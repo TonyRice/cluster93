@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 ## [Unreleased]
 
 ### Added
+- **`DockerClusterIT`**, a Testcontainers integration test that scripts the phase 2 Docker check. It runs three containers built from the jar `mvn package` produced, with production timings (1 s heartbeat). One scenario `SIGKILL`s the container running a resumable job mid-step and checks: attempt 2 runs on another node, steps finished before the kill aren't repeated, every invoice exists exactly once, and the SSE stream shows the `attempt` and `end` events. A second scenario `SIGKILL`s and immediately restarts a node under a `fail` job; it must end `ORPHANED` with only `charge` recorded. Run by Failsafe in `./mvnw verify` and in CI; skipped without Docker, or with `-DskipITs`. **Why:** the check was manual, and a real `SIGKILL` is the one failure the in-JVM tests can't produce.
+- **Dockerfile stages:** `runtime` (shared), `local-jar` (copies the already packaged jar, used by the test), `build`, and `release` (the default). **Why:** the test exercises the exact artifact the build produced, without a second Maven build inside Docker.
+- `.gitattributes`: `mvnw` keeps LF and `mvnw.cmd` keeps CRLF.
 - `docs/design/revival-plan.md`: the original approved revival plan (what Automately was, its positioning, target architecture, the 8 weak spots and their fixes, the phases), copied unchanged with a status block on top. **Why:** it only existed outside the repo, and the reasoning behind the project should live with the code.
 - `NOTES.md`: ideas to keep but not act on yet. The first is remote workers, such as a laptop, offering a sandboxed browser capability. It's modelled on the original `webdriver` module.
 - `docs/design/orphaned-jobs.md`: accepted design for jobs whose node dies. Covers attempts, the `onOrphan` policy (`fail` by default), `ctx.step` and checkpoints for resuming without repeating work, and epoch fencing against zombie attempts. **Why:** restarting orphaned jobs blindly would repeat side effects.
@@ -78,5 +81,5 @@ A ground-up rewrite of Automately Core (2015–2017) on Vert.x 5 and V8. No 2017
 ### Known gaps
 - ~~Jobs on a node that dies stay `RUNNING`.~~ Fixed in phase 2.
 - The tenant comes from the `X-Automately-Tenant` header. It's a placeholder until phase 4 auth.
-- No Testcontainers yet. The Docker cluster was verified by hand.
+- ~~No Testcontainers yet.~~ Added: `DockerClusterIT`.
 - The Javet native library is included for linux-x86_64 only.

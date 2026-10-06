@@ -20,7 +20,7 @@
 > - Decided: author is Adam & Lynn Incorporated (D-008).
 > - Decided: the KV backend starts on the cluster map and the build uses the Maven wrapper.
 > - Moved: the heap limit came forward from phase 3 into the spike.
-> - Not done yet: Testcontainers. The cluster test runs in one JVM instead.
+> - Testcontainers: added in phase 2 as `DockerClusterIT` (3 containers, real `SIGKILL`).
 > - Added: a remote-workers and browser idea parked in [NOTES.md](../../NOTES.md).
 
 # Automately Core: what it was, what it could become, and a Vert.x 5 revival plan

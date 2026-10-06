@@ -47,6 +47,7 @@
         <assertj.version>3.27.7</assertj.version>
         <archunit.version>1.5.1</archunit.version>
         <slf4j.version>2.0.20</slf4j.version>
+        <testcontainers.version>2.0.5</testcontainers.version>
     </properties>
 
     <dependencyManagement>
@@ -62,6 +63,13 @@
                 <groupId>org.junit</groupId>
                 <artifactId>junit-bom</artifactId>
                 <version>${junit.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -142,6 +150,11 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.5.3</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-failsafe-plugin</artifactId>
                     <version>3.5.3</version>
                 </plugin>
                 <plugin>

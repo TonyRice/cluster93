@@ -102,7 +102,8 @@ The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each o
 ## Build
 
 ```bash
-./mvnw verify      # JDK 21; the tests include 2- and 3-node Hazelcast clusters in one JVM, plus a chaos test
+./mvnw verify      # JDK 21. Unit tests (2- and 3-node clusters in one JVM, chaos), then
+                   # DockerClusterIT: 3 containers, SIGKILL mid-job (needs Docker; -DskipITs to skip)
 ```
 
 Javet's native library is included for linux-x86_64 only for now.
@@ -116,7 +117,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Nested callbacks and blocking map calls on the event loop | Vert.x 5 futures, with blocking work in `executeBlocking` | ArchUnit: no hand-rolled threads or `Executors` |
 | Hazelcast types in 39 files | Hazelcast lives in one package behind `SharedData` | ArchUnit: no `com.hazelcast` outside `automately.server.cluster` |
 | Regex routing by hand | `vertx-web` `Router` | |
-| No tests | 76 tests: unit, hostile scripts, orphan scenarios, 2- and 3-node clusters, chaos, architecture | CI |
+| No tests | 76 unit tests (hostile scripts, orphan scenarios, 2- and 3-node clusters, chaos, architecture) plus a Docker integration test that uses real `SIGKILL`s | CI |
 | A crashed node's jobs were simply lost or restarted blindly | Attempts with fencing, `onOrphan` policy, resumable steps | Chaos test (kills the node mid-step) |
 
 ## Roadmap
