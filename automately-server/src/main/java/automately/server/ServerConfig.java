@@ -16,6 +16,9 @@ import java.util.UUID;
  * @param requeueAfter  how long an attempt may sit QUEUED before it is dispatched again
  * @param stopGrace     how long a stopped job or service gets to finish before its isolate is terminated
  * @param maxServicesPerTenant how many enabled services one tenant may have
+ * @param ingressPort   where services' HTTP traffic arrives (routed by Host)
+ * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
+ * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
  * @param clusterMembers Hazelcast TCP/IP join addresses, e.g. {@code node1,node2,node3}; a host without a port is probed from {@code clusterPort} upwards
  */
 public record ServerConfig(
@@ -30,6 +33,9 @@ public record ServerConfig(
         Duration requeueAfter,
         Duration stopGrace,
         int maxServicesPerTenant,
+        int ingressPort,
+        String ingressDomain,
+        boolean egressAllowPrivate,
         boolean clustered,
         String clusterName,
         int clusterPort,
@@ -49,6 +55,9 @@ public record ServerConfig(
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_REQUEUE_AFTER_MS", "10000"))),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_STOP_GRACE_MS", "5000"))),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_MAX_SERVICES_PER_TENANT", "10")),
+                Integer.parseInt(env.getOrDefault("AUTOMATELY_INGRESS_PORT", "8000")),
+                env.getOrDefault("AUTOMATELY_INGRESS_DOMAIN", "localhost"),
+                Boolean.parseBoolean(env.getOrDefault("AUTOMATELY_EGRESS_ALLOW_PRIVATE", "false")),
                 Boolean.parseBoolean(env.getOrDefault("AUTOMATELY_CLUSTERED", "false")),
                 env.getOrDefault("AUTOMATELY_CLUSTER_NAME", "automately"),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_CLUSTER_PORT", "5701")),

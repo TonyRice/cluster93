@@ -10,7 +10,7 @@
 FROM eclipse-temurin:21-jre AS runtime
 RUN useradd --system --uid 10001 automately
 WORKDIR /opt/automately
-EXPOSE 8080 5701
+EXPOSE 8080 8000 5701
 ENV JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=50 \
   --add-modules java.se \
   --add-exports java.base/jdk.internal.ref=ALL-UNNAMED \

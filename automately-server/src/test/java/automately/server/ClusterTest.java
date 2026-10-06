@@ -53,6 +53,7 @@ class ClusterTest {
         return ServerConfig.fromEnv(Map.of(
                 "AUTOMATELY_NODE_ID", nodeId,
                 "AUTOMATELY_HTTP_PORT", "0",
+                    "AUTOMATELY_INGRESS_PORT", "0",
                 "AUTOMATELY_CAPACITY", "1",
                 "AUTOMATELY_MAX_HEAP_MB", "64",
                 "AUTOMATELY_CLUSTERED", "true",

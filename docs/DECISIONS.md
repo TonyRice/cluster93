@@ -159,3 +159,42 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **Decision:** The per-attempt log buffer is a ring buffer of the last 1 000 lines, not the first 1 000.
 **Why:** For a service that runs for days and then crashes, the end of the log is what matters.
+
+### D-024 — No isolate pooling
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Evidence:** a trivial job end to end, including creating and closing its V8 isolate, measured **6.6 ms p50, 9.9 ms p90, 15.8 ms p99**. Only the first isolate in a process is slow (about 390 ms while the native library loads).
+**Decision:** Keep one fresh isolate per attempt. HTTP requests are served by a service's long-lived isolate, so they never pay the cost anyway.
+**Why:** Reusing isolates would trade isolation between jobs for a few milliseconds. Revisit only if phase 5 benchmarks say otherwise.
+
+### D-025 — Asynchronous, tenant-scoped host services
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** Scripts reach storage, messaging and networking through one SPI, `HostServices` (`call` and `listen`). The node builds one per execution, already bound to the job's tenant. In the isolate, every call returns a promise. The Java side runs on Vert.x and posts the result back to the event loop (D-019), so calls run in parallel. Pending calls and listeners keep a job from being declared "never settles".
+**Limits:** at most 256 calls in flight and 100 listeners per isolate. `ctx.step` and `saveCheckpoint` stay synchronous because they must be durable before the script continues.
+
+### D-026 — Egress: connect to the address you checked, follow no redirects
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** `fetch` resolves the host, refuses private and reserved addresses (loopback, RFC 1918, link-local including cloud metadata, CGNAT, unique-local IPv6, IPv4-mapped forms), and connects **to that resolved address** with the original Host header and SNI (Vert.x `RequestOptions.setServer`). Redirects are never followed.
+**Why:** Checking a name and then letting the client resolve it again allows DNS rebinding, and following a redirect allows bouncing into an internal address. Both are classic SSRF routes in a multi-tenant sandbox.
+**Cost:** Scripts must follow redirects themselves (and each hop is checked). `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true` exists for local development only.
+
+### D-027 — `kv` expiry is decided by the entry, not the map
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** Each entry stores `expiresAt`, and every read checks it. The map TTL is set a few seconds longer, purely for cleanup.
+**Why:** Hazelcast expires entries up to about 1 s early (D-013), which would break short TTLs.
+**Cost:** `list` scans the map, and there are no queries (2017's DataBus had predicates). Both are waiting for the durable store.
+
+### D-028 — Automatic hosts and verified custom domains
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** Every service is reachable at `<service>--<tenant>.<AUTOMATELY_INGRESS_DOMAIN>`, so tenant and service names may no longer contain `--`. Custom domains are claimed per service and route only after a DNS TXT record `_automately.<domain>` = `automately-verify=<token>` is found (2017's anti-hijacking check). Unverified claims can be taken over after 24 h, and deleting a service releases its domains.
+**Why:** A single DNS label per service works with one wildcard certificate later. Verification stops one tenant capturing another's traffic.
+
+### D-029 — Ingress forwards over the event bus, routing by authority
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** Every node runs an ingress (`AUTOMATELY_INGRESS_PORT`). It routes by the request authority (the Host header on HTTP/1.1, `:authority` on HTTP/2), finds the service's current run, and forwards the request to that node over the event bus. The node hands it to the isolate's `ctx.serve` handler.
+**Cost:** Bodies are limited to 1 MB each way (they travel as event-bus messages) and there's no streaming. That's acceptable for APIs and webhooks; large uploads and downloads would need a direct proxy later.

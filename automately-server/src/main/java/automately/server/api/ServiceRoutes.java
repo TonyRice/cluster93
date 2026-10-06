@@ -6,6 +6,10 @@ import automately.core.scheduler.JobScheduler;
 import automately.core.service.RestartPolicy;
 import automately.core.service.ServiceDefinition;
 import automately.core.service.ServiceStore;
+import automately.core.host.Domain;
+import automately.core.host.DomainStore;
+import automately.core.host.HostRouter;
+import automately.core.host.TxtResolver;
 import automately.server.ServerConfig;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonArray;
@@ -23,14 +27,19 @@ import static automately.server.api.ApiVerticle.error;
 /** {@code /v1/services}: define, inspect, start, stop, restart and delete services (docs/design/services.md). */
 final class ServiceRoutes {
 
-    private static final String NAME_PATTERN = "[a-z0-9][a-z0-9_-]{0,62}";
-
     private final ServerConfig config;
     private final ServiceStore services;
     private final JobStore jobs;
     private final JobScheduler scheduler;
+    private final DomainStore domains;
+    private final TxtResolver txt;
+    private final HostRouter hostRouter;
 
-    ServiceRoutes(ServerConfig config, ServiceStore services, JobStore jobs, JobScheduler scheduler) {
+    ServiceRoutes(ServerConfig config, ServiceStore services, JobStore jobs, JobScheduler scheduler, DomainStore domains, TxtResolver txt,
+                  HostRouter hostRouter) {
+        this.domains = domains;
+        this.txt = txt;
+        this.hostRouter = hostRouter;
         this.config = config;
         this.services = services;
         this.jobs = jobs;
@@ -45,13 +54,82 @@ final class ServiceRoutes {
         router.post("/v1/services/:name/stop").handler(this::stop);
         router.post("/v1/services/:name/restart").handler(this::restart);
         router.delete("/v1/services/:name").handler(this::delete);
+        router.post("/v1/services/:name/domains").handler(body).handler(this::addDomain);
+        router.get("/v1/services/:name/domains").handler(ctx -> withService(ctx, service -> domains.forService(service.tenant(), service.name())
+                .onSuccess(list -> ctx.json(new JsonObject().put("domains", new JsonArray(list.stream().map(Domain::toViewJson).toList()))))
+                .onFailure(ctx::fail)));
+        router.post("/v1/services/:name/domains/:domain/verify").handler(this::verifyDomain);
+        router.delete("/v1/services/:name/domains/:domain").handler(ctx -> withService(ctx, service ->
+                domains.release(ctx.pathParam("domain").toLowerCase(java.util.Locale.ROOT), service.tenant())
+                        .onSuccess(released -> {
+                            if (released) {
+                                ctx.response().setStatusCode(204).end();
+                            } else {
+                                error(ctx, 404, "not_found", "No such domain");
+                            }
+                        })
+                        .onFailure(ctx::fail)));
+    }
+
+    /** Claims a custom domain for the service; it routes once {@code verify} finds the TXT record. */
+    private void addDomain(RoutingContext ctx) {
+        withService(ctx, service -> {
+            JsonObject body;
+            try {
+                body = ctx.body().asJsonObject();
+            } catch (RuntimeException e) {
+                body = null;
+            }
+            String domain = body == null || !(body.getValue("domain") instanceof String d) ? null : d.trim().toLowerCase(java.util.Locale.ROOT);
+            if (!Names.isValidDomain(domain)) {
+                error(ctx, 400, "invalid_request", "\"domain\" must be a hostname such as shop.example.com");
+                return;
+            }
+            if (hostRouter.isUnderIngressDomain(domain)) {
+                error(ctx, 400, "invalid_request", "Hosts under the ingress domain are assigned automatically");
+                return;
+            }
+            long now = System.currentTimeMillis();
+            Domain claim = new Domain(domain, service.tenant(), service.name(), java.util.UUID.randomUUID().toString().replace("-", ""),
+                    false, now, null);
+            domains.claim(claim, now)
+                    .onSuccess(stored -> stored.ifPresentOrElse(
+                            d -> ctx.response().setStatusCode(d == claim ? 201 : 200).putHeader("Content-Type", "application/json")
+                                    .end(d.toViewJson().encode()),
+                            () -> error(ctx, 409, "domain_taken", "Another tenant has claimed " + domain)))
+                    .onFailure(ctx::fail);
+        });
+    }
+
+    private void verifyDomain(RoutingContext ctx) {
+        withService(ctx, service -> {
+            String name = ctx.pathParam("domain").toLowerCase(java.util.Locale.ROOT);
+            domains.get(name).onSuccess(domain -> {
+                if (domain == null || !domain.tenant().equals(service.tenant()) || !domain.service().equals(service.name())) {
+                    error(ctx, 404, "not_found", "No such domain");
+                    return;
+                }
+                if (domain.verified()) {
+                    ctx.json(domain.toViewJson());
+                    return;
+                }
+                txt.txt(domain.txtName())
+                        .compose(records -> records.stream().anyMatch(r -> r.trim().equals(domain.txtValue()))
+                                ? domains.markVerified(domain, System.currentTimeMillis())
+                                : Future.succeededFuture(java.util.Optional.<Domain>empty()))
+                        .onSuccess(verified -> verified.ifPresentOrElse(
+                                d -> ctx.json(d.toViewJson()),
+                                () -> error(ctx, 409, "not_verified", "No TXT record " + domain.txtName() + " = " + domain.txtValue() + " found yet")))
+                        .onFailure(ctx::fail);
+            }).onFailure(ctx::fail);
+        });
     }
 
     private void put(RoutingContext ctx) {
         String tenant = ctx.get("tenant");
         String name = ctx.pathParam("name");
-        if (!name.matches(NAME_PATTERN)) {
-            error(ctx, 400, "invalid_request", "A service name must match " + NAME_PATTERN);
+        if (!Names.isValid(name)) {
+            error(ctx, 400, "invalid_request", "A service name must be " + Names.RULE);
             return;
         }
         JsonObject body;
@@ -161,7 +239,10 @@ final class ServiceRoutes {
             Future<?> stopping = service.currentJobId() == null
                     ? Future.succeededFuture()
                     : scheduler.cancel(service.currentJobId(), "service " + service.name() + " deleted");
-            stopping.compose(v -> services.delete(service.tenant(), service.name()))
+            // Release its custom domains too, so a later service with the same name doesn't inherit them.
+            stopping.compose(v -> domains.forService(service.tenant(), service.name()))
+                    .compose(owned -> Future.all(owned.stream().map(d -> domains.release(d.domain(), service.tenant())).toList()))
+                    .compose(v -> services.delete(service.tenant(), service.name()))
                     .onSuccess(v -> ctx.response().setStatusCode(204).end())
                     .onFailure(ctx::fail);
         });
@@ -201,11 +282,15 @@ final class ServiceRoutes {
     /** The definition plus its status, which depends on the current run's job. */
     private Future<JsonObject> view(ServiceDefinition service) {
         Future<Job> current = service.currentJobId() == null ? Future.succeededFuture() : jobs.get(service.currentJobId());
-        return current.map(job -> {
+        Future<List<Domain>> custom = domains.forService(service.tenant(), service.name());
+        return Future.all(current, custom).map(done -> {
             JsonObject json = service.toJson();
             json.remove("tenant");
             json.remove("currentSince");
-            json.put("status", service.status(job, System.currentTimeMillis()).name());
+            json.put("status", service.status(current.result(), System.currentTimeMillis()).name());
+            JsonArray hosts = new JsonArray().add(hostRouter.automaticHost(service.tenant(), service.name()));
+            custom.result().stream().filter(Domain::verified).forEach(d -> hosts.add(d.domain()));
+            json.put("hosts", hosts);
             return json;
         });
     }

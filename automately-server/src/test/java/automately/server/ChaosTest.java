@@ -52,17 +52,18 @@ class ChaosTest {
     void startCluster() throws Exception {
         String clusterName = "automately-chaos-" + UUID.randomUUID();
         for (String id : List.of("node-a", "node-b", "node-c")) {
-            nodes.add(await(Automately.start(ServerConfig.fromEnv(Map.of(
-                    "AUTOMATELY_NODE_ID", id,
-                    "AUTOMATELY_HTTP_PORT", "0",
-                    "AUTOMATELY_CAPACITY", "2",
-                    "AUTOMATELY_MAX_HEAP_MB", "64",
-                    "AUTOMATELY_HEARTBEAT_MS", "200",
-                    "AUTOMATELY_ORPHAN_GRACE_MS", "400",
-                    "AUTOMATELY_CLUSTERED", "true",
-                    "AUTOMATELY_CLUSTER_NAME", clusterName,
-                    "AUTOMATELY_CLUSTER_PORT", "17701",
-                    "AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")))));
+            nodes.add(await(Automately.start(ServerConfig.fromEnv(Map.ofEntries(
+                    Map.entry("AUTOMATELY_NODE_ID", id),
+                    Map.entry("AUTOMATELY_HTTP_PORT", "0"),
+                    Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
+                    Map.entry("AUTOMATELY_CAPACITY", "2"),
+                    Map.entry("AUTOMATELY_MAX_HEAP_MB", "64"),
+                    Map.entry("AUTOMATELY_HEARTBEAT_MS", "200"),
+                    Map.entry("AUTOMATELY_ORPHAN_GRACE_MS", "400"),
+                    Map.entry("AUTOMATELY_CLUSTERED", "true"),
+                    Map.entry("AUTOMATELY_CLUSTER_NAME", clusterName),
+                    Map.entry("AUTOMATELY_CLUSTER_PORT", "17701"),
+                    Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"))))));
         }
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);

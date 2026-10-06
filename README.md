@@ -4,7 +4,7 @@ A self-hostable, clustered runtime for sandboxed JavaScript functions, built on 
 
 You submit a script to any node. The cluster runs it on the least-loaded node in a fresh V8 isolate, streams its console output live, and stores the result where every node can read it.
 
-> **Status: phase 2b done** (orphaned jobs, resumable steps, long-running services). This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
+> **Status: phase 3 done** (orphaned jobs, resumable steps, long-running services, host APIs and HTTP hosting). This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
 
 ## Try it
 
@@ -32,6 +32,8 @@ export default async (input, ctx) => {
 // `billing` stands for a host API that arrives in phase 3; `ctx` works today.
 ```
 
+Scripts can store data (`kv`), message each other (`bus`), call out (`fetch`, with SSRF protection) and log with structure (`log`); services can **serve HTTP** at `<service>--<tenant>.<domain>` or your own verified domain. See the **[host APIs reference](docs/scripting/host-apis.md)**.
+
 **Services** are scripts the cluster keeps running: if one crashes or its node dies, it's restarted (with backoff) somewhere healthy, carrying its checkpoint over. See the **[services guide](docs/scripting/services.md)**.
 
 If the node running a job dies, the job's `onOrphan` policy decides what happens: `fail` (the default) ends it as `ORPHANED`; `retry` starts again from the beginning; `resume` continues on another node and skips steps that already completed. See the **[job context reference](docs/scripting/job-context.md)**.
@@ -49,7 +51,11 @@ If the node running a job dies, the job's `onOrphan` policy decides what happens
 | `PUT` | `/v1/services/{name}` | Define or update a service: `{script, config?, restart?, enabled?}` |
 | `GET` | `/v1/services` · `/v1/services/{name}` | Services with `status`, `currentJobId`, `runs`, `lastExit` |
 | `POST` | `/v1/services/{name}/start` · `/stop` · `/restart` | Change the desired state |
-| `DELETE` | `/v1/services/{name}` | Stop and remove |
+| `DELETE` | `/v1/services/{name}` | Stop and remove (releases its domains) |
+| `POST` · `GET` | `/v1/services/{name}/domains` | Claim a custom domain (returns the TXT record to publish) · list |
+| `POST` | `/v1/services/{name}/domains/{domain}/verify` | Check the TXT record; the domain routes once verified |
+| `POST` | `/v1/bus/{topic}` · `/v1/bus/{topic}/request` | Publish to a topic · call a `bus.handle`r and get its reply |
+| *ingress* | `:8000`, any path | Services' HTTP traffic, routed by host |
 | `GET` | `/v1/nodes` | Live nodes with capacity and load |
 | `GET` | `/health` | Liveness |
 
@@ -60,7 +66,7 @@ Errors use one envelope: `{"error": {"code": "...", "message": "..."}}`.
 ## Architecture
 
 ```
-            HTTP (any node)
+      API :8080 · ingress :8000 (any node)
                  │
           ┌──────▼──────┐   least-loaded    ┌──────────────┐
           │ ApiVerticle │──► JobScheduler ──►│ NodeVerticle │──► JavetScriptRuntime
@@ -77,14 +83,15 @@ Errors use one envelope: `{"error": {"code": "...", "message": "..."}}`.
 | Module | Contents |
 |---|---|
 | `automately-core` | Job model and transitions, `JobStore`, `JobStateStore`, `NodeRegistry`, the `ScriptRuntime` SPI, scheduler, node verticle, orphan reaper, and services (`ServiceDefinition`, `ServiceStore`, `ServiceSupervisor`). Depends only on `vertx-core` |
-| `automately-runtime-javet` | `ScriptRuntime` on V8 isolates, with an event loop per isolate (timers, stop requests) |
-| `automately-server` | Bootstrap, REST API, Hazelcast wiring, the shaded jar |
+| `automately-runtime-javet` | `ScriptRuntime` on V8 isolates, with an event loop per isolate (timers, stop requests, async host calls) |
+| `automately-server` | Bootstrap, REST API, HTTP ingress, Hazelcast wiring, the shaded jar |
 
 ### Sandbox
 
 Each job gets a **new isolate**, which is closed when the job finishes. Nothing carries over between jobs, including globals and prototype pollution.
 
-- **No host access.** The script can reach only a frozen `console`, timers, and its frozen `ctx`. There is no `Java`, `require` or `process`, and no reflection.
+- **No host access.** The script can reach only frozen, tenant-scoped APIs (`console`, timers, `ctx`, `kv`, `bus`, `fetch`, `log`). There is no `Java`, `require` or `process`.
+- **Egress.** `fetch` refuses private and reserved addresses (cloud metadata included), connects to the address it checked, and follows no redirects. There is no `Java`, `require` or `process`, and no reflection.
 - **Wall-clock timeout.** Enforced from the event loop with `terminateExecution()`. It also covers loops at module top level and loops after an `await`.
 - **Heap limit** (`AUTOMATELY_MAX_HEAP_MB`). When an isolate runs out of memory, V8 normally aborts the whole process. Here a near-heap-limit callback terminates the script instead and grants a little headroom so V8 can unwind, and the node keeps serving.
 
@@ -104,6 +111,9 @@ The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each o
 | `AUTOMATELY_REQUEUE_AFTER_MS` | `10000` | An attempt no node picked up is dispatched again after this |
 | `AUTOMATELY_STOP_GRACE_MS` | `5000` | How long a stopped job or service gets to finish before it's terminated |
 | `AUTOMATELY_MAX_SERVICES_PER_TENANT` | `10` | Enabled services per tenant |
+| `AUTOMATELY_INGRESS_PORT` | `8000` | Services' HTTP traffic |
+| `AUTOMATELY_INGRESS_DOMAIN` | `localhost` | Automatic hosts are `<service>--<tenant>.<domain>` |
+| `AUTOMATELY_EGRESS_ALLOW_PRIVATE` | `false` | Let `fetch` reach private addresses (local development only) |
 | `AUTOMATELY_CLUSTERED` | `false` | |
 | `AUTOMATELY_CLUSTER_NAME` | `automately` | |
 | `AUTOMATELY_CLUSTER_PORT` | `5701` | |
@@ -127,7 +137,8 @@ Javet's native library is included for linux-x86_64 only for now.
 | Nested callbacks and blocking map calls on the event loop | Vert.x 5 futures, with blocking work in `executeBlocking` | ArchUnit: no hand-rolled threads or `Executors` |
 | Hazelcast types in 39 files | Hazelcast lives in one package behind `SharedData` | ArchUnit: no `com.hazelcast` outside `automately.server.cluster` |
 | Regex routing by hand | `vertx-web` `Router` | |
-| No tests | 115 unit tests (hostile scripts, orphan scenarios, services, 2- and 3-node clusters, chaos, architecture) plus 3 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
+| No tests | 167 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, 2- and 3-node clusters, chaos, architecture) plus 4 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
+| Synchronous host objects running in the host JVM (Nashorn, `--no-java`); HTTP client with no address checks | Promise-based, tenant-scoped `kv`/`bus`/`fetch`/`log`; SSRF-safe egress; verified domains | `NodeHostServicesTest`, `HostApisTest` |
 | Service jobs: one per name, autostarted at boot, no restart on crash | Supervised services: restart with backoff, revision rolls, graceful stop, checkpoints across runs | Supervisor, chaos and Docker tests |
 | A crashed node's jobs were simply lost or restarted blindly | Attempts with fencing, `onOrphan` policy, resumable steps | Chaos test (kills the node mid-step) |
 
@@ -136,7 +147,7 @@ Javet's native library is included for linux-x86_64 only for now.
 1. ~~**Spike**~~ ✅ Cluster, V8 runtime, API, SSE, CI
 2. ~~**Orphaned jobs**~~ ✅ `onOrphan` policy (`fail` by default), attempts visible to scripts, `ctx.step` and checkpoints, fencing, and a chaos test ([design](docs/design/orphaned-jobs.md), [script API](docs/scripting/job-context.md), [plan](docs/design/phase-2-plan.md))
 2b. ~~**Long-running services**~~ ✅ Supervised services, timers and an event loop per isolate, job cancellation ([design](docs/design/services.md), [guide](docs/scripting/services.md))
-3. **Host API.** `http`, `kv`, `bus` and `log` bindings with tenant checks, isolate pooling, and hostname routing
+3. ~~**Host APIs**~~ ✅ `kv`, `bus`, `fetch`, `log`, HTTP hosting with automatic and verified domains; isolate pooling measured and declined ([design](docs/design/host-apis.md), [reference](docs/scripting/host-apis.md))
 4. **API, auth, CLI and MCP.** OpenAPI contract, scoped tokens, rate limits, an MCP server for AI agents
 5. **Observability and polish.** Metrics, tracing, Grafana, benchmarks, `SECURITY.md`
 
@@ -150,6 +161,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/design/](docs/design/): designs for upcoming work
 - [docs/scripting/job-context.md](docs/scripting/job-context.md): the job context API for scripts (attempts, steps, checkpoints)
 - [docs/scripting/services.md](docs/scripting/services.md): services, timers and cancellation
+- [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus`, `fetch`, `log`, and serving HTTP
 
 ## Author
 

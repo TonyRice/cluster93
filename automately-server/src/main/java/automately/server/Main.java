@@ -14,7 +14,8 @@ public final class Main {
         ServerConfig config = ServerConfig.fromEnv(System.getenv());
         Automately.start(config)
                 .onSuccess(node -> {
-                    LOG.info("Node {} serving HTTP on port {} (clustered: {})", node.nodeId(), node.httpPort(), config.clustered());
+                    LOG.info("Node {} serving the API on port {} and services on port {} (clustered: {})", node.nodeId(), node.httpPort(),
+                            node.ingressPort(), config.clustered());
                     Runtime.getRuntime().addShutdownHook(new Thread(() -> node.stop().await()));
                 })
                 .onFailure(err -> {

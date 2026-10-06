@@ -1,6 +1,8 @@
-# A three-node cluster. Each node serves the API; jobs run on whichever node is least loaded.
+# A three-node cluster. Each node serves the API (808x) and services' HTTP (800x); jobs run on whichever
+# node is least loaded.
 #   docker compose up --build
 #   curl -s localhost:8081/v1/nodes
+#   curl -s -H 'Host: <service>--<tenant>.localhost' localhost:8001/
 x-node: &node
   build: .
   environment: &env
@@ -18,14 +20,14 @@ services:
     <<: *node
     hostname: node1
     environment: { <<: *env, AUTOMATELY_NODE_ID: node1 }
-    ports: ["8081:8080"]
+    ports: ["8081:8080", "8001:8000"]
   node2:
     <<: *node
     hostname: node2
     environment: { <<: *env, AUTOMATELY_NODE_ID: node2 }
-    ports: ["8082:8080"]
+    ports: ["8082:8080", "8002:8000"]
   node3:
     <<: *node
     hostname: node3
     environment: { <<: *env, AUTOMATELY_NODE_ID: node3 }
-    ports: ["8083:8080"]
+    ports: ["8083:8080", "8003:8000"]

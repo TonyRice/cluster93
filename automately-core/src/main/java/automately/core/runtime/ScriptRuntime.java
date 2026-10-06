@@ -6,5 +6,10 @@ package automately.core.runtime;
  */
 public interface ScriptRuntime {
 
-    RunningExecution execute(Execution execution, LogSink logs, StateSink state);
+    RunningExecution execute(Execution execution, LogSink logs, StateSink state, HostServices host);
+
+    /** Runs without host APIs. */
+    default RunningExecution execute(Execution execution, LogSink logs, StateSink state) {
+        return execute(execution, logs, state, HostServices.NONE);
+    }
 }

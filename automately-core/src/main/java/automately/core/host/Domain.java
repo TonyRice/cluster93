@@ -1,0 +1,43 @@
+package automately.core.host;
+
+import io.vertx.core.json.JsonObject;
+
+/**
+ * A custom domain claimed for a service. It routes only once verified: the owner publishes
+ * {@link #txtValue()} in a TXT record at {@link #txtName()} (the 2017 anti-hijacking check).
+ */
+public record Domain(String domain, String tenant, String service, String token, boolean verified, long createdAt, Long verifiedAt) {
+
+    public String txtName() {
+        return "_automately." + domain;
+    }
+
+    public String txtValue() {
+        return "automately-verify=" + token;
+    }
+
+    public Domain asVerified(long now) {
+        return new Domain(domain, tenant, service, token, true, createdAt, now);
+    }
+
+    public JsonObject toJson() {
+        return new JsonObject().put("domain", domain).put("tenant", tenant).put("service", service).put("token", token)
+                .put("verified", verified).put("createdAt", createdAt).put("verifiedAt", verifiedAt);
+    }
+
+    /** What the API shows the owner, including how to verify. */
+    public JsonObject toViewJson() {
+        JsonObject json = toJson();
+        json.remove("tenant");
+        json.remove("token");
+        if (!verified) {
+            json.put("verification", new JsonObject().put("type", "TXT").put("name", txtName()).put("value", txtValue()));
+        }
+        return json;
+    }
+
+    public static Domain fromJson(JsonObject json) {
+        return new Domain(json.getString("domain"), json.getString("tenant"), json.getString("service"), json.getString("token"),
+                json.getBoolean("verified", false), json.getLong("createdAt", 0L), json.getLong("verifiedAt"));
+    }
+}

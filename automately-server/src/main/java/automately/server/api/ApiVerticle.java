@@ -9,6 +9,9 @@ import automately.core.node.NodeRegistry;
 import automately.core.scheduler.Addresses;
 import automately.core.scheduler.JobScheduler;
 import automately.core.service.ServiceStore;
+import automately.core.host.DomainStore;
+import automately.core.host.HostRouter;
+import automately.core.host.TxtResolver;
 import automately.core.state.JobStateStore;
 import automately.core.state.StepRecord;
 import automately.server.ServerConfig;
@@ -51,12 +54,18 @@ public final class ApiVerticle extends VerticleBase {
     private final NodeRegistry nodes;
     private final JobScheduler scheduler;
     private final ServiceStore services;
+    private final DomainStore domains;
+    private final TxtResolver txt;
+    private final HostRouter hostRouter;
 
     private HttpServer server;
 
     public ApiVerticle(ServerConfig config, JobStore jobs, JobStateStore state, NodeRegistry nodes, JobScheduler scheduler,
-                       ServiceStore services) {
+                       ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter) {
         this.services = services;
+        this.domains = domains;
+        this.txt = txt;
+        this.hostRouter = hostRouter;
         this.config = config;
         this.jobs = jobs;
         this.state = state;
@@ -76,13 +85,16 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/v1/nodes").handler(this::listNodes);
         router.route("/v1/jobs*").handler(this::requireTenant);
         router.route("/v1/services*").handler(this::requireTenant);
+        router.route("/v1/bus*").handler(this::requireTenant);
+        new BusRoutes(vertx).mount(router);
         router.post("/v1/jobs").handler(BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 4_096)).handler(this::submitJob);
         router.get("/v1/jobs").handler(this::listJobs);
         router.get("/v1/jobs/:id").handler(this::getJob);
         router.get("/v1/jobs/:id/events").handler(this::streamEvents);
         router.get("/v1/jobs/:id/steps").handler(this::getSteps);
         router.post("/v1/jobs/:id/cancel").handler(this::cancelJob);
-        new ServiceRoutes(config, services, jobs, scheduler).mount(router, BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 64 * 1024));
+        new ServiceRoutes(config, services, jobs, scheduler, domains, txt, hostRouter)
+                .mount(router, BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 64 * 1024));
         router.route().last().handler(ctx -> error(ctx, 404, "not_found", "No such route"));
         router.route().failureHandler(this::failure);
 
@@ -107,8 +119,8 @@ public final class ApiVerticle extends VerticleBase {
 
     private void requireTenant(RoutingContext ctx) {
         String tenant = ctx.request().getHeader(TENANT_HEADER);
-        if (tenant == null || !tenant.matches("[a-z0-9][a-z0-9_-]{0,62}")) {
-            error(ctx, 401, "unauthorized", "Set the " + TENANT_HEADER + " header to a lowercase tenant id");
+        if (!Names.isValid(tenant)) {
+            error(ctx, 401, "unauthorized", "Set the " + TENANT_HEADER + " header to a tenant id: " + Names.RULE);
             return;
         }
         ctx.put("tenant", tenant);

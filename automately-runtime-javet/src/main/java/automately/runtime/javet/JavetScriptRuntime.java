@@ -2,6 +2,7 @@ package automately.runtime.javet;
 
 import automately.core.runtime.Execution;
 import automately.core.runtime.ExecutionResult;
+import automately.core.runtime.HostServices;
 import automately.core.runtime.LogSink;
 import automately.core.runtime.RunningExecution;
 import automately.core.runtime.ScriptRuntime;
@@ -93,6 +94,122 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 }
               };
 
+              // --- host calls: a promise per call, settled by the event loop ---
+              const pending = new Map();
+              let nextCall = 1;
+              const hostError = (json) => {
+                const e = JSON.parse(json);
+                const error = new Error(e.message);
+                error.name = e.name || 'Error';
+                error.code = e.code;
+                return error;
+              };
+              const callHost = (op, args) => new Promise((resolve, reject) => {
+                const id = nextCall++;
+                pending.set(id, { resolve, reject });
+                host.call(op, JSON.stringify(args ?? {}), id);
+              });
+              const settle = (id, ok, json) => {
+                const p = pending.get(id);
+                if (!p) return;
+                pending.delete(id);
+                if (ok) p.resolve(json === undefined || json === null ? null : JSON.parse(json)); else p.reject(hostError(json));
+              };
+
+              // --- listeners: bus subscriptions, bus handlers, HTTP serving ---
+              const listeners = new Map();
+              let nextListener = 1;
+              const listen = (kind, args, handler) => new Promise((resolve, reject) => {
+                const listenerId = nextListener++;
+                listeners.set(listenerId, handler);
+                const callId = nextCall++;
+                const stop = () => { if (listeners.delete(listenerId)) host.unlisten(listenerId); };
+                pending.set(callId, { resolve: () => resolve(stop), reject: (e) => { listeners.delete(listenerId); reject(e); } });
+                host.listen(kind, JSON.stringify(args ?? {}), listenerId, callId);
+              });
+              const deliver = (listenerId, payloadJson, replyId) => {
+                const handler = listeners.get(listenerId);
+                const answer = (ok, value) => { if (replyId) host.reply(replyId, ok, JSON.stringify(value === undefined ? null : value)); };
+                const failed = (e) => {
+                  const message = String(e && e.message ? e.message : e);
+                  if (replyId) answer(false, { status: 500, message });
+                  else host.log('error', `Uncaught error in listener: ${String(e && e.stack ? e.stack : e)}`);
+                };
+                if (!handler) { if (replyId) answer(false, { status: 503, message: 'No longer listening' }); return; }
+                try {
+                  Promise.resolve(handler(JSON.parse(payloadJson))).then((value) => answer(true, value), failed);
+                } catch (e) {
+                  failed(e);
+                }
+              };
+
+              // --- host APIs (docs/scripting/host-apis.md) ---
+              const fieldsJson = (fields) => {
+                if (fields === undefined || fields === null) return 'null';
+                try { return JSON.stringify(fields); } catch { return JSON.stringify({ fields: String(fields) }); }
+              };
+              const structured = (level) => (message, fields) => host.logFields(level, show(message), fieldsJson(fields));
+              define('log', Object.freeze({ debug: structured('debug'), info: structured('info'), warn: structured('warn'), error: structured('error') }));
+
+              const kvNamespace = (ns) => Object.freeze({
+                get: (key) => callHost('kv.get', { ns, key }),
+                set: (key, value, options) => callHost('kv.set', { ns, key, value: value === undefined ? null : value, ttlMs: options?.ttlMs ?? null }).then(() => undefined),
+                delete: (key) => callHost('kv.delete', { ns, key }),
+                list: (options) => callHost('kv.list', { ns, prefix: options?.prefix ?? '', limit: options?.limit ?? 100, cursor: options?.cursor ?? null }),
+                increment: (key, by = 1) => callHost('kv.increment', { ns, key, by }),
+              });
+              const kv = kvNamespace('default');
+              define('kv', Object.freeze({ ...kv, namespace: (name) => kvNamespace(String(name)) }));
+
+              const onMessage = (handler) => {
+                if (typeof handler !== 'function') throw new TypeError('A handler must be a function');
+                return (payload) => handler(payload.message, Object.freeze({ topic: payload.topic }));
+              };
+              define('bus', Object.freeze({
+                publish: (topic, message) => callHost('bus.publish', { topic, message: message === undefined ? null : message }).then(() => undefined),
+                request: (topic, message, options) => callHost('bus.request', { topic, message: message === undefined ? null : message, timeoutMs: options?.timeoutMs ?? 10000 }),
+                subscribe: (topic, handler) => listen('bus.subscribe', { topic }, onMessage(handler)),
+                handle: (topic, handler) => listen('bus.handle', { topic }, onMessage(handler)),
+              }));
+
+              const headerBag = (raw) => {
+                const lower = {};
+                for (const [k, v] of Object.entries(raw ?? {})) lower[String(k).toLowerCase()] = String(v);
+                return Object.freeze({ ...lower, get: (name) => lower[String(name).toLowerCase()] ?? null });
+              };
+              define('fetch', async (input, init = {}) => {
+                const headers = {};
+                for (const [k, v] of Object.entries(init.headers ?? {})) headers[String(k).toLowerCase()] = String(v);
+                let body = null;
+                if (init.body !== undefined && init.body !== null) {
+                  if (typeof init.body === 'string') body = init.body;
+                  else { body = JSON.stringify(init.body); headers['content-type'] ??= 'application/json'; }
+                }
+                const r = await callHost('http.fetch', { url: String(input), method: String(init.method ?? 'GET').toUpperCase(), headers, body, timeoutMs: init.timeoutMs ?? null });
+                return Object.freeze({
+                  status: r.status, statusText: r.statusText, ok: r.status >= 200 && r.status < 300, url: r.url,
+                  headers: headerBag(r.headers),
+                  text: async () => r.body,
+                  json: async () => JSON.parse(r.body),
+                });
+              });
+
+              const toResponse = (value) => {
+                if (value === undefined || value === null) return { status: 204, headers: {}, body: '' };
+                if (typeof value === 'string') return { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: value };
+                const headers = {};
+                for (const [k, v] of Object.entries(value.headers ?? {})) headers[String(k).toLowerCase()] = String(v);
+                let body = value.body ?? '';
+                if (typeof body !== 'string') { body = JSON.stringify(body); headers['content-type'] ??= 'application/json'; }
+                return { status: Number(value.status ?? 200), headers, body };
+              };
+              const toRequest = (r) => Object.freeze({
+                method: r.method, url: r.url, path: r.path, host: r.host, query: Object.freeze({ ...r.query }),
+                headers: headerBag(r.headers),
+                text: async () => r.body,
+                json: async () => JSON.parse(r.body),
+              });
+
               class SupersededError extends Error { constructor(message) { super(message); this.name = 'SupersededError'; } }
               class StateLimitError extends Error { constructor(message) { super(message); this.name = 'StateLimitError'; } }
               for (const [name, value] of [['SupersededError', SupersededError], ['StateLimitError', StateLimitError]]) {
@@ -137,6 +254,11 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                   completedSteps: Object.freeze([...done.keys()]),
                   service: c.service ? deepFreeze(c.service) : null,
                   get stopRequested() { host.watchStop(); return stopRequested; },
+                  serve: (handler) => {
+                    if (!c.service) throw new Error('Only services can serve HTTP; define this script as a service');
+                    if (typeof handler !== 'function') throw new TypeError('ctx.serve needs a handler function');
+                    return listen('http.serve', {}, async (request) => toResponse(await handler(toRequest(request))));
+                  },
                   sleep: (ms) => new Promise((resolve) => schedule(resolve, ms, [], false)),
                   stepKey,
                   async saveCheckpoint(value) {
@@ -164,7 +286,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                   return JSON.stringify({ ok: false, error: String(e && e.stack ? e.stack : e) });
                 }
               };
-              return { invoke, fire, requestStop };
+              return { invoke, fire, requestStop, settle, deliver };
             })()
             """;
 
@@ -194,9 +316,9 @@ public final class JavetScriptRuntime implements ScriptRuntime {
     }
 
     @Override
-    public RunningExecution execute(Execution execution, LogSink logs, StateSink state) {
+    public RunningExecution execute(Execution execution, LogSink logs, StateSink state, HostServices host) {
         Control control = new Control();
-        Future<ExecutionResult> result = isolates.executeBlocking(() -> run(execution, logs, state, control), false);
+        Future<ExecutionResult> result = isolates.executeBlocking(() -> run(execution, logs, state, host, control), false);
         return new RunningExecution() {
             @Override
             public Future<ExecutionResult> result() {
@@ -254,7 +376,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 return false;
             }
             stopReason = reason;
-            loop.post(StopRequest.INSTANCE);
+            loop.post(js -> js.requestStop(reason));
             return true;
         }
 
@@ -267,16 +389,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
         }
     }
 
-    /** Marker task: the loop resolves {@code ctx.stopRequested} when it sees this. */
-    private enum StopRequest implements Runnable {
-        INSTANCE;
-
-        @Override
-        public void run() {
-        }
-    }
-
-    private ExecutionResult run(Execution execution, LogSink logs, StateSink state, Control control) throws JavetException {
+    private ExecutionResult run(Execution execution, LogSink logs, StateSink state, HostServices host, Control control) throws JavetException {
         if (control.killedWith() != null) {
             return control.killedWith();
         }
@@ -291,7 +404,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 return currentLimit + HEAP_HEADROOM_BYTES;
             });
             try {
-                ExecutionResult result = invoke(v8, execution, logs, state, control);
+                ExecutionResult result = invoke(v8, execution, logs, state, host, control);
                 if (control.killedWith() != null) {
                     return control.killedWith();
                 }
@@ -307,17 +420,22 @@ public final class JavetScriptRuntime implements ScriptRuntime {
         }
     }
 
-    private ExecutionResult invoke(V8Runtime v8, Execution execution, LogSink logs, StateSink state, Control control) throws JavetException {
+    private ExecutionResult invoke(V8Runtime v8, Execution execution, LogSink logs, StateSink state, HostServices host, Control control)
+            throws JavetException {
+        HostBridge bridge = new HostBridge(host, control.loop);
         List<JavetCallbackContext> callbacks = new ArrayList<>();
-        try (V8ValueObject host = v8.createV8ValueObject()) {
-            callbacks.addAll(host.bind(new HostConsole(logs)));
-            callbacks.addAll(host.bind(new HostState(state)));
-            callbacks.addAll(host.bind(new HostTimers(control.loop)));
-            v8.getGlobalObject().set("__automately", host);
+        try (V8ValueObject hostObject = v8.createV8ValueObject()) {
+            callbacks.addAll(hostObject.bind(new HostConsole(logs)));
+            callbacks.addAll(hostObject.bind(new HostState(state)));
+            callbacks.addAll(hostObject.bind(new HostTimers(control.loop)));
+            callbacks.addAll(hostObject.bind(bridge));
+            v8.getGlobalObject().set("__automately", hostObject);
         }
         try {
             return invokeModule(v8, execution, control);
         } finally {
+            // Stop listeners and answer pending requests before the isolate goes away.
+            bridge.close();
             // The prelude's closures still reference these; release them only once the script is done.
             callbacks.forEach(callback -> v8.removeCallbackContext(callback.getHandle()));
         }
@@ -325,9 +443,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     private ExecutionResult invokeModule(V8Runtime v8, Execution execution, Control control) throws JavetException {
         try (V8ValueObject prelude = v8.getExecutor(PRELUDE).setResourceName("automately:prelude").execute();
-             V8ValueFunction invoker = prelude.get("invoke");
-             V8ValueFunction fire = prelude.get("fire");
-             V8ValueFunction requestStop = prelude.get("requestStop");
+             ScriptEntryPoints js = new ScriptEntryPoints(prelude);
              V8Module module = v8.getExecutor(execution.script()).setResourceName("job.mjs").compileV8Module()) {
             module.executeVoid();
             try (V8ValueObject namespace = (V8ValueObject) module.getNamespace();
@@ -336,8 +452,8 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                     return ExecutionResult.failed("The script must export a default function");
                 }
                 String context = execution.context().toScriptJson().encode();
-                try (V8ValuePromise promise = invoker.call(null, fn, execution.input().encode(), context)) {
-                    ExecutionResult early = runLoop(v8, promise, fire, requestStop, execution, control);
+                try (V8ValuePromise promise = js.invoke.call(null, fn, execution.input().encode(), context)) {
+                    ExecutionResult early = runLoop(v8, promise, js, execution, control);
                     if (early != null) {
                         return early;
                     }
@@ -354,8 +470,8 @@ public final class JavetScriptRuntime implements ScriptRuntime {
      * Pumps microtasks, posted tasks and timers until the script's promise settles. Returns a result if
      * the run has to end before that, or null once the promise has settled.
      */
-    private static ExecutionResult runLoop(V8Runtime v8, V8ValuePromise promise, V8ValueFunction fire, V8ValueFunction requestStop,
-                                           Execution execution, Control control) throws JavetException {
+    private static ExecutionResult runLoop(V8Runtime v8, V8ValuePromise promise, ScriptEntryPoints js, Execution execution,
+                                           Control control) throws JavetException {
         EventLoop loop = control.loop;
         while (true) {
             if (control.killedWith() != null) {
@@ -370,11 +486,12 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             }
 
             boolean worked = false;
-            for (Runnable task = loop.pollTask(); task != null; task = loop.pollTask()) {
-                worked |= runTask(task, requestStop, control);
+            for (EventLoop.Task task = loop.pollTask(); task != null; task = loop.pollTask()) {
+                task.run(js);
+                worked = true;
             }
             for (int id = loop.pollDue(); id >= 0; id = loop.pollDue()) {
-                fire.callVoid(null, id);
+                js.fireTimer(id);
                 worked = true;
                 drainMicrotasks(v8, promise, control);
             }
@@ -383,12 +500,12 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             }
 
             long wait = loop.nanosUntilNextTimer();
-            // Nothing scheduled: a job fails fast, unless it is waiting for a stop (which a cancel can deliver,
-            // and its timeout still bounds). A service always waits.
-            if (wait < 0 && !execution.longRunning() && !loop.isStopWatched()) {
+            // Nothing scheduled: a job fails fast unless something outside it can still wake it (a host call
+            // in flight, a listener, or a stop it's waiting for; its timeout still bounds that). A service waits.
+            if (wait < 0 && !execution.longRunning() && !loop.canBeWoken()) {
                 return ExecutionResult.failed("The script returned a promise that never settles");
             }
-            Runnable task;
+            EventLoop.Task task;
             try {
                 task = loop.awaitTask(wait);
             } catch (InterruptedException e) {
@@ -396,18 +513,9 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 return ExecutionResult.cancelled("Cancelled: the isolate thread was interrupted");
             }
             if (task != null) {
-                runTask(task, requestStop, control);
+                task.run(js);
             }
         }
-    }
-
-    private static boolean runTask(Runnable task, V8ValueFunction requestStop, Control control) throws JavetException {
-        if (task == StopRequest.INSTANCE) {
-            requestStop.callVoid(null, control.stopReason());
-            return true;
-        }
-        task.run();
-        return false;
     }
 
     private static void drainMicrotasks(V8Runtime v8, V8ValuePromise promise, Control control) throws JavetException {

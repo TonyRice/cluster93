@@ -4,6 +4,7 @@ import automately.core.job.Job;
 import automately.core.job.JobStore;
 import automately.core.job.OrphanPolicy;
 import automately.core.job.ServiceRef;
+import automately.core.host.HostServicesFactory;
 import automately.core.node.NodeInfo;
 import automately.core.node.NodeRegistry;
 import automately.core.runtime.Execution;
@@ -65,6 +66,7 @@ public final class NodeVerticle extends VerticleBase {
     private final ScriptRuntime runtime;
     private final Duration heartbeat;
     private final Duration stopGrace;
+    private final HostServicesFactory hostServices;
 
     /** Jobs this node has accepted, by job id. The execution is null until the script has started. */
     private final Map<String, Slot> slots = new HashMap<>();
@@ -75,7 +77,8 @@ public final class NodeVerticle extends VerticleBase {
     }
 
     public NodeVerticle(String nodeId, String instanceId, int capacity, JobStore jobs, JobStateStore state, NodeRegistry nodes,
-                        ScriptRuntime runtime, Duration heartbeat, Duration stopGrace) {
+                        ScriptRuntime runtime, Duration heartbeat, Duration stopGrace, HostServicesFactory hostServices) {
+        this.hostServices = hostServices;
         this.nodeId = nodeId;
         this.instanceId = instanceId;
         this.capacity = capacity;
@@ -178,7 +181,8 @@ public final class NodeVerticle extends VerticleBase {
             Deque<String> logs = new ArrayDeque<>();
             JobContext jobContext = new JobContext(job.id(), attempt, job.onOrphan(), job.previousAttempt(), carried.state(),
                     carried.service());
-            RunningExecution execution = runtime.execute(execution(job, jobContext), logSink(job.id(), logs), stateSink(job.id(), attempt));
+            RunningExecution execution = runtime.execute(execution(job, jobContext), logSink(job.id(), logs), stateSink(job.id(), attempt),
+                    hostServices.create(job.tenant(), job.id(), job.service() != null));
             slots.put(job.id(), new Slot(attempt, execution));
             if (job.cancelRequested() != null) {
                 execution.stop(job.cancelRequested(), stopGrace);
@@ -263,14 +267,27 @@ public final class NodeVerticle extends VerticleBase {
     }
 
     private LogSink logSink(String jobId, Deque<String> logs) {
-        return (level, line) -> {
-            synchronized (logs) {
-                if (logs.size() >= MAX_LOG_LINES) {
-                    logs.removeFirst();
-                }
-                logs.addLast(line);
+        return new LogSink() {
+            @Override
+            public void log(String level, String line) {
+                log(level, line, null);
             }
-            publish(jobId, new JsonObject().put("type", "log").put("level", level).put("line", line));
+
+            @Override
+            public void log(String level, String message, JsonObject fields) {
+                String line = fields == null || fields.isEmpty() ? message : message + " " + fields.encode();
+                synchronized (logs) {
+                    if (logs.size() >= MAX_LOG_LINES) {
+                        logs.removeFirst();
+                    }
+                    logs.addLast(line);
+                }
+                JsonObject event = new JsonObject().put("type", "log").put("level", level).put("line", line);
+                if (fields != null && !fields.isEmpty()) {
+                    event.put("message", message).put("fields", fields);
+                }
+                publish(jobId, event);
+            }
         };
     }
 

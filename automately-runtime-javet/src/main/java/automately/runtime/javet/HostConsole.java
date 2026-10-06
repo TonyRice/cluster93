@@ -16,4 +16,11 @@ public final class HostConsole {
     public void log(String level, String line) {
         sink.log(level, line);
     }
+
+    /** {@code log.info(message, fields)}: fields arrive as JSON, or "null". */
+    @V8Function(name = "logFields")
+    public void logFields(String level, String message, String fieldsJson) {
+        Object fields = io.vertx.core.json.Json.decodeValue(fieldsJson);
+        sink.log(level, message, fields instanceof io.vertx.core.json.JsonObject object ? object : null);
+    }
 }

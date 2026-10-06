@@ -40,6 +40,11 @@ class DockerClusterIT {
 
     private static final String TENANT = "it";
 
+    static {
+        // The JDK's HTTP client refuses a custom Host header unless this is set before it loads; the ingress routes by Host.
+        System.setProperty("jdk.httpclient.allowRestrictedHeaders", "host");
+    }
+
     /** Built once per JVM from the Dockerfile's {@code local-jar} stage. */
     private static final ImageFromDockerfile IMAGE = new ImageFromDockerfile("automately-it", false)
             .withFileFromPath("Dockerfile", projectRoot().resolve("Dockerfile"))
@@ -72,7 +77,7 @@ class DockerClusterIT {
             }
             """;
 
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    private final HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(5)).build();
     private final Map<String, GenericContainer<?>> nodes = new LinkedHashMap<>();
     private final Map<String, ToStringConsumer> logs = new LinkedHashMap<>();
     private Network network;
@@ -95,9 +100,9 @@ class DockerClusterIT {
                     .withEnv("AUTOMATELY_CLUSTER_MEMBERS", "node1,node2,node3")
                     .withEnv("AUTOMATELY_CAPACITY", "2")
                     .withEnv("AUTOMATELY_MAX_HEAP_MB", "64")
-                    .withExposedPorts(8080)
+                    .withExposedPorts(8080, 8000)
                     .withLogConsumer(output)
-                    .waitingFor(Wait.forHttp("/health").forStatusCode(200).withStartupTimeout(Duration.ofSeconds(120)));
+                    .waitingFor(Wait.forHttp("/health").forPort(8080).forStatusCode(200).withStartupTimeout(Duration.ofSeconds(120)));
             nodes.put(id, node);
             logs.put(id, output);
         }
@@ -196,6 +201,35 @@ class DockerClusterIT {
     private int checkpointCount(String node, String jobId) {
         Object checkpoint = steps(node, jobId).getValue("checkpoint");
         return checkpoint == null ? 0 : ((JsonObject) checkpoint).getInteger("count");
+    }
+
+    @Test
+    void httpTrafficMovesToASurvivorAfterSigkillOfTheServingNode() throws Exception {
+        HttpResponse<String> created = http.send(request(anyNode(), "/v1/services/web")
+                .PUT(HttpRequest.BodyPublishers.ofString(new JsonObject().put("script", HostApisTest.WEB).encode())).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        String[] firstJob = new String[1];
+        awaitCondition(Duration.ofSeconds(30), "web running", () -> {
+            JsonObject service = getJson(anyNode(), "/v1/services/web");
+            firstJob[0] = service.getString("currentJobId");
+            return "RUNNING".equals(service.getString("status"));
+        });
+        String victim = job(anyNode(), firstJob[0]).getString("node");
+        String survivor = survivorOtherThan(victim);
+        awaitCondition(Duration.ofSeconds(10), "served through " + survivor, () -> "hello from run 1".equals(ingressGet(survivor, "/hello").body()));
+
+        sigkill(victim);
+        awaitCondition(Duration.ofSeconds(60), "served again after the kill", () -> {
+            HttpResponse<String> response = ingressGet(survivor, "/hello");
+            return response.statusCode() == 200 && response.body().equals("hello from run 2");
+        });
+    }
+
+    private HttpResponse<String> ingressGet(String node, String path) throws Exception {
+        GenericContainer<?> container = nodes.get(node);
+        return http.send(HttpRequest.newBuilder(URI.create("http://" + container.getHost() + ":" + container.getMappedPort(8000) + path))
+                .header("Host", "web--" + TENANT + ".localhost").timeout(Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.ofString());
     }
 
     // --- cluster helpers ---

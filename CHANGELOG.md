@@ -23,6 +23,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase 3 — Host APIs and HTTP hosting (2026-10-06)
+
+### Added
+- **Host APIs for scripts** (D-025), each the successor of a 2017 host object (design: `docs/design/host-apis.md`; reference: `docs/scripting/host-apis.md`):
+  - `kv`: get, set (with exact `ttlMs`), delete, list (prefix and cursor), atomic `increment`, and namespaces (D-027).
+  - `bus`: publish, subscribe, request/handle, tenant-scoped, plus `POST /v1/bus/{topic}` and `/request` from outside.
+  - `fetch`: WHATWG-style, with an SSRF-safe egress policy that refuses private and reserved addresses, connects to the checked address, and follows no redirects. Size, time and concurrency limits apply (D-026).
+  - `log.{debug,info,warn,error}(message, fields)`: structured lines.
+- **HTTP hosting:** `ctx.serve(handler)` in services. Every node runs an ingress (`AUTOMATELY_INGRESS_PORT`, default 8000) that routes by host to the service's current run, on any node (D-029). Every service gets an automatic host `<service>--<tenant>.<AUTOMATELY_INGRESS_DOMAIN>`, and custom domains can be added through `/v1/services/{name}/domains` with DNS TXT verification (D-028). Unknown hosts get 404; a service that's down gets 503 with `Retry-After`; slow handlers get 504; too many requests in flight get 429.
+- **Mechanism:** the `HostServices` SPI in core; in the Javet runtime, `HostBridge`, asynchronous calls settled on the event loop, listeners, and cleanup when a run ends.
+- **Config:** `AUTOMATELY_INGRESS_PORT`, `AUTOMATELY_INGRESS_DOMAIN`, `AUTOMATELY_EGRESS_ALLOW_PRIVATE`. Docker and compose expose the ingress.
+- **Tests (115 → 167 unit, 3 → 4 Docker):**
+  - `HostBridgeTest`: parallel calls, typed errors, listeners and replies, cleanup, limits, response normalisation.
+  - `SharedDataKvStoreTest` and `NodeHostServicesTest`: tenant isolation, exact expiry, paging, 100 concurrent increments, bus isolation and errors, fetch, and egress refusals for 11 private or reserved targets.
+  - `HostApisTest` on a real 2-node cluster: kv across nodes and tenants, a service answering a job and HTTP, pub/sub, fetch refused, ingress on both nodes and over HTTP/2, 404/503, custom domain verification, names.
+  - `DockerClusterIT`: HTTP traffic moves to a survivor after the serving node is `SIGKILL`ed.
+
+### Changed
+- Tenant and service names can't contain `--`.
+- `ScriptRuntime.execute` takes `HostServices`, and `NodeVerticle` takes a `HostServicesFactory`.
+
+### Decided
+- No isolate pooling (D-024): measured 6.6 ms p50 per job including isolate creation.
+
+### Fixed (found by the new tests)
+- A fetch over the size limit surfaced as a generic network error (the reset fired before the limit was recorded).
+- Deleting a service left its verified custom domains routing to the next service with that name.
+- The ingress read only the `Host` header; it now routes by authority, which is how HTTP/2 carries the host.
+
 ## Phase 2b — Long-running services (2026-10-06)
 
 ### Added

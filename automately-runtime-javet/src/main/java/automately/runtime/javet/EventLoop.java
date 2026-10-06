@@ -1,5 +1,7 @@
 package automately.runtime.javet;
 
+import com.caoccao.javet.exceptions.JavetException;
+
 import java.util.HashSet;
 import java.util.PriorityQueue;
 import java.util.Set;
@@ -7,24 +9,36 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * One isolate's event loop: timers set by the script, and tasks posted from other threads (a stop
- * request, a wake-up after a kill; in phase 3, incoming requests). Timers are only touched on the
- * isolate's thread; {@link #post} is safe from any thread.
+ * One isolate's event loop: timers set by the script, tasks posted from other threads (a stop request,
+ * a host call's result, an inbound message or HTTP request), and the bookkeeping that says whether the
+ * script can still be woken up (calls in flight, active listeners). Everything except {@link #post} and
+ * {@link #wake} is only touched on the isolate's thread.
  */
 final class EventLoop {
 
+    /** Work for the isolate's thread; receives the prelude's entry points. */
+    @FunctionalInterface
+    interface Task {
+        void run(ScriptEntryPoints js) throws JavetException;
+    }
+
     private record Timer(long dueNanos, long sequence, int id) {
     }
+
+    private static final Task WAKE = js -> {
+    };
 
     private final PriorityQueue<Timer> timers = new PriorityQueue<>((a, b) -> a.dueNanos != b.dueNanos
             ? Long.compare(a.dueNanos, b.dueNanos)
             : Long.compare(a.sequence, b.sequence));
     /** Ids with a live timer; a cleared timer stays in the queue but is skipped when it comes due. */
     private final Set<Integer> live = new HashSet<>();
-    private final LinkedBlockingQueue<Runnable> tasks = new LinkedBlockingQueue<>();
+    private final LinkedBlockingQueue<Task> tasks = new LinkedBlockingQueue<>();
     private long sequence;
     private String uncaught;
     private boolean stopWatched;
+    private int callsInFlight;
+    private int listeners;
 
     // --- isolate thread only ---
 
@@ -58,12 +72,12 @@ final class EventLoop {
         return timers.isEmpty() ? -1 : Math.max(0, timers.peek().dueNanos - System.nanoTime());
     }
 
-    Runnable pollTask() {
+    Task pollTask() {
         return tasks.poll();
     }
 
     /** Waits for a posted task, at most {@code nanos} (or indefinitely if negative). */
-    Runnable awaitTask(long nanos) throws InterruptedException {
+    Task awaitTask(long nanos) throws InterruptedException {
         return nanos < 0 ? tasks.take() : tasks.poll(nanos, TimeUnit.NANOSECONDS);
     }
 
@@ -72,8 +86,33 @@ final class EventLoop {
         stopWatched = true;
     }
 
-    boolean isStopWatched() {
-        return stopWatched;
+    void callStarted() {
+        callsInFlight++;
+    }
+
+    void callSettled() {
+        callsInFlight--;
+    }
+
+    int callsInFlight() {
+        return callsInFlight;
+    }
+
+    void listenerAdded() {
+        listeners++;
+    }
+
+    void listenerRemoved() {
+        listeners--;
+    }
+
+    int listeners() {
+        return listeners;
+    }
+
+    /** Whether something outside the script's own code can still resolve its promise. */
+    boolean canBeWoken() {
+        return stopWatched || callsInFlight > 0 || listeners > 0;
     }
 
     void reportUncaught(String error) {
@@ -88,13 +127,12 @@ final class EventLoop {
 
     // --- any thread ---
 
-    void post(Runnable task) {
+    void post(Task task) {
         tasks.add(task);
     }
 
     /** Wakes the loop without doing anything, so it re-checks whether it was killed. */
     void wake() {
-        tasks.add(() -> {
-        });
+        tasks.add(WAKE);
     }
 }
