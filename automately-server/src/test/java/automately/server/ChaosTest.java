@@ -1,0 +1,189 @@
+package automately.server;
+
+import automately.server.Automately.RunningNode;
+import io.vertx.core.Future;
+import io.vertx.core.Vertx;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.client.HttpResponse;
+import io.vertx.ext.web.client.WebClient;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Kills the node running a job, mid-step, in a real three-node cluster with real V8 isolates, and checks
+ * the job's {@code onOrphan} policy is honoured end to end (docs/design/orphaned-jobs.md).
+ */
+class ChaosTest {
+
+    private static final String TENANT = "tenant-a";
+
+    /** Step "two" takes long enough on attempt 1 for the test to kill the node in the middle of it. */
+    private static final String RESUMABLE = """
+            export default async (input, ctx) => {
+              for (const name of ['one', 'two', 'three']) {
+                await ctx.step(name, () => {
+                  console.log(`ran ${name} on attempt ${ctx.attempt}`);
+                  const until = Date.now() + (name === 'two' && ctx.attempt === 1 ? 4000 : 20);
+                  while (Date.now() < until) {}
+                  return name.toUpperCase();
+                });
+              }
+              return { attempt: ctx.attempt, skipped: ctx.completedSteps, previous: ctx.previous && ctx.previous.outcome };
+            }
+            """;
+
+    private final List<RunningNode> nodes = new ArrayList<>();
+    private Vertx clientVertx;
+    private WebClient client;
+
+    @BeforeEach
+    void startCluster() throws Exception {
+        String clusterName = "automately-chaos-" + UUID.randomUUID();
+        for (String id : List.of("node-a", "node-b", "node-c")) {
+            nodes.add(await(Automately.start(ServerConfig.fromEnv(Map.of(
+                    "AUTOMATELY_NODE_ID", id,
+                    "AUTOMATELY_HTTP_PORT", "0",
+                    "AUTOMATELY_CAPACITY", "2",
+                    "AUTOMATELY_MAX_HEAP_MB", "64",
+                    "AUTOMATELY_HEARTBEAT_MS", "200",
+                    "AUTOMATELY_ORPHAN_GRACE_MS", "400",
+                    "AUTOMATELY_CLUSTERED", "true",
+                    "AUTOMATELY_CLUSTER_NAME", clusterName,
+                    "AUTOMATELY_CLUSTER_PORT", "17701",
+                    "AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")))));
+        }
+        clientVertx = Vertx.vertx();
+        client = WebClient.create(clientVertx);
+        long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+        while (get(nodes.getFirst(), "/v1/nodes").bodyAsJsonObject().getJsonArray("nodes").size() < 3) {
+            assertThat(System.nanoTime()).as("cluster formed").isLessThan(deadline);
+            Thread.sleep(100);
+        }
+    }
+
+    @AfterEach
+    void stopCluster() throws Exception {
+        await(clientVertx.close());
+        for (RunningNode node : nodes) {
+            node.stop().toCompletionStage().toCompletableFuture().handle((v, e) -> null).get(30, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void resumeContinuesOnAnotherNodeWithoutRepeatingCompletedSteps() throws Exception {
+        String id = submitAndAwaitStep(RESUMABLE, "resume", "one");
+        RunningNode victim = killNodeRunning(id);
+        RunningNode survivor = survivorOtherThan(victim);
+        Future<HttpResponse<Buffer>> events = client.get(survivor.httpPort(), "localhost", "/v1/jobs/" + id + "/events")
+                .putHeader("X-Automately-Tenant", TENANT).timeout(30_000).send();
+
+        JsonObject done = awaitTerminal(survivor, id);
+
+        assertThat(done.getString("status")).isEqualTo("SUCCEEDED");
+        assertThat(done.getInteger("attempt")).isEqualTo(2);
+        assertThat(done.getString("node")).isNotEqualTo(victim.nodeId());
+        assertThat(done.getJsonObject("output")).isEqualTo(new JsonObject()
+                .put("attempt", 2).put("skipped", new JsonArray().add("one")).put("previous", "ORPHANED"));
+        assertThat(done.getJsonArray("logs").getList()).as("attempt 2 never re-ran step one")
+                .containsExactly("ran two on attempt 2", "ran three on attempt 2");
+        assertThat(done.getJsonArray("attempts").stream().map(a -> ((JsonObject) a).getString("outcome")))
+                .containsExactly("ORPHANED", "SUCCEEDED");
+
+        JsonObject steps = get(survivor, "/v1/jobs/" + id + "/steps").bodyAsJsonObject();
+        assertThat(steps.getJsonArray("steps").stream().map(s -> ((JsonObject) s).getString("name") + "@" + ((JsonObject) s).getInteger("attempt")))
+                .containsExactly("one@1", "two@2", "three@2");
+
+        String stream = await(events).bodyAsString();
+        assertThat(stream).contains("event: attempt", "\"previousOutcome\":\"ORPHANED\"", "event: end", "\"status\":\"SUCCEEDED\"");
+    }
+
+    @Test
+    void failPolicyEndsAsOrphanedAndShowsHowFarItGot() throws Exception {
+        String id = submitAndAwaitStep(RESUMABLE, "fail", "one");
+        RunningNode victim = killNodeRunning(id);
+        RunningNode survivor = survivorOtherThan(victim);
+
+        JsonObject done = awaitTerminal(survivor, id);
+
+        assertThat(done.getString("status")).isEqualTo("ORPHANED");
+        assertThat(done.getInteger("attempt")).isEqualTo(1);
+        assertThat(done.getString("error")).contains(victim.nodeId());
+        JsonObject steps = get(survivor, "/v1/jobs/" + id + "/steps").bodyAsJsonObject();
+        assertThat(steps.getJsonArray("steps").stream().map(s -> ((JsonObject) s).getString("name"))).containsExactly("one");
+    }
+
+    private String submitAndAwaitStep(String script, String onOrphan, String step) throws Exception {
+        HttpResponse<Buffer> response = await(client.post(nodes.getFirst().httpPort(), "localhost", "/v1/jobs")
+                .putHeader("X-Automately-Tenant", TENANT)
+                .sendJsonObject(new JsonObject().put("script", script).put("onOrphan", onOrphan).put("timeoutMs", 30_000)));
+        assertThat(response.statusCode()).as(response.bodyAsString()).isEqualTo(202);
+        String id = response.bodyAsJsonObject().getString("id");
+        long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+        while (get(nodes.getFirst(), "/v1/jobs/" + id + "/steps").bodyAsJsonObject().getJsonArray("steps").stream()
+                .noneMatch(s -> ((JsonObject) s).getString("name").equals(step))) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("Step " + step + " never completed; job is " + get(nodes.getFirst(), "/v1/jobs/" + id).bodyAsString());
+            }
+            Thread.sleep(50);
+        }
+        return id;
+    }
+
+    private RunningNode killNodeRunning(String id) throws Exception {
+        String nodeId = get(nodes.getFirst(), "/v1/jobs/" + id).bodyAsJsonObject().getString("node");
+        RunningNode victim = nodes.stream().filter(n -> n.nodeId().equals(nodeId)).findFirst().orElseThrow();
+        nodes.remove(victim);
+        // Abrupt from the job's point of view: nothing records the attempt as finished.
+        String stopError = victim.stop().toCompletionStage().toCompletableFuture()
+                .handle((v, e) -> e == null ? null : e.toString()).get(60, TimeUnit.SECONDS);
+        assertThat(stopError).as("stopping " + victim.nodeId()).isNull();
+        RunningNode survivor = survivorOtherThan(victim);
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        JsonArray live = null;
+        while (System.nanoTime() < deadline) {
+            live = get(survivor, "/v1/nodes").bodyAsJsonObject().getJsonArray("nodes");
+            if (live.stream().noneMatch(n -> ((JsonObject) n).getString("id").equals(victim.nodeId()))) {
+                return victim;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError(victim.nodeId() + " still listed as live 10 s after stopping: " + live);
+    }
+
+    private RunningNode survivorOtherThan(RunningNode victim) {
+        return nodes.stream().filter(n -> n != victim).findFirst().orElseThrow();
+    }
+
+    private JsonObject awaitTerminal(RunningNode node, String id) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        JsonObject job = null;
+        while (System.nanoTime() < deadline) {
+            job = get(node, "/v1/jobs/" + id).bodyAsJsonObject();
+            if (List.of("SUCCEEDED", "FAILED", "TIMED_OUT", "ORPHANED").contains(job.getString("status"))) {
+                return job;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("Job never finished: " + job);
+    }
+
+    private HttpResponse<Buffer> get(RunningNode node, String path) throws Exception {
+        return await(client.get(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+    }
+
+    private static <T> T await(Future<T> future) throws Exception {
+        return future.toCompletionStage().toCompletableFuture().get(60, TimeUnit.SECONDS);
+    }
+}

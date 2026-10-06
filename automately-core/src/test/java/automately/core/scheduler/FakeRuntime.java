@@ -1,0 +1,129 @@
+package automately.core.scheduler;
+
+import automately.core.runtime.Execution;
+import automately.core.runtime.ExecutionResult;
+import automately.core.runtime.LogSink;
+import automately.core.runtime.RunningExecution;
+import automately.core.runtime.ScriptRuntime;
+import automately.core.runtime.StateSink;
+import automately.core.state.StateException;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
+import io.vertx.core.Vertx;
+import io.vertx.core.json.JsonArray;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+/**
+ * A runtime whose "scripts" are keywords:
+ * <ul>
+ *   <li>{@code hold}: runs until released or cancelled</li>
+ *   <li>{@code crash}: the runtime itself fails</li>
+ *   <li>{@code resumable}: runs steps a and b, holds on attempt 1 (so the test can kill the node), then runs
+ *       step c. Completed steps carried into a resumed attempt are skipped, like {@code ctx.step}</li>
+ *   <li>{@code late-step}: waits until released, then tries to complete step "late"; a rejected write is
+ *       recorded in {@link #stateErrors}. Models a zombie attempt writing after a takeover</li>
+ *   <li>anything else: returns the script upper-cased</li>
+ * </ul>
+ * Steps run on a worker thread because {@link StateSink} calls block.
+ */
+final class FakeRuntime implements ScriptRuntime {
+
+    private final Vertx vertx;
+    private final Map<String, Promise<ExecutionResult>> held = new ConcurrentHashMap<>();
+    /** Every step body that actually ran, as {@code name@attempt}. */
+    final List<String> executedSteps = new CopyOnWriteArrayList<>();
+    /** Cancellations, as {@code jobId#attempt: reason}. */
+    final List<String> cancellations = new CopyOnWriteArrayList<>();
+    /** State writes that were rejected, as {@code KIND: message}. */
+    final List<String> stateErrors = new CopyOnWriteArrayList<>();
+    private final Map<String, Promise<Void>> gates = new ConcurrentHashMap<>();
+
+    FakeRuntime(Vertx vertx) {
+        this.vertx = vertx;
+    }
+
+    @Override
+    public RunningExecution execute(Execution execution, LogSink logs, StateSink state) {
+        logs.log("info", "running " + execution.script() + " attempt " + execution.context().attempt());
+        String key = execution.jobId() + "#" + execution.context().attempt();
+        Promise<ExecutionResult> promise = Promise.promise();
+        switch (execution.script()) {
+            case "hold" -> held.put(key, promise);
+            case "crash" -> promise.fail("engine exploded");
+            case "resumable" -> vertx.<Void>executeBlocking(() -> {
+                step(execution, state, "a");
+                step(execution, state, "b");
+                return null;
+            }).onSuccess(v -> {
+                if (execution.context().attempt() == 1) {
+                    held.put(key, promise);
+                    return;
+                }
+                vertx.<Void>executeBlocking(() -> {
+                    step(execution, state, "c");
+                    return null;
+                }).onSuccess(x -> promise.tryComplete(ExecutionResult.succeeded(new JsonArray(List.of("a", "b", "c")))))
+                        .onFailure(promise::tryFail);
+            }).onFailure(promise::tryFail);
+            case "late-step" -> {
+                Promise<Void> gate = Promise.promise();
+                gates.put(key, gate);
+                gate.future().compose(v -> vertx.<String>executeBlocking(() -> {
+                    try {
+                        state.completeStep("late", true);
+                        return "wrote";
+                    } catch (StateException e) {
+                        stateErrors.add(e.kind() + ": " + e.getMessage());
+                        throw e;
+                    }
+                })).onSuccess(result -> promise.tryComplete(ExecutionResult.succeeded(result))).onFailure(promise::tryFail);
+            }
+            default -> promise.complete(ExecutionResult.succeeded(execution.script().toUpperCase()));
+        }
+        return new RunningExecution() {
+            @Override
+            public Future<ExecutionResult> result() {
+                return promise.future();
+            }
+
+            @Override
+            public void cancel(String reason) {
+                cancellations.add(key + ": " + reason);
+                promise.tryFail("cancelled: " + reason);
+            }
+        };
+    }
+
+    private void step(Execution execution, StateSink state, String name) {
+        if (execution.context().carried().step(name).isPresent()) {
+            return;
+        }
+        executedSteps.add(name + "@" + execution.context().attempt());
+        state.completeStep(name, name.toUpperCase());
+    }
+
+    /** Lets a held attempt finish successfully. */
+    void release(String jobId, int attempt) {
+        Promise<Void> gate = gates.remove(jobId + "#" + attempt);
+        if (gate != null) {
+            gate.tryComplete();
+        }
+        Promise<ExecutionResult> promise = held.remove(jobId + "#" + attempt);
+        if (promise != null) {
+            promise.tryComplete(ExecutionResult.succeeded("released attempt " + attempt));
+        }
+    }
+
+    void releaseAll() {
+        held.values().forEach(promise -> promise.tryComplete(ExecutionResult.succeeded("released")));
+        held.clear();
+    }
+
+    boolean isHeld(String jobId, int attempt) {
+        return held.containsKey(jobId + "#" + attempt) || gates.containsKey(jobId + "#" + attempt);
+    }
+}

@@ -1,0 +1,22 @@
+package automately.core.runtime;
+
+import automately.core.job.JobStatus;
+
+/**
+ * How a script run ended. A failing or timed-out script is a normal result, not a failed future;
+ * a failed future means the runtime itself broke.
+ */
+public record ExecutionResult(JobStatus status, Object output, String error) {
+
+    public static ExecutionResult succeeded(Object output) {
+        return new ExecutionResult(JobStatus.SUCCEEDED, output, null);
+    }
+
+    public static ExecutionResult failed(String error) {
+        return new ExecutionResult(JobStatus.FAILED, null, error);
+    }
+
+    public static ExecutionResult timedOut(String error) {
+        return new ExecutionResult(JobStatus.TIMED_OUT, null, error);
+    }
+}

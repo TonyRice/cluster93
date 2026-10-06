@@ -1,0 +1,8 @@
+target/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+file-uploads/
+hs_err_pid*.log
+core.[0-9]*
