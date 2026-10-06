@@ -23,6 +23,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase 3b, milestone 1 — The cluster is the database (2026-10-06)
+
+### Added
+- **Apache Ignite 2.18 replaces Hazelcast** as the cluster manager *and* the database (D-030). New module `automately-cluster-ignite`: `IgniteCluster` (bootstrap, durable data region, discovery, safe activation) and Ignite stores for jobs, job state, services, domains and `kv`. They use compare-and-set and indexed SQL, so a tenant's jobs, active jobs and `kv.list` no longer scan everything. **Why:** before this, a restart of every node lost all jobs, services, domains and `kv`. Tony asked for a database built into the cluster.
+- **Durability:** `AUTOMATELY_DATA_DIR` (the Dockerfile sets `/var/lib/automately` as a volume, and compose has a volume per node), `AUTOMATELY_DATA_BACKUPS` (1), `AUTOMATELY_DATA_MEMORY_MB` (256), `AUTOMATELY_BASELINE_ADJUST_MS` (60 000).
+- **Safe activation after restarts** (D-031), **replicated Vert.x maps** (D-032), **retries on topology changes** (D-033), and **`AUTOMATELY_CLUSTER_SIZE`**: a new durable cluster waits for its initial nodes before activating (D-035).
+- **Retention** of finished jobs (`AUTOMATELY_JOB_RETENTION_DAYS`, default 7; D-034), and `GET /v1/jobs?limit=`.
+- **Store contract tests** in core (`JobStoreContract`, `KvStoreContract`, `JobStateStoreContract`, `ServiceStoreContract`, `DomainStoreContract`), run against both the in-memory and the Ignite stores. Core publishes a test-jar for this.
+- **Tests:**
+  - `DurabilityTest`: a 2-node full restart with every store intact, and a 3-node cluster losing a node with no data lost.
+  - `FullRestartTest`: every node of a real 3-node Automately cluster stopped and restarted from disk. Finished jobs, `kv` and domains survive, and the service runs again from its checkpoint.
+  - `DockerClusterIT`: every container stopped and started (cold start) with the same checks.
+
+### Changed
+- `JobStore.list(tenant, limit)` and `deleteFinishedBefore`; `JobStateStore.delete`; `DomainStore` is now an interface (`SharedDataDomainStore` and `IgniteDomainStore`).
+- The ArchUnit boundary now keeps **Ignite** (and any cluster-manager SPI) inside `automately.cluster.ignite`.
+- Container JVM heap is 40 % (it was 50 %) to leave room for Ignite's off-heap data.
+- `AUTOMATELY_CLUSTER_NAME` is gone (it was Hazelcast-specific). Separate clusters use separate ports or members.
+
+### Removed
+- Hazelcast (`vertx-hazelcast`, `Clustering`, `ClusteredCompareAndSetTest`).
+
+### Fixed (found while switching)
+- Activating on the first returning node made partitions held by other nodes "lost" (D-031).
+- A restarting node racing Ignite's auto-activation made Ignite halt the JVM. First start versus restart is now decided from the data directory before Ignite starts (D-031).
+- A fresh cluster activated by its first node alone had no replicas for early writes (D-035).
+- A `SIGKILL` made the node registry unreadable ("partition has been lost") because Vert.x's caches had no backups (D-032).
+- Failover made API reads fail with "Remote node has left topology" (D-033).
+- Compare-and-set under heavy contention on one key exhausted its retries; it now backs off with jitter.
+
 ## Phase 3 — Host APIs and HTTP hosting (2026-10-06)
 
 ### Added

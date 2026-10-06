@@ -7,6 +7,7 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.AsyncMap;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.function.UnaryOperator;
 
 /**
@@ -45,6 +46,17 @@ public final class SharedDataJobStateStore implements JobStateStore {
         return m.get(key(jobId, attempt)).compose(json -> json != null
                 ? Future.succeededFuture(JobState.fromJson(json))
                 : latestBefore(m, jobId, attempt - 1));
+    }
+
+    @Override
+    public Future<Void> delete(String jobId, int lastAttempt) {
+        return map.compose(m -> {
+            List<Future<JsonObject>> removed = new java.util.ArrayList<>();
+            for (int attempt = 1; attempt <= lastAttempt; attempt++) {
+                removed.add(m.remove(key(jobId, attempt)));
+            }
+            return Future.all(removed).mapEmpty();
+        });
     }
 
     @Override

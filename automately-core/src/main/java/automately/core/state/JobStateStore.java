@@ -27,6 +27,9 @@ public interface JobStateStore {
     /** Fails with {@link StateException} ({@code LIMIT}) when over a size limit. */
     Future<JobState> saveCheckpoint(String jobId, int attempt, Object value);
 
+    /** Removes every attempt's state for a job (retention). */
+    Future<Void> delete(String jobId, int lastAttempt);
+
     /** Fails with {@link StateException} ({@code LIMIT}) when over a size limit. */
     Future<JobState> completeStep(String jobId, int attempt, String name, Object result, long now);
 }

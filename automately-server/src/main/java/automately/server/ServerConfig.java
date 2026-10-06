@@ -2,7 +2,9 @@ package automately.server;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +21,12 @@ import java.util.UUID;
  * @param ingressPort   where services' HTTP traffic arrives (routed by Host)
  * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
  * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
+ * @param dataDirectory durable storage for this node (Ignite persistence); null keeps data in memory only
+ * @param dataBackups   extra copies of every piece of data on other nodes
+ * @param dataMemoryMb  off-heap memory for the durable data region
+ * @param baselineAdjust how long a departed data node is waited for before its data is rebalanced elsewhere
+ * @param jobRetention  finished jobs older than this are deleted
+ * @param clusterSize   nodes a brand-new durable cluster waits for before activating
  * @param clusterMembers Hazelcast TCP/IP join addresses, e.g. {@code node1,node2,node3}; a host without a port is probed from {@code clusterPort} upwards
  */
 public record ServerConfig(
@@ -36,8 +44,13 @@ public record ServerConfig(
         int ingressPort,
         String ingressDomain,
         boolean egressAllowPrivate,
+        Path dataDirectory,
+        int dataBackups,
+        int dataMemoryMb,
+        Duration baselineAdjust,
+        Duration jobRetention,
+        int clusterSize,
         boolean clustered,
-        String clusterName,
         int clusterPort,
         List<String> clusterMembers) {
 
@@ -58,8 +71,13 @@ public record ServerConfig(
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_INGRESS_PORT", "8000")),
                 env.getOrDefault("AUTOMATELY_INGRESS_DOMAIN", "localhost"),
                 Boolean.parseBoolean(env.getOrDefault("AUTOMATELY_EGRESS_ALLOW_PRIVATE", "false")),
+                Optional.ofNullable(env.get("AUTOMATELY_DATA_DIR")).filter(dir -> !dir.isBlank()).map(Path::of).orElse(null),
+                Integer.parseInt(env.getOrDefault("AUTOMATELY_DATA_BACKUPS", "1")),
+                Integer.parseInt(env.getOrDefault("AUTOMATELY_DATA_MEMORY_MB", "256")),
+                Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_BASELINE_ADJUST_MS", "60000"))),
+                Duration.ofDays(Long.parseLong(env.getOrDefault("AUTOMATELY_JOB_RETENTION_DAYS", "7"))),
+                Integer.parseInt(env.getOrDefault("AUTOMATELY_CLUSTER_SIZE", "1")),
                 Boolean.parseBoolean(env.getOrDefault("AUTOMATELY_CLUSTERED", "false")),
-                env.getOrDefault("AUTOMATELY_CLUSTER_NAME", "automately"),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_CLUSTER_PORT", "5701")),
                 Arrays.stream(env.getOrDefault("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1").split(","))
                         .map(String::trim)

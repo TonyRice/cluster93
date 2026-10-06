@@ -186,7 +186,14 @@ public final class ApiVerticle extends VerticleBase {
     }
 
     private void listJobs(RoutingContext ctx) {
-        jobs.list(ctx.get("tenant"))
+        int limit;
+        try {
+            limit = Math.min(Math.max(1, Integer.parseInt(ctx.request().getParam("limit", "100"))), 1000);
+        } catch (NumberFormatException e) {
+            error(ctx, 400, "invalid_request", "limit must be a number");
+            return;
+        }
+        jobs.list(ctx.get("tenant"), limit)
                 .onSuccess(list -> ctx.json(new JsonObject().put("jobs",
                         new JsonArray(list.stream().map(Job::toSummaryJson).toList()))))
                 .onFailure(ctx::fail);

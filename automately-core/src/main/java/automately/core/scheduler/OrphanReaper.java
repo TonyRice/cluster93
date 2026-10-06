@@ -81,7 +81,7 @@ public final class OrphanReaper extends VerticleBase {
                 // A cluster call can hang while a member is leaving (Hazelcast's default operation timeout is
                 // minutes). Without a deadline, `sweeping` would stay set and reaping would stop until then.
                 .timeout(sweepDeadline())
-                .onFailure(err -> LOG.warn("Orphan sweep did not complete: {}", err.getMessage()))
+                .onFailure(err -> LOG.warn("Orphan sweep did not complete", err))
                 .onComplete(ar -> sweeping = false);
     }
 

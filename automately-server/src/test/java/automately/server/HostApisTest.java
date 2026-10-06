@@ -17,7 +17,6 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
@@ -37,9 +36,8 @@ class HostApisTest {
 
     @BeforeAll
     static void startCluster() throws Exception {
-        String clusterName = "automately-host-" + UUID.randomUUID();
-        nodeA = await(Automately.start(config("node-a", clusterName), vertx -> name -> Future.succeededFuture(TXT_RECORDS.getOrDefault(name, List.of()))));
-        nodeB = await(Automately.start(config("node-b", clusterName), vertx -> name -> Future.succeededFuture(TXT_RECORDS.getOrDefault(name, List.of()))));
+        nodeA = await(Automately.start(config("node-a"), vertx -> name -> Future.succeededFuture(TXT_RECORDS.getOrDefault(name, List.of()))));
+        nodeB = await(Automately.start(config("node-b"), vertx -> name -> Future.succeededFuture(TXT_RECORDS.getOrDefault(name, List.of()))));
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
         awaitJson(nodeA, TENANT, "/v1/nodes", json -> json.getJsonArray("nodes").size() == 2);
@@ -62,7 +60,7 @@ class HostApisTest {
         }
     }
 
-    private static ServerConfig config(String nodeId, String clusterName) {
+    private static ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
@@ -73,7 +71,6 @@ class HostApisTest {
                 Map.entry("AUTOMATELY_HEARTBEAT_MS", "200"),
                 Map.entry("AUTOMATELY_STOP_GRACE_MS", "1000"),
                 Map.entry("AUTOMATELY_CLUSTERED", "true"),
-                Map.entry("AUTOMATELY_CLUSTER_NAME", clusterName),
                 Map.entry("AUTOMATELY_CLUSTER_PORT", "20701"),
                 Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")));
     }

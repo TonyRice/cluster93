@@ -64,7 +64,7 @@ class ServiceSupervisorTest {
     }
 
     private List<Job> runsOf(String name) throws Exception {
-        return LocalClusterAccess.await(cluster.jobs().list(TENANT)).stream()
+        return LocalClusterAccess.await(cluster.jobs().list(TENANT, 1000)).stream()
                 .filter(job -> job.service() != null && job.service().name().equals(name))
                 .sorted(Comparator.comparingInt(job -> job.service().run()))
                 .toList();

@@ -37,12 +37,24 @@ public final class SharedDataJobStore implements JobStore {
     }
 
     @Override
-    public Future<List<Job>> list(String tenant) {
-        // A full scan is fine for now; tenant-indexed queries arrive with a durable store.
+    public Future<List<Job>> list(String tenant, int limit) {
+        // A full scan: this in-memory store is for development and tests; the Ignite store uses an index.
         return all().map(jobs -> jobs.stream()
                 .filter(job -> job.tenant().equals(tenant))
                 .sorted(Comparator.comparingLong(Job::createdAt).reversed())
+                .limit(limit)
                 .toList());
+    }
+
+    @Override
+    public Future<List<Job>> deleteFinishedBefore(long cutoff, int limit) {
+        return all().compose(jobs -> {
+            List<Job> expired = jobs.stream()
+                    .filter(job -> job.status().isTerminal() && job.finishedAt() != null && job.finishedAt() < cutoff)
+                    .limit(limit)
+                    .toList();
+            return map.compose(m -> Future.all(expired.stream().map(job -> m.remove(job.id())).toList())).map(done -> expired);
+        });
     }
 
     @Override

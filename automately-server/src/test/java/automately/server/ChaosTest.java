@@ -16,7 +16,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,7 +49,6 @@ class ChaosTest {
 
     @BeforeEach
     void startCluster() throws Exception {
-        String clusterName = "automately-chaos-" + UUID.randomUUID();
         for (String id : List.of("node-a", "node-b", "node-c")) {
             nodes.add(await(Automately.start(ServerConfig.fromEnv(Map.ofEntries(
                     Map.entry("AUTOMATELY_NODE_ID", id),
@@ -61,7 +59,6 @@ class ChaosTest {
                     Map.entry("AUTOMATELY_HEARTBEAT_MS", "200"),
                     Map.entry("AUTOMATELY_ORPHAN_GRACE_MS", "400"),
                     Map.entry("AUTOMATELY_CLUSTERED", "true"),
-                    Map.entry("AUTOMATELY_CLUSTER_NAME", clusterName),
                     Map.entry("AUTOMATELY_CLUSTER_PORT", "17701"),
                     Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"))))));
         }

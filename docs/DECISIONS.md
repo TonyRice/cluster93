@@ -198,3 +198,55 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **Decision:** Every node runs an ingress (`AUTOMATELY_INGRESS_PORT`). It routes by the request authority (the Host header on HTTP/1.1, `:authority` on HTTP/2), finds the service's current run, and forwards the request to that node over the event bus. The node hands it to the isolate's `ctx.serve` handler.
 **Cost:** Bodies are limited to 1 MB each way (they travel as event-bus messages) and there's no streaming. That's acceptable for APIs and webhooks; large uploads and downloads would need a direct proxy later.
+
+### D-030 — The cluster is the database: Apache Ignite replaces Hazelcast
+**Date:** 2026-10-06 · **Status:** Accepted (Tony chose a built-in distributed database over an external one, and Ignite over Infinispan or a home-grown Raft store). Supersedes the Hazelcast parts of D-004 and D-013
+
+**Decision:** Each node runs one embedded Apache Ignite 2.18, used both as the Vert.x cluster manager (`vertx-ignite`) and as Automately's durable, replicated store.
+- Jobs, job state, services, domains and `kv` live in tables in a durable data region, on disk under `AUTOMATELY_DATA_DIR` with a write-ahead log.
+- Each table keeps `AUTOMATELY_DATA_BACKUPS` copies on other nodes, uses compare-and-set transitions, and has SQL indexes (Calcite engine) for listings.
+- Ignite types stay in `automately-cluster-ignite`, enforced by ArchUnit; core still sees only its store interfaces, which now have shared contract tests run against both implementations.
+- With no data directory, Ignite keeps everything in memory (development); a single non-clustered node still uses the in-memory SharedData stores.
+
+**Evidence:** a spike and tests showed compare-and-set across nodes; a two-node and a three-node **full-cluster restart from disk** with everything intact (`DurabilityTest`, `FullRestartTest`, and `DockerClusterIT` stopping and starting every container); and losing a node with no data lost (1 backup).
+**Why not Ignite 3:** there's no Vert.x cluster manager for it yet, and 2.18 is the mature line. The store interfaces keep a later move open.
+**Cost:** a much larger jar (Ignite and Calcite), extra JVM flags (`ignite.jvm.args`, also in the Dockerfile), and memory for Ignite's off-heap regions (the container heap is now 40 %).
+
+### D-031 — Activate only when no data can be lost
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Evidence:** the first version forced the cluster active as soon as the first node restarted. Ignite then treated partitions held by not-yet-returned nodes as lost ("all partition owners have left").
+**Decision:**
+- Whether a node is starting for the **first time** is decided **before** Ignite starts, from whether its data directory already holds a database.
+- Only a first start may activate the cluster, and a brand-new durable cluster waits for `AUTOMATELY_CLUSTER_SIZE` nodes first (D-035).
+- A restarting node never activates the cluster itself. It waits until every baseline (data-holding) node is back, and Ignite activates by itself.
+- If some never return, the cluster activates without them after `AUTOMATELY_BASELINE_ADJUST_MS`, but **only if no more are missing than there are backups**; otherwise it keeps waiting and logs why. Baseline auto-adjust (on since the first start) then drops the missing nodes.
+
+**Also found:**
+- A restarting node that saw no baseline yet called "activate" while Ignite was already auto-activating. The interrupted write-ahead-log restore made Ignite **halt the JVM** (its protective failure handler).
+- Ignite forbids setting the baseline by hand while auto-adjust is on, and forbids changing it on an inactive cluster.
+
+### D-032 — Vert.x's maps are replicated and ignore partition loss
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Evidence:** after a `SIGKILL` in Docker, every read of the node registry failed with "partition has been lost" and scheduling stopped. Caches Vert.x creates by name had Ignite's default of **zero backups**.
+**Decision:** Automately supplies the cache templates `vertx-ignite` normally ships, but stricter. `__vertx.*` and every other name-created cache are REPLICATED, in memory, FULL_SYNC, with partition loss IGNORE.
+**Why:** that data (event-bus subscriptions, node info, the node registry) is small and re-announced every heartbeat; staying available matters more than any single entry. Durable tables configure themselves explicitly.
+
+### D-033 — Retry operations that fail only because the topology changed
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Evidence:** during failover, Ignite queries failed with "Remote node has left topology", and the API returned 500 mid-failover.
+**Decision:** Ignite table operations retry up to 10 times with growing pauses when the failure is a topology change, and the node registry retries its reads. These are reads, idempotent puts, or compare-and-set, which re-reads; anything else fails at once.
+
+### D-034 — Retention of finished jobs
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** The leader deletes finished jobs older than `AUTOMATELY_JOB_RETENTION_DAYS` (default 7), together with their checkpoints and steps, in batches every 10 minutes. `GET /v1/jobs` gained `?limit` (default 100, at most 1 000).
+**Why:** with durable storage, history would otherwise grow until the disk fills.
+
+### D-035 — A new durable cluster waits for its initial size before activating
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Evidence:** on a fresh three-node durable cluster, the first node to start activated alone, so the baseline was one node. Writes in the first seconds had no replicas, and stopping a node in that window lost data ("all partition owners have left").
+**Decision:** `AUTOMATELY_CLUSTER_SIZE` (default 1), similar to Consul's `bootstrap_expect`. A **brand-new durable** cluster activates only once that many server nodes are present, so its baseline, and therefore replication, includes them from the first write. It has no effect on restarts (D-031) or on in-memory clusters. The compose file and the Docker test set it to 3.

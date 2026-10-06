@@ -4,7 +4,7 @@ A self-hostable, clustered runtime for sandboxed JavaScript functions, built on 
 
 You submit a script to any node. The cluster runs it on the least-loaded node in a fresh V8 isolate, streams its console output live, and stores the result where every node can read it.
 
-> **Status: phase 3 done** (orphaned jobs, resumable steps, long-running services, host APIs and HTTP hosting). This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
+> **Status: phase 3 done; phase 3b in progress.** The cluster is now the database (embedded Apache Ignite: durable, replicated, survives full restarts). Streaming and a files API are next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
 
 ## Try it
 
@@ -76,15 +76,17 @@ Errors use one envelope: `{"error": {"code": "...", "message": "..."}}`.
                  │   ServiceSupervisor ─────┘   (keeps services running: restart, backoff, roll)
                  │                                  │
                  └── JobStore · JobStateStore · ServiceStore · NodeRegistry ──┘
-                     Vert.x SharedData (AsyncMap), compare-and-set transitions
-                     └── Hazelcast, only in automately.server.cluster
+                     embedded Apache Ignite: durable (disk + WAL), replicated, indexed SQL,
+                     compare-and-set transitions; also the Vert.x cluster manager
+                     └── only in automately-cluster-ignite
 ```
 
 | Module | Contents |
 |---|---|
 | `automately-core` | Job model and transitions, `JobStore`, `JobStateStore`, `NodeRegistry`, the `ScriptRuntime` SPI, scheduler, node verticle, orphan reaper, and services (`ServiceDefinition`, `ServiceStore`, `ServiceSupervisor`). Depends only on `vertx-core` |
 | `automately-runtime-javet` | `ScriptRuntime` on V8 isolates, with an event loop per isolate (timers, stop requests, async host calls) |
-| `automately-server` | Bootstrap, REST API, HTTP ingress, Hazelcast wiring, the shaded jar |
+| `automately-cluster-ignite` | The cluster is the database: Ignite bootstrap, durable tables, the Ignite stores |
+| `automately-server` | Bootstrap, REST API, HTTP ingress, the shaded jar |
 
 ### Sandbox
 
@@ -115,14 +117,19 @@ The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each o
 | `AUTOMATELY_INGRESS_DOMAIN` | `localhost` | Automatic hosts are `<service>--<tenant>.<domain>` |
 | `AUTOMATELY_EGRESS_ALLOW_PRIVATE` | `false` | Let `fetch` reach private addresses (local development only) |
 | `AUTOMATELY_CLUSTERED` | `false` | |
-| `AUTOMATELY_CLUSTER_NAME` | `automately` | |
-| `AUTOMATELY_CLUSTER_PORT` | `5701` | |
-| `AUTOMATELY_CLUSTER_MEMBERS` | `127.0.0.1` | Hazelcast TCP/IP join list |
+| `AUTOMATELY_CLUSTER_PORT` | `5701` | Ignite discovery (communication uses port + 100) |
+| `AUTOMATELY_CLUSTER_MEMBERS` | `127.0.0.1` | Hosts to join (`host` or `host:port`) |
+| `AUTOMATELY_DATA_DIR` | *(unset: in memory)* | Durable storage for this node; the image sets `/var/lib/automately` |
+| `AUTOMATELY_DATA_BACKUPS` | `1` | Extra copies of all data; survives that many simultaneous node losses |
+| `AUTOMATELY_CLUSTER_SIZE` | `1` | Nodes a brand-new durable cluster waits for before activating |
+| `AUTOMATELY_DATA_MEMORY_MB` | `256` | Off-heap memory for the data region (the rest stays on disk) |
+| `AUTOMATELY_BASELINE_ADJUST_MS` | `60000` | How long a missing data node is waited for before its data is rebalanced |
+| `AUTOMATELY_JOB_RETENTION_DAYS` | `7` | Finished jobs older than this are deleted |
 
 ## Build
 
 ```bash
-./mvnw verify      # JDK 21. Unit tests (2- and 3-node clusters in one JVM, chaos), then
+./mvnw verify      # JDK 21. Unit tests (2- and 3-node clusters in one JVM, chaos, full restarts), then
                    # DockerClusterIT: 3 containers, SIGKILL mid-job (needs Docker; -DskipITs to skip)
 ```
 

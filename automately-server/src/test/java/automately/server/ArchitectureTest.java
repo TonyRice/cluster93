@@ -25,10 +25,10 @@ class ArchitectureTest {
                 .importPackages("automately");
     }
 
-    static final ArchRule hazelcastStaysInsideTheClusterPackage = noClasses()
-            .that().resideOutsideOfPackage("automately.server.cluster..")
-            .should().dependOnClassesThat().resideInAnyPackage("com.hazelcast..", "io.vertx.spi.cluster..")
-            .because("business code talks to Vert.x shared data, never to the cluster manager");
+    static final ArchRule igniteStaysInsideItsModule = noClasses()
+            .that().resideOutsideOfPackage("automately.cluster.ignite..")
+            .should().dependOnClassesThat().resideInAnyPackage("org.apache.ignite..", "io.vertx.spi.cluster..", "com.hazelcast..")
+            .because("business code talks to store interfaces and Vert.x, never to the cluster manager or database directly (D-030)");
 
     static final ArchRule noMutableStaticState = fields()
             .that().areDeclaredInClassesThat().resideInAPackage("automately..")
@@ -49,7 +49,7 @@ class ArchitectureTest {
             .because("core defines the SPI; engines and the HTTP edge plug into it");
 
     static Stream<ArchRule> rules() {
-        return Stream.of(hazelcastStaysInsideTheClusterPackage, noMutableStaticState, noHandRolledThreads, coreDoesNotKnowAboutEnginesOrTransport);
+        return Stream.of(igniteStaysInsideItsModule, noMutableStaticState, noHandRolledThreads, coreDoesNotKnowAboutEnginesOrTransport);
     }
 
     @ParameterizedTest

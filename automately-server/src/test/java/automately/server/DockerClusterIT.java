@@ -99,6 +99,7 @@ class DockerClusterIT {
                     .withEnv("AUTOMATELY_CLUSTERED", "true")
                     .withEnv("AUTOMATELY_CLUSTER_MEMBERS", "node1,node2,node3")
                     .withEnv("AUTOMATELY_CAPACITY", "2")
+                    .withEnv("AUTOMATELY_CLUSTER_SIZE", "3")
                     .withEnv("AUTOMATELY_MAX_HEAP_MB", "64")
                     .withExposedPorts(8080, 8000)
                     .withLogConsumer(output)
@@ -228,8 +229,51 @@ class DockerClusterIT {
 
     private HttpResponse<String> ingressGet(String node, String path) throws Exception {
         GenericContainer<?> container = nodes.get(node);
-        return http.send(HttpRequest.newBuilder(URI.create("http://" + container.getHost() + ":" + container.getMappedPort(8000) + path))
+        return http.send(HttpRequest.newBuilder(URI.create("http://" + container.getHost() + ":" + hostPort(node, 8000) + path))
                 .header("Host", "web--" + TENANT + ".localhost").timeout(Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    void everythingSurvivesStoppingAndStartingEveryContainer() throws Exception {
+        HttpResponse<String> created = http.send(request(anyNode(), "/v1/services/counter")
+                .PUT(HttpRequest.BodyPublishers.ofString(new JsonObject().put("script", ChaosTest.COUNTING_SERVICE).encode())).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        String[] firstRun = new String[1];
+        awaitCondition(Duration.ofSeconds(30), "service counting", () -> {
+            JsonObject service = getJson(anyNode(), "/v1/services/counter");
+            firstRun[0] = service.getString("currentJobId");
+            return "RUNNING".equals(service.getString("status")) && checkpointCount(anyNode(), firstRun[0]) >= 5;
+        });
+        String jobId = submit("export default async () => { await kv.set('greeting', 'survives'); return 'stored'; }", "fail", new JsonObject());
+        awaitCondition(Duration.ofSeconds(30), "job done", () -> "SUCCEEDED".equals(job(anyNode(), jobId).getString("status")));
+
+        // A clean shutdown of the whole cluster, then a cold start, like a host reboot.
+        var docker = DockerClientFactory.instance().client();
+        for (GenericContainer<?> node : nodes.values()) {
+            docker.stopContainerCmd(node.getContainerId()).withTimeout(30).exec();
+        }
+        for (GenericContainer<?> node : nodes.values()) {
+            docker.startContainerCmd(node.getContainerId()).exec();
+        }
+        awaitCondition(Duration.ofSeconds(180), "3 live nodes after the restart", () -> liveNodes(anyNode()).size() == 3);
+
+        assertThat(job(anyNode(), jobId).getString("output")).isEqualTo("stored");
+        String reader = submit("export default () => kv.get('greeting')", "fail", new JsonObject());
+        awaitCondition(Duration.ofSeconds(30), "kv read", () -> "survives".equals(job(anyNode(), reader).getString("output")));
+        JsonObject[] service = new JsonObject[1];
+        awaitCondition(Duration.ofSeconds(60), "service running again", () -> {
+            service[0] = getJson(anyNode(), "/v1/services/counter");
+            return "RUNNING".equals(service[0].getString("status")) && service[0].getInteger("runs") >= 2;
+        });
+        awaitCondition(Duration.ofSeconds(30), "count carried over", () -> checkpointCount(anyNode(), service[0].getString("currentJobId")) >= 5);
+    }
+
+    /** Looked up each time: Docker assigns new host ports when a container restarts. */
+    private int hostPort(String node, int containerPort) {
+        var ports = DockerClientFactory.instance().client().inspectContainerCmd(nodes.get(node).getContainerId()).exec()
+                .getNetworkSettings().getPorts().getBindings();
+        return Integer.parseInt(ports.get(new com.github.dockerjava.api.model.ExposedPort(containerPort))[0].getHostPortSpec());
     }
 
     // --- cluster helpers ---
@@ -266,7 +310,7 @@ class DockerClusterIT {
 
     private HttpRequest.Builder request(String node, String path) {
         GenericContainer<?> container = nodes.get(node);
-        return HttpRequest.newBuilder(URI.create("http://" + container.getHost() + ":" + container.getMappedPort(8080) + path))
+        return HttpRequest.newBuilder(URI.create("http://" + container.getHost() + ":" + hostPort(node, 8080) + path))
                 .header("X-Automately-Tenant", TENANT)
                 .timeout(Duration.ofSeconds(60));
     }

@@ -20,10 +20,14 @@ public final class SharedDataNodeRegistry implements NodeRegistry {
     static final String MAP_NAME = "automately.nodes";
     static final Duration CLEANUP_AFTER = Duration.ofMinutes(1);
 
+    static final int READ_ATTEMPTS = 5;
+
+    private final Vertx vertx;
     private final Future<AsyncMap<String, JsonObject>> map;
     private final Duration livenessWindow;
 
     public SharedDataNodeRegistry(Vertx vertx, Duration livenessWindow) {
+        this.vertx = vertx;
         this.map = vertx.sharedData().getAsyncMap(MAP_NAME);
         this.livenessWindow = livenessWindow;
     }
@@ -40,9 +44,24 @@ public final class SharedDataNodeRegistry implements NodeRegistry {
 
     @Override
     public Future<List<NodeInfo>> liveNodes() {
-        return map.compose(AsyncMap::values).map(values -> {
+        return values(1).map(values -> {
             long cutoff = System.currentTimeMillis() - livenessWindow.toMillis();
             return values.stream().map(NodeInfo::fromJson).filter(node -> node.lastSeen() >= cutoff).toList();
+        });
+    }
+
+    /**
+     * Reading the whole map can fail transiently while a node joins or leaves the cluster (seen with Ignite:
+     * "Remote node has left topology"). It's a read, so retrying shortly after is safe.
+     */
+    private Future<List<JsonObject>> values(int attempt) {
+        return map.compose(AsyncMap::values).recover(err -> {
+            if (attempt >= READ_ATTEMPTS) {
+                return Future.failedFuture(err);
+            }
+            io.vertx.core.Promise<List<JsonObject>> retried = io.vertx.core.Promise.promise();
+            vertx.setTimer(100L * attempt, id -> values(attempt + 1).onComplete(retried));
+            return retried.future();
         });
     }
 }

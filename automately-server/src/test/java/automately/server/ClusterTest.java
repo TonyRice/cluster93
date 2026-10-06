@@ -17,7 +17,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,9 +33,8 @@ class ClusterTest {
 
     @BeforeAll
     static void startCluster() throws Exception {
-        String clusterName = "automately-test-" + UUID.randomUUID();
-        nodeA = await(Automately.start(config("node-a", clusterName)));
-        nodeB = await(Automately.start(config("node-b", clusterName)));
+        nodeA = await(Automately.start(config("node-a")));
+        nodeB = await(Automately.start(config("node-b")));
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
         awaitLiveNodes(2);
@@ -49,7 +47,7 @@ class ClusterTest {
         await(nodeA.stop());
     }
 
-    private static ServerConfig config(String nodeId, String clusterName) {
+    private static ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.of(
                 "AUTOMATELY_NODE_ID", nodeId,
                 "AUTOMATELY_HTTP_PORT", "0",
@@ -57,7 +55,6 @@ class ClusterTest {
                 "AUTOMATELY_CAPACITY", "1",
                 "AUTOMATELY_MAX_HEAP_MB", "64",
                 "AUTOMATELY_CLUSTERED", "true",
-                "AUTOMATELY_CLUSTER_NAME", clusterName,
                 "AUTOMATELY_CLUSTER_PORT", "15701",
                 "AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"));
     }

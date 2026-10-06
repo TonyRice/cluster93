@@ -85,7 +85,7 @@ public final class ServiceSupervisor extends VerticleBase {
         nodes.liveNodes()
                 .compose(live -> isLeader(live) ? services.all().compose(this::reconcileAll) : Future.succeededFuture())
                 .timeout(interval.multipliedBy(5).compareTo(Duration.ofSeconds(2)) > 0 ? interval.multipliedBy(5) : Duration.ofSeconds(2))
-                .onFailure(err -> LOG.warn("Service sweep did not complete: {}", err.getMessage()))
+                .onFailure(err -> LOG.warn("Service sweep did not complete", err))
                 .onComplete(ar -> sweeping = false);
     }
 

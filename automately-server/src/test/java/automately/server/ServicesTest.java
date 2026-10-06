@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
@@ -42,9 +41,8 @@ class ServicesTest {
 
     @BeforeAll
     static void startCluster() throws Exception {
-        String clusterName = "automately-services-" + UUID.randomUUID();
-        nodeA = await(Automately.start(config("node-a", clusterName)));
-        nodeB = await(Automately.start(config("node-b", clusterName)));
+        nodeA = await(Automately.start(config("node-a")));
+        nodeB = await(Automately.start(config("node-b")));
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
         long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
@@ -69,7 +67,7 @@ class ServicesTest {
         }
     }
 
-    private static ServerConfig config(String nodeId, String clusterName) {
+    private static ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
@@ -80,7 +78,6 @@ class ServicesTest {
                 Map.entry("AUTOMATELY_STOP_GRACE_MS", "1000"),
                 Map.entry("AUTOMATELY_MAX_SERVICES_PER_TENANT", "3"),
                 Map.entry("AUTOMATELY_CLUSTERED", "true"),
-                Map.entry("AUTOMATELY_CLUSTER_NAME", clusterName),
                 Map.entry("AUTOMATELY_CLUSTER_PORT", "19701"),
                 Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")));
     }

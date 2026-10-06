@@ -15,8 +15,8 @@ public interface JobStore {
     /** Completes with {@code null} when no job has that id. */
     Future<Job> get(String id);
 
-    /** All jobs owned by a tenant, newest first. */
-    Future<List<Job>> list(String tenant);
+    /** A tenant's newest jobs, newest first, at most {@code limit}. */
+    Future<List<Job>> list(String tenant, int limit);
 
     /** All jobs still {@code QUEUED} or {@code RUNNING}, across tenants. Used by the orphan reaper. */
     Future<List<Job>> active();
@@ -27,4 +27,7 @@ public interface JobStore {
      * job does not exist or the transition does not apply (for example a stale attempt).
      */
     Future<Optional<Job>> update(String id, Function<Job, Optional<Job>> transition);
+
+    /** Deletes up to {@code limit} jobs that finished before {@code cutoff}; completes with the deleted jobs. Retention. */
+    Future<List<Job>> deleteFinishedBefore(long cutoff, int limit);
 }
