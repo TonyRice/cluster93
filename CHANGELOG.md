@@ -23,6 +23,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase 3b, milestone 2 — Streaming (2026-10-06)
+
+### Added
+- **Streaming HTTP for services.** The ingress now proxies each request **as a stream** to the serving node's new internal endpoint (`AUTOMATELY_INTERNAL_PORT`, protected by a cluster secret), with backpressure both ways. The 1 MB request and response limit is gone (D-036). **Why:** Tony asked for services that can serve large files and stream.
+- **Script API:**
+  - request bodies are async-iterable streams of `Uint8Array` chunks (`req.body`, plus `bytes()`)
+  - responses can be a `Uint8Array`, an (async) iterable such as a generator for server-sent events, or `{status, headers, body}` with any of those
+  - writes wait for the client
+  - a client disconnecting ends the generator
+- **Streaming `fetch`:** `res.body` streams, and `bytes()` was added. `text()` and `json()` buffer up to 5 MB, and the timeout applies to idle gaps rather than the whole download.
+- `TextEncoder` and `TextDecoder` (UTF-8) for scripts.
+- **Config:** `AUTOMATELY_INTERNAL_PORT` (8090), `AUTOMATELY_ADVERTISE_HOST` (this host's address), `AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS` (60 000), `AUTOMATELY_MAX_REQUEST_BYTES` (1 GiB).
+- **Core SPI:** `HttpExchange`, `BodyStream`, `FetchedResponse`, `HostServices.serve` and `HostServices.fetch`.
+- **Tests:**
+  - runtime: request bodies streamed in chunks, an unread body paused rather than buffered, generator responses waiting for a slow client, disconnect ending the generator, streaming and buffered fetch with its 5 MB cap, cancellation of an unread fetch body, read-once bodies, UTF-8 round trip
+  - core: 20 MB streamed fetch, the concurrency limit released when bodies finish
+  - `StreamingTest` through a real 2-node ingress: a 48 MB upload checksummed by the script, a 48 MB streamed download, SSE plus cleanup on disconnect, backpressure against a paused client (stops at about 22 MB of kernel socket buffers instead of 250 MB), idle timeout returning 504, 413 over the limit, and the internal endpoint refusing callers without the secret
+
+### Fixed (found by the new tests)
+- Backpressure counted chunks only once the isolate processed them, so a stalled script's queue could grow without bound (D-037).
+- The ingress's idle timeout ignored request-body progress and cut off long uploads (D-037).
+- An early 413 left the connection with an unread body, which hung the next request; such connections are now closed (D-037).
+- An idle timeout was reported as 502 instead of 504 (D-037).
+
+### Changed
+- Removed: the event-bus HTTP forwarding (`ServeVerticle`, `Addresses.nodeHttp`). Node registry entries carry `endpoint`.
+
 ## Phase 3b, milestone 1 — The cluster is the database (2026-10-06)
 
 ### Added

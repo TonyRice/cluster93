@@ -51,6 +51,8 @@ class FullRestartTest {
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
+                Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
+                Map.entry("AUTOMATELY_ADVERTISE_HOST", "127.0.0.1"),
                 Map.entry("AUTOMATELY_CAPACITY", "2"),
                 Map.entry("AUTOMATELY_MAX_HEAP_MB", "64"),
                 Map.entry("AUTOMATELY_HEARTBEAT_MS", "200"),

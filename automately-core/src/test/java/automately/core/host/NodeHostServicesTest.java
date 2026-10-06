@@ -39,7 +39,25 @@ class NodeHostServicesTest {
                 case "/echo" -> req.body().onSuccess(body -> req.response().putHeader("x-method", req.method().name())
                         .end(req.getHeader("x-custom") + "|" + body));
                 case "/redirect" -> req.response().setStatusCode(302).putHeader("location", "http://169.254.169.254/").end();
-                case "/huge" -> req.response().end("x".repeat(FetchClient.MAX_RESPONSE_BYTES + 1));
+                case "/big" -> {
+                    // 20 MB in 64 KB chunks, honouring backpressure.
+                    req.response().setChunked(true);
+                    io.vertx.core.buffer.Buffer chunk = io.vertx.core.buffer.Buffer.buffer("x".repeat(64 * 1024));
+                    int[] sent = {0};
+                    Runnable[] pump = new Runnable[1];
+                    pump[0] = () -> {
+                        while (sent[0] < 320 && !req.response().writeQueueFull()) {
+                            req.response().write(chunk);
+                            sent[0]++;
+                        }
+                        if (sent[0] == 320) {
+                            req.response().end();
+                        } else {
+                            req.response().drainHandler(v -> pump[0].run());
+                        }
+                    };
+                    pump[0].run();
+                }
                 case "/slow" -> vertx.setTimer(3_000, id -> req.response().end("late"));
                 default -> req.response().setStatusCode(404).end();
             }
@@ -148,41 +166,71 @@ class NodeHostServicesTest {
 
     // --- fetch ---
 
-    @Test
-    void fetchReturnsStatusHeadersAndBody() throws Exception {
-        JsonObject response = (JsonObject) await(host("acme", true).call("http.fetch", new JsonObject().put("url", url("/json"))));
+    /** Reads a fetched body to the end. */
+    private static String readAll(automately.core.runtime.FetchedResponse response) throws Exception {
+        java.util.concurrent.CompletableFuture<String> done = new java.util.concurrent.CompletableFuture<>();
+        io.vertx.core.buffer.Buffer all = io.vertx.core.buffer.Buffer.buffer();
+        response.body().handler(all::appendBuffer, () -> done.complete(all.toString()), done::completeExceptionally);
+        response.body().resume();
+        return done.get(30, TimeUnit.SECONDS);
+    }
 
-        assertThat(response.getInteger("status")).isEqualTo(200);
-        assertThat(response.getJsonObject("headers").getString("content-type")).isEqualTo("application/json");
-        assertThat(new JsonObject(response.getString("body"))).isEqualTo(new JsonObject().put("hello", "world"));
+    private automately.core.runtime.FetchedResponse fetch(NodeHostServices host, JsonObject args) throws Exception {
+        return await(host.fetch(args));
+    }
+
+    @Test
+    void fetchReturnsStatusHeadersAndAStreamingBody() throws Exception {
+        automately.core.runtime.FetchedResponse response = fetch(host("acme", true), new JsonObject().put("url", url("/json")));
+
+        assertThat(response.meta().getInteger("status")).isEqualTo(200);
+        assertThat(response.meta().getJsonObject("headers").getString("content-type")).isEqualTo("application/json");
+        assertThat(new JsonObject(readAll(response))).isEqualTo(new JsonObject().put("hello", "world"));
     }
 
     @Test
     void fetchSendsMethodHeadersAndBody() throws Exception {
-        JsonObject response = (JsonObject) await(host("acme", true).call("http.fetch", new JsonObject().put("url", url("/echo"))
+        automately.core.runtime.FetchedResponse response = fetch(host("acme", true), new JsonObject().put("url", url("/echo"))
                 .put("method", "POST").put("headers", new JsonObject().put("x-custom", "yes").put("host", "evil.example"))
-                .put("body", "payload")));
+                .put("body", "payload"));
 
-        assertThat(response.getString("body")).isEqualTo("yes|payload");
-        assertThat(response.getJsonObject("headers").getString("x-method")).isEqualTo("POST");
+        assertThat(readAll(response)).isEqualTo("yes|payload");
+        assertThat(response.meta().getJsonObject("headers").getString("x-method")).isEqualTo("POST");
     }
 
     @Test
     void fetchDoesNotFollowRedirects() throws Exception {
-        JsonObject response = (JsonObject) await(host("acme", true).call("http.fetch", new JsonObject().put("url", url("/redirect"))));
+        automately.core.runtime.FetchedResponse response = fetch(host("acme", true), new JsonObject().put("url", url("/redirect")));
 
-        assertThat(response.getInteger("status")).isEqualTo(302);
+        assertThat(response.meta().getInteger("status")).isEqualTo(302);
+        response.body().cancel();
     }
 
     @Test
-    void fetchCapsResponseSize() {
-        assertHostError(host("acme", true).call("http.fetch", new JsonObject().put("url", url("/huge"))), "RangeError", "limit_exceeded");
+    void fetchStreamsLargeBodiesWithoutALimit() throws Exception {
+        automately.core.runtime.FetchedResponse response = fetch(host("acme", true), new JsonObject().put("url", url("/big")));
+
+        assertThat(readAll(response)).hasSize(320 * 64 * 1024);
     }
 
     @Test
     void fetchTimesOut() {
-        assertHostError(host("acme", true).call("http.fetch", new JsonObject().put("url", url("/slow")).put("timeoutMs", 300)),
-                "TimeoutError", "timeout");
+        assertHostError(host("acme", true).fetch(new JsonObject().put("url", url("/slow")).put("timeoutMs", 300)), "TimeoutError", "timeout");
+    }
+
+    @Test
+    void concurrentFetchesAreLimitedUntilBodiesAreDone() throws Exception {
+        NodeHostServices host = host("acme", true);
+        List<automately.core.runtime.FetchedResponse> open = new java.util.ArrayList<>();
+        for (int i = 0; i < NodeHostServices.MAX_CONCURRENT_FETCHES; i++) {
+            open.add(fetch(host, new JsonObject().put("url", url("/json"))));
+        }
+
+        assertHostError(host.fetch(new JsonObject().put("url", url("/json"))), "RangeError", "limit_exceeded");
+        readAll(open.getFirst());
+        open.subList(1, open.size()).forEach(r -> r.body().cancel());
+        Thread.sleep(100);
+        assertThat(readAll(fetch(host, new JsonObject().put("url", url("/json"))))).contains("hello");
     }
 
     @ParameterizedTest
@@ -191,13 +239,13 @@ class NodeHostServicesTest {
             "http://169.254.169.254/latest/meta-data/", "http://[::1]/", "http://[fd00::1]/", "http://0.0.0.0/",
             "http://100.64.0.1/", "http://[::ffff:127.0.0.1]/"})
     void privateAndReservedAddressesAreRefusedByDefault(String target) {
-        assertHostError(host("acme", false).call("http.fetch", new JsonObject().put("url", target)), "TypeError", "egress_denied");
+        assertHostError(host("acme", false).fetch(new JsonObject().put("url", target)), "TypeError", "egress_denied");
     }
 
     @Test
     void onlyHttpSchemesAreAllowed() {
-        assertHostError(host("acme", true).call("http.fetch", new JsonObject().put("url", "file:///etc/passwd")), "TypeError", "invalid_argument");
-        assertHostError(host("acme", true).call("http.fetch", new JsonObject().put("url", "ftp://example.com/")), "TypeError", "invalid_argument");
+        assertHostError(host("acme", true).fetch(new JsonObject().put("url", "file:///etc/passwd")), "TypeError", "invalid_argument");
+        assertHostError(host("acme", true).fetch(new JsonObject().put("url", "ftp://example.com/")), "TypeError", "invalid_argument");
     }
 
     @Test
@@ -211,14 +259,14 @@ class NodeHostServicesTest {
     @Test
     void onlyOneServeRegistrationPerJobAndOnlyForServices() throws Exception {
         NodeHostServices host = host("acme", false);
-        HostServices.Registration first = await(host.listen("http.serve", new JsonObject(), in -> { }));
+        HostServices.Registration first = await(host.serve(exchange -> { }));
 
-        assertHostError(host.listen("http.serve", new JsonObject(), in -> { }).map(Object.class::cast), "Error", "already_serving");
+        assertHostError(host.serve(exchange -> { }).map(Object.class::cast), "Error", "already_serving");
         await(first.cancel());
         assertThat(serve.handler("job-1")).isNull();
 
         NodeHostServices job = new NodeHostServices(vertx, "acme", "job-2", false, kv, new FetchClient(vertx, EgressPolicy.PUBLIC_ONLY), serve);
-        assertHostError(job.listen("http.serve", new JsonObject(), in -> { }).map(Object.class::cast), "Error", "not_a_service");
+        assertHostError(job.serve(exchange -> { }).map(Object.class::cast), "Error", "not_a_service");
     }
 
     private static void assertHostError(Future<?> future, String name, String code) {

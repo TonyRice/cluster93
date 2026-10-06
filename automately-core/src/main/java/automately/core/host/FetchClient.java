@@ -1,6 +1,9 @@
 package automately.core.host;
 
+import automately.core.runtime.BodyStream;
+import automately.core.runtime.FetchedResponse;
 import automately.core.runtime.HostException;
+import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
 import io.vertx.core.Promise;
@@ -27,11 +30,11 @@ import java.util.Set;
 /**
  * Outbound HTTP for scripts ({@code fetch}). Resolves the host, refuses addresses the {@link EgressPolicy}
  * forbids, then connects to that exact address (keeping the {@code Host} header and TLS SNI), so the
- * checked address is the one used. No redirects are followed; bodies are text, capped in size.
+ * checked address is the one used. No redirects are followed. The response body is streamed; the script's
+ * {@code text()} and {@code json()} cap what they buffer.
  */
 public final class FetchClient {
 
-    public static final int MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
     public static final int MAX_REQUEST_BYTES = 1024 * 1024;
     public static final long DEFAULT_TIMEOUT_MS = 30_000;
     private static final Set<String> METHODS = Set.of("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
@@ -48,8 +51,12 @@ public final class FetchClient {
                 new PoolOptions().setHttp1MaxSize(64));
     }
 
-    /** {@code args}: url, method, headers (object), body (string or null), timeoutMs (or null). */
-    public Future<JsonObject> fetch(JsonObject args) {
+    /**
+     * {@code args}: url, method, headers (object), body (string or null), timeoutMs (or null). Completes with the
+     * status and headers once they arrive; the body is a paused stream. {@code release} runs once the body has
+     * ended, failed or been cancelled (or if the request fails).
+     */
+    public Future<FetchedResponse> fetch(JsonObject args, Runnable release) {
         URI uri;
         try {
             uri = new URI(args.getString("url", ""));
@@ -71,6 +78,7 @@ public final class FetchClient {
         if (body != null && body.getBytes(StandardCharsets.UTF_8).length > MAX_REQUEST_BYTES) {
             return Future.failedFuture(HostException.limit("Request body is over " + MAX_REQUEST_BYTES + " bytes"));
         }
+        // Applies to connecting and to any pause between chunks, not to the whole download, so long streams work.
         long timeoutMs = Math.min(args.getLong("timeoutMs") == null ? DEFAULT_TIMEOUT_MS : args.getLong("timeoutMs"), DEFAULT_TIMEOUT_MS);
         String host = uri.getHost().startsWith("[") ? uri.getHost().substring(1, uri.getHost().length() - 1) : uri.getHost();
         int port = uri.getPort() > 0 ? uri.getPort() : scheme.equals("https") ? 443 : 80;
@@ -86,7 +94,8 @@ public final class FetchClient {
                     .setSsl(scheme.equals("https"))
                     .setURI(path)
                     .setFollowRedirects(false)
-                    .setTimeout(timeoutMs);
+                    .setConnectTimeout(timeoutMs)
+                    .setIdleTimeout(timeoutMs);
             MultiMap headers = MultiMap.caseInsensitiveMultiMap();
             JsonObject requested = args.getJsonObject("headers", new JsonObject());
             requested.forEach(h -> {
@@ -97,7 +106,7 @@ public final class FetchClient {
             headers.set("Host", uri.getPort() > 0 ? host + ":" + port : host);
             headers.add("User-Agent", "Automately/2");
             options.setHeaders(headers);
-            return exchange(options, body, uri.toString());
+            return exchange(options, body, uri.toString(), release);
         });
     }
 
@@ -114,32 +123,49 @@ public final class FetchClient {
         }, false);
     }
 
-    private Future<JsonObject> exchange(RequestOptions options, String body, String url) {
-        Promise<JsonObject> result = Promise.promise();
+    private Future<FetchedResponse> exchange(RequestOptions options, String body, String url, Runnable release) {
+        Context context = vertx.getOrCreateContext();
+        Promise<FetchedResponse> result = Promise.promise();
         client.request(options).onFailure(err -> result.tryFail(networkError(err))).onSuccess(request -> {
             request.response().onFailure(err -> result.tryFail(networkError(err))).onSuccess(response -> {
-                Buffer received = Buffer.buffer();
-                response.handler(chunk -> {
-                    if (received.length() + chunk.length() > MAX_RESPONSE_BYTES) {
-                        // Fail first: resetting fires the exception handler synchronously, which would win otherwise.
-                        result.tryFail(HostException.limit("Response body is over " + MAX_RESPONSE_BYTES + " bytes"));
-                        request.reset();
-                        return;
+                response.pause();
+                JsonObject headers = new JsonObject();
+                response.headers().names().forEach(name ->
+                        headers.put(name.toLowerCase(Locale.ROOT), String.join(", ", response.headers().getAll(name))));
+                JsonObject meta = new JsonObject()
+                        .put("status", response.statusCode())
+                        .put("statusText", response.statusMessage())
+                        .put("headers", headers)
+                        .put("url", url);
+                BodyStream stream = new VertxBodyStream(response, context, request::reset);
+                result.tryComplete(new FetchedResponse(meta, new BodyStream() {
+                    @Override
+                    public void handler(java.util.function.Consumer<Buffer> chunk, Runnable end, java.util.function.Consumer<Throwable> error) {
+                        stream.handler(chunk, () -> {
+                            release.run();
+                            end.run();
+                        }, err -> {
+                            release.run();
+                            error.accept(networkError(err));
+                        });
                     }
-                    received.appendBuffer(chunk);
-                });
-                response.exceptionHandler(err -> result.tryFail(networkError(err)));
-                response.endHandler(v -> {
-                    JsonObject headers = new JsonObject();
-                    response.headers().names().forEach(name ->
-                            headers.put(name.toLowerCase(Locale.ROOT), String.join(", ", response.headers().getAll(name))));
-                    result.tryComplete(new JsonObject()
-                            .put("status", response.statusCode())
-                            .put("statusText", response.statusMessage())
-                            .put("headers", headers)
-                            .put("body", received.toString(StandardCharsets.UTF_8))
-                            .put("url", url));
-                });
+
+                    @Override
+                    public void pause() {
+                        stream.pause();
+                    }
+
+                    @Override
+                    public void resume() {
+                        stream.resume();
+                    }
+
+                    @Override
+                    public void cancel() {
+                        release.run();
+                        stream.cancel();
+                    }
+                }));
             });
             if (body == null) {
                 request.end();

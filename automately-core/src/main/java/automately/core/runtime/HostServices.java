@@ -25,6 +25,12 @@ public interface HostServices {
      */
     Future<Registration> listen(String kind, JsonObject args, Consumer<Inbound> listener);
 
+    /** Makes this run serve HTTP ({@code ctx.serve}); each request arrives as a streaming exchange. */
+    Future<Registration> serve(Consumer<HttpExchange> handler);
+
+    /** Outbound HTTP ({@code fetch}); the response body is a paused stream. */
+    Future<FetchedResponse> fetch(JsonObject args);
+
     /** Stops every listener this execution registered. Called once the script has ended. */
     Future<Void> close();
 
@@ -42,6 +48,16 @@ public interface HostServices {
         @Override
         public Future<Registration> listen(String kind, JsonObject args, Consumer<Inbound> listener) {
             return Future.failedFuture(new HostException("Error", "unavailable", "Host API \"" + kind + "\" is not available here"));
+        }
+
+        @Override
+        public Future<Registration> serve(Consumer<HttpExchange> handler) {
+            return Future.failedFuture(new HostException("Error", "unavailable", "Serving HTTP is not available here"));
+        }
+
+        @Override
+        public Future<FetchedResponse> fetch(JsonObject args) {
+            return Future.failedFuture(new HostException("Error", "unavailable", "fetch is not available here"));
         }
 
         @Override

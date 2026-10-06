@@ -27,7 +27,7 @@ import automately.core.host.HostRouter;
 import automately.core.host.HostServicesFactory;
 import automately.core.host.NodeHostServices;
 import automately.core.host.ServeRegistry;
-import automately.core.host.ServeVerticle;
+import automately.core.host.InternalHttpVerticle;
 import automately.core.host.SharedDataKvStore;
 import automately.core.host.TxtResolver;
 import automately.server.api.ApiVerticle;
@@ -103,21 +103,31 @@ public final class Automately {
                 new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving);
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter);
-        IngressVerticle ingress = new IngressVerticle(config.ingressPort(), hostRouter, services, jobs);
+        // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
+        return clusterSecret(vertx).compose(secret -> {
+            InternalHttpVerticle endpoint = new InternalHttpVerticle(config.internalPort(), secret, serving);
+            IngressVerticle ingress = new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes, secret,
+                    config.ingressIdleTimeout(), config.maxRequestBytes());
+            return vertx.deployVerticle(endpoint)
+                    .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes,
+                            runtime, config.heartbeat(), config.stopGrace(), hostServices, config.advertiseHost() + ":" + endpoint.port())))
+                    .compose(id -> vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, config.heartbeat(),
+                            config.orphanGrace(), config.requeueAfter())))
+                    .compose(id -> vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler,
+                            config.heartbeat(), ServiceSupervisor.Timing.DEFAULT)))
+                    .compose(id -> vertx.deployVerticle(new RetentionVerticle(instanceId, jobs, state, nodes, config.jobRetention(),
+                            RETENTION_INTERVAL)))
+                    .compose(id -> vertx.deployVerticle(api))
+                    .compose(id -> vertx.deployVerticle(ingress))
+                    .map(id -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster));
+        }).recover(err -> vertx.close().transform(v -> Future.failedFuture(err)));
+    }
 
-        return vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes, runtime,
-                        config.heartbeat(), config.stopGrace(), hostServices))
-                .compose(id -> vertx.deployVerticle(new ServeVerticle(instanceId, serving)))
-                .compose(id -> vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, config.heartbeat(),
-                        config.orphanGrace(), config.requeueAfter())))
-                .compose(id -> vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler,
-                        config.heartbeat(), ServiceSupervisor.Timing.DEFAULT)))
-                .compose(id -> vertx.deployVerticle(new RetentionVerticle(instanceId, jobs, state, nodes, config.jobRetention(),
-                        RETENTION_INTERVAL)))
-                .compose(id -> vertx.deployVerticle(api))
-                .compose(id -> vertx.deployVerticle(ingress))
-                .map(id -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster))
-                .recover(err -> vertx.close().transform(v -> Future.failedFuture(err)));
+    /** One random secret per cluster, agreed through shared data (the first node to ask sets it). */
+    static Future<String> clusterSecret(Vertx vertx) {
+        String candidate = UUID.randomUUID() + "-" + UUID.randomUUID();
+        return vertx.sharedData().<String, String>getAsyncMap("automately.cluster")
+                .compose(map -> map.putIfAbsent("internal-secret", candidate).map(existing -> existing == null ? candidate : existing));
     }
 
     public record RunningNode(String nodeId, String instanceId, Vertx vertx, int httpPort, int ingressPort, IgniteCluster cluster) {

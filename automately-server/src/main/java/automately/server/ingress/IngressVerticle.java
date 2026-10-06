@@ -1,49 +1,66 @@
 package automately.server.ingress;
 
-import automately.core.host.Addresses;
 import automately.core.host.HostRouter;
+import automately.core.host.InternalHttpVerticle;
 import automately.core.job.JobStatus;
 import automately.core.job.JobStore;
+import automately.core.node.NodeInfo;
+import automately.core.node.NodeRegistry;
 import automately.core.service.ServiceStore;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
 import io.vertx.core.VerticleBase;
-import io.vertx.core.buffer.Buffer;
-import io.vertx.core.eventbus.DeliveryOptions;
-import io.vertx.core.eventbus.ReplyException;
-import io.vertx.core.eventbus.ReplyFailure;
+import io.vertx.core.http.HttpClient;
+import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerRequest;
+import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.http.PoolOptions;
+import io.vertx.core.http.RequestOptions;
 import io.vertx.core.json.JsonObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Locale;
+import java.util.Set;
 
 /**
- * Serves services' HTTP traffic (the successor to 2017's ClusteredHttpServer). Each request's Host is
- * routed to a service, the service's current run gives the node instance, and the request is forwarded
- * there over the event bus; the script's handler answers. Any node's ingress can serve any host.
+ * Serves services' HTTP traffic (the successor to 2017's ClusteredHttpServer). Each request's host is routed to a
+ * service; the service's current run gives the node; the request is then **proxied as a stream** to that node's
+ * internal endpoint, request body and response body both, with backpressure. Any node's ingress can serve any host.
+ * There's no size limit on responses and no total time limit, only an idle timeout between chunks, so large files and
+ * server-sent events work.
  */
 public final class IngressVerticle extends VerticleBase {
 
     private static final Logger LOG = LoggerFactory.getLogger(IngressVerticle.class);
 
-    public static final int MAX_BODY_BYTES = 1024 * 1024;
-    static final long REQUEST_TIMEOUT_MS = 30_000;
+    static final Set<String> HOP_BY_HOP = Set.of("connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
+            "proxy-authorization", "proxy-authenticate", "host");
 
     private final int port;
     private final HostRouter router;
     private final ServiceStore services;
     private final JobStore jobs;
+    private final NodeRegistry nodes;
+    private final String secret;
+    private final Duration idleTimeout;
+    private final long maxRequestBytes;
     private HttpServer server;
+    private HttpClient client;
 
-    public IngressVerticle(int port, HostRouter router, ServiceStore services, JobStore jobs) {
+    public IngressVerticle(int port, HostRouter router, ServiceStore services, JobStore jobs, NodeRegistry nodes, String secret,
+                           Duration idleTimeout, long maxRequestBytes) {
         this.port = port;
         this.router = router;
         this.services = services;
         this.jobs = jobs;
+        this.nodes = nodes;
+        this.secret = secret;
+        this.idleTimeout = idleTimeout;
+        this.maxRequestBytes = maxRequestBytes;
     }
 
     public int port() {
@@ -52,129 +69,258 @@ public final class IngressVerticle extends VerticleBase {
 
     @Override
     public Future<?> start() {
+        client = vertx.createHttpClient(new HttpClientOptions().setKeepAlive(true), new PoolOptions().setHttp1MaxSize(256));
         return vertx.createHttpServer().requestHandler(this::handle).listen(port).onSuccess(bound -> server = bound);
     }
 
     private void handle(HttpServerRequest request) {
         request.pause();
-        // authority() is the Host header on HTTP/1.1 and :authority on HTTP/2.
         String host = host(request);
-        router.route(host).compose(route -> {
+        String length = request.getHeader("Content-Length");
+        if (length != null && parseLong(length) > maxRequestBytes) {
+            error(request, 413, "Request body is over " + maxRequestBytes + " bytes", false);
+            return;
+        }
+        resolve(host).onComplete(ar -> {
+            if (ar.failed()) {
+                LOG.warn("Ingress routing failed for {}", host, ar.cause());
+                error(request, 502, "Bad gateway", false);
+                return;
+            }
+            Target target = ar.result();
+            if (target.error() != null) {
+                error(request, target.status(), target.error(), target.status() == 503);
+                return;
+            }
+            proxy(request, host, target);
+        });
+    }
+
+    /** Where a request should go: a node endpoint and job, or an error to answer with. */
+    private record Target(String endpoint, String jobId, int status, String error) {
+
+        static Target of(String endpoint, String jobId) {
+            return new Target(endpoint, jobId, 0, null);
+        }
+
+        static Target error(int status, String message) {
+            return new Target(null, null, status, message);
+        }
+    }
+
+    private Future<Target> resolve(String host) {
+        return router.route(host).compose(route -> {
             if (route == null) {
-                return Future.succeededFuture(Answer.error(404, "No service is served at " + host, false));
+                return Future.succeededFuture(Target.error(404, "No service is served at " + host));
             }
             return services.get(route.tenant(), route.service()).compose(service -> {
                 if (service == null) {
-                    return Future.succeededFuture(Answer.error(404, "No service is served at " + host, false));
+                    return Future.succeededFuture(Target.error(404, "No service is served at " + host));
                 }
                 if (service.currentJobId() == null) {
-                    return Future.succeededFuture(Answer.error(503, "The service is not running", true));
+                    return Future.succeededFuture(Target.error(503, "The service is not running"));
                 }
-                return jobs.get(service.currentJobId()).compose(job -> job == null || job.status() != JobStatus.RUNNING
-                        ? Future.succeededFuture(Answer.error(503, "The service is starting", true))
-                        : readBody(request).compose(body -> forward(job.nodeInstance(), job.id(), request, body)));
+                return jobs.get(service.currentJobId()).compose(job -> {
+                    if (job == null || job.status() != JobStatus.RUNNING) {
+                        return Future.succeededFuture(Target.error(503, "The service is starting"));
+                    }
+                    return nodes.liveNodes().map(live -> live.stream()
+                            .filter(node -> node.instanceId().equals(job.nodeInstance()) && node.endpoint() != null)
+                            .map(NodeInfo::endpoint)
+                            .findFirst()
+                            .map(endpoint -> Target.of(endpoint, job.id()))
+                            .orElse(Target.error(503, "The service's node is unavailable")));
+                });
             });
-        }).onComplete(ar -> {
-            Answer answer = ar.succeeded() ? ar.result() : failure(ar.cause());
-            if (!request.response().ended()) {
-                answer.write(request);
-            }
         });
     }
 
-    private Future<String> readBody(HttpServerRequest request) {
-        String length = request.getHeader("Content-Length");
-        if (length != null && Long.parseLong(length) > MAX_BODY_BYTES) {
-            return Future.failedFuture(new TooLarge());
+    private void proxy(HttpServerRequest request, String host, Target target) {
+        int colon = target.endpoint().lastIndexOf(':');
+        MultiMap headers = MultiMap.caseInsensitiveMultiMap();
+        request.headers().forEach(h -> {
+            String name = h.getKey().toLowerCase(Locale.ROOT);
+            if (!HOP_BY_HOP.contains(name) && !name.startsWith("x-automately-") && !name.equals("content-length")) {
+                headers.add(h.getKey(), h.getValue());
+            }
+        });
+        String forwardedFor = request.getHeader("X-Forwarded-For");
+        String remote = request.remoteAddress() == null ? "unknown" : request.remoteAddress().hostAddress();
+        headers.set("X-Forwarded-For", forwardedFor == null ? remote : forwardedFor + ", " + remote);
+        headers.set("X-Forwarded-Host", host);
+        headers.set("X-Forwarded-Proto", request.isSSL() ? "https" : "http");
+        headers.set(InternalHttpVerticle.SECRET_HEADER, secret);
+        headers.set(InternalHttpVerticle.JOB_HEADER, target.jobId());
+        RequestOptions options = new RequestOptions()
+                .setMethod(request.method())
+                .setHost(target.endpoint().substring(0, colon))
+                .setPort(Integer.parseInt(target.endpoint().substring(colon + 1)))
+                .setURI(request.uri())
+                .setHeaders(headers)
+                .setConnectTimeout(5_000);
+
+        HttpServerResponse response = request.response();
+        client.request(options).onFailure(err -> {
+            // The node is gone or unreachable; the cluster will move the service.
+            error(request, 503, "The service's node is unavailable", true);
+        }).onSuccess(upstream -> {
+            Idle idle = new Idle(request, upstream);
+            response.closeHandler(v -> {
+                idle.stop();
+                upstream.reset();
+            });
+            response.endHandler(v -> idle.stop());
+            upstream.response().onFailure(err -> upstreamFailed(request, err)).onSuccess(answer -> {
+                response.setStatusCode(answer.statusCode());
+                answer.headers().forEach(h -> {
+                    if (!HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT))) {
+                        response.headers().add(h.getKey(), h.getValue());
+                    }
+                });
+                if (answer.statusCode() == 503 && !response.headers().contains("Retry-After")) {
+                    response.putHeader("Retry-After", "1");
+                }
+                response.putHeader("Server", "automately");
+                if (answer.getHeader("Content-Length") == null) {
+                    response.setChunked(true);
+                }
+                answer.handler(chunk -> {
+                    idle.touch();
+                    response.write(chunk);
+                    if (response.writeQueueFull()) {
+                        answer.pause();
+                        response.drainHandler(v -> answer.resume());
+                    }
+                });
+                answer.endHandler(v -> {
+                    idle.stop();
+                    response.end();
+                });
+                answer.exceptionHandler(err -> {
+                    idle.stop();
+                    error(request, 502, "The service's connection failed", false);
+                });
+            });
+            streamBody(request, upstream, idle);
+        });
+    }
+
+    /**
+     * Closes a proxied request that has gone {@code idleTimeout} without a byte moving in **either** direction.
+     * Vert.x's own idle timeout only watches the response, so it fired during long uploads the service was
+     * still reading.
+     */
+    private final class Idle {
+
+        private final HttpServerRequest request;
+        private final HttpClientRequest upstream;
+        private final long timer;
+        private volatile long lastActivity = System.currentTimeMillis();
+
+        Idle(HttpServerRequest request, HttpClientRequest upstream) {
+            this.request = request;
+            this.upstream = upstream;
+            long period = Math.max(50, Math.min(1_000, idleTimeout.toMillis() / 4));
+            this.timer = vertx.setPeriodic(period, id -> check());
         }
-        Buffer body = Buffer.buffer();
-        io.vertx.core.Promise<String> promise = io.vertx.core.Promise.promise();
-        request.handler(chunk -> {
-            if (body.length() + chunk.length() > MAX_BODY_BYTES) {
-                promise.tryFail(new TooLarge());
+
+        void touch() {
+            lastActivity = System.currentTimeMillis();
+        }
+
+        void stop() {
+            vertx.cancelTimer(timer);
+        }
+
+        private void check() {
+            if (System.currentTimeMillis() - lastActivity < idleTimeout.toMillis()) {
                 return;
             }
-            body.appendBuffer(chunk);
-        });
-        request.endHandler(v -> promise.tryComplete(body.toString(StandardCharsets.UTF_8)));
-        request.exceptionHandler(promise::tryFail);
-        request.resume();
-        return promise.future();
+            stop();
+            // Answer first: resetting the upstream fires its failure path (a 502) synchronously.
+            error(request, 504, "The service did not answer in time", false);
+            upstream.reset();
+        }
     }
 
-    private Future<Answer> forward(String instanceId, String jobId, HttpServerRequest request, String body) {
-        JsonObject headers = new JsonObject();
-        request.headers().names().forEach(name -> headers.put(name.toLowerCase(Locale.ROOT), String.join(", ", request.headers().getAll(name))));
-        JsonObject query = new JsonObject();
-        request.params().names().forEach(name -> query.put(name, request.params().get(name)));
-        JsonObject forwarded = new JsonObject()
-                .put("jobId", jobId)
-                .put("request", new JsonObject()
-                        .put("method", request.method().name())
-                        .put("url", request.absoluteURI())
-                        .put("path", request.path())
-                        .put("host", host(request))
-                        .put("query", query)
-                        .put("headers", headers)
-                        .put("body", body));
-        return vertx.eventBus().<JsonObject>request(Addresses.nodeHttp(instanceId), forwarded, new DeliveryOptions().setSendTimeout(REQUEST_TIMEOUT_MS))
-                .map(reply -> Answer.of(reply.body()));
+    /** Forwards the request body chunk by chunk, pausing the client when the node can't keep up, and enforcing the size limit. */
+    private void streamBody(HttpServerRequest request, HttpClientRequest upstream, Idle idle) {
+        String length = request.getHeader("Content-Length");
+        if (length != null) {
+            upstream.putHeader("Content-Length", length);
+        } else {
+            upstream.setChunked(true);
+        }
+        long[] received = {0};
+        request.handler(chunk -> {
+            idle.touch();
+            received[0] += chunk.length();
+            if (received[0] > maxRequestBytes) {
+                request.handler(null);
+                upstream.reset();
+                error(request, 413, "Request body is over " + maxRequestBytes + " bytes", false);
+                return;
+            }
+            upstream.write(chunk);
+            if (upstream.writeQueueFull()) {
+                request.pause();
+                upstream.drainHandler(v -> {
+                    idle.touch();
+                    request.resume();
+                });
+            }
+        });
+        request.endHandler(v -> upstream.end());
+        request.exceptionHandler(err -> upstream.reset());
+        request.resume();
+    }
+
+    private static void upstreamFailed(HttpServerRequest request, Throwable err) {
+        String message = String.valueOf(err.getMessage()).toLowerCase(Locale.ROOT);
+        if (message.contains("timeout") || message.contains("timed out")) {
+            error(request, 504, "The service did not answer in time", false);
+        } else {
+            error(request, 502, "The service's connection failed", false);
+        }
     }
 
     private static String host(HttpServerRequest request) {
+        // authority() is the Host header on HTTP/1.1 and :authority on HTTP/2.
         return request.authority() == null ? request.getHeader("Host") : request.authority().host();
     }
 
-    private static Answer failure(Throwable error) {
-        if (error instanceof TooLarge) {
-            return Answer.error(413, "Request body is over " + MAX_BODY_BYTES + " bytes", false);
+    private static void error(HttpServerRequest request, int status, String message, boolean retry) {
+        HttpServerResponse response = request.response();
+        if (response.ended()) {
+            return;
         }
-        if (error instanceof ReplyException reply) {
-            if (reply.failureType() == ReplyFailure.TIMEOUT) {
-                return Answer.error(504, "The service did not answer in time", false);
-            }
-            if (reply.failureType() == ReplyFailure.NO_HANDLERS) {
-                return Answer.error(503, "The service's node is unavailable", true);
-            }
-            int code = reply.failureCode();
-            return Answer.error(code == 503 || code == 429 || (code >= 400 && code < 600) ? code : 502, reply.getMessage(), code == 503);
+        if (response.headWritten()) {
+            response.reset();
+            return;
         }
-        LOG.warn("Ingress request failed", error);
-        return Answer.error(502, "Bad gateway", false);
+        response.setStatusCode(status).putHeader("content-type", "application/json").putHeader("Server", "automately");
+        if (retry) {
+            response.putHeader("Retry-After", "1");
+        }
+        // Answering before the request body was read (a 413, or a route that never existed) leaves unread bytes on
+        // the connection, so it can't be reused: say so and close it once the answer is out.
+        boolean unread = !request.isEnded();
+        if (unread) {
+            response.putHeader("Connection", "close");
+        }
+        response.end(new JsonObject().put("error", new JsonObject().put("code", status).put("message", message)).encode())
+                .onComplete(ar -> {
+                    if (unread) {
+                        request.connection().close();
+                    }
+                });
     }
 
-    private static final class TooLarge extends RuntimeException {
-        TooLarge() {
-            super(null, null, false, false);
-        }
-    }
-
-    /** A response to write: from the script, or an error from the ingress itself. */
-    private record Answer(int status, JsonObject headers, String body, boolean retry) {
-
-        static Answer of(JsonObject response) {
-            return new Answer(response.getInteger("status", 200), response.getJsonObject("headers", new JsonObject()),
-                    response.getString("body", ""), false);
-        }
-
-        static Answer error(int status, String message, boolean retry) {
-            return new Answer(status, new JsonObject().put("content-type", "application/json"),
-                    new JsonObject().put("error", new JsonObject().put("code", status).put("message", message)).encode(), retry);
-        }
-
-        void write(HttpServerRequest request) {
-            MultiMap out = request.response().headers();
-            headers.forEach(h -> {
-                String name = h.getKey().toLowerCase(Locale.ROOT);
-                if (!name.equals("content-length") && !name.equals("transfer-encoding") && !name.equals("connection")) {
-                    out.set(h.getKey(), String.valueOf(h.getValue()));
-                }
-            });
-            if (retry) {
-                out.set("Retry-After", "1");
-            }
-            out.set("Server", "automately");
-            request.response().setStatusCode(status).end(body);
+    private static long parseLong(String value) {
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 }

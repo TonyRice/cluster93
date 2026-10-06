@@ -11,8 +11,8 @@ FROM eclipse-temurin:21-jre AS runtime
 RUN useradd --system --uid 10001 automately \
  && mkdir -p /var/lib/automately && chown automately /var/lib/automately
 WORKDIR /opt/automately
-# API, ingress, Ignite discovery and communication.
-EXPOSE 8080 8000 5701 5801
+# API, ingress, the internal endpoint (cluster-only), Ignite discovery and communication.
+EXPOSE 8080 8000 8090 5701 5801
 # Durable data (Ignite persistence). Mount a volume here; without AUTOMATELY_DATA_DIR data is in memory only.
 VOLUME /var/lib/automately
 ENV AUTOMATELY_DATA_DIR=/var/lib/automately

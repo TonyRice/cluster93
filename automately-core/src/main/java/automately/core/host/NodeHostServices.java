@@ -1,6 +1,8 @@
 package automately.core.host;
 
+import automately.core.runtime.FetchedResponse;
 import automately.core.runtime.HostException;
+import automately.core.runtime.HttpExchange;
 import automately.core.runtime.HostServices;
 import automately.core.runtime.Inbound;
 import io.vertx.core.Future;
@@ -68,7 +70,6 @@ public final class NodeHostServices implements HostServices {
                 case "kv.increment" -> kv.increment(tenant, namespace(args), key(args), by(args)).map(Object.class::cast);
                 case "bus.publish" -> publish(args);
                 case "bus.request" -> request(args);
-                case "http.fetch" -> fetchLimited(args);
                 default -> Future.failedFuture(new HostException("Error", "unknown_operation", "Unknown host operation " + operation));
             };
         } catch (HostException e) {
@@ -82,7 +83,6 @@ public final class NodeHostServices implements HostServices {
             return switch (kind) {
                 case "bus.subscribe" -> consume(Addresses.topic(tenant, topic(args)), false, listener);
                 case "bus.handle" -> consume(Addresses.handler(tenant, topic(args)), true, listener);
-                case "http.serve" -> serve(listener);
                 default -> Future.failedFuture(new HostException("Error", "unknown_operation", "Unknown listener kind " + kind));
             };
         } catch (HostException e) {
@@ -162,15 +162,24 @@ public final class NodeHostServices implements HostServices {
 
     // --- http ---
 
-    private Future<Object> fetchLimited(JsonObject args) {
+    /** At most {@value #MAX_CONCURRENT_FETCHES} fetches whose bodies are still open. */
+    @Override
+    public Future<FetchedResponse> fetch(JsonObject args) {
         if (fetchesInFlight.incrementAndGet() > MAX_CONCURRENT_FETCHES) {
             fetchesInFlight.decrementAndGet();
             return Future.failedFuture(HostException.limit("Too many concurrent fetches (limit " + MAX_CONCURRENT_FETCHES + ")"));
         }
-        return fetch.fetch(args).map(Object.class::cast).onComplete(ar -> fetchesInFlight.decrementAndGet());
+        java.util.concurrent.atomic.AtomicBoolean released = new java.util.concurrent.atomic.AtomicBoolean();
+        Runnable release = () -> {
+            if (released.compareAndSet(false, true)) {
+                fetchesInFlight.decrementAndGet();
+            }
+        };
+        return fetch.fetch(args, release).onFailure(err -> release.run());
     }
 
-    private Future<Registration> serve(Consumer<Inbound> listener) {
+    @Override
+    public Future<Registration> serve(Consumer<HttpExchange> listener) {
         if (!service) {
             return Future.failedFuture(new HostException("Error", "not_a_service", "Only services can serve HTTP"));
         }

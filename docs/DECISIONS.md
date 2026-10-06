@@ -250,3 +250,27 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **Evidence:** on a fresh three-node durable cluster, the first node to start activated alone, so the baseline was one node. Writes in the first seconds had no replicas, and stopping a node in that window lost data ("all partition owners have left").
 **Decision:** `AUTOMATELY_CLUSTER_SIZE` (default 1), similar to Consul's `bootstrap_expect`. A **brand-new durable** cluster activates only once that many server nodes are present, so its baseline, and therefore replication, includes them from the first write. It has no effect on restarts (D-031) or on in-memory clusters. The compose file and the Docker test set it to 3.
+
+### D-036 — The ingress proxies to the serving node over HTTP; the event bus is out of the data path
+**Date:** 2026-10-06 · **Status:** Accepted. Supersedes D-029's forwarding (and its 1 MB cap)
+
+**Decision:** Every node runs an internal HTTP endpoint (`AUTOMATELY_INTERNAL_PORT`, default 8090) and advertises it (`AUTOMATELY_ADVERTISE_HOST:port`) in the node registry. The ingress proxies each request as a stream to the node running the service: the request body is forwarded with backpressure and the response body is streamed back, with no size cap on responses. Internal requests must carry a cluster secret, generated once and agreed through shared data, so the port is useless to anyone outside the cluster.
+**Why:** Large files, uploads and server-sent events can't go through single event-bus messages.
+**Cost:** One more port per node, which must be reachable between nodes. HTTP/2 between ingress and node isn't used yet.
+
+### D-037 — Streaming rules: backpressure on arrival, idle timeout in both directions, close after early answers
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Evidence (from the new tests):**
+- Counting unconsumed chunks when the isolate processed them let a stalled script's task queue grow without bound; 389 chunks arrived where 8 were allowed.
+- Vert.x's request idle timeout only watches the response, so it cut off uploads the service was still reading.
+- Answering 413 without reading the body left the connection broken for the next request.
+- Resetting the upstream before answering turned a 504 into a 502.
+
+**Decision:**
+- Chunks are counted **when they arrive**, and the source pauses at 8 unconsumed chunks and resumes at 2.
+- The ingress has its own idle watchdog (`AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS`, default 60 s) that counts bytes moving in **either** direction.
+- An early answer sends `Connection: close` and closes the connection.
+- Errors are answered before the upstream is reset.
+- Request bodies are capped by `AUTOMATELY_MAX_REQUEST_BYTES` (default 1 GiB), checked from `Content-Length` and while streaming.
+- In scripts, response writes wait for the client to drain, and a client disconnecting ends the generator.

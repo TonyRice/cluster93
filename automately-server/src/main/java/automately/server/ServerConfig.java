@@ -21,6 +21,10 @@ import java.util.UUID;
  * @param ingressPort   where services' HTTP traffic arrives (routed by Host)
  * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
  * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
+ * @param internalPort  this node's internal endpoint, where the ingress proxies service traffic (cluster-only)
+ * @param advertiseHost the address other nodes use to reach the internal endpoint
+ * @param ingressIdleTimeout how long a proxied request may go without a byte before it's closed
+ * @param maxRequestBytes largest request body the ingress accepts
  * @param dataDirectory durable storage for this node (Ignite persistence); null keeps data in memory only
  * @param dataBackups   extra copies of every piece of data on other nodes
  * @param dataMemoryMb  off-heap memory for the durable data region
@@ -44,6 +48,10 @@ public record ServerConfig(
         int ingressPort,
         String ingressDomain,
         boolean egressAllowPrivate,
+        int internalPort,
+        String advertiseHost,
+        Duration ingressIdleTimeout,
+        long maxRequestBytes,
         Path dataDirectory,
         int dataBackups,
         int dataMemoryMb,
@@ -71,6 +79,10 @@ public record ServerConfig(
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_INGRESS_PORT", "8000")),
                 env.getOrDefault("AUTOMATELY_INGRESS_DOMAIN", "localhost"),
                 Boolean.parseBoolean(env.getOrDefault("AUTOMATELY_EGRESS_ALLOW_PRIVATE", "false")),
+                Integer.parseInt(env.getOrDefault("AUTOMATELY_INTERNAL_PORT", "8090")),
+                env.getOrDefault("AUTOMATELY_ADVERTISE_HOST", defaultAdvertiseHost()),
+                Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS", "60000"))),
+                Long.parseLong(env.getOrDefault("AUTOMATELY_MAX_REQUEST_BYTES", String.valueOf(1024L * 1024 * 1024))),
                 Optional.ofNullable(env.get("AUTOMATELY_DATA_DIR")).filter(dir -> !dir.isBlank()).map(Path::of).orElse(null),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_DATA_BACKUPS", "1")),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_DATA_MEMORY_MB", "256")),
@@ -83,6 +95,14 @@ public record ServerConfig(
                         .map(String::trim)
                         .filter(member -> !member.isEmpty())
                         .toList());
+    }
+
+    private static String defaultAdvertiseHost() {
+        try {
+            return InetAddress.getLocalHost().getHostAddress();
+        } catch (UnknownHostException e) {
+            return "127.0.0.1";
+        }
     }
 
     private static String defaultNodeId() {

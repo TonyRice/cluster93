@@ -4,7 +4,7 @@ A self-hostable, clustered runtime for sandboxed JavaScript functions, built on 
 
 You submit a script to any node. The cluster runs it on the least-loaded node in a fresh V8 isolate, streams its console output live, and stores the result where every node can read it.
 
-> **Status: phase 3 done; phase 3b in progress.** The cluster is now the database (embedded Apache Ignite: durable, replicated, survives full restarts). Streaming and a files API are next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
+> **Status: phase 3 done; phase 3b in progress.** The cluster is now the database (embedded Apache Ignite: durable, replicated, survives full restarts), and services stream HTTP: large uploads and downloads, and server-sent events. A files API is next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
 
 ## Try it
 
@@ -55,7 +55,7 @@ If the node running a job dies, the job's `onOrphan` policy decides what happens
 | `POST` · `GET` | `/v1/services/{name}/domains` | Claim a custom domain (returns the TXT record to publish) · list |
 | `POST` | `/v1/services/{name}/domains/{domain}/verify` | Check the TXT record; the domain routes once verified |
 | `POST` | `/v1/bus/{topic}` · `/v1/bus/{topic}/request` | Publish to a topic · call a `bus.handle`r and get its reply |
-| *ingress* | `:8000`, any path | Services' HTTP traffic, routed by host |
+| *ingress* | `:8000`, any path | Services' HTTP traffic, routed by host and proxied as a stream to the serving node |
 | `GET` | `/v1/nodes` | Live nodes with capacity and load |
 | `GET` | `/health` | Liveness |
 
@@ -115,6 +115,10 @@ The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each o
 | `AUTOMATELY_MAX_SERVICES_PER_TENANT` | `10` | Enabled services per tenant |
 | `AUTOMATELY_INGRESS_PORT` | `8000` | Services' HTTP traffic |
 | `AUTOMATELY_INGRESS_DOMAIN` | `localhost` | Automatic hosts are `<service>--<tenant>.<domain>` |
+| `AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS` | `60000` | A proxied request with no bytes moving either way for this long is closed |
+| `AUTOMATELY_MAX_REQUEST_BYTES` | `1073741824` | Largest request body the ingress accepts |
+| `AUTOMATELY_INTERNAL_PORT` | `8090` | Node-to-node endpoint for proxied service traffic (cluster-only, secret-protected) |
+| `AUTOMATELY_ADVERTISE_HOST` | this host's address | How other nodes reach this node's internal endpoint |
 | `AUTOMATELY_EGRESS_ALLOW_PRIVATE` | `false` | Let `fetch` reach private addresses (local development only) |
 | `AUTOMATELY_CLUSTERED` | `false` | |
 | `AUTOMATELY_CLUSTER_PORT` | `5701` | Ignite discovery (communication uses port + 100) |

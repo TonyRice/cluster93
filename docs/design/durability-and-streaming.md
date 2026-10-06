@@ -1,6 +1,6 @@
 # Design and plan: the cluster is the database, streaming, and files (phase 3b)
 
-**Status:** Milestone 1 ✅ done (2026-10-06); milestones 2 and 3 in progress · **Date:** 2026-10-06
+**Status:** Milestones 1 and 2 ✅ done (2026-10-06); milestone 3 in progress · **Date:** 2026-10-06
 **Why now:** before phase 4, close the three gaps phase 3 left open. Tony asked for them directly ("shouldn't we have a central database…", "what if someone wants to deploy a service that can serve large files or offer streaming?"), and chose a database **built into the cluster** rather than an external one.
 
 ## Decisions taken with Tony
@@ -84,3 +84,10 @@
 - **Transient topology errors** during failover are retried (D-033).
 - **Compare-and-set backoff:** jittered pauses between retries. Immediate retries kept colliding with 50 to 100 writers on one key.
 - **Store contracts:** the existing in-memory tests became shared contracts, run against both implementations.
+
+## What changed during milestone 2
+- **Backpressure is counted on arrival**, not when the isolate processes a chunk (D-037). The first version let a stalled script's queue grow.
+- **The ingress has its own two-way idle watchdog.** Vert.x's request idle timeout ignores upload progress.
+- **Early answers close the connection.** A 413 sent without reading the body broke the next request on that connection.
+- **`fetch` binary request bodies** aren't supported yet (request bodies are strings or JSON). Response bodies stream as binary.
+- **Measured:** a 48 MB upload through the single-node ingress took 292 ms. With a paused client, about 22 MB ended up in kernel socket buffers on loopback (two hops), against 250 MB without backpressure.

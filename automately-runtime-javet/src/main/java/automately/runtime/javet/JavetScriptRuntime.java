@@ -177,38 +177,204 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 for (const [k, v] of Object.entries(raw ?? {})) lower[String(k).toLowerCase()] = String(v);
                 return Object.freeze({ ...lower, get: (name) => lower[String(name).toLowerCase()] ?? null });
               };
+
+              // --- UTF-8 text <-> bytes (V8 itself has no TextEncoder/TextDecoder) ---
+              const utf8Encode = (text) => {
+                const out = [];
+                for (const ch of String(text)) {
+                  let c = ch.codePointAt(0);
+                  if (c < 0x80) out.push(c);
+                  else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+                  else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+                  else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+                }
+                return new Uint8Array(out);
+              };
+              const utf8Decode = (bytes) => {
+                let s = '';
+                for (let i = 0; i < bytes.length;) {
+                  const b = bytes[i];
+                  let c, n;
+                  if (b < 0x80) { c = b; n = 1; }
+                  else if (b >= 0xf0) { c = ((b & 7) << 18) | ((bytes[i + 1] & 63) << 12) | ((bytes[i + 2] & 63) << 6) | (bytes[i + 3] & 63); n = 4; }
+                  else if (b >= 0xe0) { c = ((b & 15) << 12) | ((bytes[i + 1] & 63) << 6) | (bytes[i + 2] & 63); n = 3; }
+                  else if (b >= 0xc0) { c = ((b & 31) << 6) | (bytes[i + 1] & 63); n = 2; }
+                  else { c = 0xfffd; n = 1; }
+                  s += String.fromCodePoint(c);
+                  i += n;
+                }
+                return s;
+              };
+              define('TextEncoder', class TextEncoder { get encoding() { return 'utf-8'; } encode(text = '') { return utf8Encode(text); } });
+              define('TextDecoder', class TextDecoder { get encoding() { return 'utf-8'; } decode(bytes) { return bytes ? utf8Decode(bytes) : ''; } });
+
+              // --- streams: chunks arrive from the host as Uint8Arrays; reading one acknowledges it (backpressure) ---
+              const streams = new Map();
+              const readable = (id) => {
+                const st = { queue: [], waiter: null, done: false, error: null, taken: false };
+                streams.set(id, st);
+                const finish = () => { if (!st.done) { st.done = true; streams.delete(id); host.cancelStream(id); } };
+                const iterator = {
+                  next() {
+                    if (st.queue.length) { const value = st.queue.shift(); host.ack(id); return Promise.resolve({ value, done: false }); }
+                    if (st.error) return Promise.reject(st.error);
+                    if (st.done) return Promise.resolve({ value: undefined, done: true });
+                    return new Promise((resolve, reject) => { st.waiter = { resolve, reject }; });
+                  },
+                  return() { finish(); return Promise.resolve({ value: undefined, done: true }); },
+                  [Symbol.asyncIterator]() { return this; },
+                };
+                return Object.freeze({
+                  [Symbol.asyncIterator]() {
+                    if (st.taken) throw new TypeError('This body has already been read');
+                    st.taken = true;
+                    return iterator;
+                  },
+                  cancel: finish,
+                });
+              };
+              const chunk = (id, bytes) => {
+                const st = streams.get(id);
+                if (!st) return;
+                if (bytes === null || bytes === undefined) {
+                  st.done = true;
+                  streams.delete(id);
+                  if (st.waiter) { const w = st.waiter; st.waiter = null; w.resolve({ value: undefined, done: true }); }
+                  return;
+                }
+                if (st.waiter) { const w = st.waiter; st.waiter = null; host.ack(id); w.resolve({ value: bytes, done: false }); }
+                else st.queue.push(bytes);
+              };
+              const streamError = (id, message) => {
+                const st = streams.get(id);
+                if (!st) return;
+                st.error = new Error(message);
+                st.done = true;
+                streams.delete(id);
+                if (st.waiter) { const w = st.waiter; st.waiter = null; w.reject(st.error); }
+              };
+              const collect = async (body, limit, what) => {
+                const parts = [];
+                let size = 0;
+                for await (const part of body) {
+                  size += part.length;
+                  if (size > limit) { body.cancel(); throw new RangeError(`${what} is over ${limit} bytes; read it as a stream instead`); }
+                  parts.push(part);
+                }
+                const all = new Uint8Array(size);
+                let offset = 0;
+                for (const part of parts) { all.set(part, offset); offset += part.length; }
+                return all;
+              };
+              const BUFFER_LIMIT = 32 * 1024 * 1024;
+              const FETCH_BUFFER_LIMIT = 5 * 1024 * 1024;
+              const toBytes = (part) => {
+                if (part instanceof Uint8Array) return part;
+                if (part instanceof ArrayBuffer) return new Uint8Array(part);
+                if (ArrayBuffer.isView(part)) return new Uint8Array(part.buffer, part.byteOffset, part.byteLength);
+                return String(part);
+              };
+
               define('fetch', async (input, init = {}) => {
                 const headers = {};
                 for (const [k, v] of Object.entries(init.headers ?? {})) headers[String(k).toLowerCase()] = String(v);
                 let body = null;
                 if (init.body !== undefined && init.body !== null) {
                   if (typeof init.body === 'string') body = init.body;
+                  else if (init.body instanceof Uint8Array) body = utf8Decode(init.body);
                   else { body = JSON.stringify(init.body); headers['content-type'] ??= 'application/json'; }
                 }
-                const r = await callHost('http.fetch', { url: String(input), method: String(init.method ?? 'GET').toUpperCase(), headers, body, timeoutMs: init.timeoutMs ?? null });
+                const args = { url: String(input), method: String(init.method ?? 'GET').toUpperCase(), headers, body, timeoutMs: init.timeoutMs ?? null };
+                const r = await new Promise((resolve, reject) => {
+                  const id = nextCall++;
+                  pending.set(id, { resolve, reject });
+                  host.fetch(JSON.stringify(args), id);
+                });
+                const stream = readable(r.streamId);
                 return Object.freeze({
                   status: r.status, statusText: r.statusText, ok: r.status >= 200 && r.status < 300, url: r.url,
                   headers: headerBag(r.headers),
-                  text: async () => r.body,
-                  json: async () => JSON.parse(r.body),
+                  body: stream,
+                  bytes: () => collect(stream, FETCH_BUFFER_LIMIT, 'The response body'),
+                  text: async () => utf8Decode(await collect(stream, FETCH_BUFFER_LIMIT, 'The response body')),
+                  json: async () => JSON.parse(utf8Decode(await collect(stream, FETCH_BUFFER_LIMIT, 'The response body'))),
                 });
               });
 
+              // --- serving HTTP: a request body streams in, a response streams out ---
+              const isIterable = (v) => v && typeof v !== 'string' && !(v instanceof Uint8Array)
+                  && (typeof v[Symbol.asyncIterator] === 'function' || typeof v[Symbol.iterator] === 'function');
               const toResponse = (value) => {
-                if (value === undefined || value === null) return { status: 204, headers: {}, body: '' };
+                if (value === undefined || value === null) return { status: 204, headers: {}, body: null };
                 if (typeof value === 'string') return { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: value };
+                if (value instanceof Uint8Array || isIterable(value)) return { status: 200, headers: {}, body: value };
                 const headers = {};
                 for (const [k, v] of Object.entries(value.headers ?? {})) headers[String(k).toLowerCase()] = String(v);
-                let body = value.body ?? '';
-                if (typeof body !== 'string') { body = JSON.stringify(body); headers['content-type'] ??= 'application/json'; }
+                let body = value.body ?? null;
+                if (body !== null && typeof body !== 'string' && !(body instanceof Uint8Array) && !isIterable(body)) {
+                  body = JSON.stringify(body);
+                  headers['content-type'] ??= 'application/json';
+                }
                 return { status: Number(value.status ?? 200), headers, body };
               };
-              const toRequest = (r) => Object.freeze({
-                method: r.method, url: r.url, path: r.path, host: r.host, query: Object.freeze({ ...r.query }),
-                headers: headerBag(r.headers),
-                text: async () => r.body,
-                json: async () => JSON.parse(r.body),
+              const writeTo = (exchangeId, part) => new Promise((resolve, reject) => {
+                const id = nextCall++;
+                pending.set(id, { resolve, reject });
+                host.write(exchangeId, toBytes(part), id);
               });
+              const respond = async (exchangeId, value) => {
+                const res = toResponse(value);
+                host.respond(exchangeId, res.status, JSON.stringify(res.headers));
+                const body = res.body;
+                if (body === null) {
+                  // nothing
+                } else if (typeof body === 'string' || body instanceof Uint8Array) {
+                  if (body.length) await writeTo(exchangeId, body);
+                } else {
+                  for await (const part of body) {
+                    if (part === undefined || part === null) continue;
+                    await writeTo(exchangeId, part);
+                  }
+                }
+                host.end(exchangeId);
+              };
+              const servers = new Map();
+              const serve = (handler) => new Promise((resolve, reject) => {
+                // Same id space as bus listeners: the host keeps both in one registry.
+                const listenerId = nextListener++;
+                servers.set(listenerId, handler);
+                const callId = nextCall++;
+                pending.set(callId, { resolve: () => resolve(() => { if (servers.delete(listenerId)) host.unlisten(listenerId); }),
+                                      reject: (e) => { servers.delete(listenerId); reject(e); } });
+                host.serve(listenerId, callId);
+              });
+              const request = (listenerId, exchangeId, requestJson, bodyId) => {
+                const handler = servers.get(listenerId);
+                const r = JSON.parse(requestJson);
+                const body = readable(bodyId);
+                const req = Object.freeze({
+                  method: r.method, url: r.url, path: r.path, host: r.host, query: Object.freeze({ ...r.query }),
+                  headers: headerBag(r.headers),
+                  body,
+                  bytes: () => collect(body, BUFFER_LIMIT, 'The request body'),
+                  text: async () => utf8Decode(await collect(body, BUFFER_LIMIT, 'The request body')),
+                  json: async () => JSON.parse(utf8Decode(await collect(body, BUFFER_LIMIT, 'The request body'))),
+                });
+                (async () => {
+                  let started = false;
+                  try {
+                    if (!handler) { host.fail(exchangeId, 503, 'No longer serving'); return; }
+                    const value = await handler(req);
+                    started = true;
+                    await respond(exchangeId, value);
+                  } catch (e) {
+                    if (!started) host.log('error', `Uncaught error in request handler: ${String(e && e.stack ? e.stack : e)}`);
+                    host.fail(exchangeId, 500, String(e && e.message ? e.message : e));
+                  } finally {
+                    body.cancel();
+                  }
+                })();
+              };
 
               class SupersededError extends Error { constructor(message) { super(message); this.name = 'SupersededError'; } }
               class StateLimitError extends Error { constructor(message) { super(message); this.name = 'StateLimitError'; } }
@@ -257,7 +423,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                   serve: (handler) => {
                     if (!c.service) throw new Error('Only services can serve HTTP; define this script as a service');
                     if (typeof handler !== 'function') throw new TypeError('ctx.serve needs a handler function');
-                    return listen('http.serve', {}, async (request) => toResponse(await handler(toRequest(request))));
+                    return serve(handler);
                   },
                   sleep: (ms) => new Promise((resolve) => schedule(resolve, ms, [], false)),
                   stepKey,
@@ -286,7 +452,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                   return JSON.stringify({ ok: false, error: String(e && e.stack ? e.stack : e) });
                 }
               };
-              return { invoke, fire, requestStop, settle, deliver };
+              return { invoke, fire, requestStop, settle, deliver, request, chunk, streamError };
             })()
             """;
 
@@ -443,7 +609,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     private ExecutionResult invokeModule(V8Runtime v8, Execution execution, Control control) throws JavetException {
         try (V8ValueObject prelude = v8.getExecutor(PRELUDE).setResourceName("automately:prelude").execute();
-             ScriptEntryPoints js = new ScriptEntryPoints(prelude);
+             ScriptEntryPoints js = new ScriptEntryPoints(v8, prelude);
              V8Module module = v8.getExecutor(execution.script()).setResourceName("job.mjs").compileV8Module()) {
             module.executeVoid();
             try (V8ValueObject namespace = (V8ValueObject) module.getNamespace();

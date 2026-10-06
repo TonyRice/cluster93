@@ -4,7 +4,10 @@ import automately.core.job.JobStatus;
 import automately.core.job.OrphanPolicy;
 import automately.core.runtime.Execution;
 import automately.core.runtime.ExecutionResult;
+import automately.core.runtime.BodyStream;
+import automately.core.runtime.FetchedResponse;
 import automately.core.runtime.HostException;
+import automately.core.runtime.HttpExchange;
 import automately.core.runtime.HostServices;
 import automately.core.runtime.Inbound;
 import automately.core.runtime.JobContext;
@@ -13,6 +16,7 @@ import automately.core.runtime.RunningExecution;
 import automately.core.runtime.StateSink;
 import automately.core.state.JobState;
 import io.vertx.core.Future;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
@@ -74,6 +78,35 @@ class HostBridgeTest {
                 listeners.remove(listener);
                 return Future.succeededFuture();
             });
+        }
+
+        final List<Consumer<HttpExchange>> servers = new CopyOnWriteArrayList<>();
+        /** What fetch returns: a status and the body chunks. */
+        volatile List<String> fetchChunks = List.of("hello ", "world");
+        final List<String> fetchesCancelled = new CopyOnWriteArrayList<>();
+
+        @Override
+        public Future<Registration> serve(Consumer<HttpExchange> handler) {
+            servers.add(handler);
+            return Future.succeededFuture(() -> {
+                servers.remove(handler);
+                return Future.succeededFuture();
+            });
+        }
+
+        @Override
+        public Future<FetchedResponse> fetch(JsonObject args) {
+            JsonObject meta = new JsonObject().put("status", 200).put("statusText", "OK").put("url", args.getString("url"))
+                    .put("headers", new JsonObject().put("content-type", "text/plain"));
+            return Future.succeededFuture(new FetchedResponse(meta, new ListStream(fetchChunks, () -> fetchesCancelled.add(args.getString("url")))));
+        }
+
+        void awaitServer() throws InterruptedException {
+            long deadline = System.currentTimeMillis() + 5_000;
+            while (servers.isEmpty() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(10);
+            }
+            assertThat(servers).isNotEmpty();
         }
 
         @Override
@@ -276,40 +309,213 @@ class HostBridgeTest {
         assertThat(result.output()).asString().contains("Only services can serve HTTP");
     }
 
+    private static final JsonObject SERVICE = new JsonObject().put("name", "web").put("revision", 1).put("run", 1)
+            .put("config", new JsonObject()).putNull("previousRun");
+
+    private RunningExecution serving(String handler, FakeHost host) throws Exception {
+        RunningExecution running = start("export default async (input, ctx) => { await ctx.serve(" + handler + "); return ctx.stopRequested; }",
+                host, (level, line) -> { }, true, SERVICE);
+        host.awaitServer();
+        return running;
+    }
+
+    private static FakeExchange send(FakeHost host, FakeExchange exchange) {
+        host.servers.forEach(server -> server.accept(exchange));
+        return exchange;
+    }
+
     @Test
     void servedResponsesAreNormalised() throws Exception {
         FakeHost host = new FakeHost();
-        JsonObject service = new JsonObject().put("name", "web").put("revision", 1).put("run", 1).put("config", new JsonObject()).putNull("previousRun");
-        RunningExecution running = start("""
-                export default async (input, ctx) => {
-                  await ctx.serve(async (req) => {
-                    if (req.path === '/text') return 'plain';
-                    if (req.path === '/json') return { status: 201, body: { echo: await req.json(), q: req.query.x, h: req.headers.get('X-Test') } };
-                    if (req.path === '/empty') return undefined;
-                    throw new Error('nope');
-                  });
-                  return ctx.stopRequested;
+        RunningExecution running = serving("""
+                async (req) => {
+                  if (req.path === '/text') return 'plain';
+                  if (req.path === '/json') return { status: 201, headers: { 'X-Test': 'yes' }, body: { echo: await req.json() } };
+                  if (req.path === '/empty') return undefined;
+                  throw new Error('nope');
                 }
-                """, host, (level, line) -> { }, true, service);
-        host.awaitListener();
+                """, host);
 
-        JsonObject base = new JsonObject().put("method", "POST").put("url", "http://web/").put("host", "web")
-                .put("query", new JsonObject().put("x", "1")).put("headers", new JsonObject().put("x-test", "yes")).put("body", "{\"a\":1}");
-        JsonObject text = (JsonObject) host.send(base.copy().put("path", "/text"), true).get(5, TimeUnit.SECONDS);
-        JsonObject json = (JsonObject) host.send(base.copy().put("path", "/json"), true).get(5, TimeUnit.SECONDS);
-        JsonObject empty = (JsonObject) host.send(base.copy().put("path", "/empty"), true).get(5, TimeUnit.SECONDS);
-        CompletableFuture<Object> broken = host.send(base.copy().put("path", "/boom"), true);
+        FakeExchange text = send(host, new FakeExchange("GET", "/text", List.of()));
+        FakeExchange json = send(host, new FakeExchange("POST", "/json", List.of("{\"a\"", ":1}")));
+        FakeExchange empty = send(host, new FakeExchange("GET", "/empty", List.of()));
+        FakeExchange broken = send(host, new FakeExchange("GET", "/boom", List.of()));
+        text.ended.get(5, TimeUnit.SECONDS);
+        json.ended.get(5, TimeUnit.SECONDS);
+        empty.ended.get(5, TimeUnit.SECONDS);
 
-        assertThat(text).isEqualTo(new JsonObject().put("status", 200)
-                .put("headers", new JsonObject().put("content-type", "text/plain; charset=utf-8")).put("body", "plain"));
-        assertThat(json.getInteger("status")).isEqualTo(201);
-        assertThat(new JsonObject(json.getString("body"))).isEqualTo(new JsonObject()
-                .put("echo", new JsonObject().put("a", 1)).put("q", "1").put("h", "yes"));
-        assertThat(json.getJsonObject("headers").getString("content-type")).isEqualTo("application/json");
-        assertThat(empty.getInteger("status")).isEqualTo(204);
-        assertThat(broken).failsWithin(Duration.ofSeconds(5)).withThrowableThat().withMessageContaining("500 nope");
+        assertThat(text.status).isEqualTo(200);
+        assertThat(text.headers.getString("content-type")).isEqualTo("text/plain; charset=utf-8");
+        assertThat(text.text()).isEqualTo("plain");
+        assertThat(json.status).isEqualTo(201);
+        assertThat(json.headers.getString("x-test")).isEqualTo("yes");
+        assertThat(json.headers.getString("content-type")).isEqualTo("application/json");
+        assertThat(new JsonObject(json.text())).isEqualTo(new JsonObject().put("echo", new JsonObject().put("a", 1)));
+        assertThat(empty.status).isEqualTo(204);
+        assertThat(broken.ended).failsWithin(Duration.ofSeconds(5)).withThrowableThat().withMessageContaining("500 nope");
         running.stop("done", Duration.ofSeconds(2));
         await(running);
+    }
+
+    @Test
+    void requestBodiesStreamInChunks() throws Exception {
+        FakeHost host = new FakeHost();
+        RunningExecution running = serving("""
+                async (req) => {
+                  let chunks = 0, bytes = 0;
+                  for await (const part of req.body) { chunks++; bytes += part.length; }
+                  return { body: { chunks, bytes } };
+                }
+                """, host);
+        List<String> parts = java.util.stream.IntStream.range(0, 50).mapToObj(i -> "x".repeat(1000)).toList();
+
+        FakeExchange upload = send(host, new FakeExchange("POST", "/upload", parts));
+        upload.ended.get(10, TimeUnit.SECONDS);
+
+        assertThat(new JsonObject(upload.text())).isEqualTo(new JsonObject().put("chunks", 50).put("bytes", 50_000));
+        running.stop("done", Duration.ofSeconds(2));
+        await(running);
+    }
+
+    @Test
+    void anUnreadRequestBodyIsPausedNotBuffered() throws Exception {
+        FakeHost host = new FakeHost();
+        RunningExecution running = serving("""
+                async (req) => {
+                  const it = req.body[Symbol.asyncIterator]();
+                  await it.next();                       // read one chunk, then stall
+                  await new Promise((r) => setTimeout(r, 300));
+                  return 'stalled';
+                }
+                """, host);
+        List<String> parts = java.util.stream.IntStream.range(0, 1000).mapToObj(i -> "y").toList();
+
+        FakeExchange upload = send(host, new FakeExchange("POST", "/slow", parts));
+        Thread.sleep(150);
+
+        assertThat(upload.body.delivered()).as("the source paused at the high-water mark").isLessThanOrEqualTo(HostBridge.HIGH_WATER + 2);
+        upload.ended.get(5, TimeUnit.SECONDS);
+        running.stop("done", Duration.ofSeconds(2));
+        await(running);
+    }
+
+    @Test
+    void generatorResponsesStreamAndWaitForTheClient() throws Exception {
+        FakeHost host = new FakeHost();
+        RunningExecution running = serving("""
+                async (req) => ({
+                  headers: { 'content-type': 'text/event-stream' },
+                  body: (async function* () {
+                    for (let i = 1; i <= 5; i++) { yield `data: ${i}\n\n`; }
+                  })(),
+                })
+                """, host);
+        FakeExchange exchange = new FakeExchange("GET", "/events", List.of());
+        exchange.writeDelayMs = 60;
+        long start = System.nanoTime();
+
+        send(host, exchange).ended.get(10, TimeUnit.SECONDS);
+
+        assertThat(exchange.headers.getString("content-type")).isEqualTo("text/event-stream");
+        assertThat(exchange.text()).isEqualTo("data: 1\n\ndata: 2\n\ndata: 3\n\ndata: 4\n\ndata: 5\n\n");
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).as("each write waited for the slow client").isGreaterThanOrEqualTo(Duration.ofMillis(5 * 60));
+        running.stop("done", Duration.ofSeconds(2));
+        await(running);
+    }
+
+    @Test
+    void aDisconnectedClientEndsTheGenerator() throws Exception {
+        FakeHost host = new FakeHost();
+        List<String> logs = new CopyOnWriteArrayList<>();
+        RunningExecution running = start("""
+                export default async (input, ctx) => {
+                  await ctx.serve(async () => ({ body: (async function* () {
+                    try { for (let i = 0; ; i++) { yield `tick ${i}\n`; } }
+                    finally { console.log('generator closed'); }
+                  })() }));
+                  return ctx.stopRequested;
+                }
+                """, host, (level, line) -> logs.add(line), true, SERVICE);
+        host.awaitServer();
+        FakeExchange exchange = send(host, new FakeExchange("GET", "/forever", List.of()));
+        Thread.sleep(100);
+
+        exchange.clientGone = true;
+        Thread.sleep(200);
+
+        assertThat(logs).contains("generator closed");
+        running.stop("done", Duration.ofSeconds(2));
+        await(running);
+    }
+
+    @Test
+    void fetchBodiesStreamAndCanBeBuffered() throws Exception {
+        FakeHost host = new FakeHost();
+        host.fetchChunks = List.of("a", "b", "c");
+
+        ExecutionResult result = run("""
+                export default async () => {
+                  const streamed = [];
+                  for await (const part of (await fetch('https://x.test/stream')).body) streamed.push(new TextDecoder().decode(part));
+                  const text = await (await fetch('https://x.test/text')).text();
+                  return [streamed, text];
+                }
+                """, host);
+
+        assertThat(result.output()).as(String.valueOf(result.error())).isEqualTo(new JsonArray().add(new JsonArray().add("a").add("b").add("c")).add("abc"));
+    }
+
+    @Test
+    void bufferingAHugeFetchBodyFailsAndCancelsIt() throws Exception {
+        FakeHost host = new FakeHost();
+        host.fetchChunks = java.util.stream.IntStream.range(0, 6).mapToObj(i -> "z".repeat(1024 * 1024)).toList();
+
+        ExecutionResult result = run("""
+                export default async () => {
+                  try { await (await fetch('https://x.test/huge')).text(); } catch (e) { return [e.name, e.message]; }
+                }
+                """, host);
+
+        assertThat(result.output()).asString().contains("RangeError").contains("read it as a stream");
+        assertThat(host.fetchesCancelled).contains("https://x.test/huge");
+    }
+
+    @Test
+    void anUnreadFetchBodyIsCancelledWhenTheScriptEnds() throws Exception {
+        FakeHost host = new FakeHost();
+        host.fetchChunks = java.util.stream.IntStream.range(0, 100).mapToObj(i -> "chunk").toList();
+
+        run("export default async () => { await fetch('https://x.test/ignored'); return 'done'; }", host);
+
+        assertThat(host.fetchesCancelled).contains("https://x.test/ignored");
+    }
+
+    @Test
+    void textEncodingRoundTripsUnicode() throws Exception {
+        ExecutionResult result = run("""
+                export default () => {
+                  const text = 'héllo wörld ✓ 🚀';
+                  const bytes = new TextEncoder().encode(text);
+                  return [bytes.length, new TextDecoder().decode(bytes) === text];
+                }
+                """, new FakeHost());
+
+        // h é(2) l l o ␠ w ö(2) r l d ␠ ✓(3) ␠ 🚀(4) = 22 bytes of UTF-8
+        assertThat(result.output()).isEqualTo(new JsonArray().add(22).add(true));
+    }
+
+    @Test
+    void aBodyCanOnlyBeReadOnce() throws Exception {
+        FakeHost host = new FakeHost();
+        ExecutionResult result = run("""
+                export default async () => {
+                  const res = await fetch('https://x.test/once');
+                  await res.text();
+                  try { await res.text(); } catch (e) { return e.name; }
+                }
+                """, host);
+
+        assertThat(result.output()).isEqualTo("TypeError");
     }
 
     @Test
@@ -362,5 +568,137 @@ class HostBridgeTest {
                 """, new FakeHost());
 
         assertThat(result.output()).isEqualTo(new JsonArray().add("function").add("function").add("function").add("function"));
+    }
+
+    /** A body stream over fixed chunks; it delivers as long as it's resumed, like a socket. */
+    static final class ListStream implements BodyStream {
+
+        private final List<String> chunks;
+        private final Runnable onCancel;
+        private Consumer<Buffer> chunk;
+        private Runnable end;
+        private int next;
+        private boolean paused = true;
+        private boolean cancelled;
+        int maxOutstandingObserved;
+
+        ListStream(List<String> chunks, Runnable onCancel) {
+            this.chunks = chunks;
+            this.onCancel = onCancel;
+        }
+
+        @Override
+        public synchronized void handler(Consumer<Buffer> chunk, Runnable end, Consumer<Throwable> error) {
+            this.chunk = chunk;
+            this.end = end;
+        }
+
+        @Override
+        public void pause() {
+            synchronized (this) {
+                paused = true;
+            }
+        }
+
+        @Override
+        public void resume() {
+            synchronized (this) {
+                paused = false;
+            }
+            vertx.runOnContext(v -> pump());
+        }
+
+        private void pump() {
+            while (true) {
+                Consumer<Buffer> target;
+                Buffer data;
+                synchronized (this) {
+                    if (paused || cancelled || chunk == null) {
+                        return;
+                    }
+                    if (next >= chunks.size()) {
+                        cancelled = true;
+                        end.run();
+                        return;
+                    }
+                    target = chunk;
+                    data = Buffer.buffer(chunks.get(next++));
+                }
+                target.accept(data);
+            }
+        }
+
+        @Override
+        public synchronized void cancel() {
+            cancelled = true;
+            onCancel.run();
+        }
+
+        synchronized int delivered() {
+            return next;
+        }
+    }
+
+    /** An exchange that records the response; writes can be slowed down to show backpressure. */
+    static final class FakeExchange implements HttpExchange {
+
+        final JsonObject request;
+        final ListStream body;
+        final CompletableFuture<Void> ended = new CompletableFuture<>();
+        final List<String> written = new CopyOnWriteArrayList<>();
+        volatile int status;
+        volatile JsonObject headers;
+        volatile long writeDelayMs;
+        volatile boolean clientGone;
+
+        FakeExchange(String method, String path, List<String> bodyChunks) {
+            this.request = new JsonObject().put("method", method).put("url", "http://web" + path).put("path", path).put("host", "web")
+                    .put("query", new JsonObject()).put("headers", new JsonObject());
+            this.body = new ListStream(bodyChunks, () -> { });
+        }
+
+        @Override
+        public JsonObject request() {
+            return request;
+        }
+
+        @Override
+        public BodyStream body() {
+            return body;
+        }
+
+        @Override
+        public void respond(int status, JsonObject headers) {
+            this.status = status;
+            this.headers = headers;
+        }
+
+        @Override
+        public Future<Void> write(Buffer chunk) {
+            if (clientGone) {
+                return Future.failedFuture("The client disconnected");
+            }
+            Promise<Void> done = Promise.promise();
+            vertx.setTimer(Math.max(1, writeDelayMs), id -> {
+                written.add(chunk.toString());
+                done.complete();
+            });
+            return done.future();
+        }
+
+        @Override
+        public void end() {
+            ended.complete(null);
+        }
+
+        @Override
+        public void fail(int status, String message) {
+            this.status = status;
+            ended.completeExceptionally(new IllegalStateException(status + " " + message));
+        }
+
+        String text() {
+            return String.join("", written);
+        }
     }
 }

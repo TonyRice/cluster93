@@ -39,6 +39,7 @@ final class EventLoop {
     private boolean stopWatched;
     private int callsInFlight;
     private int listeners;
+    private int openStreams;
 
     // --- isolate thread only ---
 
@@ -110,9 +111,17 @@ final class EventLoop {
         return listeners;
     }
 
+    void streamOpened() {
+        openStreams++;
+    }
+
+    void streamClosed() {
+        openStreams--;
+    }
+
     /** Whether something outside the script's own code can still resolve its promise. */
     boolean canBeWoken() {
-        return stopWatched || callsInFlight > 0 || listeners > 0;
+        return stopWatched || callsInFlight > 0 || listeners > 0 || openStreams > 0;
     }
 
     void reportUncaught(String error) {

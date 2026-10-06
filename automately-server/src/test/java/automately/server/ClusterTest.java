@@ -52,6 +52,8 @@ class ClusterTest {
                 "AUTOMATELY_NODE_ID", nodeId,
                 "AUTOMATELY_HTTP_PORT", "0",
                     "AUTOMATELY_INGRESS_PORT", "0",
+                    "AUTOMATELY_INTERNAL_PORT", "0",
+                    "AUTOMATELY_ADVERTISE_HOST", "127.0.0.1",
                 "AUTOMATELY_CAPACITY", "1",
                 "AUTOMATELY_MAX_HEAP_MB", "64",
                 "AUTOMATELY_CLUSTERED", "true",

@@ -46,6 +46,19 @@ POST /v1/bus/prices/request?timeoutMs=5000 → 200 {"value": ...}, or 404 / 504 
 X-Automately-Tenant: acme
 ```
 
+## Streams and text encoding
+
+Bodies are **streams of `Uint8Array` chunks** that you read with `for await`. Reading is backpressured: while you're not reading, the sender is paused.
+
+```js
+for await (const chunk of req.body) { ... }        // request bodies in ctx.serve
+for await (const chunk of res.body) { ... }        // fetch response bodies
+```
+
+A body can be read **once**: either as a stream, or with `text()`, `json()` or `bytes()`, which buffer it. Buffering is capped (32 MB for request bodies, 5 MB for fetch responses); anything larger must be read as a stream.
+
+`TextEncoder` and `TextDecoder` (UTF-8) are available for turning chunks into text and back.
+
 ## `fetch`: outbound HTTP
 
 ```js
@@ -56,13 +69,16 @@ const res = await fetch('https://api.example.com/items?page=2', {
   timeoutMs: 10_000,                // at most 30 s
 });
 res.status; res.ok; res.headers.get('content-type');
-const data = await res.json();      // or await res.text()
+const data = await res.json();      // or res.text(), res.bytes(), or stream res.body
 ```
 
 - Only `http` and `https`.
 - **Private and reserved addresses are refused** (`code: 'egress_denied'`): loopback, 10/8, 172.16/12, 192.168/16, link-local (including the 169.254.169.254 cloud metadata endpoint), CGNAT, unique-local IPv6, and so on. The connection goes to the exact address that was checked, so DNS tricks can't get around this.
 - Redirects are **not followed**: a 3xx comes back as is.
-- Response bodies are text, up to 5 MB. Request bodies are up to 1 MB. At most 16 fetches run at once per script.
+- The response body streams (`res.body`), with no size limit when read as a stream. `text()`, `json()` and `bytes()` buffer it, up to 5 MB.
+- Request bodies are strings or JSON, up to 1 MB. Binary request bodies aren't supported yet.
+- At most 16 fetches run at once per script, counting a fetch until its body has been read, cancelled, or the script ends. An unread body is cancelled when the script ends.
+- The timeout applies to connecting and to any pause between chunks, so long downloads work.
 - For local development, `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true` lifts the address check.
 
 ## `log`: structured logging
@@ -79,7 +95,7 @@ Each call is a log line (`order placed {"orderId":7,"total":19.5}`). The live ev
 // PUT /v1/services/shop  { "script": "..." }
 export default async (input, ctx) => {
   await ctx.serve(async (req) => {
-    // req: method, url, path, host, query (object), headers.get(name), text(), json()
+    // req: method, url, path, host, query (object), headers.get(name), body (stream), text(), json(), bytes()
     if (req.path === '/health') return 'ok';                                     // 200 text/plain
     if (req.method === 'POST' && req.path === '/orders') {
       const order = await req.json();
@@ -99,9 +115,25 @@ export default async (input, ctx) => {
   → 201 {"verified": false, "verification": {"type": "TXT", "name": "_automately.shop.example.com", "value": "automately-verify=…"}}
   ```
   Publish that TXT record, then call `POST /v1/services/shop/domains/shop.example.com/verify`. The domain routes only once it's verified. Unverified claims lapse after 24 h, and deleting the service releases its domains.
-- **Responses.** Return a string (200), `undefined` (204), or `{status, headers, body}`. If the handler throws, the response is a 500.
-- **Ingress errors.** An unknown host gets 404. A service that's stopped, restarting or not serving gets 503 with `Retry-After: 1`. A handler that doesn't answer within 30 s gets 504. More than 64 requests in flight to one service gets 429.
-- **Limits.** Request and response bodies up to 1 MB each, and no streaming yet.
+- **Responses.** Return a string (200), `undefined` (204), a `Uint8Array`, an (async) iterable such as a generator, or `{status, headers, body}`, where `body` can be any of those or an object (sent as JSON). If the handler throws before responding, the response is a 500. If it throws while streaming, the connection is reset.
+- **Streaming responses.** Each chunk you yield waits until the client has taken it, so a slow client slows your generator down instead of filling memory. If the client disconnects, the generator is ended, so its `finally` runs.
+
+  ```js
+  await ctx.serve(async (req) => {
+    if (req.path === '/events') {                     // server-sent events
+      return { headers: { 'content-type': 'text/event-stream' }, body: (async function* () {
+        for (let i = 0; ; i++) { yield `data: ${i}\n\n`; await ctx.sleep(1000); }
+      })() };
+    }
+    if (req.method === 'POST' && req.path === '/upload') {   // a large upload, read as it arrives
+      let bytes = 0;
+      for await (const chunk of req.body) bytes += chunk.length;
+      return { body: { bytes } };
+    }
+  });
+  ```
+- **Ingress errors.** An unknown host gets 404. A service that's stopped, restarting or not yet serving gets 503 with `Retry-After: 1`. A request with no bytes moving in either direction for the idle timeout (60 s) gets 504, or a closed connection if the response had already started. More than 64 requests in flight to one service gets 429.
+- **Limits.** Request bodies up to `AUTOMATELY_MAX_REQUEST_BYTES` (1 GiB by default). Responses have no size or total-time limit, only the idle timeout.
 - Only services can serve. In a plain job, `ctx.serve` throws.
 
 ## Naming

@@ -1,6 +1,9 @@
 package automately.runtime.javet;
 
+import com.caoccao.javet.enums.V8ValueType;
 import com.caoccao.javet.exceptions.JavetException;
+import com.caoccao.javet.interop.V8Runtime;
+import com.caoccao.javet.values.reference.V8ValueTypedArray;
 import com.caoccao.javet.values.reference.V8ValueFunction;
 import com.caoccao.javet.values.reference.V8ValueObject;
 
@@ -12,8 +15,16 @@ final class ScriptEntryPoints implements AutoCloseable {
     private final V8ValueFunction requestStop;
     private final V8ValueFunction settle;
     private final V8ValueFunction deliver;
+    private final V8ValueFunction request;
+    private final V8ValueFunction chunk;
+    private final V8ValueFunction streamError;
+    private final V8Runtime runtime;
 
-    ScriptEntryPoints(V8ValueObject prelude) throws JavetException {
+    ScriptEntryPoints(V8Runtime runtime, V8ValueObject prelude) throws JavetException {
+        this.runtime = runtime;
+        this.request = prelude.get("request");
+        this.chunk = prelude.get("chunk");
+        this.streamError = prelude.get("streamError");
         this.invoke = prelude.get("invoke");
         this.fire = prelude.get("fire");
         this.requestStop = prelude.get("requestStop");
@@ -39,8 +50,32 @@ final class ScriptEntryPoints implements AutoCloseable {
         deliver.callVoid(null, listenerId, payloadJson, replyId);
     }
 
+    /** An HTTP request for serve listener {@code listenerId}; its body arrives on stream {@code bodyId}. */
+    void request(int listenerId, int exchangeId, String requestJson, int bodyId) throws JavetException {
+        request.callVoid(null, listenerId, exchangeId, requestJson, bodyId);
+    }
+
+    /** The next chunk of stream {@code streamId} as a {@code Uint8Array}, or the end of the stream if null. */
+    void chunk(int streamId, byte[] bytes) throws JavetException {
+        if (bytes == null) {
+            chunk.callVoid(null, streamId, null);
+            return;
+        }
+        try (V8ValueTypedArray array = runtime.createV8ValueTypedArray(V8ValueType.Uint8Array, bytes.length)) {
+            array.fromBytes(bytes);
+            chunk.callVoid(null, streamId, array);
+        }
+    }
+
+    void streamError(int streamId, String message) throws JavetException {
+        streamError.callVoid(null, streamId, message);
+    }
+
     @Override
     public void close() throws JavetException {
+        request.close();
+        chunk.close();
+        streamError.close();
         invoke.close();
         fire.close();
         requestStop.close();

@@ -67,6 +67,7 @@ public final class NodeVerticle extends VerticleBase {
     private final Duration heartbeat;
     private final Duration stopGrace;
     private final HostServicesFactory hostServices;
+    private final String endpoint;
 
     /** Jobs this node has accepted, by job id. The execution is null until the script has started. */
     private final Map<String, Slot> slots = new HashMap<>();
@@ -77,8 +78,9 @@ public final class NodeVerticle extends VerticleBase {
     }
 
     public NodeVerticle(String nodeId, String instanceId, int capacity, JobStore jobs, JobStateStore state, NodeRegistry nodes,
-                        ScriptRuntime runtime, Duration heartbeat, Duration stopGrace, HostServicesFactory hostServices) {
+                        ScriptRuntime runtime, Duration heartbeat, Duration stopGrace, HostServicesFactory hostServices, String endpoint) {
         this.hostServices = hostServices;
+        this.endpoint = endpoint;
         this.nodeId = nodeId;
         this.instanceId = instanceId;
         this.capacity = capacity;
@@ -127,7 +129,7 @@ public final class NodeVerticle extends VerticleBase {
     }
 
     private Future<Void> announce() {
-        return nodes.announce(new NodeInfo(nodeId, instanceId, capacity, slots.size(), System.currentTimeMillis()));
+        return nodes.announce(new NodeInfo(nodeId, instanceId, capacity, slots.size(), System.currentTimeMillis(), endpoint));
     }
 
     private void onRun(Message<JsonObject> message) {

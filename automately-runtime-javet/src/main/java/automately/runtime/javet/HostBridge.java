@@ -1,13 +1,21 @@
 package automately.runtime.javet;
 
+import automately.core.runtime.BodyStream;
+import automately.core.runtime.FetchedResponse;
 import automately.core.runtime.HostException;
+import automately.core.runtime.HttpExchange;
 import automately.core.runtime.HostServices;
 import automately.core.runtime.Inbound;
 import com.caoccao.javet.annotations.V8Function;
+import com.caoccao.javet.values.V8Value;
+import com.caoccao.javet.values.primitive.V8ValueString;
+import com.caoccao.javet.values.reference.V8ValueTypedArray;
 import io.vertx.core.Future;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +40,45 @@ public final class HostBridge {
     private final Map<Integer, Inbound> awaitingReply = new ConcurrentHashMap<>();
     private final AtomicInteger nextReplyId = new AtomicInteger(1);
     private final AtomicBoolean closed = new AtomicBoolean();
+
+    /** Chunks handed to the script but not yet consumed; the source pauses at the high mark and resumes at the low. */
+    static final int HIGH_WATER = 8;
+    static final int LOW_WATER = 2;
+
+    /**
+     * Counted when a chunk **arrives** (on the source's thread), not when the isolate gets to it: otherwise a
+     * stalled script would let chunks pile up in the event loop's task queue without bound.
+     */
+    private static final class StreamState {
+        final BodyStream stream;
+        int unconsumed;
+        boolean paused;
+
+        StreamState(BodyStream stream) {
+            this.stream = stream;
+        }
+
+        synchronized void arrived() {
+            unconsumed++;
+            if (!paused && unconsumed >= HIGH_WATER) {
+                paused = true;
+                stream.pause();
+            }
+        }
+
+        synchronized void consumed() {
+            unconsumed--;
+            if (paused && unconsumed <= LOW_WATER) {
+                paused = false;
+                stream.resume();
+            }
+        }
+    }
+
+    /** Isolate thread only. */
+    private final Map<Integer, StreamState> streams = new HashMap<>();
+    private final Map<Integer, HttpExchange> exchanges = new ConcurrentHashMap<>();
+    private final AtomicInteger nextId = new AtomicInteger(1);
 
     HostBridge(HostServices host, EventLoop loop) {
         this.host = host;
@@ -68,6 +115,156 @@ public final class HostBridge {
         }));
     }
 
+    // --- streams (request bodies, fetch bodies) ---
+
+    /** Starts delivering a stream's chunks to the script. Isolate thread only. */
+    private int openStream(BodyStream stream) {
+        int id = nextId.getAndIncrement();
+        StreamState state = new StreamState(stream);
+        streams.put(id, state);
+        loop.streamOpened();
+        stream.handler(
+                chunk -> {
+                    state.arrived();
+                    loop.post(js -> deliverChunk(js, id, chunk.getBytes()));
+                },
+                () -> loop.post(js -> endStream(js, id, null)),
+                err -> loop.post(js -> endStream(js, id, String.valueOf(err.getMessage()))));
+        stream.resume();
+        return id;
+    }
+
+    private void deliverChunk(ScriptEntryPoints js, int id, byte[] bytes) throws com.caoccao.javet.exceptions.JavetException {
+        if (!streams.containsKey(id)) {
+            return;
+        }
+        js.chunk(id, bytes);
+    }
+
+    private void endStream(ScriptEntryPoints js, int id, String error) throws com.caoccao.javet.exceptions.JavetException {
+        if (streams.remove(id) == null) {
+            return;
+        }
+        loop.streamClosed();
+        if (error == null) {
+            js.chunk(id, null);
+        } else {
+            js.streamError(id, error);
+        }
+    }
+
+    /** The script consumed a chunk. */
+    @V8Function(name = "ack")
+    public void ack(int id) {
+        StreamState state = streams.get(id);
+        if (state != null) {
+            state.consumed();
+        }
+    }
+
+    /** The script stopped reading (broke out of a loop, or never read a fetch body). */
+    @V8Function(name = "cancelStream")
+    public void cancelStream(int id) {
+        StreamState state = streams.remove(id);
+        if (state != null) {
+            loop.streamClosed();
+            state.stream.cancel();
+        }
+    }
+
+    // --- serving HTTP ---
+
+    @V8Function(name = "serve")
+    public void serve(int listenerId, int callId) {
+        loop.callStarted();
+        Future<HostServices.Registration> registered = start(() -> host.serve(exchange -> onExchange(listenerId, exchange)));
+        registered.onComplete(ar -> loop.post(js -> {
+            loop.callSettled();
+            if (ar.succeeded()) {
+                registrations.put(listenerId, ar.result());
+                loop.listenerAdded();
+                js.settle(callId, true, "null");
+            } else {
+                js.settle(callId, false, errorJson(ar.cause()));
+            }
+        }));
+    }
+
+    private void onExchange(int listenerId, HttpExchange exchange) {
+        if (closed.get()) {
+            exchange.fail(503, "The service is no longer running");
+            return;
+        }
+        int exchangeId = nextId.getAndIncrement();
+        exchanges.put(exchangeId, exchange);
+        String request = exchange.request().encode();
+        loop.post(js -> js.request(listenerId, exchangeId, request, openStream(exchange.body())));
+    }
+
+    @V8Function(name = "respond")
+    public void respond(int exchangeId, int status, String headersJson) {
+        HttpExchange exchange = exchanges.get(exchangeId);
+        if (exchange != null) {
+            exchange.respond(status, new JsonObject(headersJson));
+        }
+    }
+
+    /** Writes a response chunk; the script's promise settles when the client has taken it. */
+    @V8Function(name = "write")
+    public void write(int exchangeId, V8Value data, int callId) throws com.caoccao.javet.exceptions.JavetException {
+        loop.callStarted();
+        HttpExchange exchange = exchanges.get(exchangeId);
+        if (exchange == null) {
+            settleLater(callId, Future.failedFuture(new HostException("Error", "closed", "The response is already finished")));
+            return;
+        }
+        settleLater(callId, exchange.write(Buffer.buffer(bytes(data))).map(v -> (Object) null)
+                .recover(err -> Future.failedFuture(new HostException("Error", "client_disconnected", err.getMessage()))));
+    }
+
+    @V8Function(name = "end")
+    public void end(int exchangeId) {
+        HttpExchange exchange = exchanges.remove(exchangeId);
+        if (exchange != null) {
+            exchange.end();
+        }
+    }
+
+    @V8Function(name = "fail")
+    public void fail(int exchangeId, int status, String message) {
+        HttpExchange exchange = exchanges.remove(exchangeId);
+        if (exchange != null) {
+            exchange.fail(status, message);
+        }
+    }
+
+    static byte[] bytes(V8Value data) throws com.caoccao.javet.exceptions.JavetException {
+        if (data instanceof V8ValueTypedArray array) {
+            return array.toBytes();
+        }
+        if (data instanceof V8ValueString string) {
+            return string.getValue().getBytes(StandardCharsets.UTF_8);
+        }
+        return String.valueOf(data).getBytes(StandardCharsets.UTF_8);
+    }
+
+    // --- fetch ---
+
+    @V8Function(name = "fetch")
+    public void fetch(String argsJson, int callId) {
+        loop.callStarted();
+        Future<FetchedResponse> response = start(() -> host.fetch(new JsonObject(argsJson)));
+        response.onComplete(ar -> loop.post(js -> {
+            loop.callSettled();
+            if (ar.succeeded()) {
+                int streamId = openStream(ar.result().body());
+                js.settle(callId, true, ar.result().meta().copy().put("streamId", streamId).encode());
+            } else {
+                js.settle(callId, false, errorJson(ar.cause()));
+            }
+        }));
+    }
+
     @V8Function(name = "unlisten")
     public void unlisten(int listenerId) {
         HostServices.Registration registration = registrations.remove(listenerId);
@@ -98,6 +295,10 @@ public final class HostBridge {
         }
         registrations.values().forEach(HostServices.Registration::cancel);
         registrations.clear();
+        streams.values().forEach(state -> state.stream.cancel());
+        streams.clear();
+        exchanges.values().forEach(exchange -> exchange.fail(503, "The script ended before it answered"));
+        exchanges.clear();
         awaitingReply.values().forEach(inbound -> inbound.fail(503, "The script ended before it answered"));
         awaitingReply.clear();
         host.close();
