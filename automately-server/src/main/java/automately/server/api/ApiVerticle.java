@@ -8,6 +8,7 @@ import automately.core.node.NodeInfo;
 import automately.core.node.NodeRegistry;
 import automately.core.scheduler.Addresses;
 import automately.core.scheduler.JobScheduler;
+import automately.core.service.ServiceStore;
 import automately.core.state.JobStateStore;
 import automately.core.state.StepRecord;
 import automately.server.ServerConfig;
@@ -49,10 +50,13 @@ public final class ApiVerticle extends VerticleBase {
     private final JobStateStore state;
     private final NodeRegistry nodes;
     private final JobScheduler scheduler;
+    private final ServiceStore services;
 
     private HttpServer server;
 
-    public ApiVerticle(ServerConfig config, JobStore jobs, JobStateStore state, NodeRegistry nodes, JobScheduler scheduler) {
+    public ApiVerticle(ServerConfig config, JobStore jobs, JobStateStore state, NodeRegistry nodes, JobScheduler scheduler,
+                       ServiceStore services) {
+        this.services = services;
         this.config = config;
         this.jobs = jobs;
         this.state = state;
@@ -71,11 +75,14 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/health").handler(this::health);
         router.get("/v1/nodes").handler(this::listNodes);
         router.route("/v1/jobs*").handler(this::requireTenant);
+        router.route("/v1/services*").handler(this::requireTenant);
         router.post("/v1/jobs").handler(BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 4_096)).handler(this::submitJob);
         router.get("/v1/jobs").handler(this::listJobs);
         router.get("/v1/jobs/:id").handler(this::getJob);
         router.get("/v1/jobs/:id/events").handler(this::streamEvents);
         router.get("/v1/jobs/:id/steps").handler(this::getSteps);
+        router.post("/v1/jobs/:id/cancel").handler(this::cancelJob);
+        new ServiceRoutes(config, services, jobs, scheduler).mount(router, BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 64 * 1024));
         router.route().last().handler(ctx -> error(ctx, 404, "not_found", "No such route"));
         router.route().failureHandler(this::failure);
 
@@ -181,6 +188,22 @@ public final class ApiVerticle extends VerticleBase {
         });
     }
 
+    private void cancelJob(RoutingContext ctx) {
+        findOwnJob(ctx).onSuccess(job -> {
+            if (job == null) {
+                return;
+            }
+            if (job.status().isTerminal()) {
+                error(ctx, 409, "already_finished", "The job already ended " + job.status());
+                return;
+            }
+            scheduler.cancel(job.id(), "cancelled through the API")
+                    .onSuccess(updated -> ctx.response().setStatusCode(202).putHeader("Content-Type", "application/json")
+                            .end(updated.toSummaryJson().encode()))
+                    .onFailure(ctx::fail);
+        });
+    }
+
     /** The current attempt's checkpoint and completed steps (docs/scripting/job-context.md). */
     private void getSteps(RoutingContext ctx) {
         findOwnJob(ctx).onSuccess(job -> {
@@ -249,7 +272,7 @@ public final class ApiVerticle extends VerticleBase {
         error(ctx, 500, "internal", "Internal error");
     }
 
-    private static void error(RoutingContext ctx, int status, String code, String message) {
+    static void error(RoutingContext ctx, int status, String code, String message) {
         ctx.response()
                 .setStatusCode(status)
                 .putHeader("Content-Type", "application/json")

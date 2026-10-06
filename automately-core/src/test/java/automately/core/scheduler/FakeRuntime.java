@@ -12,6 +12,7 @@ import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,6 +37,12 @@ final class FakeRuntime implements ScriptRuntime {
     private final Map<String, Promise<ExecutionResult>> held = new ConcurrentHashMap<>();
     /** Every step body that actually ran, as {@code name@attempt}. */
     final List<String> executedSteps = new CopyOnWriteArrayList<>();
+    /** Graceful stop requests, as {@code jobId#attempt: reason}. */
+    final List<String> stops = new CopyOnWriteArrayList<>();
+    /** Every execution started, in order: {@code jobId#attempt}. Services also record {@code service run N}. */
+    final List<String> started = new CopyOnWriteArrayList<>();
+    /** The contexts executions were started with, by {@code jobId#attempt}. */
+    final Map<String, automately.core.runtime.JobContext> contexts = new ConcurrentHashMap<>();
     /** Cancellations, as {@code jobId#attempt: reason}. */
     final List<String> cancellations = new CopyOnWriteArrayList<>();
     /** State writes that were rejected, as {@code KIND: message}. */
@@ -50,10 +57,19 @@ final class FakeRuntime implements ScriptRuntime {
     public RunningExecution execute(Execution execution, LogSink logs, StateSink state) {
         logs.log("info", "running " + execution.script() + " attempt " + execution.context().attempt());
         String key = execution.jobId() + "#" + execution.context().attempt();
+        started.add(key);
+        contexts.put(key, execution.context());
         Promise<ExecutionResult> promise = Promise.promise();
         switch (execution.script()) {
             case "hold" -> held.put(key, promise);
             case "crash" -> promise.fail("engine exploded");
+            case "fail" -> promise.complete(ExecutionResult.failed("script failed"));
+            case "checkpoint" -> vertx.<Void>executeBlocking(() -> {
+                Object previous = execution.context().carried().checkpoint();
+                int count = previous == null ? 1 : ((Number) ((io.vertx.core.json.JsonObject) previous).getValue("count")).intValue() + 1;
+                state.saveCheckpoint(new io.vertx.core.json.JsonObject().put("count", count));
+                return null;
+            }).onSuccess(v -> promise.tryComplete(ExecutionResult.failed("crashed after checkpoint"))).onFailure(promise::tryFail);
             case "resumable" -> vertx.<Void>executeBlocking(() -> {
                 step(execution, state, "a");
                 step(execution, state, "b");
@@ -91,9 +107,16 @@ final class FakeRuntime implements ScriptRuntime {
             }
 
             @Override
+            public void stop(String reason, Duration grace) {
+                stops.add(key + ": " + reason);
+                // A well-behaved script returns promptly when asked to stop.
+                promise.tryComplete(ExecutionResult.cancelled("Stopped: " + reason));
+            }
+
+            @Override
             public void cancel(String reason) {
                 cancellations.add(key + ": " + reason);
-                promise.tryFail("cancelled: " + reason);
+                promise.tryComplete(ExecutionResult.cancelled("Cancelled: " + reason));
             }
         };
     }

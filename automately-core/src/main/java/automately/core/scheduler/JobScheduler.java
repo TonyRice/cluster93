@@ -3,6 +3,7 @@ package automately.core.scheduler;
 import automately.core.job.Job;
 import automately.core.job.JobStore;
 import automately.core.job.OrphanPolicy;
+import automately.core.job.ServiceRef;
 import automately.core.node.NodeInfo;
 import automately.core.node.NodeRegistry;
 import io.vertx.core.Future;
@@ -42,6 +43,34 @@ public final class JobScheduler {
                 .compose(v -> dispatch(job))
                 .recover(err -> jobs.update(job.id(), current -> current.rejected(err.getMessage(), System.currentTimeMillis()))
                         .compose(rejected -> rejected.isPresent() ? Future.succeededFuture(rejected.get()) : jobs.get(job.id())));
+    }
+
+    /**
+     * Cancels a job. A queued job ends {@code CANCELLED} at once. A running job is marked (durably) and
+     * its node is told to stop it gracefully; if that message is lost, the node's heartbeat check or the
+     * reaper still honours the mark. Completes with the job as it is after the request.
+     */
+    public Future<Job> cancel(String jobId, String reason) {
+        return jobs.update(jobId, job -> job.cancelRequested(reason, System.currentTimeMillis())).compose(updated -> {
+            if (updated.isEmpty()) {
+                return jobs.get(jobId);
+            }
+            Job job = updated.get();
+            if (job.status().isTerminal()) {
+                vertx.eventBus().publish(Addresses.jobEvents(jobId), new JsonObject().put("type", "end").put("status", job.status().name()));
+                return Future.succeededFuture(job);
+            }
+            JsonObject request = new JsonObject().put("jobId", jobId).put("attempt", job.attempt()).put("reason", reason);
+            return vertx.eventBus().request(Addresses.nodeControl(job.nodeInstance()), request, DISPATCH)
+                    .transform(ignored -> Future.succeededFuture(job));
+        });
+    }
+
+    /** Submits a run of a service: like {@link #submit} but with no timeout, and returning the job even if no node takes it yet. */
+    public Future<Job> submitServiceRun(String jobId, String tenant, String script, JsonObject config, ServiceRef service) {
+        Job job = Job.queued(jobId, tenant, script, config, 0, OrphanPolicy.FAIL, 1, service, System.currentTimeMillis());
+        // If no node can take it now, it stays QUEUED and the reaper re-dispatches it later.
+        return jobs.save(job).compose(v -> dispatch(job).otherwise(job));
     }
 
     /** Offers the job's current attempt to live nodes, least loaded first. Used for new and re-queued attempts. */

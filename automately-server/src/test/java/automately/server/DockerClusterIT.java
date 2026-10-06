@@ -165,6 +165,39 @@ class DockerClusterIT {
         awaitCondition(Duration.ofSeconds(60), "restarted " + victim + " rejoins", () -> liveNodes(survivor).contains(victim));
     }
 
+    @Test
+    void aServiceSurvivesSigkillOfItsNodeAndKeepsItsCheckpoint() throws Exception {
+        HttpResponse<String> created = http.send(request(anyNode(), "/v1/services/counter")
+                .PUT(HttpRequest.BodyPublishers.ofString(new JsonObject().put("script", ChaosTest.COUNTING_SERVICE).encode())).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        String[] firstJob = new String[1];
+        awaitCondition(Duration.ofSeconds(30), "service counting", () -> {
+            JsonObject service = getJson(anyNode(), "/v1/services/counter");
+            firstJob[0] = service.getString("currentJobId");
+            return "RUNNING".equals(service.getString("status")) && checkpointCount(anyNode(), firstJob[0]) >= 5;
+        });
+        String victim = job(anyNode(), firstJob[0]).getString("node");
+
+        sigkill(victim);
+        String survivor = survivorOtherThan(victim);
+        JsonObject[] restarted = new JsonObject[1];
+        awaitCondition(Duration.ofSeconds(60), "service restarted on a survivor", () -> {
+            restarted[0] = getJson(survivor, "/v1/services/counter");
+            return "RUNNING".equals(restarted[0].getString("status")) && restarted[0].getInteger("runs") >= 2;
+        });
+
+        String secondJob = restarted[0].getString("currentJobId");
+        assertThat(job(survivor, secondJob).getString("node")).isNotEqualTo(victim);
+        assertThat(restarted[0].getJsonObject("lastExit").getString("status")).isEqualTo("ORPHANED");
+        assertThat(checkpointCount(survivor, secondJob)).as("continued from the killed run's count").isGreaterThanOrEqualTo(5);
+    }
+
+    private int checkpointCount(String node, String jobId) {
+        Object checkpoint = steps(node, jobId).getValue("checkpoint");
+        return checkpoint == null ? 0 : ((JsonObject) checkpoint).getInteger("count");
+    }
+
     // --- cluster helpers ---
 
     private void sigkill(String node) {

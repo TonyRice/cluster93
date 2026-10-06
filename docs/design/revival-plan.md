@@ -10,7 +10,7 @@
 > |---|---|---|
 > | 1. Spike | ✅ Done | [CHANGELOG](../../CHANGELOG.md) · D-001 to D-006 |
 > | 2. Scheduler port | ✅ Done, narrowed to orphaned jobs, attempts, steps and checkpoints | [phase-2-plan.md](phase-2-plan.md) · [orphaned-jobs.md](orphaned-jobs.md) · D-007, D-009 to D-014 |
-> | 2b. Long-running services | Planned | Split out of phase 2 |
+> | 2b. Long-running services | ✅ Done | [services.md](services.md) · D-019 to D-023 |
 > | 3. Sandboxed runtime and host API | Planned | Some of it was done early: heap limit and isolation tests (D-003) |
 > | 4. API, auth, CLI and MCP | Planned | |
 > | 5. Observability and polish | Planned | |

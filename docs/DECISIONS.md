@@ -116,3 +116,46 @@ A crashed container restarts with the same node name. Its old jobs would then lo
 **Decision:** The phase 2 plan had an internal `SUPERSEDED` outcome; it was left out. A cancelled zombie attempt reports `FAILED: Cancelled: …`, and its "finished" write is rejected by the attempt check, so the job never sees it. The attempt is already recorded as `ORPHANED` in the job's history, and the node logs a warning.
 **Why:** A status that clients never see adds states without adding information.
 **Follow-up:** Phase 5 should count discarded late results as a metric (`automately_attempt_results_discarded_total`), which is where this information is actually useful.
+
+### D-017 — No CI for now
+**Date:** 2026-10-06 · **Status:** Accepted (Tony)
+
+**Decision:** The GitHub Actions workflow is removed. The repo is private and worked on locally, and `./mvnw verify` (unit tests plus `DockerClusterIT`) is the gate. The crash-report check that CI ran is now a manual step: `find . -name 'hs_err_pid*.log'`.
+**Cost:** Nothing runs automatically on push. Bring the workflow back from git history (commit `31ce7c7`) when the repo gets collaborators or goes public.
+
+### D-018 — Name and rights
+**Date:** 2026-10-06 · **Status:** Recorded, as stated by Tony
+
+The acquired product was renamed **Executory** after the acquisition. Tony was given the rights to the pre-acquisition open-source Automately code, so using the Automately name and building on that code here is fine and doesn't overlap with what the product became. This closes the question raised in the revival plan.
+
+### D-019 — An event loop per isolate, on a dedicated executor
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** Each execution runs an event loop on its isolate's thread. It pumps microtasks, fires timers (`setTimeout`/`setInterval`, at most 10 000 pending), and runs tasks posted from other threads (stop requests now, incoming requests and messages in phase 3). Kills and timeouts wake an idle loop. Isolates run on a Vert.x shared worker executor (`automately-isolates`) sized to the node's capacity, with execute-time warnings disabled.
+**Why:** Services need to stay alive and react over time, and phase 3's handlers need the same loop. A long-running isolate on the default worker pool would trigger blocked-thread warnings and take threads from other blocking work.
+**Cost:** One thread per running isolate. Isolates are thread-affine, so virtual threads aren't an obvious substitute.
+
+### D-020 — Durable cancellation and a `CANCELLED` status
+**Date:** 2026-10-06 · **Status:** Accepted. Updates D-016
+
+**Decision:** A cancel is stored on the job (`cancelRequested`) with compare-and-set, then sent to the node as an optimisation. The node also checks the flag on every heartbeat, and the reaper ends an orphaned job with a pending cancel as `CANCELLED` instead of retrying it. Running jobs get a graceful stop: `ctx.stopRequested` resolves, then after `AUTOMATELY_STOP_GRACE_MS` (default 5 s) the isolate is terminated. Cancelled attempts, including zombies cancelled by their own node, report `CANCELLED` rather than `FAILED` (that part of D-016 is superseded; their results are still discarded).
+**Why:** A cancel must never be lost and must never turn into a retry.
+
+### D-021 — Services are supervised jobs, claimed before they're submitted
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** A service is a definition (desired state). Each run is an ordinary job (`onOrphan: fail`, no timeout) with a `service` reference. A leader-only `ServiceSupervisor` reconciles: it records exits (with exponential backoff on failure, reset after 60 s of uptime), stops outdated or disabled runs, and starts missing ones by **writing the new job id into the service with compare-and-set before submitting the job**. Checkpoints carry from one run to the next; steps don't.
+**Why:** Reusing jobs keeps placement, fencing, logs, `/steps` and the orphan reaper in one place. Claiming first means overlapping supervisors can't start two runs.
+**Cost:** Definitions live in the cluster map, so a full-cluster restart loses them (2017 autostarted from a persistent map). The `ServiceStore` interface is ready for a durable store.
+
+### D-022 — Looking at `ctx.stopRequested` counts as waiting
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** A job whose promise is pending with nothing scheduled still fails fast ("never settles"), unless the script has accessed `ctx.stopRequested`. In that case it waits, bounded by its timeout, because a cancel can resolve it.
+**Why:** Found by ServicesTest: `await ctx.stopRequested` in a job was failed instantly instead of waiting to be cancelled.
+
+### D-023 — Stored logs keep the last 1 000 lines
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:** The per-attempt log buffer is a ring buffer of the last 1 000 lines, not the first 1 000.
+**Why:** For a service that runs for days and then crashes, the end of the log is what matters.

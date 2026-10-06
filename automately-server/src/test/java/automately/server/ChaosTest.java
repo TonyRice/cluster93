@@ -124,6 +124,62 @@ class ChaosTest {
         assertThat(steps.getJsonArray("steps").stream().map(s -> ((JsonObject) s).getString("name"))).containsExactly("one");
     }
 
+    /** A service that counts in its checkpoint, so a restart shows whether state carried over. */
+    static final String COUNTING_SERVICE = """
+            export default async (input, ctx) => {
+              let count = ctx.checkpoint?.count ?? 0;
+              console.log(`run ${ctx.service.run} starting from ${count}`);
+              while (true) {
+                count++;
+                await ctx.saveCheckpoint({ count });
+                await Promise.race([ctx.sleep(100), ctx.stopRequested]);
+              }
+            }
+            """;
+
+    @Test
+    void aServiceComesBackOnASurvivorWithItsCheckpoint() throws Exception {
+        HttpResponse<Buffer> created = await(client.put(nodes.getFirst().httpPort(), "localhost", "/v1/services/counter")
+                .putHeader("X-Automately-Tenant", TENANT).sendJsonObject(new JsonObject().put("script", COUNTING_SERVICE)));
+        assertThat(created.statusCode()).as(created.bodyAsString()).isEqualTo(201);
+        JsonObject first = awaitService(nodes.getFirst(), s -> "RUNNING".equals(s.getString("status")));
+        String firstJob = first.getString("currentJobId");
+        long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+        while (countOf(nodes.getFirst(), firstJob) < 5) {
+            assertThat(System.nanoTime()).as("service counting").isLessThan(deadline);
+            Thread.sleep(100);
+        }
+
+        RunningNode victim = killNodeRunning(firstJob);
+        RunningNode survivor = survivorOtherThan(victim);
+        JsonObject restarted = awaitService(survivor, s -> "RUNNING".equals(s.getString("status")) && s.getInteger("runs") >= 2);
+
+        JsonObject secondJob = get(survivor, "/v1/jobs/" + restarted.getString("currentJobId")).bodyAsJsonObject();
+        assertThat(secondJob.getString("node")).isNotEqualTo(victim.nodeId());
+        assertThat(get(survivor, "/v1/jobs/" + firstJob).bodyAsJsonObject().getString("status")).isEqualTo("ORPHANED");
+        assertThat(restarted.getJsonObject("lastExit").getString("status")).isEqualTo("ORPHANED");
+        int carried = countOf(survivor, secondJob.getString("id"));
+        assertThat(carried).as("the new run continued from the old run's count").isGreaterThanOrEqualTo(5);
+    }
+
+    private int countOf(RunningNode node, String jobId) throws Exception {
+        Object checkpoint = get(node, "/v1/jobs/" + jobId + "/steps").bodyAsJsonObject().getValue("checkpoint");
+        return checkpoint == null ? 0 : ((JsonObject) checkpoint).getInteger("count");
+    }
+
+    private JsonObject awaitService(RunningNode node, java.util.function.Predicate<JsonObject> condition) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        JsonObject last = null;
+        while (System.nanoTime() < deadline) {
+            last = get(node, "/v1/services/counter").bodyAsJsonObject();
+            if (condition.test(last)) {
+                return last;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("Service never reached the expected state: " + last);
+    }
+
     private String submitAndAwaitStep(String script, String onOrphan, String step) throws Exception {
         HttpResponse<Buffer> response = await(client.post(nodes.getFirst().httpPort(), "localhost", "/v1/jobs")
                 .putHeader("X-Automately-Tenant", TENANT)

@@ -210,4 +210,53 @@ class OrphanHandlingTest {
         assertThat(events).filteredOn(e -> e.getString("type").equals("end")).singleElement()
                 .satisfies(e -> assertThat(e.getString("status")).isEqualTo("SUCCEEDED"));
     }
+
+    @Test
+    void cancellingARunningJobStopsItGracefully() throws Exception {
+        Job job = cluster.submit("hold", OrphanPolicy.RETRY, 3);
+        cluster.awaitRunning(job.id(), 1);
+
+        await(cluster.scheduler.cancel(job.id(), "user asked"));
+        Job done = cluster.awaitTerminal(job.id());
+
+        assertThat(done.status()).isEqualTo(JobStatus.CANCELLED);
+        assertThat(done.error()).isEqualTo("Stopped: user asked");
+        assertThat(cluster.runtime.stops).containsExactly(job.id() + "#1: user asked");
+    }
+
+    @Test
+    void aCancelWhoseMessageWasLostIsStillHonouredByTheNode() throws Exception {
+        Job job = cluster.submit("hold", OrphanPolicy.FAIL, 1);
+        cluster.awaitRunning(job.id(), 1);
+
+        // Mark it the way the scheduler does, but never tell the node.
+        await(cluster.jobs.update(job.id(), j -> j.cancelRequested("quietly", System.currentTimeMillis())));
+
+        assertThat(cluster.awaitTerminal(job.id()).status()).isEqualTo(JobStatus.CANCELLED);
+    }
+
+    @Test
+    void anOrphanedJobWithAPendingCancelIsNotRetried() throws Exception {
+        Job job = runOnVictimThenKill("hold", OrphanPolicy.RETRY, 3);
+        await(cluster.jobs.update(job.id(), j -> j.cancelRequested("user asked", System.currentTimeMillis())));
+
+        Job done = cluster.awaitTerminal(job.id());
+
+        assertThat(done.status()).isEqualTo(JobStatus.CANCELLED);
+        assertThat(done.attempt()).isEqualTo(1);
+        assertThat(cluster.runtime.started).doesNotContain(job.id() + "#2");
+    }
+
+    @Test
+    void cancellingAQueuedJobEndsIt() throws Exception {
+        Job stranded = Job.queued("stranded-cancel", "tenant-a", "hello", new JsonObject(), 10_000, OrphanPolicy.FAIL, 1,
+                System.currentTimeMillis());
+        await(cluster.jobs.save(stranded));
+
+        Job cancelled = await(cluster.scheduler.cancel(stranded.id(), "changed my mind"));
+
+        assertThat(cancelled.status()).isEqualTo(JobStatus.CANCELLED);
+        Thread.sleep(LocalCluster.REQUEUE_AFTER.toMillis() + 300);
+        assertThat(cluster.runtime.started).as("a cancelled job is never dispatched").doesNotContain("stranded-cancel#1");
+    }
 }

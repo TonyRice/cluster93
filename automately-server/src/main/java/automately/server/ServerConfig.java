@@ -14,6 +14,8 @@ import java.util.UUID;
  * @param heartbeat     how often nodes announce themselves; a node is considered gone after 3 missed heartbeats
  * @param orphanGrace   how much longer a job's node must stay gone before the job is treated as orphaned
  * @param requeueAfter  how long an attempt may sit QUEUED before it is dispatched again
+ * @param stopGrace     how long a stopped job or service gets to finish before its isolate is terminated
+ * @param maxServicesPerTenant how many enabled services one tenant may have
  * @param clusterMembers Hazelcast TCP/IP join addresses, e.g. {@code node1,node2,node3}; a host without a port is probed from {@code clusterPort} upwards
  */
 public record ServerConfig(
@@ -26,6 +28,8 @@ public record ServerConfig(
         Duration heartbeat,
         Duration orphanGrace,
         Duration requeueAfter,
+        Duration stopGrace,
+        int maxServicesPerTenant,
         boolean clustered,
         String clusterName,
         int clusterPort,
@@ -43,6 +47,8 @@ public record ServerConfig(
                 heartbeat,
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_ORPHAN_GRACE_MS", String.valueOf(heartbeat.toMillis() * 3)))),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_REQUEUE_AFTER_MS", "10000"))),
+                Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_STOP_GRACE_MS", "5000"))),
+                Integer.parseInt(env.getOrDefault("AUTOMATELY_MAX_SERVICES_PER_TENANT", "10")),
                 Boolean.parseBoolean(env.getOrDefault("AUTOMATELY_CLUSTERED", "false")),
                 env.getOrDefault("AUTOMATELY_CLUSTER_NAME", "automately"),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_CLUSTER_PORT", "5701")),

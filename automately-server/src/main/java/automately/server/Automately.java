@@ -8,6 +8,9 @@ import automately.core.runtime.ScriptRuntime;
 import automately.core.scheduler.JobScheduler;
 import automately.core.scheduler.NodeVerticle;
 import automately.core.scheduler.OrphanReaper;
+import automately.core.service.ServiceStore;
+import automately.core.service.ServiceSupervisor;
+import automately.core.service.SharedDataServiceStore;
 import automately.core.state.JobStateStore;
 import automately.core.state.SharedDataJobStateStore;
 import automately.runtime.javet.JavetScriptRuntime;
@@ -31,14 +34,17 @@ public final class Automately {
             JobStore jobs = new SharedDataJobStore(vertx);
             JobStateStore state = new SharedDataJobStateStore(vertx);
             NodeRegistry nodes = new SharedDataNodeRegistry(vertx, config.heartbeat().multipliedBy(3));
-            ScriptRuntime runtime = new JavetScriptRuntime(vertx, config.maxHeapMb());
+            ServiceStore services = new SharedDataServiceStore(vertx);
+            ScriptRuntime runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
             JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
-            ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler);
+            ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services);
 
             return vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes, runtime,
-                            config.heartbeat()))
+                            config.heartbeat(), config.stopGrace()))
                     .compose(id -> vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, config.heartbeat(),
                             config.orphanGrace(), config.requeueAfter())))
+                    .compose(id -> vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler,
+                            config.heartbeat(), ServiceSupervisor.Timing.DEFAULT)))
                     .compose(id -> vertx.deployVerticle(api))
                     .map(id -> new RunningNode(config.nodeId(), instanceId, vertx, api.port()))
                     .recover(err -> vertx.close().transform(v -> Future.failedFuture(err)));

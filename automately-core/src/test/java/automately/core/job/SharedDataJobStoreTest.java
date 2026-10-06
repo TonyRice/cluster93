@@ -65,9 +65,7 @@ class SharedDataJobStoreTest {
     private static Job withLog(Job job, String line) {
         List<String> logs = new ArrayList<>(job.logs());
         logs.add(line);
-        return new Job(job.id(), job.tenant(), job.script(), job.input(), job.timeoutMs(), job.onOrphan(), job.maxAttempts(),
-                job.status(), job.attempt(), job.node(), job.nodeInstance(), job.output(), job.error(), logs, job.attempts(),
-                job.createdAt(), job.queuedAt(), job.startedAt(), job.finishedAt());
+        return job.edit().logs(logs).build();
     }
 
     private static <T> T await(Future<T> future) throws Exception {

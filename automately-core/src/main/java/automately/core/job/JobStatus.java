@@ -7,9 +7,11 @@ public enum JobStatus {
     FAILED,
     TIMED_OUT,
     /** The node running the job disappeared and the job was not continued (see {@link OrphanPolicy}). */
-    ORPHANED;
+    ORPHANED,
+    /** Someone cancelled or stopped the job. Never counted as a failure. */
+    CANCELLED;
 
     public boolean isTerminal() {
-        return this == SUCCEEDED || this == FAILED || this == TIMED_OUT || this == ORPHANED;
+        return this != QUEUED && this != RUNNING;
     }
 }

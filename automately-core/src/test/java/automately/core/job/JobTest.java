@@ -101,4 +101,45 @@ class JobTest {
         assertThat(summary.getJsonArray("attempts").getJsonObject(0).containsKey("nodeInstance")).isFalse();
         assertThat(summary.getString("onOrphan")).isEqualTo("retry");
     }
+
+    @Test
+    void cancellingAQueuedJobEndsItAtOnce() {
+        Job cancelled = queued(OrphanPolicy.RETRY, 3).cancelRequested("user asked", 300).orElseThrow();
+
+        assertThat(cancelled.status()).isEqualTo(JobStatus.CANCELLED);
+        assertThat(cancelled.error()).isEqualTo("Cancelled: user asked");
+        assertThat(cancelled.finishedAt()).isEqualTo(300);
+    }
+
+    @Test
+    void cancellingARunningJobMarksItOnce() {
+        Job marked = running(OrphanPolicy.RETRY, 3).cancelRequested("user asked", 300).orElseThrow();
+
+        assertThat(marked.status()).isEqualTo(JobStatus.RUNNING);
+        assertThat(marked.cancelRequested()).isEqualTo("user asked");
+        assertThat(marked.cancelRequested("again", 400)).isEmpty();
+        Job done = marked.finished(1, "inst-a", JobStatus.CANCELLED, null, "Stopped: user asked", List.of(), 500).orElseThrow();
+        assertThat(done.status()).isEqualTo(JobStatus.CANCELLED);
+        assertThat(done.cancelRequested("late", 600)).as("finished jobs can't be cancelled").isEmpty();
+    }
+
+    @Test
+    void anOrphanWithAPendingCancelIsCancelledNotRetried() {
+        Job marked = running(OrphanPolicy.RETRY, 3).cancelRequested("user asked", 300).orElseThrow();
+
+        Job ended = marked.orphaned(1, "inst-a", 500).orElseThrow();
+
+        assertThat(ended.status()).isEqualTo(JobStatus.CANCELLED);
+        assertThat(ended.error()).contains("user asked").contains("disappeared before it stopped");
+        assertThat(ended.attempts()).extracting(Attempt::outcome).containsExactly(JobStatus.ORPHANED);
+    }
+
+    @Test
+    void serviceRunsRoundTripThroughJson() {
+        Job run = Job.queued("job-9", "t", "s", new JsonObject().put("everyMs", 5), 0, OrphanPolicy.FAIL, 1,
+                new ServiceRef("poller", 2, 7, "job-8"), 100);
+
+        assertThat(Job.fromJson(run.toJson())).isEqualTo(run);
+        assertThat(run.toSummaryJson().getJsonObject("service").getInteger("run")).isEqualTo(7);
+    }
 }

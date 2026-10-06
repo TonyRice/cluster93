@@ -126,10 +126,11 @@ public final class OrphanReaper extends VerticleBase {
         jobs.update(job.id(), current -> current.orphaned(job.attempt(), job.nodeInstance(), now))
                 .onSuccess(updated -> updated.ifPresent(next -> {
                     suspects.remove(job.id() + "#" + job.attempt());
-                    if (next.status() == JobStatus.ORPHANED) {
-                        LOG.info("Job {} orphaned on node {} (attempt {}, policy {})", job.id(), job.node(), job.attempt(), job.onOrphan().apiName());
+                    if (next.status().isTerminal()) {
+                        LOG.info("Job {} lost node {} (attempt {}, policy {}); it ends {}", job.id(), job.node(), job.attempt(),
+                                job.onOrphan().apiName(), next.status());
                         vertx.eventBus().publish(Addresses.jobEvents(job.id()),
-                                new JsonObject().put("type", "end").put("status", JobStatus.ORPHANED.name()));
+                                new JsonObject().put("type", "end").put("status", next.status().name()));
                     } else {
                         LOG.info("Job {} lost node {}; starting attempt {} ({})", job.id(), job.node(), next.attempt(), job.onOrphan().apiName());
                         dispatch(next);

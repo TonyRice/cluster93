@@ -35,7 +35,7 @@ class JavetScriptRuntimeTest {
     @BeforeAll
     static void setUp() {
         vertx = Vertx.vertx();
-        runtime = new JavetScriptRuntime(vertx, 64);
+        runtime = new JavetScriptRuntime(vertx, 64, 8);
     }
 
     @AfterAll
@@ -373,7 +373,7 @@ class JavetScriptRuntimeTest {
             running.cancel("superseded");
 
             ExecutionResult result = running.result().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertThat(result.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(result.status()).isEqualTo(JobStatus.CANCELLED);
             assertThat(result.error()).isEqualTo("Cancelled: superseded");
         }
 
@@ -387,6 +387,209 @@ class JavetScriptRuntimeTest {
                     """, JobContext.firstAttempt("job-7", OrphanPolicy.FAIL), StateSink.DISCARD);
 
             assertThat(result.output()).isEqualTo("SupersededError");
+        }
+    }
+
+    @Nested
+    class TimersAndServices {
+
+        private RunningExecution start(String script, boolean longRunning, Duration timeout, List<String> logs) {
+            Execution execution = new Execution("svc-1", "tenant-a", script, new JsonObject(), timeout,
+                    JobContext.firstAttempt("svc-1", OrphanPolicy.FAIL), longRunning);
+            return runtime.execute(execution, (level, line) -> logs.add(line), StateSink.DISCARD);
+        }
+
+        private ExecutionResult await(RunningExecution running) throws Exception {
+            return running.result().toCompletionStage().toCompletableFuture().get(20, TimeUnit.SECONDS);
+        }
+
+        @Test
+        void setTimeoutAndSleepResolveInOrder() throws Exception {
+            ExecutionResult result = run("""
+                    export default async (input, ctx) => {
+                      const order = [];
+                      setTimeout(() => order.push('timeout 30'), 30);
+                      setTimeout((x) => order.push(x), 10, 'timeout 10');
+                      await ctx.sleep(60);
+                      order.push('slept 60');
+                      return order;
+                    }
+                    """);
+
+            assertThat(result.output()).isEqualTo(new JsonArray().add("timeout 10").add("timeout 30").add("slept 60"));
+        }
+
+        @Test
+        void intervalsRepeatUntilCleared() throws Exception {
+            ExecutionResult result = run("""
+                    export default () => new Promise((resolve) => {
+                      let ticks = 0;
+                      const id = setInterval(() => { if (++ticks === 3) { clearInterval(id); resolve(ticks); } }, 5);
+                    })
+                    """);
+
+            assertThat(result.output()).isEqualTo(3);
+        }
+
+        @Test
+        void aClearedTimeoutNeverFires() throws Exception {
+            ExecutionResult result = run("""
+                    export default async (input, ctx) => {
+                      let fired = false;
+                      clearTimeout(setTimeout(() => { fired = true; }, 5));
+                      await ctx.sleep(30);
+                      return fired;
+                    }
+                    """);
+
+            assertThat(result.output()).isEqualTo(false);
+        }
+
+        @Test
+        void aJobWaitingOnNothingStillNeverSettles() throws Exception {
+            ExecutionResult result = run("export default () => new Promise(() => { setTimeout(() => {}, 10); })");
+
+            assertThat(result.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(result.error()).contains("never settles");
+        }
+
+        @Test
+        void aJobWaitingForAStopWaitsAndCanBeCancelledGracefully() throws Exception {
+            RunningExecution running = start("export default async (input, ctx) => { await ctx.stopRequested; return 'tidied'; }",
+                    false, Duration.ofSeconds(10), new CopyOnWriteArrayList<>());
+            Thread.sleep(200);
+            assertThat(running.result().isComplete()).as("waiting for a stop is not 'never settles'").isFalse();
+
+            running.stop("cancelled through the API", Duration.ofSeconds(5));
+
+            ExecutionResult result = await(running);
+            assertThat(result.status()).isEqualTo(JobStatus.CANCELLED);
+            assertThat(result.output()).isEqualTo("tidied");
+        }
+
+        @Test
+        void anErrorThrownInATimerFailsTheRun() throws Exception {
+            ExecutionResult result = run("""
+                    export default (input, ctx) => {
+                      setTimeout(() => { throw new Error('tick exploded'); }, 5);
+                      return ctx.sleep(1000);
+                    }
+                    """);
+
+            assertThat(result.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(result.error()).contains("Uncaught error in timer callback").contains("tick exploded");
+        }
+
+        @Test
+        void timerCountIsLimited() throws Exception {
+            ExecutionResult result = run("""
+                    export default () => {
+                      try { for (let i = 0; i < 20000; i++) setTimeout(() => {}, 100000); } catch (e) { return e.name; }
+                    }
+                    """);
+
+            assertThat(result.output()).isEqualTo("RangeError");
+        }
+
+        @Test
+        void timerGlobalsCannotBeReplaced() throws Exception {
+            ExecutionResult result = run("""
+                    export default () => { try { globalThis.setTimeout = () => 'hijacked'; } catch {} return typeof setTimeout(() => {}, 1); }
+                    """);
+
+            assertThat(result.output()).isEqualTo("number");
+        }
+
+        @Test
+        void aLongRunningScriptWaitsIdleUntilStoppedAndCanCleanUp() throws Exception {
+            List<String> logs = new CopyOnWriteArrayList<>();
+            RunningExecution running = start("""
+                    export default async (input, ctx) => {
+                      const { reason } = await ctx.stopRequested;
+                      console.log('cleaning up: ' + reason);
+                      return 'clean';
+                    }
+                    """, true, Duration.ZERO, logs);
+            Thread.sleep(300);
+            assertThat(running.result().isComplete()).as("still running while idle").isFalse();
+
+            running.stop("service stopped", Duration.ofSeconds(5));
+            ExecutionResult result = await(running);
+
+            assertThat(result.status()).isEqualTo(JobStatus.CANCELLED);
+            assertThat(result.output()).isEqualTo("clean");
+            assertThat(result.error()).isEqualTo("Stopped: service stopped");
+            assertThat(logs).containsExactly("cleaning up: service stopped");
+        }
+
+        @Test
+        void aServiceOnIntervalsKeepsTickingUntilStopped() throws Exception {
+            List<String> logs = new CopyOnWriteArrayList<>();
+            RunningExecution running = start("""
+                    export default (input, ctx) => {
+                      setInterval(() => console.log('tick'), 20);
+                      return ctx.stopRequested;
+                    }
+                    """, true, Duration.ZERO, logs);
+            Thread.sleep(300);
+            running.stop("enough", Duration.ofSeconds(5));
+            ExecutionResult result = await(running);
+
+            assertThat(result.status()).isEqualTo(JobStatus.CANCELLED);
+            assertThat(logs.size()).isGreaterThanOrEqualTo(5);
+        }
+
+        @Test
+        void aScriptThatIgnoresTheStopIsTerminatedAfterTheGracePeriod() throws Exception {
+            RunningExecution running = start("export default () => { while (true) {} }", true, Duration.ZERO, new CopyOnWriteArrayList<>());
+            Thread.sleep(100);
+            long start = System.nanoTime();
+
+            running.stop("redeploy", Duration.ofMillis(200));
+            ExecutionResult result = await(running);
+
+            assertThat(result.status()).isEqualTo(JobStatus.CANCELLED);
+            assertThat(result.error()).contains("Stopped: redeploy").contains("grace period");
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(3));
+        }
+
+        @Test
+        void cancellingAnIdleScriptEndsItPromptly() throws Exception {
+            RunningExecution running = start("export default () => new Promise(() => {})", true, Duration.ZERO, new CopyOnWriteArrayList<>());
+            Thread.sleep(200);
+            long start = System.nanoTime();
+
+            running.cancel("user asked");
+            ExecutionResult result = await(running);
+
+            assertThat(result.status()).isEqualTo(JobStatus.CANCELLED);
+            assertThat(result.error()).isEqualTo("Cancelled: user asked");
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(2));
+        }
+
+        @Test
+        void aTimeoutStillAppliesToIdleJobsWithTimers() throws Exception {
+            RunningExecution running = start("export default (input, ctx) => ctx.sleep(60000)", false, Duration.ofMillis(200),
+                    new CopyOnWriteArrayList<>());
+
+            assertThat(await(running).status()).isEqualTo(JobStatus.TIMED_OUT);
+        }
+
+        @Test
+        void exposesTheServiceContextFrozen() throws Exception {
+            JsonObject service = new JsonObject().put("name", "poller").put("revision", 2).put("run", 3)
+                    .put("config", new JsonObject().put("everyMs", 1000)).putNull("previousRun");
+            JobContext context = new JobContext("svc-1", 1, OrphanPolicy.FAIL, null,
+                    new JobState(new JsonObject().put("cursor", 41), List.of()), service);
+
+            ExecutionResult result = run("""
+                    export default (input, ctx) => {
+                      try { ctx.service.config.everyMs = 1; } catch {}
+                      return [ctx.service.name, ctx.service.revision, ctx.service.run, ctx.service.config.everyMs, ctx.checkpoint.cursor, Object.isFrozen(ctx.service.config)];
+                    }
+                    """, context, StateSink.DISCARD);
+
+            assertThat(result.output()).isEqualTo(new JsonArray().add("poller").add(2).add(3).add(1000).add(41).add(true));
         }
     }
 }

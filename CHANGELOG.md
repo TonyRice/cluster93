@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 
 ## [Unreleased]
 
+### Removed
+- GitHub Actions CI. **Why:** the repo is private and local `./mvnw verify` is the gate for now (D-017).
+
+### Docs
+- D-018: name and rights recorded. Automately was renamed Executory after the acquisition, and Tony holds the rights to the pre-acquisition OSS code.
+
 ### Added
 - **`DockerClusterIT`**, a Testcontainers integration test that scripts the phase 2 Docker check. It runs three containers built from the jar `mvn package` produced, with production timings (1 s heartbeat). One scenario `SIGKILL`s the container running a resumable job mid-step and checks: attempt 2 runs on another node, steps finished before the kill aren't repeated, every invoice exists exactly once, and the SSE stream shows the `attempt` and `end` events. A second scenario `SIGKILL`s and immediately restarts a node under a `fail` job; it must end `ORPHANED` with only `charge` recorded. Run by Failsafe in `./mvnw verify` and in CI; skipped without Docker, or with `-DskipITs`. **Why:** the check was manual, and a real `SIGKILL` is the one failure the in-JVM tests can't produce.
 - **Dockerfile stages:** `runtime` (shared), `local-jar` (copies the already packaged jar, used by the test), `build`, and `release` (the default). **Why:** the test exercises the exact artifact the build produced, without a second Maven build inside Docker.
@@ -16,6 +22,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - `docs/design/phase-2-plan.md`: the phase 2 implementation plan. It adds node instance ids, per-attempt state, compare-and-set transitions and a lock-free reaper (D-009 to D-012). **Why:** planning against the real code showed that a restarted node would hide its own orphans, and that state needs fencing.
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
+
+## Phase 2b — Long-running services (2026-10-06)
+
+### Added
+- **Services:** named, long-running scripts per tenant that the cluster keeps running (the 2017 "service jobs", made robust). `PUT/GET /v1/services/{name}`, `GET /v1/services`, `POST /v1/services/{name}/start|stop|restart`, `DELETE /v1/services/{name}`, with `restart: always` (default) or `on-failure`. Changing script, config or restart creates a new revision, which is rolled out by stopping the old run. **Why:** this was the main 2017 feature not yet carried over. Design: `docs/design/services.md`; script API: `docs/scripting/services.md`.
+- **`ServiceSupervisor`** (leader-only, compare-and-set): records each run's exit, backs off on failures (1 s doubling to 60 s, reset after 60 s of uptime), stops disabled or outdated runs, and claims a run before submitting it so there are never two (D-021). A run whose job never appeared is given up after 10 s.
+- **Service context:** `ctx.service` (`name`, `revision`, `run`, `config`, `previousRun`), and `ctx.checkpoint` carried from the previous run.
+- **Runtime event loop** (D-019): `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, `ctx.sleep()`, `ctx.stopRequested`, posted tasks, idle waiting for long-running executions, a timer error failing the run, and isolates on a dedicated executor sized to node capacity.
+- **Job cancellation:** `POST /v1/jobs/{id}/cancel`, a `CANCELLED` status, and a durable `cancelRequested` honoured by the node's heartbeat check and by the reaper. Running jobs get a graceful stop with `AUTOMATELY_STOP_GRACE_MS` (D-020).
+- `RunningExecution.stop(reason, grace)`, and a node control address for stopping a specific attempt.
+- **Config:** `AUTOMATELY_STOP_GRACE_MS` (5000), `AUTOMATELY_MAX_SERVICES_PER_TENANT` (10).
+- **Tests (76 → 115 unit, 2 → 3 Docker):**
+  - runtime: timers, idle and stop, grace exceeded, cancel while idle, waiting for a stop, `ctx.service`
+  - job cancel transitions
+  - cancellation through the node, including a lost message and an orphan with a pending cancel
+  - `ServiceSupervisorTest`: start, backoff, `on-failure`, stop and start, revision roll, one run at a time, node death including the leader, checkpoint carry-over, a lost claim
+  - `ServicesTest` over HTTP on a real 2-node cluster
+  - `ChaosTest` and `DockerClusterIT`: a service comes back on a survivor, with its checkpoint, after its node is stopped or `SIGKILL`ed
+
+### Changed
+- Stored logs keep the **last** 1 000 lines (D-023).
+- Cancelled attempts report `CANCELLED` (updates D-016).
+- `Job` transitions are built with an internal editor, and the job JSON gains `cancelRequested` and `service`.
+
+### Fixed (found by the new tests)
+- A job awaiting `ctx.stopRequested` failed instantly as "never settles"; it now waits, bounded by its timeout (D-022).
 
 ## Phase 2 — Orphaned jobs, attempts and resumable steps (2026-10-06)
 

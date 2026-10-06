@@ -8,6 +8,9 @@ import automately.core.job.SharedDataJobStore;
 import automately.core.node.NodeInfo;
 import automately.core.node.NodeRegistry;
 import automately.core.node.SharedDataNodeRegistry;
+import automately.core.service.ServiceStore;
+import automately.core.service.ServiceSupervisor;
+import automately.core.service.SharedDataServiceStore;
 import automately.core.state.JobStateStore;
 import automately.core.state.SharedDataJobStateStore;
 import io.vertx.core.Future;
@@ -29,6 +32,9 @@ final class LocalCluster implements AutoCloseable {
     static final Duration HEARTBEAT = Duration.ofMillis(100);
     static final Duration GRACE = Duration.ofMillis(300);
     static final Duration REQUEUE_AFTER = Duration.ofMillis(500);
+    static final Duration STOP_GRACE = Duration.ofMillis(300);
+    static final ServiceSupervisor.Timing SERVICE_TIMING =
+            new ServiceSupervisor.Timing(Duration.ofSeconds(2), Duration.ofMillis(100), Duration.ofMillis(800));
 
     final Vertx vertx = Vertx.vertx();
     final JobStore jobs = new SharedDataJobStore(vertx);
@@ -36,6 +42,7 @@ final class LocalCluster implements AutoCloseable {
     final NodeRegistry nodes = new SharedDataNodeRegistry(vertx, HEARTBEAT.multipliedBy(3));
     final FakeRuntime runtime = new FakeRuntime(vertx);
     final JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
+    final ServiceStore services = new SharedDataServiceStore(vertx);
 
     /** Instances whose heartbeats are being dropped, as if cut off from the cluster. */
     private final Set<String> partitioned = ConcurrentHashMap.newKeySet();
@@ -45,9 +52,12 @@ final class LocalCluster implements AutoCloseable {
 
     /** Starts a node. Instance ids sort in start order, so the first node started is the reaper leader. */
     String start(String nodeId, String instanceId, int capacity) throws Exception {
-        String node = await(vertx.deployVerticle(new NodeVerticle(nodeId, instanceId, capacity, jobs, state, partitionable(), runtime, HEARTBEAT)));
+        String node = await(vertx.deployVerticle(new NodeVerticle(nodeId, instanceId, capacity, jobs, state, partitionable(), runtime,
+                HEARTBEAT, STOP_GRACE)));
         String reaper = await(vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, HEARTBEAT, GRACE, REQUEUE_AFTER)));
-        deployments.put(instanceId, new String[]{node, reaper});
+        String supervisor = await(vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler, HEARTBEAT,
+                SERVICE_TIMING)));
+        deployments.put(instanceId, new String[]{node, reaper, supervisor});
         return instanceId;
     }
 

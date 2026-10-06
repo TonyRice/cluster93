@@ -3,6 +3,7 @@ package automately.core.scheduler;
 import automately.core.job.Job;
 import automately.core.job.JobStore;
 import automately.core.job.OrphanPolicy;
+import automately.core.job.ServiceRef;
 import automately.core.node.NodeInfo;
 import automately.core.node.NodeRegistry;
 import automately.core.runtime.Execution;
@@ -23,8 +24,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +41,8 @@ import java.util.concurrent.TimeoutException;
  *
  * <p>Every write about a job names the attempt and this node's instance id, so if the cluster has
  * already given the job to another node (because this one looked dead), the write is rejected. On each
- * heartbeat the node also checks its running jobs and cancels any it no longer owns.
+ * heartbeat the node also checks its running jobs: it cancels any it no longer owns, and gracefully stops
+ * any with a pending cancel request (in case the stop message was lost).
  *
  * <p>All mutable state is confined to this verticle's event loop, so several nodes can share one
  * Vert.x instance in tests.
@@ -48,6 +51,7 @@ public final class NodeVerticle extends VerticleBase {
 
     private static final Logger LOG = LoggerFactory.getLogger(NodeVerticle.class);
 
+    /** Stored logs keep the last lines, so a run that crashes shows how it ended. */
     static final int MAX_LOG_LINES = 1_000;
     static final long STATE_WRITE_TIMEOUT_SECONDS = 30;
     static final Duration SHUTDOWN_WAIT = Duration.ofSeconds(10);
@@ -60,6 +64,7 @@ public final class NodeVerticle extends VerticleBase {
     private final NodeRegistry nodes;
     private final ScriptRuntime runtime;
     private final Duration heartbeat;
+    private final Duration stopGrace;
 
     /** Jobs this node has accepted, by job id. The execution is null until the script has started. */
     private final Map<String, Slot> slots = new HashMap<>();
@@ -70,7 +75,7 @@ public final class NodeVerticle extends VerticleBase {
     }
 
     public NodeVerticle(String nodeId, String instanceId, int capacity, JobStore jobs, JobStateStore state, NodeRegistry nodes,
-                        ScriptRuntime runtime, Duration heartbeat) {
+                        ScriptRuntime runtime, Duration heartbeat, Duration stopGrace) {
         this.nodeId = nodeId;
         this.instanceId = instanceId;
         this.capacity = capacity;
@@ -79,16 +84,17 @@ public final class NodeVerticle extends VerticleBase {
         this.nodes = nodes;
         this.runtime = runtime;
         this.heartbeat = heartbeat;
+        this.stopGrace = stopGrace;
     }
 
     @Override
     public Future<?> start() {
         heartbeatTimer = vertx.setPeriodic(heartbeat.toMillis(), id -> {
             announce();
-            cancelSuperseded();
+            checkRunningJobs();
         });
-        return vertx.eventBus().<JsonObject>consumer(Addresses.nodeRun(instanceId), this::onRun)
-                .completion()
+        return vertx.eventBus().<JsonObject>consumer(Addresses.nodeRun(instanceId), this::onRun).completion()
+                .compose(v -> vertx.eventBus().<JsonObject>consumer(Addresses.nodeControl(instanceId), this::onControl).completion())
                 .compose(v -> announce());
     }
 
@@ -96,7 +102,7 @@ public final class NodeVerticle extends VerticleBase {
      * Stops the node's running scripts and waits for their isolates to exit, so no native V8 code is still
      * running when the process ends (that crashed the JVM on exit). The attempts are deliberately not
      * recorded as finished: they stay RUNNING on an instance that's gone, and the reaper applies each
-     * job's {@code onOrphan} policy, the same path as after a crash.
+     * job's {@code onOrphan} policy, the same path as after a crash (D-015).
      */
     @Override
     public Future<?> stop() {
@@ -148,28 +154,78 @@ public final class NodeVerticle extends VerticleBase {
                 });
     }
 
+    /** A request to stop one of this node's attempts gracefully. */
+    private void onControl(Message<JsonObject> message) {
+        Slot slot = slots.get(message.body().getString("jobId"));
+        if (slot == null || slot.attempt() != message.body().getInteger("attempt") || slot.execution() == null) {
+            message.fail(404, "Node " + nodeId + " is not running that attempt");
+            return;
+        }
+        slot.execution().stop(message.body().getString("reason"), stopGrace);
+        message.reply(instanceId);
+    }
+
     private Future<Void> run(Job job) {
         int attempt = job.attempt();
-        boolean resuming = job.onOrphan() == OrphanPolicy.RESUME && attempt > 1;
-        Future<JobState> carried = resuming ? state.resumeFrom(job.id(), attempt) : Future.succeededFuture(JobState.EMPTY);
-        return carried.compose(carriedState -> {
+        return carriedState(job).compose(carried -> {
+            if (stopping) {
+                return Future.succeededFuture();
+            }
             if (attempt > 1) {
                 publish(job.id(), new JsonObject().put("type", "attempt").put("attempt", attempt).put("node", nodeId)
                         .put("previousOutcome", job.previousAttempt().outcome().name()));
             }
-            if (stopping) {
-                return Future.succeededFuture();
-            }
-            List<String> logs = Collections.synchronizedList(new ArrayList<>());
-            JobContext jobContext = new JobContext(job.id(), attempt, job.onOrphan(), job.previousAttempt(), carriedState);
+            Deque<String> logs = new ArrayDeque<>();
+            JobContext jobContext = new JobContext(job.id(), attempt, job.onOrphan(), job.previousAttempt(), carried.state(),
+                    carried.service());
             RunningExecution execution = runtime.execute(execution(job, jobContext), logSink(job.id(), logs), stateSink(job.id(), attempt));
             slots.put(job.id(), new Slot(attempt, execution));
+            if (job.cancelRequested() != null) {
+                execution.stop(job.cancelRequested(), stopGrace);
+            }
 
             // A runtime may complete on any thread; continue on this verticle's context so `slots` stays confined.
             return Future.fromCompletionStage(execution.result().toCompletionStage(), context)
                     .recover(err -> Future.succeededFuture(ExecutionResult.failed("Runtime error: " + err.getMessage())))
-                    .compose(result -> finish(job.id(), attempt, result, List.copyOf(logs)));
+                    .compose(result -> finish(job.id(), attempt, result, snapshot(logs)));
         });
+    }
+
+    private record Carried(JobState state, JsonObject service) {
+    }
+
+    /**
+     * What this attempt starts from: for a resumed job, the earlier attempts' state; for a service run, the
+     * previous run's checkpoint (seeded into this run's state so it shows in /steps) plus ctx.service.
+     */
+    private Future<Carried> carriedState(Job job) {
+        if (job.service() != null) {
+            ServiceRef service = job.service();
+            Future<Job> previous = service.previousJobId() == null ? Future.succeededFuture() : jobs.get(service.previousJobId());
+            return previous.compose(prev -> {
+                JsonObject serviceJson = new JsonObject()
+                        .put("name", service.name())
+                        .put("revision", service.revision())
+                        .put("run", service.run())
+                        .put("config", job.input())
+                        .put("previousRun", prev == null ? null : new JsonObject()
+                                .put("jobId", prev.id())
+                                .put("status", prev.status().name())
+                                .put("error", prev.error())
+                                .put("endedAt", prev.finishedAt()));
+                if (prev == null) {
+                    return Future.succeededFuture(new Carried(JobState.EMPTY, serviceJson));
+                }
+                return state.load(prev.id(), prev.attempt()).compose(prevState -> prevState.checkpoint() == null
+                        ? Future.succeededFuture(new Carried(JobState.EMPTY, serviceJson))
+                        : state.saveCheckpoint(job.id(), job.attempt(), prevState.checkpoint())
+                        .map(seeded -> new Carried(new JobState(prevState.checkpoint(), List.of()), serviceJson)));
+            });
+        }
+        if (job.onOrphan() == OrphanPolicy.RESUME && job.attempt() > 1) {
+            return state.resumeFrom(job.id(), job.attempt()).map(resumed -> new Carried(resumed, null));
+        }
+        return Future.succeededFuture(new Carried(JobState.EMPTY, null));
     }
 
     /** Records the end of an attempt. Rejected (and not announced) if the attempt was superseded meanwhile. */
@@ -190,7 +246,8 @@ public final class NodeVerticle extends VerticleBase {
                 });
     }
 
-    private void cancelSuperseded() {
+    /** Cancels attempts this node no longer owns, and stops attempts someone asked to cancel. */
+    private void checkRunningJobs() {
         slots.forEach((jobId, slot) -> {
             if (slot.execution() == null) {
                 return;
@@ -198,18 +255,29 @@ public final class NodeVerticle extends VerticleBase {
             jobs.get(jobId).onSuccess(job -> {
                 if (job == null || !job.isCurrent(slot.attempt(), instanceId)) {
                     slot.execution().cancel("attempt " + slot.attempt() + " was superseded");
+                } else if (job.cancelRequested() != null) {
+                    slot.execution().stop(job.cancelRequested(), stopGrace);
                 }
             });
         });
     }
 
-    private LogSink logSink(String jobId, List<String> logs) {
+    private LogSink logSink(String jobId, Deque<String> logs) {
         return (level, line) -> {
-            if (logs.size() < MAX_LOG_LINES) {
-                logs.add(line);
+            synchronized (logs) {
+                if (logs.size() >= MAX_LOG_LINES) {
+                    logs.removeFirst();
+                }
+                logs.addLast(line);
             }
             publish(jobId, new JsonObject().put("type", "log").put("level", level).put("line", line));
         };
+    }
+
+    private static List<String> snapshot(Deque<String> logs) {
+        synchronized (logs) {
+            return List.copyOf(logs);
+        }
     }
 
     /** Called from the script's thread. Each write first checks this attempt still owns the job. */
@@ -255,6 +323,7 @@ public final class NodeVerticle extends VerticleBase {
     }
 
     private static Execution execution(Job job, JobContext context) {
-        return new Execution(job.id(), job.tenant(), job.script(), job.input(), Duration.ofMillis(job.timeoutMs()), context);
+        return new Execution(job.id(), job.tenant(), job.script(), job.input(), Duration.ofMillis(job.timeoutMs()), context,
+                job.service() != null);
     }
 }
