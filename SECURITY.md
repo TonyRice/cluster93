@@ -52,7 +52,8 @@ Automately runs other people's code. This page describes who is trusted, what ea
 
 - **Isolates share the node's process.** V8 isolates are memory-safe sandboxes, but they aren't separate processes or VMs. A V8 vulnerability that escapes the isolate would compromise the node, so keep the JVM and Javet up to date. For hostile multi-tenant use at scale, run nodes as unprivileged containers on dedicated hosts.
 - **CPU is bounded by time, not quota.** A job's timeout and the node's capacity bound how much CPU a tenant uses, but a running service has no CPU cap beyond holding one of the node's isolate slots. The per-tenant service limit (`AUTOMATELY_MAX_SERVICES_PER_TENANT`) bounds how many it can hold.
-- **The cluster's own ports are trusted.** Ignite discovery and communication (5701 and 5801 by default) and the Vert.x event bus are **neither authenticated nor encrypted**. Put nodes on a private network, and never expose those ports. The internal endpoint's secret protects only that endpoint.
+- **The cluster's own ports are trusted, for now.** Ignite discovery and communication (5701 and 5801 by default) and the Vert.x event bus are **neither authenticated nor encrypted**. Put nodes on a private network, bind Ignite to it (`AUTOMATELY_CLUSTER_BIND`), and never expose those ports. The internal endpoint's secret protects only that endpoint. Mutual TLS with a cluster CA is designed in [docs/design/cluster-security.md](docs/design/cluster-security.md).
+- **Ignite's own client and REST ports are off (D-065).** Ignite opens a thin-client/JDBC/ODBC connector (10800) and a REST command protocol (11211) by default, unauthenticated, on every interface. Automately uses neither, so both are disabled, and a test fails if a node listens anywhere unexpected. Before this fix (2026-10-07), anything that could reach 10800 could query every table.
 - **TLS is yours to add.** Nodes speak plain HTTP. Terminate TLS in front of the API (8080) and the ingress (8000) with a reverse proxy or load balancer, and keep the internal (8090) and metrics (9090) ports private.
 - **Operators can read logs.** Scripts' console output is stored with their jobs (the last 1 000 lines) and appears in node logs, so tenants shouldn't log secrets.
 - **Services serve the public.** Anything a service exposes through the ingress is public; services authenticate their own users.
@@ -62,7 +63,7 @@ Automately runs other people's code. This page describes who is trusted, what ea
 ## Deployment checklist
 
 - [ ] `AUTOMATELY_ADMIN_TOKEN` is set and stored securely, or the generated one was saved and rotated.
-- [ ] Ignite ports (5701, 5801), the internal port (8090) and the metrics port (9090) are reachable only between nodes, and by Prometheus.
+- [ ] Ignite ports (5701, 5801), the internal port (8090) and the metrics port (9090) are reachable only between nodes, and by Prometheus. `AUTOMATELY_CLUSTER_BIND` is the node's private address.
 - [ ] TLS terminates in front of 8080 and 8000.
 - [ ] `AUTOMATELY_SECRETS_KEY` is set (at least 32 random characters) if tenants will bring their own storage, and backed up.
 - [ ] `AUTOMATELY_EGRESS_ALLOW_PRIVATE` is left off in production.

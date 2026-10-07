@@ -16,9 +16,16 @@ import java.util.List;
  * @param baselineAdjust   how long a departed node is waited for before its data is rebalanced elsewhere
  * @param initialClusterSize how many nodes a brand-new durable cluster waits for before it activates, so data is
  *                         replicated from the first write (like Consul's bootstrap_expect)
+ * @param bindHost         the one address Ignite listens on; null means every interface (D-065)
  */
 public record IgniteSettings(String nodeId, Path dataDirectory, int discoveryPort, List<String> members, int backups,
-                             int dataMemoryMb, Duration baselineAdjust, int initialClusterSize) {
+                             int dataMemoryMb, Duration baselineAdjust, int initialClusterSize, String bindHost) {
+
+    /** Listening on every interface: tests and single-machine development. */
+    public IgniteSettings(String nodeId, Path dataDirectory, int discoveryPort, List<String> members, int backups,
+                          int dataMemoryMb, Duration baselineAdjust, int initialClusterSize) {
+        this(nodeId, dataDirectory, discoveryPort, members, backups, dataMemoryMb, baselineAdjust, initialClusterSize, null);
+    }
 
     public boolean persistent() {
         return dataDirectory != null;

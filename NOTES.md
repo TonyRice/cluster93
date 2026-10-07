@@ -62,3 +62,19 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
   - **Compatibility:** pure Python plus part of the standard library. Native extensions such as numpy aren't offered inside the sandbox, because native access is what the sandbox forbids.
   - Sources: [GraalVM sandboxing](https://www.graalvm.org/latest/security-guide/sandboxing/), [GraalVM 25.1 release notes](https://www.graalvm.org/release-notes/25.1/).
 
+---
+
+## Known intermittent: a tenant-S3 download closed mid-stream once
+
+*Seen 2026-10-07, in 1 of 2 full runs; passed 3 of 3 on its own and in the next full run.* `StorageProvidersTest.aTenantStoresFilesInItsOwnBucketAndFolderUnderTheAdminsPolicy` failed at the 6 MB download from the tenant's S3 bucket: `HttpClosedException: Connection was closed`.
+
+**Why the test saw a closed connection:** the node closes the response when a body stream fails after the headers have gone out.
+
+**Hypothesis, unconfirmed:** a keep-alive race. `S3Client` keeps idle connections for 120 s (`setIdleTimeout(120)`). If the S3 server, here the versitygw test gateway, closes idle connections sooner, the client can reuse one the server just closed, and the GET fails before any data arrives.
+
+**Possible fix:**
+- a client keep-alive shorter than the server's (`setKeepAliveTimeout`)
+- one retry for GET and HEAD when the connection closes before a response, which is safe because they're idempotent and nothing has been sent onward yet
+
+Confirm by idling a pooled connection past the gateway's timeout before changing anything.
+

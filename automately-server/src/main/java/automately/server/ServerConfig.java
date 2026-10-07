@@ -72,7 +72,8 @@ public record ServerConfig(
         automately.core.files.s3.S3Settings s3,
         String secretsKey,
         Path diskRoot,
-        int metricsPort) {
+        int metricsPort,
+        String clusterBind) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
 
@@ -134,7 +135,9 @@ public record ServerConfig(
                 "s3".equalsIgnoreCase(env.getOrDefault("AUTOMATELY_FILES_BACKEND", "").trim()) ? automately.core.files.s3.S3Settings.fromEnv(env) : null,
                 blankToNull(env.get("AUTOMATELY_SECRETS_KEY")),
                 blankToNull(env.get("AUTOMATELY_DISK_ROOT")) == null ? null : Path.of(env.get("AUTOMATELY_DISK_ROOT").trim()),
-                parsePort(env.getOrDefault("AUTOMATELY_METRICS_PORT", "9090")));
+                parsePort(env.getOrDefault("AUTOMATELY_METRICS_PORT", "9090")),
+                // Ignite listens on this address only: AUTOMATELY_CLUSTER_BIND, or an explicitly set advertised host (D-065).
+                blankToNull(env.getOrDefault("AUTOMATELY_CLUSTER_BIND", env.get("AUTOMATELY_ADVERTISE_HOST"))));
     }
 
     /** A port number, 0 for a random one, or "off" (-1). */

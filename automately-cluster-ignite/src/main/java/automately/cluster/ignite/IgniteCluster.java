@@ -160,7 +160,7 @@ public final class IgniteCluster {
         List<String> addresses = settings.members().stream()
                 .map(m -> m.contains(":") ? m : m + ":" + settings.discoveryPort() + ".." + (settings.discoveryPort() + DISCOVERY_PORT_RANGE - 1))
                 .toList();
-        return new IgniteConfiguration()
+        IgniteConfiguration configuration = new IgniteConfiguration()
                 .setIgniteInstanceName("automately-" + settings.nodeId())
                 .setConsistentId(settings.nodeId())
                 .setWorkDirectory(work.toString())
@@ -176,7 +176,15 @@ public final class IgniteCluster {
                         .setIpFinder(new TcpDiscoveryVmIpFinder().setAddresses(addresses)))
                 .setCommunicationSpi(new TcpCommunicationSpi()
                         .setLocalPort(settings.discoveryPort() + COMMUNICATION_OFFSET)
-                        .setLocalPortRange(20));
+                        .setLocalPortRange(20))
+                // Ignite's thin-client/JDBC/ODBC connector (10800) and its REST command protocol (11211) are on by
+                // default, unauthenticated, on every interface. Automately uses neither, so neither listens (D-065).
+                .setClientConnectorConfiguration(null)
+                .setConnectorConfiguration(null);
+        if (settings.bindHost() != null) {
+            configuration.setLocalHost(settings.bindHost());
+        }
+        return configuration;
     }
 
     /**

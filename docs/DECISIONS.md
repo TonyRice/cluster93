@@ -638,3 +638,19 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **The recording** is `docs/demo.cast` (asciicast v2), made by `scripts/record.py`, which captures a real run without asciinema installed. Long pauses are shortened on playback.
 
 **To make the dashboard tell the same story,** queues and callbacks got counters: `automately_queue_messages_total{outcome}` and `automately_callbacks_deliveries_total{outcome}`. They have a dashboard row of their own, and `DashboardTest` produces both.
+
+### D-065 — Ignite's client and REST connectors are off, and Ignite binds to one address
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Context:** While designing mutual TLS for the cluster (docs/design/cluster-security.md), a probe of a running node found two listeners nothing in Automately uses, both Ignite defaults, unauthenticated, on every interface:
+- **10800:** the thin-client/JDBC/ODBC connector. Anything that could reach it could run SQL against every table, every tenant's data and the tokens table included.
+- **11211:** the binary REST command protocol.
+
+Docker didn't publish them to the host, but every container on the network could reach them, and they weren't in SECURITY.md.
+
+**Decision:**
+- **Both off:** `IgniteConfiguration.setClientConnectorConfiguration(null)` and `setConnectorConfiguration(null)`.
+- **One address:** Ignite listens on `AUTOMATELY_CLUSTER_BIND`, defaulting to an explicitly set `AUTOMATELY_ADVERTISE_HOST`. Without either, it still listens on every interface, as single-machine development does, and the node logs a warning. The compose file and DockerClusterIT bind each node to its own hostname.
+- **`ListeningPortsTest`:** it reads the JVM's own listening sockets from `/proc` and asserts a clustered node opens only the API, ingress, internal, metrics, discovery and communication ports plus the event bus. Any new listener fails the build until it's added on purpose. It was checked to fail, naming 10800 and 11211, with the connectors turned back on.
+
+**Not yet:** authentication and encryption between nodes. That's the rest of the design (D-066, D-067): a cluster CA whose key stays on the operator's machine, and node bundles for one-line joins.

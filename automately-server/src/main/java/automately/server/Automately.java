@@ -102,7 +102,12 @@ public final class Automately {
         IgniteCluster cluster;
         try {
             cluster = IgniteCluster.start(new IgniteSettings(config.nodeId(), config.dataDirectory(), config.clusterPort(),
-                    config.clusterMembers(), config.dataBackups(), config.dataMemoryMb(), config.baselineAdjust(), config.clusterSize()));
+                    config.clusterMembers(), config.dataBackups(), config.dataMemoryMb(), config.baselineAdjust(), config.clusterSize(),
+                    config.clusterBind()));
+            if (config.clusterBind() == null) {
+                LOG.warn("Ignite listens on every interface; set AUTOMATELY_CLUSTER_BIND (or AUTOMATELY_ADVERTISE_HOST) to the "
+                        + "private address other nodes use (SECURITY.md)");
+            }
             IgniteStores.createTables(cluster);
         } catch (RuntimeException e) {
             return Future.failedFuture(e);
@@ -292,7 +297,7 @@ public final class Automately {
                     .compose(id -> vertx.deployVerticle(ingress))
                     .compose(id -> serveMetrics(vertx, config, instanceId, nodes, cluster))
                     .map(metricsPort -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster, api.routes(),
-                            metricsPort));
+                            metricsPort, endpoint.port()));
         }).recover(err -> {
             // Not waited for: this runs on one of Vert.x's own threads, which a close can't report back to.
             vertx.close();
@@ -309,7 +314,7 @@ public final class Automately {
 
     /** A started node. {@code apiRoutes} lists every REST route as "METHOD path", for checks that walk them all. */
     public record RunningNode(String nodeId, String instanceId, Vertx vertx, int httpPort, int ingressPort, IgniteCluster cluster,
-                              List<String> apiRoutes, int metricsPort) {
+                              List<String> apiRoutes, int metricsPort, int internalPort) {
 
         /** Stops Vert.x (which stops the node's scripts, D-015), then this node's Ignite. */
         public Future<Void> stop() {

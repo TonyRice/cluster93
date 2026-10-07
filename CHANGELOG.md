@@ -26,6 +26,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Security groundwork, part 1A — Closing Ignite's unused ports (2026-10-07)
+
+### Fixed
+- **Ignite's thin-client/JDBC/ODBC connector (10800) and REST command protocol (11211) no longer listen (D-065).** Both are Ignite defaults, unauthenticated, on every interface, and Automately uses neither. Anything that could reach 10800 could run SQL against every table. Found by probing a running node while designing mutual TLS for the cluster.
+
+### Added
+- **`AUTOMATELY_CLUSTER_BIND`:** the one private address Ignite listens on, defaulting to an explicitly set `AUTOMATELY_ADVERTISE_HOST`. Nodes warn when Ignite listens on every interface. The compose file and DockerClusterIT bind each node to its hostname.
+- **`ListeningPortsTest`:** a clustered node may open only its known ports plus the event bus. It reads the JVM's sockets from `/proc` (Linux), and was checked to fail on the old configuration.
+- **`docs/design/cluster-security.md`:** the design for the rest.
+  - **The CA:** a cluster certificate authority whose key stays on the operator's machine.
+  - **Mutual TLS:** on Ignite, the event bus and the internal endpoint.
+  - **Joining and renewal:** one-line joins with a per-node bundle (never the CA key), and renewals done by the operator.
+
+  Tony decided where the CA key is kept, and that the internal endpoint's shared secret is retired once mutual TLS is required.
+
+### Docs
+- SECURITY.md: the finding, the fix, and `AUTOMATELY_CLUSTER_BIND` in the checklist.
+
 ## Phase 5, milestone 4 — The demo (2026-10-07)
 
 ### Added

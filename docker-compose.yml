@@ -23,19 +23,19 @@ services:
   node1:
     <<: *node
     hostname: node1
-    environment: { <<: *env, AUTOMATELY_NODE_ID: node1 }
+    environment: { <<: *env, AUTOMATELY_NODE_ID: node1, AUTOMATELY_CLUSTER_BIND: node1 }
     ports: ["8081:8080", "8001:8000"]
     volumes: ["node1-data:/var/lib/automately"]
   node2:
     <<: *node
     hostname: node2
-    environment: { <<: *env, AUTOMATELY_NODE_ID: node2 }
+    environment: { <<: *env, AUTOMATELY_NODE_ID: node2, AUTOMATELY_CLUSTER_BIND: node2 }
     ports: ["8082:8080", "8002:8000"]
     volumes: ["node2-data:/var/lib/automately"]
   node3:
     <<: *node
     hostname: node3
-    environment: { <<: *env, AUTOMATELY_NODE_ID: node3 }
+    environment: { <<: *env, AUTOMATELY_NODE_ID: node3, AUTOMATELY_CLUSTER_BIND: node3 }
     ports: ["8083:8080", "8003:8000"]
     volumes: ["node3-data:/var/lib/automately"]
 
