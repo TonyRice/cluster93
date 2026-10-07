@@ -63,6 +63,8 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.auth.AuthStore authStore;
 
     private final automately.core.auth.RateLimiter limiter;
+    /** Marks the MCP tools' own calls to this API, which the tool call already counted (D-047). */
+    private final String loopbackSecret = java.util.UUID.randomUUID() + "-" + java.util.UUID.randomUUID();
     private final java.util.Map<Long, BodyHandler> bodyHandlers = new java.util.concurrent.ConcurrentHashMap<>();
 
     private HttpServer server;
@@ -126,6 +128,7 @@ public final class ApiVerticle extends VerticleBase {
         router.route("/v1/*").handler(this::authenticate).handler(this::rateLimit).handler(this::readBody).handler(this::validate);
         router.get("/v1/openapi.json").handler(ctx -> ctx.json(contract.getRawContract()));
         router.get("/v1/nodes").handler(this::listNodes);
+        new McpRoutes(vertx, authenticator, limiter, () -> server.actualPort(), loopbackSecret).mount(router);
         new AuthRoutes(authStore, authenticator, this::isEmpty).mount(router);
         new FilesRoutes(files, quota).mount(router);
         new BusRoutes(vertx).mount(router);
@@ -215,7 +218,7 @@ public final class ApiVerticle extends VerticleBase {
     /** Per-tenant limits (milestone 2). The admin and public routes aren't limited. */
     private void rateLimit(RoutingContext ctx) {
         String tenant = ctx.get("tenant");
-        if (tenant == null || !limiter.enabled()) {
+        if (tenant == null || !limiter.enabled() || loopbackSecret.equals(ctx.request().getHeader(McpRoutes.LOOPBACK_HEADER))) {
             ctx.next();
             return;
         }

@@ -138,6 +138,10 @@ class ContractTest {
         calls.check("publish", "POST", "/v1/bus/news", tenant, new JsonObject().put("hello", true));
         calls.check("request", "POST", "/v1/bus/nobody-listens/request?timeoutMs=500", tenant, new JsonObject());
 
+        calls.check("mcp", "POST", "/mcp", tenant, new JsonObject().put("jsonrpc", "2.0").put("id", 1).put("method", "ping"));
+        calls.check("mcpStream", "GET", "/mcp", null, null);
+        calls.check("mcpEndSession", "DELETE", "/mcp", null, null);
+
         calls.check("deleteTenant", "DELETE", "/v1/tenants/contract", admin, null);
 
         Set<String> all = contract.operations().stream().map(Operation::getOperationId).collect(Collectors.toCollection(TreeSet::new));

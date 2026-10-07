@@ -63,6 +63,19 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- The scripting guides, served to AI agents as MCP resources (D-047). -->
+            <resource>
+                <directory>${project.basedir}/../docs/scripting</directory>
+                <targetPath>mcp-docs</targetPath>
+                <includes>
+                    <include>*.md</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

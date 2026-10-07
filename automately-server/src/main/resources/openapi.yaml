@@ -34,6 +34,7 @@ tags:
   - name: tokens
   - name: admin
   - name: cluster
+  - name: mcp
 
 paths:
   /health:
@@ -53,6 +54,46 @@ paths:
                 properties:
                   status: { type: string, const: UP }
                   node: { type: string }
+
+  /mcp:
+    post:
+      operationId: mcp
+      tags: [mcp]
+      summary: MCP over Streamable HTTP (JSON-RPC 2.0), for AI agents
+      description: |
+        One JSON-RPC message per request (D-047): `initialize`, `ping`, `tools/list`, `tools/call`,
+        `resources/list`, `resources/read`. Answers are `application/json`; notifications get `202`. The tools act
+        through this API with the caller's token, so the same scopes apply. Not validated here: JSON-RPC is its own
+        protocol.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200':
+          description: A JSON-RPC response.
+          content:
+            application/json:
+              schema: { type: object }
+        '202': { description: 'A notification, accepted.' }
+        default: { $ref: '#/components/responses/Error' }
+    get:
+      operationId: mcpStream
+      tags: [mcp]
+      summary: Not offered (no server-initiated stream)
+      security: []
+      responses:
+        '405': { description: 'Only POST is offered.' }
+    delete:
+      operationId: mcpEndSession
+      tags: [mcp]
+      summary: Not offered (the server keeps no sessions)
+      security: []
+      responses:
+        '405': { description: 'Only POST is offered.' }
 
   /v1/openapi.json:
     get:
