@@ -491,3 +491,22 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - `SharedDiskRootTest`, on two nodes: different folders turn disk providers off; a shared folder serves files from either node
 - the contract on both stores, `StorageModelTest` (routing and sealing), `ContractTest` (52 operations) and `CliTest`
 
+### D-058 — Metrics: Micrometer and Prometheus on a management port, one registry per node
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Decision:**
+- **Each node has its own Prometheus registry**, tagged `node`, and Vert.x is built with it (`MicrometerMetricsFactory`). That gives Vert.x's HTTP server and client, event bus and pool metrics, plus the JVM's.
+- **Automately's own meters:**
+  - jobs submitted, queue wait, run time by status, running and capacity
+  - isolate cold start
+  - service runs and restarts
+  - 429s by tenant
+  - files stored by backend kind, and uploads refused by reason
+  - live nodes, leader, and the Ignite data region's use
+- **Recorded without plumbing.** The registry sits in each node's Vert.x local map, so any component with the `Vertx` records. Several nodes in one JVM (the tests) stay apart.
+- **Low-cardinality labels:** no job ids, no client addresses (`remote`), no event-bus addresses. Tenants appear only on the rate-limit counter, where the tenant is the point.
+- **The `/metrics` port is separate** (`AUTOMATELY_METRICS_PORT`, default 9090, `off` to disable), meant for a private network like the internal port. It's kept off the API so it doesn't need a token.
+- **`/ready`**, next to `/health`, answers 503 with reasons until the node is among the live nodes and the cluster is active. It's for load balancers and orchestrators.
+- **Logs:** Logback replaces slf4j-simple. `AUTOMATELY_LOG_FORMAT=json` uses Logback's own JSON encoder: one object per line, with SLF4J key-value pairs (`jobId`, `tenant`, `status`, `durationMs` on "job ended") as fields. In JSON mode Ignite logs through the logger (`IGNITE_QUIET=false`), so its console lines don't break the format.
+**Deferred:** OpenTelemetry tracing. The plan made it optional, and metrics, readiness and structured logs cover operating the cluster. It can be added with `vertx-opentelemetry` behind `AUTOMATELY_OTLP_ENDPOINT` later.
+

@@ -47,6 +47,7 @@ class ContractTest {
                 Map.entry("AUTOMATELY_NODE_ID", "contract"),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
+                Map.entry("AUTOMATELY_METRICS_PORT", "0"),
                 Map.entry("AUTOMATELY_SECRETS_KEY", "contract-secrets-key-0123456789abcdef"),
                 Map.entry("AUTOMATELY_DISK_ROOT", diskRoot().toString()),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
@@ -94,6 +95,7 @@ class ContractTest {
         String admin = TestAuth.ADMIN;
 
         calls.check("getHealth", "GET", "/health", null, null);
+        calls.check("getReady", "GET", "/ready", null, null);
         calls.check("getOpenApi", "GET", "/v1/openapi.json", null, null);
         calls.check("listNodes", "GET", "/v1/nodes", admin, null);
         calls.check("createTenant", "POST", "/v1/tenants", admin, new JsonObject().put("name", "contract"));

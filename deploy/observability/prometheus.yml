@@ -1,0 +1,9 @@
+# Scrapes the three-node demo cluster's management ports (AUTOMATELY_METRICS_PORT). Phase 5, milestone 2.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+scrape_configs:
+  - job_name: automately
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['node1:9090', 'node2:9090', 'node3:9090']

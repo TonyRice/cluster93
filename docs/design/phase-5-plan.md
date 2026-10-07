@@ -1,6 +1,6 @@
 # Plan: observability and polish (phase 5)
 
-**Status:** Planned · **Date:** 2026-10-07
+**Status:** Milestones 1 and 2 ✅ done (2026-10-07; tracing deferred, D-058); milestones 3 and 4 next · **Date:** 2026-10-07
 **Why:** Weak spot #8 from the [revival plan](revival-plan.md): the 2017 code had its own logger and no metrics, so nothing could be measured or watched. Phase 5 also finishes the project as a portfolio piece: numbers in the README come from real measurements, the security model is written down, and a demo shows it working end to end.
 
 ## Milestone 1: metrics, health and logs

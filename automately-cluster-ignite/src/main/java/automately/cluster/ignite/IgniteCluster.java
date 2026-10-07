@@ -207,6 +207,21 @@ public final class IgniteCluster {
         return Vertx.builder().withClusterManager(new IgniteClusterManager(ignite)).buildClustered();
     }
 
+    /** The same, with metrics recorded through {@code metrics} (phase 5). */
+    public Future<Vertx> vertx(io.vertx.core.VertxOptions options, io.vertx.core.spi.VertxMetricsFactory metrics) {
+        return Vertx.builder().with(options).withMetrics(metrics).withClusterManager(new IgniteClusterManager(ignite)).buildClustered();
+    }
+
+    /** Bytes used in the data region, for the metrics. */
+    public long dataRegionUsedBytes() {
+        org.apache.ignite.DataRegionMetrics metrics = ignite.dataRegionMetrics(DATA_REGION);
+        return metrics == null ? 0 : metrics.getTotalUsedSize();
+    }
+
+    public boolean active() {
+        return ignite.cluster().state().active();
+    }
+
     public Ignite ignite() {
         return ignite;
     }

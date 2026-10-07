@@ -235,6 +235,7 @@ public abstract class ClusterFileStore implements FileStore {
                             ? Future.succeededFuture()
                             : putGarbage(previous.getString("fileId"), FileInfo.fromJson(previous).backend(), tenant,
                                     System.currentTimeMillis() + READER_GRACE.toMillis())))
+                    .onSuccess(v -> automately.core.metrics.Metrics.of(vertx).fileStored(automately.core.metrics.Metrics.backendKind(target.name()), size))
                     .map(info);
         }
 

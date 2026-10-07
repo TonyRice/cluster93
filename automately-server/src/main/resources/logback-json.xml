@@ -1,0 +1,15 @@
+<!-- One JSON object per line, with key-value pairs (jobId, tenant, status, ...) as fields: for log pipelines (phase 5). -->
+<configuration>
+    <appender name="out" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.classic.encoder.JsonEncoder">
+            <withSequenceNumber>false</withSequenceNumber>
+            <withNanoseconds>false</withNanoseconds>
+            <withContext>false</withContext>
+        </encoder>
+    </appender>
+    <!-- Ignite logs through SLF4J here (IGNITE_QUIET=false), so its console lines don't break the JSON. -->
+    <logger name="org.apache.ignite" level="WARN"/>
+    <root level="INFO">
+        <appender-ref ref="out"/>
+    </root>
+</configuration>

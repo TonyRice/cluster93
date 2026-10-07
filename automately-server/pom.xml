@@ -35,9 +35,19 @@
             <groupId>automately</groupId>
             <artifactId>automately-cluster-ignite</artifactId>
         </dependency>
+        <!-- Logs: text by default, JSON lines with AUTOMATELY_LOG_FORMAT=json (phase 5). -->
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+        </dependency>
+        <!-- Metrics: Vert.x's own (HTTP, event bus, pools) and Automately's, scraped by Prometheus. -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-micrometer-metrics</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
         <dependency>

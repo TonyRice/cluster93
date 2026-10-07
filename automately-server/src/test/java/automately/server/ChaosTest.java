@@ -54,6 +54,7 @@ class ChaosTest {
                     Map.entry("AUTOMATELY_NODE_ID", id),
                     Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                     Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
+                    Map.entry("AUTOMATELY_METRICS_PORT", "0"),
                     Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                     Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),

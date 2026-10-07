@@ -92,6 +92,10 @@ public final class NodeVerticle extends VerticleBase {
 
     @Override
     public Future<?> start() {
+        io.micrometer.core.instrument.Gauge.builder("automately.jobs.running", slots, java.util.Map::size)
+                .description("Attempts running on this node (one isolate each)").register(automately.core.metrics.Metrics.of(vertx).registry());
+        io.micrometer.core.instrument.Gauge.builder("automately.jobs.capacity", () -> capacity)
+                .description("Attempts this node can run at once").register(automately.core.metrics.Metrics.of(vertx).registry());
         heartbeatTimer = vertx.setPeriodic(heartbeat.toMillis(), id -> {
             announce();
             checkRunningJobs();
@@ -146,6 +150,11 @@ public final class NodeVerticle extends VerticleBase {
         message.reply(instanceId);
 
         jobs.update(jobId, job -> job.started(attempt, nodeId, instanceId, System.currentTimeMillis()))
+                .onSuccess(started -> started.ifPresent(job -> {
+                    if (job.startedAt() != null) {
+                        automately.core.metrics.Metrics.of(vertx).jobStarted(java.time.Duration.ofMillis(Math.max(0, job.startedAt() - job.queuedAt())));
+                    }
+                }))
                 .compose(started -> started.isPresent() ? run(started.get()) : Future.succeededFuture())
                 .onFailure(err -> {
                     LOG.error("Node {} could not run attempt {} of job {}", nodeId, attempt, jobId, err);
@@ -244,6 +253,12 @@ public final class NodeVerticle extends VerticleBase {
                         System.currentTimeMillis()))
                 .map(finished -> {
                     if (finished.isPresent()) {
+                        Job done = finished.get();
+                        long ran = done.startedAt() == null || done.finishedAt() == null ? 0 : done.finishedAt() - done.startedAt();
+                        automately.core.metrics.Metrics.of(vertx).jobFinished(done.status().name(), java.time.Duration.ofMillis(Math.max(0, ran)));
+                        LOG.atInfo().addKeyValue("jobId", jobId).addKeyValue("tenant", done.tenant()).addKeyValue("status", done.status().name())
+                                .addKeyValue("attempt", attempt).addKeyValue("durationMs", ran)
+                                .log("Job {} attempt {} ended {} after {} ms", jobId, attempt, done.status(), ran);
                         publish(jobId, new JsonObject().put("type", "end").put("status", finished.get().status().name()));
                     } else {
                         LOG.warn("Attempt {} of job {} on node {} was superseded; its result ({}) is discarded",

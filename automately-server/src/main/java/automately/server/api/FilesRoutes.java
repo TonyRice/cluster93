@@ -155,6 +155,16 @@ final class FilesRoutes {
             return;
         }
         if (err instanceof HostException host) {
+            String reason = switch (host.code()) {
+                case "insufficient_storage" -> "insufficient_storage";
+                case "limit_exceeded" -> host.getMessage().contains("allotment") ? "allotment" : "quota";
+                case "storage_disabled" -> "disabled";
+                case "storage_unavailable" -> "unavailable";
+                default -> null;
+            };
+            if (reason != null) {
+                automately.core.metrics.Metrics.of(ctx.vertx()).storageRefused(reason);
+            }
             switch (host.code()) {
                 case "insufficient_storage" -> error(ctx, 507, host.code(), host.getMessage());
                 case "storage_unavailable" -> error(ctx, 503, host.code(), host.getMessage());

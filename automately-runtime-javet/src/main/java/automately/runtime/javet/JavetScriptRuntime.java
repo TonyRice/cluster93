@@ -629,7 +629,9 @@ public final class JavetScriptRuntime implements ScriptRuntime {
         if (control.killedWith() != null) {
             return control.killedWith();
         }
+        long creating = System.nanoTime();
         try (V8Runtime v8 = V8Host.getV8Instance().createV8Runtime()) {
+            automately.core.metrics.Metrics.of(vertx).isolateStarted(java.time.Duration.ofNanos(System.nanoTime() - creating));
             control.attach(v8);
             long timer = execution.hasTimeout()
                     ? vertx.setTimer(execution.timeout().toMillis(),

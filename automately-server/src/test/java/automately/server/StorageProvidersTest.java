@@ -49,6 +49,7 @@ class StorageProvidersTest {
                 Map.entry("AUTOMATELY_NODE_ID", "storage"),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
+                Map.entry("AUTOMATELY_METRICS_PORT", "0"),
                 Map.entry("AUTOMATELY_SECRETS_KEY", "storage-test-secrets-key-0123456789"),
                 Map.entry("AUTOMATELY_DISK_ROOT", diskRoot.toString()),
                 Map.entry("AUTOMATELY_TENANT_STORAGE_MB", "5"),

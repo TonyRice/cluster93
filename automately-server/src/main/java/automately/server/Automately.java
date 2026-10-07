@@ -17,6 +17,13 @@ import automately.core.files.FileStore;
 import automately.core.files.SharedDataFileStore;
 import automately.core.files.StorageCapacity;
 import automately.core.storage.TenantQuota;
+import automately.core.metrics.Metrics;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import io.vertx.core.VertxOptions;
+import io.vertx.micrometer.Label;
+import io.vertx.micrometer.MicrometerMetricsFactory;
+import io.vertx.micrometer.MicrometerMetricsOptions;
 import automately.core.files.BlobStore;
 import automately.core.files.DiskBlobStore;
 import automately.core.files.SharedDataChunks;
@@ -81,7 +88,9 @@ public final class Automately {
     /** {@code txt} builds the DNS TXT resolver used for domain verification; tests substitute a fake. */
     public static Future<RunningNode> start(ServerConfig config, java.util.function.Function<Vertx, TxtResolver> txt) {
         if (!config.clustered()) {
-            Vertx vertx = Vertx.vertx();
+            PrometheusMeterRegistry registry = registry(config);
+            Vertx vertx = Vertx.builder().with(vertxOptions()).withMetrics(new MicrometerMetricsFactory(registry)).build();
+            Metrics.install(vertx, registry);
             return wire(config, txt, vertx, Stores.inMemory(vertx, config), null);
         }
         // The cluster is the database (D-030): Ignite comes up first (blocking, before Vert.x serves anything),
@@ -94,8 +103,12 @@ public final class Automately {
         } catch (RuntimeException e) {
             return Future.failedFuture(e);
         }
-        return cluster.vertx()
+        PrometheusMeterRegistry registry = registry(config);
+        return cluster.vertx(vertxOptions(), new MicrometerMetricsFactory(registry))
                 .compose(vertx -> {
+                    Metrics.install(vertx, registry);
+                    io.micrometer.core.instrument.Gauge.builder("automately.ignite.data.region.used", cluster, IgniteCluster::dataRegionUsedBytes)
+                            .description("Bytes used in the cluster data region on this node").baseUnit("bytes").register(registry);
                     IgniteStores durable = IgniteStores.open(vertx, cluster);
                     StorageCapacity capacity = IgniteCapacity.of(cluster, config.minFreeDiskBytes());
                     BlobStore blobs = fileBackend(vertx, config, () -> durable.chunks(capacity));
@@ -109,6 +122,69 @@ public final class Automately {
                     cluster.stop();
                     return Future.failedFuture(err);
                 });
+    }
+
+    /** Ready once this node has joined (it's among the live nodes) and, when clustered, the cluster is active. */
+    static Future<List<String>> readiness(NodeRegistry nodes, String instanceId, IgniteCluster cluster) {
+        return nodes.liveNodes().map(live -> {
+            List<String> reasons = new java.util.ArrayList<>();
+            if (live.stream().noneMatch(node -> node.instanceId().equals(instanceId))) {
+                reasons.add("This node hasn't joined the live nodes yet");
+            }
+            if (cluster != null && !cluster.active()) {
+                reasons.add("The cluster isn't active (waiting for its nodes)");
+            }
+            return reasons;
+        });
+    }
+
+    /** One registry per node, tagged with the node's id (several nodes can share a JVM in tests). */
+    static PrometheusMeterRegistry registry(ServerConfig config) {
+        PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+        registry.config().commonTags("node", config.nodeId());
+        new io.micrometer.core.instrument.binder.jvm.JvmMemoryMetrics().bindTo(registry);
+        new io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics().bindTo(registry);
+        new io.micrometer.core.instrument.binder.system.ProcessorMetrics().bindTo(registry);
+        new io.micrometer.core.instrument.binder.system.UptimeMetrics().bindTo(registry);
+        return registry;
+    }
+
+    /**
+     * Vert.x's own metrics with labels that stay small: no client addresses or event-bus addresses (one per job),
+     * which would make a series per request.
+     */
+    static VertxOptions vertxOptions() {
+        return new VertxOptions().setMetricsOptions(new MicrometerMetricsOptions().setEnabled(true)
+                .setLabels(java.util.EnumSet.of(Label.HTTP_METHOD, Label.HTTP_CODE, Label.HTTP_ROUTE, Label.LOCAL, Label.POOL_TYPE, Label.POOL_NAME)));
+    }
+
+    /**
+     * Prometheus at {@code /metrics} on its own port, plus cluster gauges: live nodes, and whether this node leads
+     * (the lowest instance id, as the reaper and supervisor decide). Completes with the bound port, or -1 if off.
+     */
+    static Future<Integer> serveMetrics(Vertx vertx, ServerConfig config, String instanceId, NodeRegistry nodes, IgniteCluster cluster) {
+        Metrics metrics = Metrics.of(vertx);
+        java.util.concurrent.atomic.AtomicInteger live = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger leader = new java.util.concurrent.atomic.AtomicInteger();
+        io.micrometer.core.instrument.Gauge.builder("automately.cluster.nodes", live, java.util.concurrent.atomic.AtomicInteger::get)
+                .description("Live nodes this node sees").register(metrics.registry());
+        io.micrometer.core.instrument.Gauge.builder("automately.cluster.leader", leader, java.util.concurrent.atomic.AtomicInteger::get)
+                .description("1 if this node is the leader").register(metrics.registry());
+        vertx.setPeriodic(0, config.heartbeat().toMillis() * 5, id -> nodes.liveNodes().onSuccess(all -> {
+            live.set(all.size());
+            leader.set(all.stream().map(n -> n.instanceId()).min(String::compareTo).map(instanceId::equals).orElse(false) ? 1 : 0);
+        }));
+        if (config.metricsPort() < 0) {
+            return Future.succeededFuture(-1);
+        }
+        PrometheusMeterRegistry registry = (PrometheusMeterRegistry) metrics.registry();
+        return vertx.createHttpServer().requestHandler(request -> {
+            if ("/metrics".equals(request.path())) {
+                request.response().putHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8").end(registry.scrape());
+            } else {
+                request.response().setStatusCode(404).end();
+            }
+        }).listen(config.metricsPort()).map(io.vertx.core.http.HttpServer::actualPort);
     }
 
     /** Tenants' own providers on top of the cluster's default (D-057). */
@@ -168,7 +244,8 @@ public final class Automately {
         Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken());
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
-                        config.secretsKey() == null ? null : new SecretBox(config.secretsKey()), config.diskRoot(), stores.blobs().name()));
+                        config.secretsKey() == null ? null : new SecretBox(config.secretsKey()), config.diskRoot(), stores.blobs().name()),
+                () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         // A node whose file backend can't be used refuses to start, saying why, rather than failing uploads later.
         // Tenant disk providers need a disk root every node sees (D-057); a single node always does.
@@ -200,7 +277,9 @@ public final class Automately {
                     .compose(id -> vertx.deployVerticle(new FileGarbageVerticle(instanceId, stores.files(), nodes, FILE_GARBAGE_INTERVAL)))
                     .compose(id -> vertx.deployVerticle(api))
                     .compose(id -> vertx.deployVerticle(ingress))
-                    .map(id -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster, api.routes()));
+                    .compose(id -> serveMetrics(vertx, config, instanceId, nodes, cluster))
+                    .map(metricsPort -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster, api.routes(),
+                            metricsPort));
         }).recover(err -> {
             // Not waited for: this runs on one of Vert.x's own threads, which a close can't report back to.
             vertx.close();
@@ -217,7 +296,7 @@ public final class Automately {
 
     /** A started node. {@code apiRoutes} lists every REST route as "METHOD path", for checks that walk them all. */
     public record RunningNode(String nodeId, String instanceId, Vertx vertx, int httpPort, int ingressPort, IgniteCluster cluster,
-                              List<String> apiRoutes) {
+                              List<String> apiRoutes, int metricsPort) {
 
         /** Stops Vert.x (which stops the node's scripts, D-015), then this node's Ignite. */
         public Future<Void> stop() {

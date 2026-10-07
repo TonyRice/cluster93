@@ -65,6 +65,8 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.auth.RateLimiter limiter;
     private final automately.core.files.Room room;
     private final StorageApi.Wiring storage;
+    /** Why this node shouldn't take traffic yet; empty when it should. */
+    private final java.util.function.Supplier<Future<List<String>>> notReady;
     /** Marks the MCP tools' own calls to this API, which the tool call already counted (D-047). */
     private final String loopbackSecret = java.util.UUID.randomUUID() + "-" + java.util.UUID.randomUUID();
     private final java.util.Map<Long, BodyHandler> bodyHandlers = new java.util.concurrent.ConcurrentHashMap<>();
@@ -77,7 +79,9 @@ public final class ApiVerticle extends VerticleBase {
     public ApiVerticle(ServerConfig config, JobStore jobs, JobStateStore state, NodeRegistry nodes, JobScheduler scheduler,
                        ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter, FileStore files,
                        automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
-                       automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage) {
+                       automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage,
+                       java.util.function.Supplier<Future<List<String>>> notReady) {
+        this.notReady = notReady;
         this.room = room;
         this.storage = storage;
         this.limiter = new automately.core.auth.RateLimiter(config.rateLimitPerMinute());
@@ -129,6 +133,11 @@ public final class ApiVerticle extends VerticleBase {
     private Future<HttpServer> listen() {
         router = Router.router(vertx);
         router.get("/health").handler(this::health);
+        router.get("/ready").handler(ctx -> notReady.get().onFailure(ctx::fail).onSuccess(reasons -> {
+            ctx.response().setStatusCode(reasons.isEmpty() ? 200 : 503);
+            ctx.json(new JsonObject().put("status", reasons.isEmpty() ? "READY" : "NOT_READY").put("node", config.nodeId())
+                    .put("reasons", new JsonArray(reasons)));
+        }));
         router.route("/v1/*").handler(this::authenticate).handler(this::rateLimit).handler(this::readBody).handler(this::validate);
         router.get("/v1/openapi.json").handler(ctx -> ctx.json(contract.getRawContract()));
         router.get("/v1/nodes").handler(this::listNodes);
@@ -231,6 +240,7 @@ public final class ApiVerticle extends VerticleBase {
         ctx.response().putHeader("RateLimit-Policy", "\"tenant\";q=" + decision.limit() + ";w=60")
                 .putHeader("RateLimit", "\"tenant\";r=" + decision.remaining() + ";t=" + decision.resetSeconds());
         if (!decision.allowed()) {
+            automately.core.metrics.Metrics.of(vertx).rateLimited(tenant);
             ctx.response().putHeader("Retry-After", String.valueOf(decision.retryAfterSeconds()));
             error(ctx, 429, "rate_limited", "Over " + decision.limit() + " requests a minute for this tenant; retry in "
                     + decision.retryAfterSeconds() + " s");

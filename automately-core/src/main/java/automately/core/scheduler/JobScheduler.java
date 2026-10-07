@@ -37,6 +37,7 @@ public final class JobScheduler {
     }
 
     public Future<Job> submit(String tenant, String script, JsonObject input, Duration timeout, OrphanPolicy onOrphan, int maxAttempts) {
+        automately.core.metrics.Metrics.of(vertx).jobSubmitted(false);
         Job job = Job.queued(UUID.randomUUID().toString(), tenant, script, input, timeout.toMillis(), onOrphan, maxAttempts,
                 System.currentTimeMillis());
         return jobs.save(job)
@@ -68,6 +69,7 @@ public final class JobScheduler {
 
     /** Submits a run of a service: like {@link #submit} but with no timeout, and returning the job even if no node takes it yet. */
     public Future<Job> submitServiceRun(String jobId, String tenant, String script, JsonObject config, ServiceRef service) {
+        automately.core.metrics.Metrics.of(vertx).jobSubmitted(true);
         Job job = Job.queued(jobId, tenant, script, config, 0, OrphanPolicy.FAIL, 1, service, System.currentTimeMillis());
         // If no node can take it now, it stays QUEUED and the reaper re-dispatches it later.
         return jobs.save(job).compose(v -> dispatch(job).otherwise(job));

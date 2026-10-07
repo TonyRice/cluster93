@@ -96,6 +96,17 @@ paths:
       responses:
         '405': { description: 'Only POST is offered.' }
 
+  /ready:
+    get:
+      operationId: getReady
+      tags: [cluster]
+      summary: Readiness, for load balancers
+      description: 200 once this node has joined the cluster (and the cluster is active); 503 with the reasons until then.
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Readiness' }
+        '503': { $ref: '#/components/responses/Readiness' }
+
   /v1/openapi.json:
     get:
       operationId: getOpenApi
@@ -1049,6 +1060,19 @@ components:
                 required: [token]
                 properties:
                   token: { type: string, pattern: '^atly_[0-9A-Za-z]{49}$' }
+    Readiness:
+      description: Whether the node takes traffic, and why not.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [status, node, reasons]
+            properties:
+              status: { type: string, enum: [READY, NOT_READY] }
+              node: { type: string }
+              reasons:
+                type: array
+                items: { type: string }
     StoragePolicy:
       description: A tenant's storage policy.
       content:

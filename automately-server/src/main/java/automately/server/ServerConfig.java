@@ -71,7 +71,8 @@ public record ServerConfig(
         Path filesDirectory,
         automately.core.files.s3.S3Settings s3,
         String secretsKey,
-        Path diskRoot) {
+        Path diskRoot,
+        int metricsPort) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
 
@@ -132,7 +133,13 @@ public record ServerConfig(
                 blankToNull(env.get("AUTOMATELY_FILES_DIR")) == null ? null : Path.of(env.get("AUTOMATELY_FILES_DIR").trim()),
                 "s3".equalsIgnoreCase(env.getOrDefault("AUTOMATELY_FILES_BACKEND", "").trim()) ? automately.core.files.s3.S3Settings.fromEnv(env) : null,
                 blankToNull(env.get("AUTOMATELY_SECRETS_KEY")),
-                blankToNull(env.get("AUTOMATELY_DISK_ROOT")) == null ? null : Path.of(env.get("AUTOMATELY_DISK_ROOT").trim()));
+                blankToNull(env.get("AUTOMATELY_DISK_ROOT")) == null ? null : Path.of(env.get("AUTOMATELY_DISK_ROOT").trim()),
+                parsePort(env.getOrDefault("AUTOMATELY_METRICS_PORT", "9090")));
+    }
+
+    /** A port number, 0 for a random one, or "off" (-1). */
+    private static int parsePort(String value) {
+        return "off".equalsIgnoreCase(value.trim()) ? -1 : Integer.parseInt(value.trim());
     }
 
     private static String blankToNull(String value) {
