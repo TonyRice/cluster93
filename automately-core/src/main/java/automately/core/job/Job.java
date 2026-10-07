@@ -30,6 +30,8 @@ import java.util.Optional;
  *                        {@code {url, data, status: PENDING|DELIVERED|FAILED, attempts, deliveredAt, lastError}}
  * @param parent          the job whose script started this one ({@code jobs.run}, D-063), or null
  * @param depth           how deeply nested it is: 0 for jobs submitted from outside, the parent's plus one otherwise
+ * @param secrets         whether its script may read the tenant's secrets: set when it's submitted by a token with
+ *                        {@code secrets:use}, or by a service or job whose script may (D-068)
  */
 public record Job(
         String id,
@@ -55,7 +57,8 @@ public record Job(
         Long finishedAt,
         JsonObject callback,
         String parent,
-        int depth) {
+        int depth,
+        boolean secrets) {
 
     public Job {
         Objects.requireNonNull(id, "id");
@@ -76,7 +79,7 @@ public record Job(
     public static Job queued(String id, String tenant, String script, JsonObject input, long timeoutMs,
                              OrphanPolicy onOrphan, int maxAttempts, ServiceRef service, long now) {
         return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, JobStatus.QUEUED, 1,
-                null, null, null, service, null, null, List.of(), List.of(), now, now, null, null, null, null, 0);
+                null, null, null, service, null, null, List.of(), List.of(), now, now, null, null, null, null, 0, false);
     }
 
     /** True when {@code attempt} on {@code nodeInstance} is still the one that owns this job. */
@@ -180,7 +183,13 @@ public record Job(
     /** A job started by another job's script (D-063). Only before it's saved. */
     public Job startedBy(String parentId, int parentDepth) {
         return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, status, attempt, node, nodeInstance, cancelRequested, service,
-                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parentId, parentDepth + 1);
+                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parentId, parentDepth + 1, secrets);
+    }
+
+    /** Whether the script may read the tenant's secrets (D-068). Only before it's saved. */
+    public Job withSecrets(boolean allowed) {
+        return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, status, attempt, node, nodeInstance, cancelRequested, service,
+                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parent, depth, allowed);
     }
 
     /** Records an attempt to deliver the callback. */
@@ -223,7 +232,8 @@ public record Job(
                 .put("finishedAt", finishedAt)
                 .put("callback", callback)
                 .put("parent", parent)
-                .put("depth", depth);
+                .put("depth", depth)
+                .put("secrets", secrets);
     }
 
     /** The public view of a job, without the script source or internal node instance ids. */
@@ -260,7 +270,8 @@ public record Job(
                 json.getLong("finishedAt"),
                 json.getJsonObject("callback"),
                 json.getString("parent"),
-                json.getInteger("depth", 0));
+                json.getInteger("depth", 0),
+                json.getBoolean("secrets", false));
     }
 
     /** Starts a modified copy; used by transitions and tests. */
@@ -319,7 +330,7 @@ public record Job(
         Job build() {
             return new Job(base.id, base.tenant, base.script, base.input, base.timeoutMs, base.onOrphan, base.maxAttempts, status,
                     attempt, node, nodeInstance, cancelRequested, base.service, output, error, logs, attempts, base.createdAt,
-                    queuedAt, startedAt, finishedAt, callback, base.parent, base.depth);
+                    queuedAt, startedAt, finishedAt, callback, base.parent, base.depth, base.secrets);
         }
     }
 }

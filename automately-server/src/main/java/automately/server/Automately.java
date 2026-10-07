@@ -276,6 +276,7 @@ public final class Automately {
         JobStore jobs = new CallbackJobStore(stores.jobs(), queues);
         SecretBox secretBox = config.secretsKey() == null ? null : new SecretBox(config.secretsKey());
         CallbackSecrets callbackSecrets = new CallbackSecrets(stores.kv(), secretBox);
+        automately.core.secrets.TenantSecrets tenantSecrets = new automately.core.secrets.TenantSecrets(stores.kv(), secretBox);
         FetchClient fetch = new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate()));
         JobStateStore state = stores.state();
         ServiceStore services = stores.services();
@@ -287,13 +288,14 @@ public final class Automately {
         StorageRoom room = new StorageRoom(quota, stores.storage(), stores.files());
         automately.core.auth.RateLimiter limiter = new automately.core.auth.RateLimiter(config.rateLimitPerMinute());
         HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(), fetch, serving, stores.files(), stores.capacity(),
-                quota, room, queues, new automately.core.host.JobsWiring(jobs, scheduler, config.defaultTimeout(), config.maxTimeout(), limiter)));
+                quota, room, queues, new automately.core.host.JobsWiring(jobs, scheduler, config.defaultTimeout(), config.maxTimeout(), limiter),
+                tenantSecrets));
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken());
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, limiter,
+                queues, callbackSecrets, tenantSecrets, limiter,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
                 () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.

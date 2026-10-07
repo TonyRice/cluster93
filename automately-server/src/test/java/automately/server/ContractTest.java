@@ -155,6 +155,10 @@ class ContractTest {
         calls.check("revokeNode", "POST", "/v1/cluster/nodes/node9/revoke", admin, null);
         calls.check("getCallbackSecret", "GET", "/v1/callbacks/secret", tenant, null);
         calls.check("rotateCallbackSecret", "POST", "/v1/callbacks/secret/rotate", tenant, null);
+        calls.check("putSecret", "PUT", "/v1/secrets/db-url", tenant, new JsonObject().put("value", "postgres://u:p@db/app"));
+        calls.check("getSecret", "GET", "/v1/secrets/db-url", tenant, null);
+        calls.check("listSecrets", "GET", "/v1/secrets", tenant, null);
+        calls.check("deleteSecret", "DELETE", "/v1/secrets/db-url", tenant, null);
         calls.check("pushQueueMessage", "POST", "/v1/queues/emails", tenant,
                 new JsonObject().put("message", new JsonObject().put("to", "a@example.com")).put("key", "welcome-1").put("maxAttempts", 3));
         calls.check("getQueue", "GET", "/v1/queues/emails", tenant, null);

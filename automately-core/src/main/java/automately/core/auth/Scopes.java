@@ -23,10 +23,15 @@ public final class Scopes {
     public static final String NODES_READ = "nodes:read";
     public static final String STORAGE_READ = "storage:read";
     public static final String STORAGE_WRITE = "storage:write";
+    public static final String SECRETS_READ = "secrets:read";
+    public static final String SECRETS_WRITE = "secrets:write";
+    /** Scripts of jobs this token submits, and of services it defines, may read the tenant's secrets (D-068). */
+    public static final String SECRETS_USE = "secrets:use";
 
     /** Every scope a tenant token can hold, besides {@link #ALL}. */
     public static final List<String> KNOWN = List.of(JOBS_READ, JOBS_WRITE, SERVICES_READ, SERVICES_WRITE, FILES_READ, FILES_WRITE,
-            BUS_PUBLISH, BUS_REQUEST, QUEUES_READ, QUEUES_WRITE, TOKENS_WRITE, NODES_READ, STORAGE_READ, STORAGE_WRITE);
+            BUS_PUBLISH, BUS_REQUEST, QUEUES_READ, QUEUES_WRITE, TOKENS_WRITE, NODES_READ, STORAGE_READ, STORAGE_WRITE,
+            SECRETS_READ, SECRETS_WRITE, SECRETS_USE);
 
     private Scopes() {
     }

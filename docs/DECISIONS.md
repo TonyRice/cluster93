@@ -710,3 +710,41 @@ Docker didn't publish them to the host, but every container on the network could
 - **Compose:** a one-shot `tls-init` service makes the CA and certificates in a volume on the first start (`automately.tls.ClusterInit`), so `docker compose up`, the demo and the benchmarks stay one command. That's development only, since `ca.key` sits in the volume.
 
 **Tests:** CLI tests for `cluster init`, `node invite` (bundle and `--key`) and `node revoke`. DockerClusterIT joins every node with a bundle.
+
+### D-068 — Tenants' secrets: write-only through the API, readable by scripts only with `secrets:use`
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Context:** Security groundwork, step 0, part 2. A service's config was plain JSON on its record, readable by anyone with `services:read`, and links, containers and apps will need credentials too. The pieces already existed: D-057 seals tenants' storage keys with `AUTOMATELY_SECRETS_KEY`, and D-062 keeps per-tenant callback secrets under the system tenant.
+
+**Decision:**
+- **Named secrets per tenant:** `PUT /v1/secrets/{name}` with `{value}` (at most 64 KiB), `GET /v1/secrets`, `GET` and `DELETE /v1/secrets/{name}`. At most 500 per tenant.
+  - **Values go in and never come out:** the API and the CLI show a secret's name, version, timestamps and the token that last set it.
+  - **CLI:** `automately secrets set NAME` reads the value from standard input, or hidden at a terminal, to keep it out of shell history; `secrets list`; `secrets rm`.
+- **Scripts read them with `secrets.get(name)`**, which resolves to the value, or null if there's none.
+- **Three scopes:** `secrets:read` (names), `secrets:write` (set and delete) and **`secrets:use`** (scripts may read values).
+  - **Why `secrets:use`:** without it, any token that can submit a job (`jobs:write`) could run `secrets.get` and print every secret. That's the token an MCP agent typically has.
+  - **Recorded on the job:** the job records `secrets: true` only if the token that submitted it had `secrets:use`.
+  - **A service** records whether the token that last defined it had it; changing that is a new revision.
+  - **Jobs started from scripts** (`jobs.run`, D-063) inherit their parent's flag, so a child never has more than its parent.
+  - **Other scripts** get a `forbidden` error.
+  - **Checked at the node:** it reads the flag from the job's durable record on the first `secrets.get`, rather than trusting anything the script passes.
+- **Storage:** the replicated kv store under the system tenant, one namespace per tenant, like D-062. Each value is sealed with AES-256-GCM (D-057's `SecretBox`), with the tenant and name as associated data, so a sealed value copied to another name or tenant doesn't open.
+- **The secrets key is required.** Without `AUTOMATELY_SECRETS_KEY` the API answers 409 `secrets_unavailable` and scripts get `unavailable`. A store called "secrets" that kept values in the clear would mislead. D-062 stores callback secrets in the clear without a key; this doesn't.
+- **Deleting a tenant** deletes its secrets.
+- **Not for agents:** there are no MCP tools for secrets, so values never pass through an agent; a script that may read them still can.
+
+**Not yet (recorded for later):**
+- **References** like `env: {DB_URL: {secret: "db-url"}}`, resolved when a link or container starts, with an audit of which secrets leave the cluster and to which device. They come with links and containers.
+- **Rotating `AUTOMATELY_SECRETS_KEY`:** changing it makes stored secrets unreadable, as with D-057. Re-sealing under a new key, with the old one still accepted for a while, is a separate change.
+- **Masking secrets in job logs:** a script can print a value it read, and logs are visible with `jobs:read`.
+
+**Tests:**
+- `TenantSecretsTest`: values are sealed at rest; a sealed value doesn't open under another name, tenant or key; versions; the per-tenant limit; forgetting.
+- `SecretsTest`, a node with the API and scripts:
+  - values are never returned
+  - `jobs:write` without `secrets:use` gets `forbidden`, and child jobs inherit
+  - services follow whoever last defined them
+  - tenants see only their own secrets
+  - deleting a tenant deletes its secrets
+  - without a key, 409
+- The CLI test, and `ContractTest` (64 operations).

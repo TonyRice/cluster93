@@ -111,6 +111,16 @@ await jobs.handle(id).result();  // follow a job you know the id of
 - **Other tenants.** Another tenant's job ids look like missing ones: `get` gives `null`, and `result` and `stop` fail with `not_found`.
 - **Results after the run.** To receive a job's result after your own run has ended, use a [completion callback](../guides/callbacks.md) instead of `result()`.
 
+## `secrets`: credentials
+
+```js
+const key = await secrets.get('STRIPE_KEY');   // the value, or null if there's no such secret
+```
+
+- **Read-only.** Set secrets with the API or `automately secrets set` ([guide](../guides/secrets.md)).
+- **Only scripts allowed to read them:** jobs submitted with a token that has `secrets:use`, services last defined with one, and jobs those start. Other scripts get `forbidden`.
+- **Needs `AUTOMATELY_SECRETS_KEY`** on the cluster; without it, calls fail with `unavailable`.
+
 ## Streams and text encoding
 
 Bodies are **streams of `Uint8Array` chunks** that you read with `for await`. Reading is backpressured: while you're not reading, the sender is paused.

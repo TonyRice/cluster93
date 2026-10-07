@@ -20,6 +20,8 @@ import java.util.Optional;
  * @param consecutiveFailures failures in a row, reset by a run that stays up long enough
  * @param nextStartAt        no new run before this time (backoff)
  * @param lastExit           how the previous run ended: {@code jobId, status, error, startedAt, endedAt}
+ * @param secrets            whether its runs may read the tenant's secrets: whether the token that last defined it had
+ *                           {@code secrets:use} (D-068)
  */
 public record ServiceDefinition(
         String tenant,
@@ -38,7 +40,8 @@ public record ServiceDefinition(
         long nextStartAt,
         JsonObject lastExit,
         long createdAt,
-        long updatedAt) {
+        long updatedAt,
+        boolean secrets) {
 
     public ServiceDefinition {
         Objects.requireNonNull(tenant, "tenant");
@@ -50,7 +53,12 @@ public record ServiceDefinition(
 
     public static ServiceDefinition create(String tenant, String name, String script, JsonObject config, RestartPolicy restart,
                                            boolean enabled, long now) {
-        return new ServiceDefinition(tenant, name, script, config, restart, enabled, false, 1, null, 0, 0, 0, 0, 0, null, now, now);
+        return create(tenant, name, script, config, restart, enabled, false, now);
+    }
+
+    public static ServiceDefinition create(String tenant, String name, String script, JsonObject config, RestartPolicy restart,
+                                           boolean enabled, boolean secrets, long now) {
+        return new ServiceDefinition(tenant, name, script, config, restart, enabled, false, 1, null, 0, 0, 0, 0, 0, null, now, now, secrets);
     }
 
     public String key() {
@@ -63,17 +71,22 @@ public record ServiceDefinition(
 
     /** New script, config or restart policy: a new revision, which the supervisor rolls out. */
     public ServiceDefinition redefined(String script, JsonObject config, RestartPolicy restart, long now) {
-        boolean changed = !this.script.equals(script) || !this.config.equals(config) || this.restart != restart;
+        return redefined(script, config, restart, secrets, now);
+    }
+
+    /** As {@link #redefined(String, JsonObject, RestartPolicy, long)}; a change of {@code secrets} is a new revision too. */
+    public ServiceDefinition redefined(String script, JsonObject config, RestartPolicy restart, boolean secrets, long now) {
+        boolean changed = !this.script.equals(script) || !this.config.equals(config) || this.restart != restart || this.secrets != secrets;
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, changed ? false : completed,
                 changed ? revision + 1 : revision, currentJobId, currentRevision, currentSince, runs,
-                changed ? 0 : consecutiveFailures, changed ? 0 : nextStartAt, lastExit, createdAt, now);
+                changed ? 0 : consecutiveFailures, changed ? 0 : nextStartAt, lastExit, createdAt, now, secrets);
     }
 
     /** Desired state: running or not. Enabling clears completion and backoff. */
     public ServiceDefinition withEnabled(boolean enabled, long now) {
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, enabled ? false : completed, revision,
                 currentJobId, currentRevision, currentSince, runs, enabled ? 0 : consecutiveFailures, enabled ? 0 : nextStartAt,
-                lastExit, createdAt, now);
+                lastExit, createdAt, now, secrets);
     }
 
     /** Claims a new run. Only applies when no run is current and a start is due. */
@@ -82,7 +95,7 @@ public record ServiceDefinition(
             return Optional.empty();
         }
         return Optional.of(new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision,
-                jobId, revision, now, runs + 1, consecutiveFailures, nextStartAt, lastExit, createdAt, now));
+                jobId, revision, now, runs + 1, consecutiveFailures, nextStartAt, lastExit, createdAt, now, secrets));
     }
 
     /**
@@ -121,7 +134,7 @@ public record ServiceDefinition(
             next = now + Math.min(delay, maxBackoff.toMillis());
         }
         return Optional.of(new ServiceDefinition(tenant, name, script, config, restart, enabled, done, revision,
-                null, 0, 0, runs, failures, next, exit, createdAt, now));
+                null, 0, 0, runs, failures, next, exit, createdAt, now, secrets));
     }
 
     /** The state the API shows, given the current run's job (null if none or not found). */
@@ -159,7 +172,8 @@ public record ServiceDefinition(
                 .put("nextStartAt", nextStartAt)
                 .put("lastExit", lastExit)
                 .put("createdAt", createdAt)
-                .put("updatedAt", updatedAt);
+                .put("updatedAt", updatedAt)
+                .put("secrets", secrets);
     }
 
     public static ServiceDefinition fromJson(JsonObject json) {
@@ -180,6 +194,7 @@ public record ServiceDefinition(
                 json.getLong("nextStartAt", 0L),
                 json.getJsonObject("lastExit"),
                 json.getLong("createdAt", 0L),
-                json.getLong("updatedAt", 0L));
+                json.getLong("updatedAt", 0L),
+                json.getBoolean("secrets", false));
     }
 }

@@ -11,6 +11,8 @@ import automately.core.runtime.api.HttpApi;
 import automately.core.runtime.api.JobsApi;
 import automately.core.runtime.api.KvApi;
 import automately.core.runtime.api.QueueApi;
+import automately.core.runtime.api.SecretsApi;
+import automately.core.secrets.TenantSecrets;
 import automately.core.storage.TenantQuota;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -26,14 +28,21 @@ public final class NodeHostApis implements HostApis {
     private final FilesApi files;
     private final FetchApi fetch;
     private final HttpApi http;
+    private final SecretsApi secrets;
 
     /** The node's shared stores and clients; one per node. */
     public record Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
-                       TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs) {
+                       TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs, TenantSecrets secrets) {
+
+        /** Without secrets. */
+        public Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
+                    TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs) {
+            this(vertx, kv, fetch, serve, files, capacity, quota, room, queues, jobs, null);
+        }
 
         /** Without files, queues, jobs, storage limits or quotas: for tests. */
         public Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve) {
-            this(vertx, kv, fetch, serve, null, StorageCapacity.UNLIMITED, TenantQuota.unlimited(), Room.fixed(Long.MAX_VALUE), null, null);
+            this(vertx, kv, fetch, serve, null, StorageCapacity.UNLIMITED, TenantQuota.unlimited(), Room.fixed(Long.MAX_VALUE), null, null, null);
         }
     }
 
@@ -46,6 +55,7 @@ public final class NodeHostApis implements HostApis {
         this.files = new NodeFilesApi(scope, node.files(), node.capacity(), node.quota(), node.room());
         this.fetch = new NodeFetchApi(node.fetch());
         this.http = new NodeHttpApi(scope, node.serve());
+        this.secrets = new NodeSecretsApi(scope, node.secrets(), node.jobs());
     }
 
     /** Builds each execution's APIs over one node's stores. */
@@ -86,6 +96,11 @@ public final class NodeHostApis implements HostApis {
     @Override
     public HttpApi http() {
         return http;
+    }
+
+    @Override
+    public SecretsApi secrets() {
+        return secrets;
     }
 
     @Override

@@ -106,7 +106,8 @@ final class NodeJobsApi implements JobsApi {
                     return Future.failedFuture(HostException.limit("Jobs can start jobs at most " + MAX_DEPTH + " levels deep"));
                 }
                 return wiring.scheduler().submit(scope.tenant(), script, input == null ? new JsonObject() : input, jobTimeout, onOrphan, attempts,
-                        job -> withCallback.apply(job.startedBy(scope.jobId(), depth)));
+                        // A started job may read secrets only if the job starting it may (D-068).
+                        job -> withCallback.apply(job.startedBy(scope.jobId(), depth).withSecrets(self != null && self.secrets())));
             }).map(Job::toSummaryJson);
         });
     }

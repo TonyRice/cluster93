@@ -50,6 +50,7 @@ class CliTest {
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
                 Map.entry("AUTOMATELY_METRICS_PORT", "0"),
                 Map.entry("AUTOMATELY_DISK_ROOT", Files.createTempDirectory("automately-cli-disk").toString()),
+                Map.entry("AUTOMATELY_SECRETS_KEY", "cli-test-secrets-key-0123456789abcdef"),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -185,6 +186,27 @@ class CliTest {
         Result revoke = cli("--url", url, "--token", ADMIN, "node", "revoke", "node2");
         assertThat(revoke.code()).isNotZero();
         assertThat(revoke.err()).contains("doesn't use node certificates");
+    }
+
+    @Test
+    void secretsAreSetFromStandardInputListedAndRemovedButNeverPrinted() throws Exception {
+        loginAsNewTenant("secretive");
+        Result set = cli(Map.of(), "line one\nline two\n", "secrets", "set", "pem");
+        assertThat(set.code()).as(set.err()).isZero();
+        assertThat(set.out()).contains("Saved secret pem (version 1)");
+        assertThat(cli("secrets", "set", "pem", "--value", "replaced").out()).contains("version 2");
+
+        Result listed = cli("secrets", "list");
+        assertThat(listed.out()).contains("NAME").containsPattern("pem\\s+2").doesNotContain("replaced").doesNotContain("line one");
+
+        Path script = home.resolve("read-secret.js");
+        Files.writeString(script, "export default () => secrets.get('pem')");
+        Result read = cli("--json", "run", script.toString());
+        assertThat(read.code()).as(read.err()).isZero();
+        assertThat(read.json().get("output").asText()).isEqualTo("replaced");
+
+        assertThat(cli("secrets", "rm", "pem").out()).contains("Deleted secret pem");
+        assertThat(cli("secrets", "rm", "pem").code()).isNotZero();
     }
 
     @Test

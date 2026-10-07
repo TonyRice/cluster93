@@ -67,6 +67,7 @@ public final class ApiVerticle extends VerticleBase {
     private final StorageApi.Wiring storage;
     private final automately.core.queue.QueueService queues;
     private final automately.core.callback.CallbackSecrets callbackSecrets;
+    private final automately.core.secrets.TenantSecrets secrets;
     /** Revokes a node's certificate (D-066); null when the cluster doesn't use node certificates. */
     private final java.util.function.Function<String, Future<JsonObject>> revokeNode;
     /** Why this node shouldn't take traffic yet; empty when it should. */
@@ -85,12 +86,14 @@ public final class ApiVerticle extends VerticleBase {
                        automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
                        automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage,
                        automately.core.queue.QueueService queues, automately.core.callback.CallbackSecrets callbackSecrets,
+                       automately.core.secrets.TenantSecrets secrets,
                        automately.core.auth.RateLimiter limiter, java.util.function.Function<String, Future<JsonObject>> revokeNode,
                        java.util.function.Supplier<Future<List<String>>> notReady) {
         this.revokeNode = revokeNode;
         this.notReady = notReady;
         this.queues = queues;
         this.callbackSecrets = callbackSecrets;
+        this.secrets = secrets;
         this.room = room;
         this.storage = storage;
         // Shared with the scripts' jobs API, so jobs started from scripts count toward the same limit (D-063).
@@ -152,11 +155,12 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/v1/openapi.json").handler(ctx -> ctx.json(contract.getRawContract()));
         router.get("/v1/nodes").handler(this::listNodes);
         new McpRoutes(vertx, authenticator, limiter, () -> server.actualPort(), loopbackSecret).mount(router);
-        new AuthRoutes(authStore, authenticator, this::isEmpty, tenant -> storage.config().forget(tenant)).mount(router);
+        new AuthRoutes(authStore, authenticator, this::isEmpty, tenant -> storage.config().forget(tenant).compose(v -> secrets.forget(tenant))).mount(router);
         new StorageApi(storage, files, authStore, quota).mount(router);
         new FilesRoutes(files, quota, room).mount(router);
         new BusRoutes(vertx).mount(router);
         new QueueRoutes(queues).mount(router);
+        new SecretsRoutes(secrets).mount(router);
         router.post("/v1/cluster/nodes/:id/revoke").handler(ctx -> {
             if (revokeNode == null) {
                 error(ctx, 409, "not_available", "This cluster doesn't use node certificates (AUTOMATELY_CLUSTER_TLS=off, or a single node)");
@@ -399,7 +403,9 @@ public final class ApiVerticle extends VerticleBase {
             maxAttempts = requested;
         }
 
-        java.util.function.UnaryOperator<Job> prepare = java.util.function.UnaryOperator.identity();
+        // The job's script may read the tenant's secrets only if the submitting token may (D-068).
+        boolean secretsAllowed = ctx.<automately.core.auth.Principal>get("principal").allows(automately.core.auth.Scopes.SECRETS_USE);
+        java.util.function.UnaryOperator<Job> prepare = job -> job.withSecrets(secretsAllowed);
         if (body.getValue("callback") != null) {
             if (!(body.getValue("callback") instanceof JsonObject callback) || !(callback.getValue("url") instanceof String url)) {
                 error(ctx, 400, "invalid_request", "\"callback\" must be an object with a \"url\"");
@@ -412,7 +418,7 @@ public final class ApiVerticle extends VerticleBase {
                 return;
             }
             Object data = callback.getValue("data");
-            prepare = job -> job.withCallback(url, data).orElseThrow();
+            prepare = job -> job.withSecrets(secretsAllowed).withCallback(url, data).orElseThrow();
         }
         scheduler.submit(ctx.get("tenant"), script, (JsonObject) input, timeout, onOrphan, maxAttempts, prepare)
                 .onSuccess(job -> ctx.response()

@@ -30,6 +30,8 @@ final class RouteScopes {
     static final long SMALL = 16 * 1024;
     static final long SCRIPT = ApiVerticle.MAX_SCRIPT_BYTES + 64 * 1024;
     static final long MESSAGE = BusRoutes.MAX_MESSAGE_BYTES;
+    /** A secret's value, JSON-escaped at worst six bytes per byte, plus the object around it. */
+    static final long SECRET_BODY = automately.core.secrets.TenantSecrets.MAX_VALUE_BYTES * 6L + 1024;
     private static final String SEG = "[^/]+";
 
     static final List<Rule> RULES = List.of(
@@ -64,6 +66,11 @@ final class RouteScopes {
             rule("DELETE", "/v1/tokens/" + SEG, "revokeToken", Who.TENANT, Scopes.TOKENS_WRITE),
             rule("GET", "/v1/callbacks/secret", "getCallbackSecret", Who.TENANT, Scopes.TOKENS_WRITE),
             rule("POST", "/v1/callbacks/secret/rotate", "rotateCallbackSecret", Who.TENANT, Scopes.TOKENS_WRITE),
+
+            rule("GET", "/v1/secrets", "listSecrets", Who.TENANT, Scopes.SECRETS_READ),
+            rule("GET", "/v1/secrets/" + SEG, "getSecret", Who.TENANT, Scopes.SECRETS_READ),
+            json("PUT", "/v1/secrets/" + SEG, "putSecret", Who.TENANT, Scopes.SECRETS_WRITE, SECRET_BODY),
+            rule("DELETE", "/v1/secrets/" + SEG, "deleteSecret", Who.TENANT, Scopes.SECRETS_WRITE),
 
             rule("GET", "/v1/jobs", "listJobs", Who.TENANT, Scopes.JOBS_READ),
             json("POST", "/v1/jobs", "submitJob", Who.TENANT, Scopes.JOBS_WRITE, ApiVerticle.MAX_SCRIPT_BYTES + 4_096),

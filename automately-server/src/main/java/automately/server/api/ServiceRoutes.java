@@ -169,14 +169,16 @@ final class ServiceRoutes {
                                 return Future.succeededFuture((Runnable) () -> limitReached(ctx));
                             }
                             long now = System.currentTimeMillis();
+                            // Its runs may read secrets only if whoever defines it may (D-068).
+                            boolean secrets = ctx.<automately.core.auth.Principal>get("principal").allows(automately.core.auth.Scopes.SECRETS_USE);
                             if (existing == null) {
-                                ServiceDefinition created = ServiceDefinition.create(tenant, name, script, serviceConfig, restart, enabled, now);
+                                ServiceDefinition created = ServiceDefinition.create(tenant, name, script, serviceConfig, restart, enabled, secrets, now);
                                 return services.create(created).map(ok -> ok
                                         ? () -> respond(ctx, 201, created)
                                         : () -> error(ctx, 409, "conflict", "The service was created concurrently; retry"));
                             }
                             return services.update(tenant, name, current -> Optional.of(
-                                            current.redefined(script, serviceConfig, restart, now).withEnabled(enabled, now)))
+                                            current.redefined(script, serviceConfig, restart, secrets, now).withEnabled(enabled, now)))
                                     .map(updated -> updated.<Runnable>map(s -> () -> respond(ctx, 200, s))
                                             .orElse(() -> error(ctx, 404, "not_found", "No such service")));
                         }))

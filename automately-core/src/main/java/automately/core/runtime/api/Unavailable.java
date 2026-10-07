@@ -20,6 +20,8 @@ final class Unavailable {
         return Future.failedFuture(new HostException("Error", "unavailable", what + " is not available here"));
     }
 
+    static final SecretsApi SECRETS = name -> fail("Secrets");
+
     static final KvApi KV = new KvApi() {
         @Override
         public Future<Object> get(String namespace, String key) {

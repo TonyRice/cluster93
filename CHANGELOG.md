@@ -26,6 +26,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Security groundwork, part 2 — Secrets (2026-10-07)
+
+### Added
+- **Tenants' secrets (D-068).** `PUT /v1/secrets/{name}` with `{value}`, list, get and delete. **Values go in and never come back out:** the API shows names, versions and who set them.
+  - **In scripts:** `await secrets.get('STRIPE_KEY')`.
+  - **Sealed:** with AES-256-GCM under `AUTOMATELY_SECRETS_KEY`, bound to the tenant and name, in the replicated store under the system tenant. Without the key the API answers 409 rather than storing values in the clear.
+  - **Scopes:** `secrets:read`, `secrets:write`, and **`secrets:use`**. A script may read secrets only if its job was submitted, or its service defined, by a token with `secrets:use`; jobs it starts inherit that, and other scripts get `forbidden`. **Why:** otherwise any `jobs:write` token, such as an agent's, could print every secret. Jobs and services show it as `secrets: true|false`.
+  - **CLI:** `automately secrets set NAME` reads the value from standard input, or hidden at a terminal, to keep it out of shell history; `secrets list`; `secrets rm`.
+  - **Deleting a tenant** deletes its secrets.
+- **`docs/guides/secrets.md`**, and `secrets` in the scripting reference.
+- **Tests:**
+  - `TenantSecretsTest`: sealed at rest; copies under another name, tenant or key don't open; limits
+  - `SecretsTest`: never returned; `forbidden` without `secrets:use`; child jobs and services; tenant isolation; no key
+  - a CLI test
+  - `ContractTest`: 64 operations
+
+### Changed
+- The MCP guide suggests leaving `secrets:use` out of an agent's token.
+
 ## Security groundwork, part 1B — Node certificates between core nodes (2026-10-07)
 
 ### Added

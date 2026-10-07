@@ -37,6 +37,7 @@ tags:
   - name: cluster
   - name: mcp
   - name: storage
+  - name: secrets
 
 paths:
   /health:
@@ -1016,6 +1017,84 @@ paths:
               schema: { $ref: '#/components/schemas/CallbackSecret' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/secrets:
+    get:
+      operationId: listSecrets
+      tags: [secrets]
+      summary: Your secrets' names and versions (never their values)
+      security:
+        - bearer: ['secrets:read']
+      responses:
+        '200':
+          description: Every secret, by name.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [secrets]
+                properties:
+                  secrets:
+                    type: array
+                    items: { $ref: '#/components/schemas/Secret' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/secrets/{name}:
+    parameters:
+      - $ref: '#/components/parameters/secretName'
+    get:
+      operationId: getSecret
+      tags: [secrets]
+      summary: A secret's details (never its value)
+      security:
+        - bearer: ['secrets:read']
+      responses:
+        '200':
+          description: The secret's details.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Secret' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putSecret
+      tags: [secrets]
+      summary: Create or replace a secret. Scripts read it with `secrets.get(name)` when their job was submitted with `secrets:use`.
+      description: >-
+        The value is sealed (AES-256-GCM with the cluster's AUTOMATELY_SECRETS_KEY) and never returned by the API.
+        409 `secrets_unavailable` if the cluster has no secrets key.
+      security:
+        - bearer: ['secrets:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: string, maxLength: 65536, description: 'At most 64 KiB as UTF-8.' }
+      responses:
+        '200':
+          description: Replaced; its version went up.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Secret' }
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Secret' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteSecret
+      tags: [secrets]
+      summary: Delete a secret
+      security:
+        - bearer: ['secrets:write']
+      responses:
+        '204':
+          description: Deleted.
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/queues/{queue}:
     parameters:
       - $ref: '#/components/parameters/queue'
@@ -1157,6 +1236,11 @@ components:
       in: path
       required: true
       schema: { $ref: '#/components/schemas/Name' }
+    secretName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$' }
     serviceName:
       name: name
       in: path
@@ -1229,7 +1313,7 @@ components:
                   type: string
                   enum: ['*', 'jobs:read', 'jobs:write', 'services:read', 'services:write', 'files:read', 'files:write',
                          'bus:publish', 'bus:request', 'queues:read', 'queues:write', 'tokens:write', 'nodes:read',
-                         'storage:read', 'storage:write']
+                         'storage:read', 'storage:write', 'secrets:read', 'secrets:write', 'secrets:use']
               expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
 
   responses:
@@ -1309,6 +1393,15 @@ components:
         application/octet-stream: {}
 
   schemas:
+    Secret:
+      type: object
+      required: [name, version, createdAt, updatedAt]
+      properties:
+        name: { type: string }
+        version: { type: integer, description: 'Goes up by one each time the value is replaced.' }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+        updatedBy: { type: [string, 'null'], description: 'The id of the token that last set it.' }
     CallbackSecret:
       type: object
       required: [secret]
@@ -1454,6 +1547,7 @@ components:
             lastError: { type: [string, 'null'] }
         parent: { type: [string, 'null'], description: 'The job whose script started this one (jobs.run).' }
         depth: { type: integer, description: '0 for jobs submitted from outside; one more than the parent otherwise.' }
+        secrets: { type: boolean, description: 'Whether its script may read your secrets: submitted with secrets:use, or started by a job or service that may.' }
     Service:
       type: object
       required: [name, status, enabled, revision, runs, hosts]
@@ -1477,6 +1571,7 @@ components:
           items: { type: string }
         createdAt: { type: integer }
         updatedAt: { type: integer }
+        secrets: { type: boolean, description: 'Whether its runs may read your secrets: whether the token that last defined it had secrets:use.' }
     Domain:
       type: object
       required: [domain, service, verified, createdAt]

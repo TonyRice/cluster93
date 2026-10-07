@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class JavetScriptRuntime implements ScriptRuntime {
 
     /** The prelude's files (src/main/resources/automately/runtime/javet/js), in order; each sees what the earlier ones define. */
-    static final List<String> PRELUDE_FILES = List.of("prelude.js", "console.js", "timers.js", "listeners.js", "kv.js", "bus.js", "jobs.js",
+    static final List<String> PRELUDE_FILES = List.of("prelude.js", "console.js", "timers.js", "listeners.js", "kv.js", "bus.js", "jobs.js", "secrets.js",
             "encoding.js", "streams.js", "fetch.js", "files.js", "serve.js", "context.js", "entry.js");
 
     /**
@@ -228,6 +228,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 bindApi(v8, hostObject, "files", new FilesBinding(bridge, host.files()), callbacks);
                 bindApi(v8, hostObject, "fetch", new FetchBinding(bridge, host.fetch()), callbacks);
                 bindApi(v8, hostObject, "http", new HttpBinding(bridge), callbacks);
+                bindApi(v8, hostObject, "secrets", new SecretsBinding(bridge, host.secrets()), callbacks);
                 v8.getGlobalObject().set("__automately", hostObject);
             }
             try {

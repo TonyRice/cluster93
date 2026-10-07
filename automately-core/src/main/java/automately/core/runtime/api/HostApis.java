@@ -27,6 +27,11 @@ public interface HostApis {
 
     HttpApi http();
 
+    /** The tenant's secrets, if this execution may read them (D-068). */
+    default SecretsApi secrets() {
+        return Unavailable.SECRETS;
+    }
+
     /** Stops every listener this execution registered and discards unfinished uploads. Called once the script has ended. */
     Future<Void> close();
 

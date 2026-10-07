@@ -11,6 +11,7 @@ Create a token for the agent, with only the scopes it needs:
 ```bash
 automately tokens create claude --scope jobs:read --scope jobs:write --scope services:read --scope services:write
 ```
+Leave out `secrets:use` unless the agent's scripts need your [secrets](secrets.md): without it they can run, but `secrets.get` fails with `forbidden`.
 
 **Clients that support remote MCP servers**, for example Claude Code:
 

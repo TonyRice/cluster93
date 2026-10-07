@@ -110,7 +110,7 @@ If the node running a job dies, the job's `onOrphan` policy decides what happens
 Every `/v1` call carries `Authorization: Bearer <token>`.
 
 - **Admin token.** It manages tenants and their tokens, and cannot read or change tenant data (D-044).
-- **Tenant tokens** (`atly_…`) belong to one tenant and carry **scopes**: `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`, `nodes:read`, `storage:read`, `storage:write`, or `*` for all of them.
+- **Tenant tokens** (`atly_…`) belong to one tenant and carry **scopes**: `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`, `nodes:read`, `storage:read`, `storage:write`, `secrets:read`, `secrets:write`, `secrets:use`, or `*` for all of them.
 - **Errors.** A missing or revoked token gets `401`, and a missing scope gets `403` naming it (D-045).
 - **Storage.** Only a SHA-256 of each token is stored. The `atly_` prefix and a checksum let secret scanners recognise a leaked token.
 
@@ -128,6 +128,8 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `GET` | `/v1/storage` | `storage:read`: your quota, disk use, routes |
 | `GET` · `PUT` · `DELETE` | `/v1/storage/providers/{name}` | Your own S3 bucket or disk folder (`storage:write`; secrets are never returned) · `POST …/check` |
 | `GET` · `PUT` | `/v1/storage/routes` | Which provider new files go to, by path prefix ([storage](docs/guides/storage.md)) |
+| `GET` | `/v1/secrets` | `secrets:read`: your secrets' names and versions, never their values |
+| `GET` · `PUT` · `DELETE` | `/v1/secrets/{name}` | One secret's details · set it `{value}` (`secrets:write`) · delete it. Scripts read values with `secrets.get` given `secrets:use` ([secrets](docs/guides/secrets.md)) |
 | `GET` | `/v1/openapi.json` | The OpenAPI 3.1 contract; no token needed |
 | `POST` | `/mcp` | MCP (Streamable HTTP) for AI agents, using the same tokens ([guide](docs/guides/mcp.md)) |
 | `POST` | `/v1/jobs` | `{script, input?, timeoutMs?, onOrphan?, maxAttempts?}` → `202` with the job |
@@ -247,7 +249,7 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_FILES_DIR` | | The folder for `disk` (shared by every node in a cluster) |
 | `AUTOMATELY_S3_BUCKET` · `_ENDPOINT` · `_REGION` · `_PREFIX` · `_PATH_STYLE` | | The bucket for `s3`; any S3-compatible endpoint (MinIO, R2, B2, Wasabi) |
 | `AUTOMATELY_S3_ACCESS_KEY_ID` · `_SECRET_ACCESS_KEY` | `AWS_*` | Credentials for `s3`; the standard `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` also work |
-| `AUTOMATELY_SECRETS_KEY` | | Encrypts tenants' storage credentials; required for tenant S3 providers (at least 32 characters, the same on every node) |
+| `AUTOMATELY_SECRETS_KEY` | | Encrypts tenants' secrets and storage credentials; required for secrets and tenant S3 providers (at least 32 characters, the same on every node) |
 | `AUTOMATELY_DISK_ROOT` | | Where tenant disk providers live; must be shared storage in a cluster ([storage](docs/guides/storage.md)) |
 | `AUTOMATELY_METRICS_PORT` | `9090` | Prometheus `/metrics`, on a private network; `off` disables it |
 | `AUTOMATELY_LOG_FORMAT` | `text` | `json` for one JSON object per line, with `jobId`/`tenant`/`status` fields |
@@ -311,6 +313,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/guides/callbacks.md](docs/guides/callbacks.md): receiving a job's result as a signed POST when it ends
 - [docs/guides/cluster.md](docs/guides/cluster.md): node certificates: creating a cluster, adding, removing and renewing nodes
 - [docs/guides/storage.md](docs/guides/storage.md): file storage, from the cluster's default to tenants' own buckets and folders
+- [docs/guides/secrets.md](docs/guides/secrets.md): secrets: setting them, and which scripts may read them
 
 ## Author
 

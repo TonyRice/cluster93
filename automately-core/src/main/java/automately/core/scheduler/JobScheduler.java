@@ -74,9 +74,9 @@ public final class JobScheduler {
     }
 
     /** Submits a run of a service: like {@link #submit} but with no timeout, and returning the job even if no node takes it yet. */
-    public Future<Job> submitServiceRun(String jobId, String tenant, String script, JsonObject config, ServiceRef service) {
+    public Future<Job> submitServiceRun(String jobId, String tenant, String script, JsonObject config, ServiceRef service, boolean secrets) {
         automately.core.metrics.Metrics.of(vertx).jobSubmitted(true);
-        Job job = Job.queued(jobId, tenant, script, config, 0, OrphanPolicy.FAIL, 1, service, System.currentTimeMillis());
+        Job job = Job.queued(jobId, tenant, script, config, 0, OrphanPolicy.FAIL, 1, service, System.currentTimeMillis()).withSecrets(secrets);
         // If no node can take it now, it stays QUEUED and the reaper re-dispatches it later.
         return jobs.save(job).compose(v -> dispatch(job).otherwise(job));
     }
