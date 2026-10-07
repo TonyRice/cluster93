@@ -1,6 +1,6 @@
 # Plan: API, auth, CLI and MCP (phase 4)
 
-**Status:** Milestone 1 ✅ done (2026-10-06); milestones 2–4 planned · **Date:** 2026-10-06
+**Status:** Milestones 1 and 2 ✅ done (2026-10-06); milestones 3 and 4 in progress · **Date:** 2026-10-06
 **Why:** Weak spots #4 (routing by hand, no contract) and #7 (Basic auth with a long-lived key) from the [revival plan](revival-plan.md), plus the part of the positioning that makes Automately current: AI agents can deploy and run code on it through MCP. The `X-Automately-Tenant` header was always a stand-in. Anyone who can reach the API can act as any tenant, so it has to go before anything else is exposed.
 
 ## Decisions taken with Tony
@@ -99,4 +99,11 @@ Milestones 1, 2, 3, 4, in that order. Each ends green on the full `./mvnw verify
 - **Deleting a tenant requires it to be empty** (no services, files or kv). Its finished jobs are kept until retention removes them.
 - **`/v1/nodes`** needs `nodes:read` or the admin token. It was open before.
 - **Tenant names are checked when a tenant is created**, by the admin, instead of on every request.
+
+## What changed during milestone 2
+- **Validation is wired into the existing routes, not RouterBuilder** (D-050). Each route rule names its contract operation and body mode; auth, rate limiting, body reading and validation run in one chain before the handler.
+- **JSON bodies are validated as JSON whatever their Content-Type**, so `curl -d` keeps working.
+- **Binary bodies have no schema**, and server-sent events are registered as text, because `vertx-openapi` can't run a JSON schema over raw bytes.
+- **Rate limits use each node's share** of the tenant's budget (D-051). The default is 1 200 a minute rather than the planned 600, since a CLI following a job polls.
+- **Early answers close with a lingering close** (D-052), found when a 413 for an oversized upload sometimes arrived as a reset.
 

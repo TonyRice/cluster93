@@ -16,7 +16,6 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.handler.BodyHandler;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -46,15 +45,15 @@ final class ServiceRoutes {
         this.scheduler = scheduler;
     }
 
-    void mount(Router router, BodyHandler body) {
-        router.put("/v1/services/:name").handler(body).handler(this::put);
+    void mount(Router router) {
+        router.put("/v1/services/:name").handler(this::put);
         router.get("/v1/services").handler(this::list);
         router.get("/v1/services/:name").handler(ctx -> withService(ctx, service -> respond(ctx, 200, service)));
         router.post("/v1/services/:name/start").handler(this::start);
         router.post("/v1/services/:name/stop").handler(this::stop);
         router.post("/v1/services/:name/restart").handler(this::restart);
         router.delete("/v1/services/:name").handler(this::delete);
-        router.post("/v1/services/:name/domains").handler(body).handler(this::addDomain);
+        router.post("/v1/services/:name/domains").handler(this::addDomain);
         router.get("/v1/services/:name/domains").handler(ctx -> withService(ctx, service -> domains.forService(service.tenant(), service.name())
                 .onSuccess(list -> ctx.json(new JsonObject().put("domains", new JsonArray(list.stream().map(Domain::toViewJson).toList()))))
                 .onFailure(ctx::fail)));

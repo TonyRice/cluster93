@@ -8,7 +8,6 @@ import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.handler.BodyHandler;
 
 import static automately.server.api.ApiVerticle.error;
 
@@ -26,7 +25,6 @@ final class BusRoutes {
     }
 
     void mount(Router router) {
-        router.route("/v1/bus/*").handler(BodyHandler.create(false).setBodyLimit(MAX_MESSAGE_BYTES));
         router.post("/v1/bus/:topic").handler(this::publish);
         router.post("/v1/bus/:topic/request").handler(this::request);
     }

@@ -31,6 +31,7 @@ class AuthTest {
         node = await(Automately.start(ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", "auth"),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
+                Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -50,7 +51,8 @@ class AuthTest {
 
     @Test
     void everyRouteNeedsAToken() throws Exception {
-        List<String> routes = node.apiRoutes().stream().filter(route -> route.contains(" /v1/")).toList();
+        // The contract itself is public (D-046); everything else under /v1 needs a token.
+        List<String> routes = node.apiRoutes().stream().filter(route -> route.contains(" /v1/") && !route.endsWith("/v1/openapi.json")).toList();
         assertThat(routes).hasSizeGreaterThan(25);
 
         for (String route : routes) {
@@ -66,6 +68,7 @@ class AuthTest {
             assertThat(wrong.statusCode()).as(route).isEqualTo(401);
         }
         assertThat(await(client.get(node.httpPort(), "localhost", "/health").send()).statusCode()).isEqualTo(200);
+        assertThat(await(client.get(node.httpPort(), "localhost", "/v1/openapi.json").send()).statusCode()).isEqualTo(200);
     }
 
     @Test

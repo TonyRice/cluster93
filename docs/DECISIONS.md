@@ -380,3 +380,30 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Why:** Tony: "super easy to install the cli via curl", with Windows, Linux and macOS builds, and no JDK on the machines that talk to the cluster.
 **Open:** native-image can't cross-compile, so building for macOS and Windows needs GitHub Actions runners in a tag-only release workflow (not CI). Separately, a private repo's release assets can't be downloaded anonymously, so the one-liner needs either a public repo or a separate public releases repo. Both are Tony's call before milestone 3.
 
+### D-050 — How requests are validated against the contract
+**Date:** 2026-10-06 · **Status:** Accepted. Implements D-046
+
+**Decision:**
+- Every rule in `RouteScopes` names its contract operation and how its body is read: no body, JSON up to a limit, or streamed. The node won't start if a rule names an operation the spec lacks.
+- After authentication and rate limiting, JSON bodies are read once with the rule's limit and validated, together with the path, query and headers, by `vertx-openapi`, before the handler runs. Failures get 400 `invalid_request` with the reason and location.
+- **JSON regardless of Content-Type.** JSON bodies are validated as JSON whatever Content-Type they arrive with, because `curl -d` sends a form type and the API always accepted that. An empty body counts as no body.
+- **Streamed and binary bodies** (file uploads) are checked on headers and parameters only. Binary content has no schema in the spec, as OpenAPI 3.1 intends. Server-sent events are registered as a media type and checked as text.
+- `ContractTest` enforces the agreement both ways: the router's routes and the spec's operations must be the same set, and one real call per operation (40 in all) must produce a response the spec allows. It already caught one discrepancy: `cancelRequested` can be `null`.
+**Why not RouterBuilder** (vertx-web-openapi-router)? It owns routing and body handling, which would fight the streamed uploads and the async auth that pauses requests. Using it would mean rewriting every route for no gain.
+
+### D-051 — Rate limits per tenant, as each node's share
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:**
+- A token bucket per tenant, holding a minute's worth (`AUTOMATELY_RATE_LIMIT_PER_MINUTE`, default 1200; 0 turns limiting off). It refills continuously.
+- Each node enforces its share: the budget divided by the live nodes, refreshed every 5 s. No request needs a cluster round-trip.
+- Responses carry the IETF `RateLimit-Policy` and `RateLimit` fields. Over the limit is 429 `rate_limited` with `Retry-After`.
+- The admin token and public routes aren't limited.
+**Cost:** a client that only ever reaches one node gets that node's share, not the whole budget. A cluster-wide counter would have to be updated on every request.
+
+### D-052 — Early answers close with a lingering close
+**Date:** 2026-10-06 · **Status:** Accepted. Refines D-039
+
+**Evidence:** `StreamingTest` sometimes saw "Connection was closed" instead of the 413 for a 65 MB upload. The server answered and closed straight away while bytes were still arriving, the kernel reset the connection, and the client lost the answer it had been sent.
+**Decision:** When the body is too big to drain (over 64 MB, declared or counted), the server sends `Connection: close` and keeps reading and discarding. It closes once the body ends or after 5 s, whichever is first, and only after the answer is out. This is what nginx calls a lingering close. Small bodies are drained and the connection is kept, as before.
+

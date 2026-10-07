@@ -72,6 +72,7 @@ class ServicesTest {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
+                Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -181,6 +182,45 @@ class ServicesTest {
 
         assertThat(done.getString("output")).isEqualTo("tidied up");
         assertThat(post("/v1/jobs/" + id + "/cancel").statusCode()).as("already finished").isEqualTo(409);
+    }
+
+    @Test
+    void connectingToARunningJobFirstReplaysWhatItLoggedSoFar() throws Exception {
+        HttpResponse<Buffer> submitted = await(client.post(nodeB.httpPort(), "localhost", "/v1/jobs")
+                .putHeader("Authorization", TestAuth.bearer(TENANT))
+                .sendJsonObject(new JsonObject().put("timeoutMs", 30_000).put("script", """
+                        export default async (input, ctx) => {
+                          console.log('one');
+                          console.log('two');
+                          await ctx.stopRequested;
+                          return 'done';
+                        }
+                        """)));
+        String id = submitted.bodyAsJsonObject().getString("id");
+        awaitJob(id, j -> j.getString("status").equals("RUNNING"));
+        Thread.sleep(300);
+
+        // Connect through node A, whichever node runs it: the earlier lines come first, once each, then live events.
+        java.net.http.HttpResponse<java.io.InputStream> events = java.net.http.HttpClient.newHttpClient().send(
+                java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://localhost:" + nodeA.httpPort() + "/v1/jobs/" + id + "/events"))
+                        .header("Authorization", TestAuth.bearer(TENANT)).build(),
+                java.net.http.HttpResponse.BodyHandlers.ofInputStream());
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(events.body()))) {
+            for (String line; (line = reader.readLine()) != null; ) {
+                if (line.startsWith("data:")) {
+                    JsonObject event = new JsonObject(line.substring(5).trim());
+                    lines.add(event.getString("type") + (event.containsKey("line") ? ":" + event.getString("line") : ""));
+                    if (lines.size() == 2) {
+                        assertThat(post("/v1/jobs/" + id + "/cancel").statusCode()).isEqualTo(202);
+                    }
+                    if ("end".equals(event.getString("type"))) {
+                        break;
+                    }
+                }
+            }
+        }
+        assertThat(lines).containsExactly("log:one", "log:two", "end");
     }
 
     // --- helpers ---

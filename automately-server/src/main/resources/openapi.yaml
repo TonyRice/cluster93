@@ -1,0 +1,974 @@
+openapi: 3.1.0
+info:
+  title: Automately API
+  version: 2.0.0
+  summary: Run sandboxed JavaScript jobs and services on a self-hosted cluster.
+  description: |
+    The REST API every Automately node serves. This file is the contract (D-046): requests are validated against
+    it before any handler runs, and the test suite checks real responses against it.
+
+    **Authentication.** Every `/v1` call carries `Authorization: Bearer <token>` (D-045). The admin token
+    (`AUTOMATELY_ADMIN_TOKEN`, or generated once and logged) manages tenants and tokens only. Tenant tokens
+    (`atly_…`) belong to one tenant and carry scopes; each operation lists the scope it needs. A missing or
+    unknown token gets `401`, a missing scope `403`.
+
+    **Rate limits.** Tenant requests are limited per tenant (`AUTOMATELY_RATE_LIMIT_PER_MINUTE`). Responses
+    carry `RateLimit-Policy` and `RateLimit`; over the limit is `429` with `Retry-After`.
+
+    **Errors** always look like `{"error": {"code": "…", "message": "…"}}`.
+  contact:
+    name: Adam & Lynn Incorporated
+    email: tony@adamnlynn.com
+  license:
+    name: MPL-2.0
+    identifier: MPL-2.0
+servers:
+  - url: http://localhost:8080
+security:
+  - bearer: []
+tags:
+  - name: jobs
+  - name: services
+  - name: files
+  - name: bus
+  - name: tokens
+  - name: admin
+  - name: cluster
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [cluster]
+      summary: Liveness
+      security: []
+      responses:
+        '200':
+          description: The node is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, node]
+                properties:
+                  status: { type: string, const: UP }
+                  node: { type: string }
+
+  /v1/openapi.json:
+    get:
+      operationId: getOpenApi
+      tags: [cluster]
+      summary: This contract, as JSON
+      security: []
+      responses:
+        '200':
+          description: The OpenAPI document.
+          content:
+            application/json:
+              schema: { type: object }
+
+  /v1/whoami:
+    get:
+      operationId: getWhoami
+      tags: [tokens]
+      summary: Who the token is and what it may do
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: The token's identity.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Whoami' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/nodes:
+    get:
+      operationId: listNodes
+      tags: [cluster]
+      summary: Live nodes with capacity and load
+      description: Needs `nodes:read`, or the admin token.
+      security:
+        - bearer: ['nodes:read']
+      responses:
+        '200':
+          description: Live nodes, by id.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nodes]
+                properties:
+                  nodes:
+                    type: array
+                    items: { $ref: '#/components/schemas/Node' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tenants:
+    get:
+      operationId: listTenants
+      tags: [admin]
+      summary: List tenants (admin)
+      security:
+        - bearer: [admin]
+      responses:
+        '200':
+          description: Every tenant, by name.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tenants]
+                properties:
+                  tenants:
+                    type: array
+                    items: { $ref: '#/components/schemas/Tenant' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createTenant
+      tags: [admin]
+      summary: Create a tenant (admin)
+      security:
+        - bearer: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { $ref: '#/components/schemas/Name' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tenants/{tenant}:
+    parameters:
+      - $ref: '#/components/parameters/tenant'
+    get:
+      operationId: getTenant
+      tags: [admin]
+      summary: One tenant (admin)
+      security:
+        - bearer: [admin]
+      responses:
+        '200':
+          description: The tenant.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteTenant
+      tags: [admin]
+      summary: Delete an empty tenant and its tokens (admin)
+      description: Refused with `409` while the tenant still has services, files or kv data.
+      security:
+        - bearer: [admin]
+      responses:
+        '204': { description: 'Deleted.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tenants/{tenant}/tokens:
+    parameters:
+      - $ref: '#/components/parameters/tenant'
+    get:
+      operationId: listTenantTokens
+      tags: [admin]
+      summary: A tenant's tokens (admin)
+      security:
+        - bearer: [admin]
+      responses:
+        '200': { $ref: '#/components/responses/TokenList' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createTenantToken
+      tags: [admin]
+      summary: Mint a token for a tenant (admin)
+      security:
+        - bearer: [admin]
+      requestBody: { $ref: '#/components/requestBodies/TokenRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/TokenCreated' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tenants/{tenant}/tokens/{id}:
+    parameters:
+      - $ref: '#/components/parameters/tenant'
+      - $ref: '#/components/parameters/tokenId'
+    delete:
+      operationId: revokeTenantToken
+      tags: [admin]
+      summary: Revoke a tenant's token (admin)
+      security:
+        - bearer: [admin]
+      responses:
+        '204': { description: 'Revoked.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/admin/rotate:
+    post:
+      operationId: rotateAdminToken
+      tags: [admin]
+      summary: Replace a generated admin token (admin)
+      description: Refused with `409` when the admin token comes from `AUTOMATELY_ADMIN_TOKEN`.
+      security:
+        - bearer: [admin]
+      responses:
+        '200':
+          description: The new admin token, shown once.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token]
+                properties:
+                  token: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tokens:
+    get:
+      operationId: listTokens
+      tags: [tokens]
+      summary: Your tenant's tokens
+      security:
+        - bearer: ['tokens:write']
+      responses:
+        '200': { $ref: '#/components/responses/TokenList' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createToken
+      tags: [tokens]
+      summary: Mint a token for your tenant, with scopes your token also has
+      security:
+        - bearer: ['tokens:write']
+      requestBody: { $ref: '#/components/requestBodies/TokenRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/TokenCreated' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tokens/{id}:
+    parameters:
+      - $ref: '#/components/parameters/tokenId'
+    delete:
+      operationId: revokeToken
+      tags: [tokens]
+      summary: Revoke one of your tenant's tokens
+      security:
+        - bearer: ['tokens:write']
+      responses:
+        '204': { description: 'Revoked; it stops working on the next request.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/jobs:
+    get:
+      operationId: listJobs
+      tags: [jobs]
+      summary: Your jobs, newest first
+      security:
+        - bearer: ['jobs:read']
+      parameters:
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Jobs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobs]
+                properties:
+                  jobs:
+                    type: array
+                    items: { $ref: '#/components/schemas/Job' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: submitJob
+      tags: [jobs]
+      summary: Run a script
+      security:
+        - bearer: ['jobs:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [script]
+              properties:
+                script:
+                  type: string
+                  minLength: 1
+                  description: An ES module whose default export receives `(input, ctx)`. At most 256 KB.
+                input: { type: object }
+                timeoutMs: { type: integer, minimum: 1 }
+                onOrphan: { type: string, enum: [fail, retry, resume] }
+                maxAttempts: { type: integer, minimum: 1, maximum: 10 }
+      responses:
+        '202':
+          description: Accepted; the job is queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/jobs/{id}:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+    get:
+      operationId: getJob
+      tags: [jobs]
+      summary: One job, with its attempts
+      security:
+        - bearer: ['jobs:read']
+      responses:
+        '200':
+          description: The job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/jobs/{id}/events:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+    get:
+      operationId: streamJobEvents
+      tags: [jobs]
+      summary: Server-sent events for a job
+      description: |
+        `data:` lines carry JSON events: `{"type": "log", "level", "line", "seq"}`, `{"type": "attempt", "attempt", "node",
+        "previousOutcome"}`, and finally `{"type": "end", "status"}`. A finished job is replayed; a running one starts
+        with the lines it has logged so far (up to 1 000), then continues live, each line once.
+      security:
+        - bearer: ['jobs:read']
+      responses:
+        '200':
+          description: An event stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/jobs/{id}/steps:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+    get:
+      operationId: getJobSteps
+      tags: [jobs]
+      summary: The current attempt's checkpoint and completed steps
+      security:
+        - bearer: ['jobs:read']
+      responses:
+        '200':
+          description: Checkpoint and steps.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobId, attempt, steps]
+                properties:
+                  jobId: { type: string }
+                  attempt: { type: integer }
+                  checkpoint: {}
+                  steps:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, attempt, completedAt]
+                      properties:
+                        name: { type: string }
+                        result: {}
+                        attempt: { type: integer }
+                        completedAt: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/jobs/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+    post:
+      operationId: cancelJob
+      tags: [jobs]
+      summary: Cancel a job; a running one gets a graceful stop
+      security:
+        - bearer: ['jobs:write']
+      responses:
+        '202':
+          description: Cancellation requested.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/services:
+    get:
+      operationId: listServices
+      tags: [services]
+      summary: Your services
+      security:
+        - bearer: ['services:read']
+      responses:
+        '200':
+          description: Services.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services:
+                    type: array
+                    items: { $ref: '#/components/schemas/Service' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/services/{name}:
+    parameters:
+      - $ref: '#/components/parameters/serviceName'
+    get:
+      operationId: getService
+      tags: [services]
+      summary: One service, with its status and hosts
+      security:
+        - bearer: ['services:read']
+      responses:
+        '200': { $ref: '#/components/responses/Service' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putService
+      tags: [services]
+      summary: Define or update a service
+      security:
+        - bearer: ['services:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [script]
+              properties:
+                script: { type: string, minLength: 1 }
+                config: { type: object }
+                restart: { type: string, enum: [always, on-failure] }
+                enabled: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/Service' }
+        '201': { $ref: '#/components/responses/Service' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteService
+      tags: [services]
+      summary: Stop and remove a service (releases its domains)
+      security:
+        - bearer: ['services:write']
+      responses:
+        '204': { description: 'Removed.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/services/{name}/start:
+    parameters:
+      - $ref: '#/components/parameters/serviceName'
+    post:
+      operationId: startService
+      tags: [services]
+      summary: Start (enable) a service
+      security:
+        - bearer: ['services:write']
+      responses:
+        '200': { $ref: '#/components/responses/Service' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/services/{name}/stop:
+    parameters:
+      - $ref: '#/components/parameters/serviceName'
+    post:
+      operationId: stopService
+      tags: [services]
+      summary: Stop (disable) a service
+      security:
+        - bearer: ['services:write']
+      responses:
+        '200': { $ref: '#/components/responses/Service' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/services/{name}/restart:
+    parameters:
+      - $ref: '#/components/parameters/serviceName'
+    post:
+      operationId: restartService
+      tags: [services]
+      summary: Restart a service's current run
+      security:
+        - bearer: ['services:write']
+      responses:
+        '202': { $ref: '#/components/responses/Service' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/services/{name}/domains:
+    parameters:
+      - $ref: '#/components/parameters/serviceName'
+    get:
+      operationId: listDomains
+      tags: [services]
+      summary: A service's custom domains
+      security:
+        - bearer: ['services:read']
+      responses:
+        '200':
+          description: Domains.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domains]
+                properties:
+                  domains:
+                    type: array
+                    items: { $ref: '#/components/schemas/Domain' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: claimDomain
+      tags: [services]
+      summary: Claim a custom domain; returns the TXT record to publish
+      security:
+        - bearer: ['services:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain]
+              properties:
+                domain: { type: string, minLength: 1, maxLength: 253 }
+      responses:
+        '200': { $ref: '#/components/responses/Domain' }
+        '201': { $ref: '#/components/responses/Domain' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/services/{name}/domains/{domain}:
+    parameters:
+      - $ref: '#/components/parameters/serviceName'
+      - $ref: '#/components/parameters/domain'
+    delete:
+      operationId: releaseDomain
+      tags: [services]
+      summary: Release a custom domain
+      security:
+        - bearer: ['services:write']
+      responses:
+        '204': { description: 'Released.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/services/{name}/domains/{domain}/verify:
+    parameters:
+      - $ref: '#/components/parameters/serviceName'
+      - $ref: '#/components/parameters/domain'
+    post:
+      operationId: verifyDomain
+      tags: [services]
+      summary: Check the TXT record; the domain routes once verified
+      security:
+        - bearer: ['services:write']
+      responses:
+        '200': { $ref: '#/components/responses/Domain' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/files:
+    get:
+      operationId: listFiles
+      tags: [files]
+      summary: Your files, by path
+      security:
+        - bearer: ['files:read']
+      parameters:
+        - name: prefix
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200':
+          description: A page of files.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files]
+                properties:
+                  files:
+                    type: array
+                    items: { $ref: '#/components/schemas/File' }
+                  cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/files/{path}:
+    parameters:
+      - $ref: '#/components/parameters/filePath'
+    get:
+      operationId: getFile
+      tags: [files]
+      summary: Download a file, with Range and If-None-Match
+      security:
+        - bearer: ['files:read']
+      responses:
+        '200': { $ref: '#/components/responses/FileBytes' }
+        '206': { $ref: '#/components/responses/FileBytes' }
+        '304': { description: 'Not modified.' }
+        default: { $ref: '#/components/responses/Error' }
+    head:
+      operationId: headFile
+      tags: [files]
+      summary: A file's headers (size, type, ETag)
+      security:
+        - bearer: ['files:read']
+      responses:
+        '200': { description: 'The file''s headers, no body.' }
+        '304': { description: 'Not modified.' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putFile
+      tags: [files]
+      summary: Upload a file (streamed; any size up to the quota)
+      description: |
+        The body is streamed to storage as it arrives and is not validated here. `413` over the tenant's quota
+        (straight away when `Content-Length` is sent), `507` when the cluster is out of room.
+      security:
+        - bearer: ['files:write']
+      requestBody:
+        required: false
+        content:
+          application/octet-stream: {}
+      responses:
+        '201':
+          description: Stored.
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/File' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteFile
+      tags: [files]
+      summary: Delete a file
+      security:
+        - bearer: ['files:write']
+      responses:
+        '204': { description: 'Deleted.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/bus/{topic}:
+    parameters:
+      - $ref: '#/components/parameters/topic'
+    post:
+      operationId: publish
+      tags: [bus]
+      summary: Publish the JSON body to a topic
+      security:
+        - bearer: ['bus:publish']
+      requestBody:
+        required: false
+        description: Any JSON; no body sends `null`.
+        content:
+          application/json:
+            schema: {}
+      responses:
+        '202': { description: 'Published.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/bus/{topic}/request:
+    parameters:
+      - $ref: '#/components/parameters/topic'
+    post:
+      operationId: request
+      tags: [bus]
+      summary: Call a topic's handler and get its reply
+      security:
+        - bearer: ['bus:request']
+      parameters:
+        - name: timeoutMs
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 30000 }
+      requestBody:
+        required: false
+        description: Any JSON; no body sends `null`.
+        content:
+          application/json:
+            schema: {}
+      responses:
+        '200':
+          description: The handler's reply.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value: {}
+        default: { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: |
+        `atly_…` tenant tokens, or the admin token. Scopes: `jobs:read`, `jobs:write`, `services:read`,
+        `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`,
+        `nodes:read`, or `*`. Operations marked `admin` need the admin token.
+
+  parameters:
+    tenant:
+      name: tenant
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Name' }
+    serviceName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 63 }
+    tokenId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    jobId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    domain:
+      name: domain
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 253 }
+    topic:
+      name: topic
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-zA-Z0-9._-]{1,128}$' }
+    filePath:
+      name: path
+      in: path
+      required: true
+      description: A relative path; it may contain `/`, e.g. `site/index.html`.
+      schema: { type: string, minLength: 1 }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000 }
+    cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+
+  requestBodies:
+    TokenRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [name, scopes]
+            properties:
+              name: { type: string, minLength: 1, maxLength: 100 }
+              scopes:
+                type: array
+                minItems: 1
+                items:
+                  type: string
+                  enum: ['*', 'jobs:read', 'jobs:write', 'services:read', 'services:write', 'files:read', 'files:write',
+                         'bus:publish', 'bus:request', 'tokens:write', 'nodes:read']
+              expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
+
+  responses:
+    Error:
+      description: An error.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    TokenList:
+      description: Tokens, without their secrets.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [tokens]
+            properties:
+              tokens:
+                type: array
+                items: { $ref: '#/components/schemas/Token' }
+    TokenCreated:
+      description: The token, with its secret; shown once.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Token'
+              - type: object
+                required: [token]
+                properties:
+                  token: { type: string, pattern: '^atly_[0-9A-Za-z]{49}$' }
+    Service:
+      description: A service.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Service' }
+    Domain:
+      description: A custom domain claim.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Domain' }
+    FileBytes:
+      description: The file's bytes (or the requested range), with the file's own Content-Type.
+      headers:
+        ETag:
+          schema: { type: string }
+        Accept-Ranges:
+          schema: { type: string }
+      content:
+        application/octet-stream: {}
+
+  schemas:
+    Name:
+      type: string
+      pattern: '^(?!.*--)[a-z0-9][a-z0-9_-]{0,62}$'
+      description: Lowercase letters, digits, `_` and `-`; starts with a letter or digit; no `--`.
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: [string, integer] }
+            message: { type: string }
+    Whoami:
+      type: object
+      required: [admin]
+      properties:
+        admin: { type: boolean }
+        tenant: { type: string }
+        token: { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+    Tenant:
+      type: object
+      required: [name, createdAt]
+      properties:
+        name: { type: string }
+        createdAt: { type: integer }
+    Token:
+      type: object
+      required: [id, tenant, name, scopes, createdAt]
+      properties:
+        id: { type: string }
+        tenant: { type: string }
+        name: { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+        createdAt: { type: integer }
+        expiresAt: { type: [integer, 'null'] }
+        lastUsedAt: { type: [integer, 'null'] }
+    Node:
+      type: object
+      required: [id, capacity, running, lastSeen]
+      properties:
+        id: { type: string }
+        instanceId: { type: string }
+        capacity: { type: integer }
+        running: { type: integer }
+        lastSeen: { type: integer }
+        endpoint: { type: [string, 'null'] }
+    Job:
+      type: object
+      required: [id, status, attempt, createdAt]
+      properties:
+        id: { type: string }
+        tenant: { type: string }
+        input: { type: [object, 'null'] }
+        timeoutMs: { type: integer }
+        onOrphan: { type: string, enum: [fail, retry, resume] }
+        maxAttempts: { type: integer }
+        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, TIMED_OUT, ORPHANED, CANCELLED] }
+        attempt: { type: integer }
+        node: { type: [string, 'null'] }
+        cancelRequested: { type: [boolean, 'null'] }
+        service: { type: [object, 'null'] }
+        output: {}
+        error: { type: [string, 'null'] }
+        logs:
+          type: array
+          items: { type: string }
+        attempts:
+          type: array
+          items:
+            type: object
+            properties:
+              attempt: { type: integer }
+              node: { type: [string, 'null'] }
+              startedAt: { type: [integer, 'null'] }
+              endedAt: { type: integer }
+              outcome: { type: string }
+        createdAt: { type: integer }
+        queuedAt: { type: [integer, 'null'] }
+        startedAt: { type: [integer, 'null'] }
+        finishedAt: { type: [integer, 'null'] }
+    Service:
+      type: object
+      required: [name, status, enabled, revision, runs, hosts]
+      properties:
+        name: { type: string }
+        script: { type: string }
+        config: { type: [object, 'null'] }
+        restart: { type: string, enum: [always, on-failure] }
+        enabled: { type: boolean }
+        completed: { type: boolean }
+        status: { type: string }
+        revision: { type: integer }
+        currentJobId: { type: [string, 'null'] }
+        currentRevision: { type: [integer, 'null'] }
+        runs: { type: integer }
+        consecutiveFailures: { type: integer }
+        nextStartAt: { type: [integer, 'null'] }
+        lastExit: { type: [object, 'null'] }
+        hosts:
+          type: array
+          items: { type: string }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+    Domain:
+      type: object
+      required: [domain, service, verified, createdAt]
+      properties:
+        domain: { type: string }
+        tenant: { type: string }
+        service: { type: string }
+        verified: { type: boolean }
+        createdAt: { type: integer }
+        verifiedAt: { type: [integer, 'null'] }
+        verification:
+          type: object
+          properties:
+            type: { type: string, const: TXT }
+            name: { type: string }
+            value: { type: string }
+    File:
+      type: object
+      required: [path, size, contentType, etag, createdAt]
+      properties:
+        path: { type: string }
+        size: { type: integer }
+        contentType: { type: string }
+        etag: { type: string }
+        createdAt: { type: integer }

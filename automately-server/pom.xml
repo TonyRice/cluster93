@@ -28,6 +28,10 @@
             <artifactId>vertx-web</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-openapi</artifactId>
+        </dependency>
+        <dependency>
             <groupId>automately</groupId>
             <artifactId>automately-cluster-ignite</artifactId>
         </dependency>

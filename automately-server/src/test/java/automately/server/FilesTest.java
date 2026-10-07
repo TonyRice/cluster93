@@ -73,6 +73,7 @@ class FilesTest {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
+                Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -184,6 +185,8 @@ class FilesTest {
 
         HttpResponse<Buffer> refused = upload(nodeB, "kvquota", "almost-40mb.bin", bytes(40 * MB - 512 * 1024, 8), "application/octet-stream");
         HttpResponse<Buffer> accepted = upload(nodeB, "kvquota", "39mb.bin", bytes(39 * MB, 9), "application/octet-stream");   // leaves about 24 KB
+        // kv checks a count at most TenantQuota.FRESH old, and the upload went through the other node (D-043).
+        Thread.sleep(automately.core.storage.TenantQuota.FRESH.toMillis() + 200);
         JsonObject full = runJob("kvquota", "export default () => kv.set('one-more', 'k'.repeat(250 * 1024))");
 
         assertThat(refused.statusCode()).as(refused.bodyAsString()).isEqualTo(413);

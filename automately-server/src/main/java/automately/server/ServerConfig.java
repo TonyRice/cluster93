@@ -65,7 +65,8 @@ public record ServerConfig(
         boolean clustered,
         int clusterPort,
         List<String> clusterMembers,
-        String adminToken) {
+        String adminToken,
+        long rateLimitPerMinute) {
 
     public ServerConfig {
         if (adminToken != null && adminToken.length() < automately.core.auth.Authenticator.MIN_ADMIN_TOKEN_LENGTH) {
@@ -109,7 +110,8 @@ public record ServerConfig(
                         .map(String::trim)
                         .filter(member -> !member.isEmpty())
                         .toList(),
-                blankToNull(env.get("AUTOMATELY_ADMIN_TOKEN")));
+                blankToNull(env.get("AUTOMATELY_ADMIN_TOKEN")),
+                Long.parseLong(env.getOrDefault("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "1200")));
     }
 
     private static String blankToNull(String value) {

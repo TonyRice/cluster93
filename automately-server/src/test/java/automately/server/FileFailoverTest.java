@@ -215,6 +215,7 @@ class FileFailoverTest {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
+                Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),

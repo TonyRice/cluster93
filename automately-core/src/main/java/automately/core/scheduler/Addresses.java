@@ -17,6 +17,11 @@ public final class Addresses {
     }
 
     /** Publish: {@code log}, {@code attempt} and the final {@code end} event of one job. */
+    /** Answered by the node running the job with its recent log lines: {@code {"lastSeq", "lines"}}. */
+    public static String jobTail(String jobId) {
+        return "automately.job." + jobId + ".tail";
+    }
+
     public static String jobEvents(String jobId) {
         return "automately.job." + jobId + ".events";
     }

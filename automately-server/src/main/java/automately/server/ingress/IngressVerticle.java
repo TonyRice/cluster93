@@ -309,12 +309,7 @@ public final class IngressVerticle extends VerticleBase {
         if (unread) {
             response.putHeader("Connection", "close");
         }
-        response.end(new JsonObject().put("error", new JsonObject().put("code", status).put("message", message)).encode())
-                .onComplete(ar -> {
-                    if (unread) {
-                        request.connection().close();
-                    }
-                });
+        response.end(new JsonObject().put("error", new JsonObject().put("code", status).put("message", message)).encode());
     }
 
     private static long parseLong(String value) {

@@ -13,7 +13,6 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.handler.BodyHandler;
 
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -41,20 +40,19 @@ final class AuthRoutes {
     }
 
     void mount(Router router) {
-        BodyHandler body = BodyHandler.create(false).setBodyLimit(16 * 1024);
         router.get("/v1/whoami").handler(this::whoami);
-        router.post("/v1/tenants").handler(body).handler(this::createTenant);
+        router.post("/v1/tenants").handler(this::createTenant);
         router.get("/v1/tenants").handler(ctx -> store.tenants()
                 .onSuccess(all -> ctx.json(new JsonObject().put("tenants", new JsonArray(all.stream().map(Tenant::toJson).toList()))))
                 .onFailure(ctx::fail));
         router.get("/v1/tenants/:tenant").handler(ctx -> withTenant(ctx, tenant -> ctx.json(tenant.toJson())));
         router.delete("/v1/tenants/:tenant").handler(this::deleteTenant);
         router.get("/v1/tenants/:tenant/tokens").handler(ctx -> withTenant(ctx, tenant -> listTokens(ctx, tenant.name())));
-        router.post("/v1/tenants/:tenant/tokens").handler(body).handler(ctx -> withTenant(ctx, tenant -> createToken(ctx, tenant.name(), null)));
+        router.post("/v1/tenants/:tenant/tokens").handler(ctx -> withTenant(ctx, tenant -> createToken(ctx, tenant.name(), null)));
         router.delete("/v1/tenants/:tenant/tokens/:id").handler(ctx -> withTenant(ctx, tenant -> revoke(ctx, tenant.name())));
         router.post("/v1/admin/rotate").handler(this::rotate);
         router.get("/v1/tokens").handler(ctx -> listTokens(ctx, ctx.get("tenant")));
-        router.post("/v1/tokens").handler(body).handler(ctx -> createToken(ctx, ctx.get("tenant"), ctx.<Principal>get("principal").scopes()));
+        router.post("/v1/tokens").handler(ctx -> createToken(ctx, ctx.get("tenant"), ctx.<Principal>get("principal").scopes()));
         router.delete("/v1/tokens/:id").handler(ctx -> revoke(ctx, ctx.get("tenant")));
     }
 

@@ -98,6 +98,7 @@ class DockerClusterIT {
                     .withNetworkAliases(id)
                     .withEnv("AUTOMATELY_NODE_ID", id)
                     .withEnv("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN)
+                    .withEnv("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0")
                     .withEnv("AUTOMATELY_CLUSTERED", "true")
                     .withEnv("AUTOMATELY_CLUSTER_MEMBERS", "node1,node2,node3")
                     .withEnv("AUTOMATELY_CAPACITY", "2")

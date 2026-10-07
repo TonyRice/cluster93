@@ -18,6 +18,7 @@ import automately.core.state.StepRecord;
 import automately.server.ServerConfig;
 import io.vertx.core.Future;
 import io.vertx.core.VerticleBase;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.MessageConsumer;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerResponse;
@@ -61,13 +62,19 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.auth.Authenticator authenticator;
     private final automately.core.auth.AuthStore authStore;
 
+    private final automately.core.auth.RateLimiter limiter;
+    private final java.util.Map<Long, BodyHandler> bodyHandlers = new java.util.concurrent.ConcurrentHashMap<>();
+
     private HttpServer server;
     private Router router;
+    private io.vertx.openapi.contract.OpenAPIContract contract;
+    private io.vertx.openapi.validation.RequestValidator validator;
 
     public ApiVerticle(ServerConfig config, JobStore jobs, JobStateStore state, NodeRegistry nodes, JobScheduler scheduler,
                        ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter, FileStore files,
                        automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
                        automately.core.auth.AuthStore authStore) {
+        this.limiter = new automately.core.auth.RateLimiter(config.rateLimitPerMinute());
         this.authenticator = authenticator;
         this.authStore = authStore;
         this.files = files;
@@ -90,21 +97,45 @@ public final class ApiVerticle extends VerticleBase {
 
     @Override
     public Future<?> start() {
+        return Contract.load(vertx).compose(loaded -> {
+            for (RouteScopes.Rule rule : RouteScopes.RULES) {
+                if (loaded.operation(rule.operationId()) == null) {
+                    return Future.failedFuture(new IllegalStateException("Route rule names " + rule.operationId()
+                            + ", which isn't in " + CONTRACT + " (D-046)"));
+                }
+            }
+            contract = loaded;
+            validator = io.vertx.openapi.validation.RequestValidator.create(vertx, loaded);
+            refreshNodeCount();
+            vertx.setPeriodic(NODE_COUNT_REFRESH.toMillis(), id -> refreshNodeCount());
+            return listen();
+        });
+    }
+
+    /** The contract every request is validated against (D-046). */
+    static final String CONTRACT = Contract.PATH;
+    static final Duration NODE_COUNT_REFRESH = Duration.ofSeconds(5);
+
+    private void refreshNodeCount() {
+        nodes.liveNodes().onSuccess(live -> limiter.nodes(live.size()));
+    }
+
+    private Future<HttpServer> listen() {
         router = Router.router(vertx);
         router.get("/health").handler(this::health);
-        router.route("/v1/*").handler(this::authenticate);
+        router.route("/v1/*").handler(this::authenticate).handler(this::rateLimit).handler(this::readBody).handler(this::validate);
+        router.get("/v1/openapi.json").handler(ctx -> ctx.json(contract.getRawContract()));
         router.get("/v1/nodes").handler(this::listNodes);
         new AuthRoutes(authStore, authenticator, this::isEmpty).mount(router);
         new FilesRoutes(files, quota).mount(router);
         new BusRoutes(vertx).mount(router);
-        router.post("/v1/jobs").handler(BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 4_096)).handler(this::submitJob);
+        router.post("/v1/jobs").handler(this::submitJob);
         router.get("/v1/jobs").handler(this::listJobs);
         router.get("/v1/jobs/:id").handler(this::getJob);
         router.get("/v1/jobs/:id/events").handler(this::streamEvents);
         router.get("/v1/jobs/:id/steps").handler(this::getSteps);
         router.post("/v1/jobs/:id/cancel").handler(this::cancelJob);
-        new ServiceRoutes(config, services, jobs, scheduler, domains, txt, hostRouter)
-                .mount(router, BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 64 * 1024));
+        new ServiceRoutes(config, services, jobs, scheduler, domains, txt, hostRouter).mount(router);
         router.route().last().handler(ctx -> error(ctx, 404, "not_found", "No such route"));
         router.route().failureHandler(this::failure);
 
@@ -150,6 +181,11 @@ public final class ApiVerticle extends VerticleBase {
             return;
         }
         request.pause();
+        ctx.put("rule", rule.get());
+        if (rule.get().who() == RouteScopes.Who.PUBLIC) {
+            ctx.next();
+            return;
+        }
         authenticator.authenticate(request.getHeader("Authorization")).onComplete(ar -> {
             if (ar.failed()) {
                 if (ar.cause() instanceof automately.core.auth.AuthFailure failure) {
@@ -172,16 +208,82 @@ public final class ApiVerticle extends VerticleBase {
             if (!principal.admin()) {
                 ctx.put("tenant", principal.tenant());
             }
-            if (!rule.get().readsBody()) {
-                request.resume();
-            }
             ctx.next();
         });
     }
 
+    /** Per-tenant limits (milestone 2). The admin and public routes aren't limited. */
+    private void rateLimit(RoutingContext ctx) {
+        String tenant = ctx.get("tenant");
+        if (tenant == null || !limiter.enabled()) {
+            ctx.next();
+            return;
+        }
+        automately.core.auth.RateLimiter.Decision decision = limiter.acquire(tenant, System.nanoTime());
+        ctx.response().putHeader("RateLimit-Policy", "\"tenant\";q=" + decision.limit() + ";w=60")
+                .putHeader("RateLimit", "\"tenant\";r=" + decision.remaining() + ";t=" + decision.resetSeconds());
+        if (!decision.allowed()) {
+            ctx.response().putHeader("Retry-After", String.valueOf(decision.retryAfterSeconds()));
+            error(ctx, 429, "rate_limited", "Over " + decision.limit() + " requests a minute for this tenant; retry in "
+                    + decision.retryAfterSeconds() + " s");
+            return;
+        }
+        ctx.next();
+    }
+
+    /** JSON bodies are read here, once, with the route's limit; streamed bodies stay paused for their handler. */
+    private void readBody(RoutingContext ctx) {
+        RouteScopes.Rule rule = ctx.get("rule");
+        switch (rule.body()) {
+            case NONE -> {
+                ctx.request().resume();
+                ctx.next();
+            }
+            case JSON -> bodyHandlers.computeIfAbsent(rule.bodyLimit(), limit -> BodyHandler.create(false).setBodyLimit(limit)).handle(ctx);
+            case STREAM -> ctx.next();
+        }
+    }
+
+    /**
+     * Checks the request against its operation in the contract before the handler runs (D-046). JSON bodies are
+     * validated as JSON whatever Content-Type the client sent (curl's -d sends a form type); streamed bodies aren't.
+     */
+    private void validate(RoutingContext ctx) {
+        RouteScopes.Rule rule = ctx.get("rule");
+        io.vertx.openapi.contract.Operation operation = contract.operation(rule.operationId());
+        io.vertx.openapi.validation.RequestUtils.extract(ctx.request(), operation, () -> Future.succeededFuture(Buffer.buffer()))
+                .map(extracted -> rule.body() != RouteScopes.Body.JSON ? extracted : asJson(extracted, ctx.body().buffer()))
+                .compose(request -> validator.validate(request, rule.operationId()))
+                .onSuccess(validated -> ctx.next())
+                .onFailure(err -> {
+                    if (err instanceof io.vertx.openapi.validation.SchemaValidationException invalid) {
+                        error(ctx, 400, "invalid_request", describe(invalid));
+                    } else if (err instanceof io.vertx.openapi.validation.ValidatorException invalid) {
+                        error(ctx, 400, "invalid_request", invalid.getMessage());
+                    } else {
+                        ctx.fail(err);
+                    }
+                });
+    }
+
+    /** The request as JSON, whatever Content-Type it came with; an empty body is no body. */
+    private static io.vertx.openapi.validation.ValidatableRequest asJson(io.vertx.openapi.validation.ValidatableRequest extracted, Buffer body) {
+        boolean empty = body == null || body.length() == 0;
+        return new io.vertx.openapi.validation.impl.ValidatableRequestImpl(extracted.getCookies(), extracted.getHeaders(),
+                extracted.getPathParameters(), extracted.getQuery(),
+                new io.vertx.openapi.validation.impl.RequestParameterImpl(empty ? null : body), empty ? null : "application/json");
+    }
+
+    private static String describe(io.vertx.openapi.validation.SchemaValidationException invalid) {
+        io.vertx.json.schema.OutputUnit unit = invalid.getOutputUnit();
+        String where = unit == null || unit.getInstanceLocation() == null || unit.getInstanceLocation().isEmpty()
+                ? "" : " at " + unit.getInstanceLocation();
+        return invalid.getMessage() + where;
+    }
+
     private static String denied(RouteScopes.Rule rule, automately.core.auth.Principal principal) {
         return switch (rule.who()) {
-            case ANY -> null;
+            case PUBLIC, ANY -> null;
             case ADMIN -> principal.admin() ? null : "Only the admin token can do this";
             case ADMIN_OR_TENANT -> principal.admin() || principal.allows(rule.scope()) ? null : lacks(rule.scope());
             case TENANT -> principal.admin()
@@ -332,10 +434,19 @@ public final class ApiVerticle extends VerticleBase {
             stream.onEnd(consumer::unregister);
             response.closeHandler(v -> consumer.unregister());
 
-            // Subscribe first, then look again: a job that ended in between is replayed from the store.
+            // Subscribe first, then look again: a job that ended in between is replayed from the store, and a running
+            // one starts with the lines it has logged so far, from the node running it.
             consumer.completion()
                     .compose(v -> jobs.get(found.id()))
-                    .onSuccess(stream::start)
+                    .onSuccess(job -> {
+                        if (job == null || job.status().isTerminal()) {
+                            stream.start(job, null);
+                            return;
+                        }
+                        vertx.eventBus().<JsonObject>request(Addresses.jobTail(job.id()), null,
+                                        new io.vertx.core.eventbus.DeliveryOptions().setSendTimeout(TAIL_TIMEOUT.toMillis()))
+                                .onComplete(tail -> stream.start(job, tail.succeeded() ? tail.result().body() : null));
+                    })
                     .onFailure(err -> stream.abort());
         });
     }
@@ -378,15 +489,13 @@ public final class ApiVerticle extends VerticleBase {
         ctx.response()
                 .setStatusCode(status)
                 .putHeader("Content-Type", "application/json")
-                .end(new JsonObject().put("error", new JsonObject().put("code", code).put("message", message)).encode())
-                .onComplete(ar -> {
-                    if (unread) {
-                        ctx.request().connection().close();
-                    }
-                });
+                .end(new JsonObject().put("error", new JsonObject().put("code", code).put("message", message)).encode());
     }
 
     /** Buffers live events until it knows whether the job is still running or must be replayed. */
+    /** How long a new event stream waits for a running job's recent lines before going live without them. */
+    static final Duration TAIL_TIMEOUT = Duration.ofSeconds(2);
+
     private static final class EventStream {
 
         private final HttpServerResponse response;
@@ -395,6 +504,8 @@ public final class ApiVerticle extends VerticleBase {
         };
         private boolean started;
         private boolean ended;
+        /** Log lines up to this number were sent from the tail; live copies of them are skipped. */
+        private long sentUpTo;
 
         EventStream(HttpServerResponse response) {
             this.response = response;
@@ -415,7 +526,7 @@ public final class ApiVerticle extends VerticleBase {
             write(event);
         }
 
-        void start(Job job) {
+        void start(Job job, JsonObject tail) {
             started = true;
             if (job != null && job.status().isTerminal()) {
                 pending.clear();
@@ -427,6 +538,14 @@ public final class ApiVerticle extends VerticleBase {
                 job.logs().forEach(line -> write(new JsonObject().put("type", "log").put("level", "info").put("line", line)));
                 write(new JsonObject().put("type", "end").put("status", job.status().name()));
                 return;
+            }
+            if (tail != null) {
+                JsonArray lines = tail.getJsonArray("lines", new JsonArray());
+                long first = tail.getLong("lastSeq", 0L) - lines.size() + 1;
+                for (int i = 0; i < lines.size(); i++) {
+                    write(new JsonObject().put("type", "log").put("level", "info").put("line", lines.getString(i)).put("seq", first + i));
+                }
+                sentUpTo = tail.getLong("lastSeq", 0L);
             }
             List<JsonObject> buffered = List.copyOf(pending);
             pending.clear();
@@ -441,6 +560,10 @@ public final class ApiVerticle extends VerticleBase {
 
         private void write(JsonObject event) {
             if (ended) {
+                return;
+            }
+            Long seq = event.getLong("seq");
+            if ("log".equals(event.getString("type")) && seq != null && seq <= sentUpTo) {
                 return;
             }
             response.write("event: " + event.getString("type") + "\ndata: " + event.encode() + "\n\n");

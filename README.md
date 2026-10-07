@@ -65,6 +65,7 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `POST` · `GET` | `/v1/tokens` | `tokens:write`: mint a token for your own tenant, with scopes your token also has · list |
 | `DELETE` | `/v1/tokens/{id}` | `tokens:write`: revoke one of your tenant's tokens, effective on the next request |
 | `GET` | `/v1/whoami` | Any token: who it is and what it may do |
+| `GET` | `/v1/openapi.json` | The OpenAPI 3.1 contract; no token needed |
 | `POST` | `/v1/jobs` | `{script, input?, timeoutMs?, onOrphan?, maxAttempts?}` → `202` with the job |
 | `GET` | `/v1/jobs` | Jobs for the tenant, newest first |
 | `GET` | `/v1/jobs/{id}` | One job, including `attempt` and the `attempts` history |
@@ -87,6 +88,8 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `GET` | `/health` | Liveness |
 
 Errors use one envelope: `{"error": {"code": "...", "message": "..."}}`.
+
+The API is **contract-first**: [`openapi.yaml`](automately-server/src/main/resources/openapi.yaml) is the source of truth. Requests are validated against it, and bad input gets `400 invalid_request`. Every tenant gets a request budget (`AUTOMATELY_RATE_LIMIT_PER_MINUTE`): responses carry `RateLimit-Policy`/`RateLimit`, and going over gets `429` with `Retry-After`.
 
 ## Architecture
 
@@ -130,6 +133,7 @@ The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each o
 |---|---|---|
 | `AUTOMATELY_NODE_ID` | hostname | |
 | `AUTOMATELY_ADMIN_TOKEN` | *(unset: generated once and logged)* | The admin token, at least 32 characters; the same on every node |
+| `AUTOMATELY_RATE_LIMIT_PER_MINUTE` | `1200` | Requests per tenant per minute across the cluster (each node enforces its share); `0` turns it off |
 | `AUTOMATELY_HTTP_PORT` | `8080` | `0` = random |
 | `AUTOMATELY_CAPACITY` | `8` | Concurrent jobs per node |
 | `AUTOMATELY_MAX_HEAP_MB` | `128` | Per-isolate heap. Applies process-wide |
@@ -175,7 +179,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Static state in `JobServer`, `UserData` and others | Services are verticles with injected interfaces | ArchUnit: static fields must be final |
 | Nested callbacks and blocking map calls on the event loop | Vert.x 5 futures, with blocking work in `executeBlocking` | ArchUnit: no hand-rolled threads or `Executors` |
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
-| Regex routing by hand | `vertx-web` `Router`, one table of what each route needs | `AuthTest` walks every route |
+| Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
 | No tests | 291 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, files, auth, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
 | Synchronous host objects running in the host JVM (Nashorn, `--no-java`); HTTP client with no address checks | Promise-based, tenant-scoped `kv`/`bus`/`fetch`/`log`; SSRF-safe egress; verified domains | `NodeHostServicesTest`, `HostApisTest` |

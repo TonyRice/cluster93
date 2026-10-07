@@ -25,6 +25,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase 4, milestone 2 — The OpenAPI contract, validation and rate limits (2026-10-06)
+
+### Added
+- **`openapi.yaml` (OpenAPI 3.1), the API's contract** (D-046), served at `GET /v1/openapi.json` without a token. It covers every operation, with its scope, request and response schemas, the error envelope, and the bearer scheme. **Why:** weak spot #4; the CLI and MCP tools are built from it next.
+- **Request validation** (D-050). Requests are checked against their operation before any handler runs, and bad input gets 400 `invalid_request` naming where. JSON bodies are read once, after auth, with each operation's own limit.
+- **Event streams of running jobs start with what was logged so far.** Log events now carry a `seq` number. A client connecting to a running job, on any node, first receives its recent lines (up to 1 000) from the node running it, then live events, each line exactly once. **Why:** `automately services logs` and the MCP tools need a running service's recent output, and the stream used to show only lines logged after connecting.
+- **Rate limits per tenant** (D-051): `AUTOMATELY_RATE_LIMIT_PER_MINUTE` (default 1200, 0 = off), each node enforcing its share. Responses carry `RateLimit-Policy` and `RateLimit`, and over the limit is 429 with `Retry-After`. The admin isn't limited.
+- **Tests:**
+  - `ContractTest`: routes and operations must match exactly, every one of the 40 operations is called and its response validated, bad input is refused, and a form-typed JSON body (`curl -d`) still works
+  - `RateLimitTest` and `RateLimiterTest`
+
+### Changed
+- `RouteScopes` has one rule per operation, naming its contract operation and body mode. The node won't start if a rule and the spec disagree.
+- **Stricter input** where the spec says so: for example, `limit` above 1 000 is now 400 instead of being clamped, and unknown scopes or `onOrphan` values are refused by the contract.
+- Bus messages may have no body (`null`), as before; the spec now says so.
+- Tests run with rate limiting off, except `RateLimitTest`.
+
+### Fixed
+- **A 413 could arrive as a reset connection.** When a too-large upload was refused, the connection closed while bytes were still arriving. It now closes with a lingering close (D-052).
+- The spec as first written said `cancelRequested` was always a boolean. `ContractTest` found that it can be `null`.
+
 ## Phase 4, milestone 1 — Tenants and scoped tokens (2026-10-06)
 
 ### Added

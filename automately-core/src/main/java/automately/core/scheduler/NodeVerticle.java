@@ -25,9 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -180,7 +178,9 @@ public final class NodeVerticle extends VerticleBase {
                 publish(job.id(), new JsonObject().put("type", "attempt").put("attempt", attempt).put("node", nodeId)
                         .put("previousOutcome", job.previousAttempt().outcome().name()));
             }
-            Deque<String> logs = new ArrayDeque<>();
+            LogBook logs = new LogBook();
+            // Clients connecting mid-run ask this node for the lines so far (the API's event stream).
+            io.vertx.core.eventbus.MessageConsumer<Object> tail = vertx.eventBus().consumer(Addresses.jobTail(job.id()), msg -> msg.reply(logs.tail()));
             JobContext jobContext = new JobContext(job.id(), attempt, job.onOrphan(), job.previousAttempt(), carried.state(),
                     carried.service());
             RunningExecution execution = runtime.execute(execution(job, jobContext), logSink(job.id(), logs), stateSink(job.id(), attempt),
@@ -193,7 +193,8 @@ public final class NodeVerticle extends VerticleBase {
             // A runtime may complete on any thread; continue on this verticle's context so `slots` stays confined.
             return Future.fromCompletionStage(execution.result().toCompletionStage(), context)
                     .recover(err -> Future.succeededFuture(ExecutionResult.failed("Runtime error: " + err.getMessage())))
-                    .compose(result -> finish(job.id(), attempt, result, snapshot(logs)));
+                    .compose(result -> finish(job.id(), attempt, result, logs.lines()))
+                    .onComplete(done -> tail.unregister());
         });
     }
 
@@ -268,7 +269,7 @@ public final class NodeVerticle extends VerticleBase {
         });
     }
 
-    private LogSink logSink(String jobId, Deque<String> logs) {
+    private LogSink logSink(String jobId, LogBook logs) {
         return new LogSink() {
             @Override
             public void log(String level, String line) {
@@ -278,13 +279,8 @@ public final class NodeVerticle extends VerticleBase {
             @Override
             public void log(String level, String message, JsonObject fields) {
                 String line = fields == null || fields.isEmpty() ? message : message + " " + fields.encode();
-                synchronized (logs) {
-                    if (logs.size() >= MAX_LOG_LINES) {
-                        logs.removeFirst();
-                    }
-                    logs.addLast(line);
-                }
-                JsonObject event = new JsonObject().put("type", "log").put("level", level).put("line", line);
+                long seq = logs.add(line);
+                JsonObject event = new JsonObject().put("type", "log").put("level", level).put("line", line).put("seq", seq);
                 if (fields != null && !fields.isEmpty()) {
                     event.put("message", message).put("fields", fields);
                 }
@@ -293,11 +289,7 @@ public final class NodeVerticle extends VerticleBase {
         };
     }
 
-    private static List<String> snapshot(Deque<String> logs) {
-        synchronized (logs) {
-            return List.copyOf(logs);
-        }
-    }
+
 
     /** Called from the script's thread. Each write first checks this attempt still owns the job. */
     private StateSink stateSink(String jobId, int attempt) {
