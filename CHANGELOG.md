@@ -36,6 +36,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
   - **What it checks:** the service restarts on a survivor, the waiting orders are handled, and the orders that were in flight come back when their leases run out. It fails unless all 120 are handled, counted by id.
   - **Afterwards:** the cluster stays up for Grafana, and `scripts/demo.sh down` removes it.
   - **Why scripted:** it runs the same way every time, needs no API key, and doubles as a smoke test. Tony agreed a live agent session isn't needed.
+- **`docs/demo.html`:** a self-contained page that plays the recording offline, with the player and the recording inlined and "jump to" buttons for the kill and the recovery.
 - **`docs/demo.cast`:** a recording of a real run (asciicast v2). It was made by `scripts/record.py`, which needs no asciinema and redacts `atly_` tokens.
 - **Metrics:**
   - `automately_queue_messages_total{outcome}`: pushed, claimed, acked, retried, reclaimed, released, dead.

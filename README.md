@@ -54,7 +54,7 @@ Then:
 - **The two orders in flight on the dead node** come back when their 30 s leases run out.
 - **Grafana** (http://localhost:3000) shows the restart and the queue draining.
 
-`scripts/demo.sh down` stops it. A recording is in [docs/demo.cast](docs/demo.cast) (`asciinema play docs/demo.cast`).
+`scripts/demo.sh down` stops it. Watch the recording by opening [docs/demo.html](docs/demo.html) in a browser (it works offline), or run `asciinema play docs/demo.cast`.
 
 ## Try it
 
