@@ -87,6 +87,21 @@ public final class Metrics implements Shareable {
         Counter.builder("automately.files.refused").description("Uploads refused, by reason").tag("reason", reason).register(registry).increment();
     }
 
+    /**
+     * A queue message changed hands (D-061): pushed, acked, retried (a handler failed), dead (attempts used up),
+     * released (its consumer stopped) or reclaimed (its consumer's lease ran out, so another took it).
+     */
+    public void queueMessage(String outcome) {
+        Counter.builder("automately.queue.messages").description("Queue messages by what happened to them").tag("outcome", outcome)
+                .register(registry).increment();
+    }
+
+    /** A completion callback delivery (D-062): delivered, retry (it will be tried again) or failed (given up). */
+    public void callbackDelivery(String outcome) {
+        Counter.builder("automately.callbacks.deliveries").description("Completion callback deliveries by outcome").tag("outcome", outcome)
+                .register(registry).increment();
+    }
+
     /** "cluster", "disk", "s3", or "provider" for any tenant's own. */
     public static String backendKind(String backend) {
         return backend.startsWith("provider:") ? "provider" : backend;

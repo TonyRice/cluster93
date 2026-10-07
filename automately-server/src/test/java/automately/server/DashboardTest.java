@@ -72,6 +72,15 @@ class DashboardTest {
             await(client.put(node.httpPort(), "localhost", "/v1/services/svc").putHeader("Authorization", bearer)
                     .sendJsonObject(new JsonObject().put("script", "export default async (input, ctx) => ctx.stopRequested")));
             await(client.put(node.httpPort(), "localhost", "/v1/files/small.txt").putHeader("Authorization", bearer).sendBuffer(Buffer.buffer("x")));
+            // A queue message pushed and consumed, and a callback to an address the egress policy refuses.
+            await(client.post(node.httpPort(), "localhost", "/v1/jobs").putHeader("Authorization", bearer)
+                    .sendJsonObject(new JsonObject().put("script", """
+                            export default async () => {
+                              const q = bus.queue('dash');
+                              await q.push(1);
+                              await new Promise((resolve) => q.consume(async () => { setTimeout(resolve, 50); }));
+                            }
+                            """).put("callback", new JsonObject().put("url", "http://169.254.169.254/hook"))));
             await(client.put(node.httpPort(), "localhost", "/v1/files/big.bin").putHeader("Authorization", bearer)
                     .sendBuffer(Buffer.buffer(new byte[2 * 1024 * 1024])));
             long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();

@@ -111,6 +111,7 @@ public final class QueueService {
                     : capacity.ensureRoom().compose(v -> quota.ensureFits(tenant, message.size()));
             return room.compose(v -> store.add(message)).map(added -> {
                 if (added) {
+                    metrics().queueMessage("pushed");
                     hint(tenant, queue);
                 }
                 return id;
@@ -123,6 +124,10 @@ public final class QueueService {
     /** Time-ordered, so messages pushed together come out roughly in order. */
     private static String newId(long now) {
         return String.format("%013d-%s", now, UUID.randomUUID().toString().substring(0, 8));
+    }
+
+    private automately.core.metrics.Metrics metrics() {
+        return automately.core.metrics.Metrics.of(vertx);
     }
 
     void hint(String tenant, String queue) {
@@ -149,9 +154,11 @@ public final class QueueService {
         }
         QueueMessage candidate = candidates.get(index);
         boolean[] deadLettered = {false};
+        boolean[] reclaimed = {false};
         return store.update(candidate.tenant(), candidate.queue(), candidate.id(), current -> {
             // Compare-and-set may run this more than once; only the last run counts.
             deadLettered[0] = false;
+            reclaimed[0] = current.status() == QueueMessage.Status.IN_FLIGHT;
             if (!current.claimable(now)) {
                 return Optional.empty();
             }
@@ -162,9 +169,12 @@ public final class QueueService {
             }
             return Optional.of(current.with(QueueMessage.Status.IN_FLIGHT, current.attempt() + 1, current.availableAt(), now + leaseMs,
                     owner, current.lastError()));
-        }).compose(updated -> updated.isPresent() && !deadLettered[0]
-                ? Future.succeededFuture(updated)
-                : claimFirst(candidates, index + 1, owner, now));
+        }).compose(updated -> {
+            if (updated.isPresent()) {
+                metrics().queueMessage(deadLettered[0] ? "dead" : reclaimed[0] ? "reclaimed" : "claimed");
+            }
+            return updated.isPresent() && !deadLettered[0] ? Future.succeededFuture(updated) : claimFirst(candidates, index + 1, owner, now);
+        });
     }
 
     private static boolean owns(QueueMessage current, QueueMessage claimed) {
@@ -175,7 +185,12 @@ public final class QueueService {
     /** Done with it: removes the message if this delivery still owns it. Completes with whether it did. */
     public Future<Boolean> ack(QueueMessage claimed) {
         return store.get(claimed.tenant(), claimed.queue(), claimed.id())
-                .compose(current -> current != null && owns(current, claimed) ? store.removeIfUnchanged(current) : Future.succeededFuture(false));
+                .compose(current -> current != null && owns(current, claimed) ? store.removeIfUnchanged(current) : Future.succeededFuture(false))
+                .onSuccess(removed -> {
+                    if (removed) {
+                        metrics().queueMessage("acked");
+                    }
+                });
     }
 
     /**
@@ -198,6 +213,7 @@ public final class QueueService {
             }
             return Optional.of(current.with(QueueMessage.Status.READY, current.attempt(), now + backoff(current.attempt()), 0, null, reason));
         }).map(updated -> {
+            updated.ifPresent(m -> metrics().queueMessage(release ? "released" : m.status() == QueueMessage.Status.DEAD ? "dead" : "retried"));
             if (updated.isPresent() && updated.get().status() == QueueMessage.Status.READY) {
                 // Delayed retries are found by the consumers' periodic look; an immediate one wakes them now.
                 if (release) {

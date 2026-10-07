@@ -622,3 +622,19 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - stop and events
 - other tenants' jobs looking missing
 - bad runs refused
+
+### D-064 — The demo is a script, with a scripted MCP client as the agent
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Context:** The plan's demo was "an agent deploys and calls a function on a 3-node cluster, including a node kill". A live Claude Code session would show an AI at work, but it isn't repeatable, needs an API key and Claude Code, and can take a wrong turn in a recording. Tony agreed a live session isn't needed.
+
+**Decision:** `scripts/demo.sh` runs the whole story the same way every time.
+- **Setup:** it builds the jar into a local image (as the benchmarks do), starts the three nodes with Prometheus and Grafana, and creates a tenant and a token.
+- **The agent** is a scripted MCP client: `initialize`, `tools/list`, `deploy_service` and `queue_push`, sent as JSON-RPC to `/mcp` exactly as an agent would send them. The CLI shows queue stats along the way.
+- **The service** is the new APIs together: `jobs.get` to name its node, `bus.queue('orders').consume`, `kv` to record each order by id, and `ctx.serve`. Its work takes 400 ms per order with 2 at a time, so the kill lands mid-queue.
+- **Each step is checked, so the demo doubles as a smoke test.** It `SIGKILL`s the node running the service, then watches the restart, the queue draining, and the in-flight orders coming back after their leases run out. It fails unless every order is handled, counted by distinct id because delivery is at least once.
+- **It leaves the cluster running** for Grafana, and `scripts/demo.sh down` removes it.
+
+**The recording** is `docs/demo.cast` (asciicast v2), made by `scripts/record.py`, which captures a real run without asciinema installed. Long pauses are shortened on playback.
+
+**To make the dashboard tell the same story,** queues and callbacks got counters: `automately_queue_messages_total{outcome}` and `automately_callbacks_deliveries_total{outcome}`. They have a dashboard row of their own, and `DashboardTest` produces both.

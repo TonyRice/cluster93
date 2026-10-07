@@ -70,6 +70,14 @@ panel("Bytes stored / s by backend", "timeseries", [("sum by (backend) (rate(aut
 panel("Uploads refused / min by reason", "timeseries", [("sum by (reason) (rate(automately_files_refused_total[5m])) * 60", "{{reason}}")])
 panel("Worker pools in use", "timeseries", [("sum by (pool_name) (vertx_pool_in_use)", "{{pool_name}}")])
 
+row("Queues and callbacks")
+panel("Queue messages / s by outcome", "timeseries", [("sum by (outcome) (rate(automately_queue_messages_total[1m]))", "{{outcome}}")],
+      w=12, unit="ops", description="pushed, claimed, acked; retried when a handler failed; reclaimed when a consumer's node died "
+                                    "and its lease ran out; released when its script stopped; dead when attempts ran out (D-061)")
+panel("Callback deliveries / min by outcome", "timeseries",
+      [("sum by (outcome) (rate(automately_callbacks_deliveries_total[5m])) * 60", "{{outcome}}")], w=12,
+      description="Completion callbacks: delivered, retry (tried again later) or failed (given up) (D-062)")
+
 dashboard = {"uid": "automately", "title": "Automately", "tags": ["automately"], "timezone": "browser", "schemaVersion": 39,
              "version": 1, "refresh": "5s", "time": {"from": "now-15m", "to": "now"}, "panels": panels}
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grafana", "dashboards", "automately.json")

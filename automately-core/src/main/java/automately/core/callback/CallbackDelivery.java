@@ -71,6 +71,7 @@ public final class CallbackDelivery {
                 });
             }).transform(ar -> {
                 if (ar.succeeded() && ar.result() >= 200 && ar.result() < 300) {
+                    automately.core.metrics.Metrics.of(queues.vertx()).callbackDelivery("delivered");
                     delivery.ack();
                     return record(job, "DELIVERED", attempt, null, System.currentTimeMillis());
                 }
@@ -79,6 +80,7 @@ public final class CallbackDelivery {
                         && (host.code().equals("egress_denied") || host.code().equals("invalid_argument"));
                 boolean last = permanent || attempt >= delivery.message().maxAttempts();
                 LOG.info("Callback of job {} attempt {} failed: {}{}", job.id(), attempt, error, last ? " (giving up)" : "");
+                automately.core.metrics.Metrics.of(queues.vertx()).callbackDelivery(last ? "failed" : "retry");
                 if (permanent) {
                     delivery.ack();
                 } else {

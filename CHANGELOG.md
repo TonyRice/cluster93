@@ -26,6 +26,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase 5, milestone 4 — The demo (2026-10-07)
+
+### Added
+- **`scripts/demo.sh` (D-064):**
+  - **Setup:** it builds the jar into a local image and starts three nodes with Prometheus and Grafana.
+  - **The agent:** a scripted MCP client (the same JSON-RPC an agent sends to `/mcp`) deploys a service that consumes a durable `orders` queue, then pushes 120 orders.
+  - **The chaos:** it `SIGKILL`s the node running the service, mid-queue.
+  - **What it checks:** the service restarts on a survivor, the waiting orders are handled, and the orders that were in flight come back when their leases run out. It fails unless all 120 are handled, counted by id.
+  - **Afterwards:** the cluster stays up for Grafana, and `scripts/demo.sh down` removes it.
+  - **Why scripted:** it runs the same way every time, needs no API key, and doubles as a smoke test. Tony agreed a live agent session isn't needed.
+- **`docs/demo.cast`:** a recording of a real run (asciicast v2). It was made by `scripts/record.py`, which needs no asciinema and redacts `atly_` tokens.
+- **Metrics:**
+  - `automately_queue_messages_total{outcome}`: pushed, claimed, acked, retried, reclaimed, released, dead.
+  - `automately_callbacks_deliveries_total{outcome}`: delivered, retry, failed.
+  - A "Queues and callbacks" dashboard row (now 29 panels), which `DashboardTest` covers.
+- **README:** the demo with its output, the status (phase 5 done), and four new rows in "What changed since 2017": callbacks, queues, jobs from scripts, and host APIs as objects.
+
 ## Core features, part 4 — Scripts start and follow jobs (2026-10-07)
 
 ### Added

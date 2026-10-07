@@ -4,14 +4,16 @@ A self-hostable, clustered runtime for sandboxed JavaScript functions, built on 
 
 You submit a script to any node. The cluster runs it on the least-loaded node in a fresh V8 isolate, streams its console output live, and stores the result where every node can read it.
 
-> **Status: phase 4 done.**
+> **Status: phase 5 done.**
 >
 > - **Database.** The cluster is the database: embedded Apache Ignite, durable, replicated, and it survives full restarts.
 > - **Streaming and files.** Services stream HTTP and serve files, with ranges for video. Writes are refused before memory or disk runs out.
 > - **API.** The API has an OpenAPI contract that validates every request, scoped tokens and rate limits.
 > - **Tools.** A native CLI installs with one line, and every node serves an **MCP server**, so AI agents can deploy and run code.
+> - **The 2017 core, preserved.** Durable queues next to the message bus, signed completion callbacks, and jobs that start and await jobs, behind host APIs that are Java objects again.
+> - **Operations.** Prometheus metrics, a Grafana dashboard, benchmarks, a security model, and a [demo](#the-demo) that kills a node mid-queue.
 >
-> Phase 5 (observability and polish) is nearly done: metrics, a Grafana dashboard, benchmarks and the security model are in, and the demo is next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
+> This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
 
 ## Install the CLI
 
@@ -21,6 +23,38 @@ irm https://github.com/adamnlynn/automately-v2/releases/latest/download/install.
 ```
 
 These are native binaries that need no Java, and the installer checks each one's checksum. See the [CLI guide](docs/guides/cli.md). To let an AI agent use the cluster, see [MCP](docs/guides/mcp.md).
+
+## The demo
+
+```bash
+scripts/demo.sh        # needs Docker, JDK 21, curl, python3; about 90 s
+```
+
+In the demo:
+1. **Start.** Three nodes come up with Prometheus and Grafana.
+2. **An AI agent deploys a service** over MCP. It's a scripted MCP client sending the same JSON-RPC calls Claude would. The service consumes a durable queue of orders and serves its progress over HTTP.
+3. **The agent pushes 120 orders.**
+4. **The node running the service is `SIGKILL`ed.**
+
+Then:
+
+```
+== Chaos: SIGKILL the node running the service (node1)
+   ✘ node1 killed
+== Recovery
+   +2s  queue: ready  72  in flight 2  dead 0   ingress → (no answer)
+   +13s  queue: ready  66  in flight 4  dead 0   ingress → node2
+   ✔ the service restarted on node2 13s after the kill
+   +27s  queue: ready   0  in flight 2  dead 0   ingress → node2
+   +32s  queue: ready   0  in flight 0  dead 0   ingress → node2
+   ✔ every order handled: 120 of 120 distinct, 32s after the kill
+```
+
+- **The restart.** The service restarts on a survivor and works through what's left.
+- **The two orders in flight on the dead node** come back when their 30 s leases run out.
+- **Grafana** (http://localhost:3000) shows the restart and the queue draining.
+
+`scripts/demo.sh down` stops it. A recording is in [docs/demo.cast](docs/demo.cast) (`asciinema play docs/demo.cast`).
 
 ## Try it
 
@@ -235,7 +269,11 @@ Javet's native library is included for linux-x86_64 only for now.
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
-| No tests | 387 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, files, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
+| No tests | 437 unit tests (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress, files, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
+| `callbackUrl`: one unsigned POST of `{success, error}` when a job finished, never retried | A signed POST of the result and your `data` for every way a job ends, retried through a durable queue | `CallbacksTest`, `CallbackDeliveryTest` |
+| `messagebus`: at most once, lost if nobody listened | The same bus, plus durable queues: at least once, leases, retries, dead letters, surviving a node's death | `QueueStoreContract` on both stores, a three-node failover test, the demo |
+| `Automately.startJob(..., waitForJob)` blocked a thread until the child finished | `jobs.run()` returns a handle whose `result()` is a promise; children stay in the tenant, with depth and rate limits | `JobsFromScriptsTest` |
+| Host APIs were Java objects in the script's scope, reflection included | Java objects again, one per API, bound with only their annotated methods; thin JavaScript glue in files | `NodeHostApisTest`, hostile-script tests |
 | Synchronous host objects running in the host JVM (Nashorn, `--no-java`); HTTP client with no address checks | Promise-based, tenant-scoped `kv`/`bus`/`fetch`/`log`; SSRF-safe egress; verified domains | `NodeHostApisTest`, `HostApisTest` |
 | Service jobs: one per name, autostarted at boot, no restart on crash | Supervised services: restart with backoff, revision rolls, graceful stop, checkpoints across runs | Supervisor, chaos and Docker tests |
 | A crashed node's jobs were simply lost or restarted blindly | Attempts with fencing, `onOrphan` policy, resumable steps | Chaos test (kills the node mid-step) |
@@ -248,7 +286,7 @@ Javet's native library is included for linux-x86_64 only for now.
 3. ~~**Host APIs**~~ ✅ `kv`, `bus`, `fetch`, `log`, HTTP hosting with automatic and verified domains; isolate pooling measured and declined ([design](docs/design/host-apis.md), [reference](docs/scripting/host-apis.md))
 3b. ~~**The cluster is the database, streaming, files**~~ ✅ Embedded Ignite (durable, replicated), streamed HTTP, a `files` API with ranges, storage admission control ([design](docs/design/durability-and-streaming.md))
 4. ~~**API, auth, CLI and MCP**~~ ✅ Scoped tokens, an OpenAPI contract that validates every request, rate limits, a native CLI with a one-line install, and an MCP server for AI agents ([plan](docs/design/phase-4-plan.md), [CLI](docs/guides/cli.md), [MCP](docs/guides/mcp.md))
-5. **Observability and polish.** ✅ Metrics, readiness, JSON logs, a Grafana dashboard ([plan](docs/design/phase-5-plan.md)), [benchmarks](docs/benchmarks.md), [SECURITY.md](SECURITY.md). Next: the demo
+5. **Observability and polish.** ✅ Metrics, readiness, JSON logs, a Grafana dashboard ([plan](docs/design/phase-5-plan.md)), [benchmarks](docs/benchmarks.md), [SECURITY.md](SECURITY.md). ✅ The demo ([scripts/demo.sh](scripts/demo.sh))
 
 Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES.md](NOTES.md).
 
