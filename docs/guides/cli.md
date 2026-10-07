@@ -57,6 +57,8 @@ The URL and token are saved in `~/.config/automately/config.json` (`%APPDATA%\au
 | `domains add · verify · ls · rm` | Your own domain for a service. `add` prints the TXT record to publish |
 | `files put · get · ls · rm` | Files, streamed both ways. `get NAME -` writes to stdout |
 | `files sync DIR PREFIX [--delete] [--dry-run]` | Mirror a folder, for example a static site. Only new and changed files go up, compared by SHA-256 ETag |
+| `queues push QUEUE JSON [--key K] [--delay-ms MS] [--max-attempts N]` | Queue a message for your services; prints its id. The same `--key` pushes once |
+| `queues stats · dead · retry · discard` | A queue's counts, its dead letters (with their last error), and putting one back or deleting it |
 | `storage` · `storage providers ls · get · set-s3 · set-disk · check · rm` · `storage routes [set]` | Your own S3 bucket or disk folder, and which paths go there ([storage guide](storage.md)) |
 | `tokens create NAME --scope jobs:read · ls · revoke` | Your tenant's tokens. The secret is printed once, to stdout |
 | `tenants create · ls · rm · token · tokens · revoke · storage-policy` | Admin only |

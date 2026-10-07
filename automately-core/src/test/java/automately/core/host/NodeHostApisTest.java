@@ -1,7 +1,10 @@
 package automately.core.host;
 
 import automately.core.runtime.HostException;
-import automately.core.runtime.HostServices;
+import automately.core.runtime.api.FetchApi;
+import automately.core.runtime.api.HostApis;
+import automately.core.runtime.api.KvApi;
+import automately.core.runtime.api.Registration;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpServer;
@@ -21,7 +24,8 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class NodeHostServicesTest {
+/** The node's host APIs (D-060): validation, limits and tenant scoping, without a script engine. */
+class NodeHostApisTest {
 
     private Vertx vertx;
     private KvStore kv;
@@ -69,8 +73,8 @@ class NodeHostServicesTest {
         await(vertx.close());
     }
 
-    private NodeHostServices host(String tenant, boolean allowPrivate) {
-        return new NodeHostServices(vertx, tenant, "job-1", true, kv, new FetchClient(vertx, new EgressPolicy(allowPrivate)), serve);
+    private NodeHostApis host(String tenant, boolean allowPrivate) {
+        return new NodeHostApis(new NodeHostApis.Node(vertx, kv, new FetchClient(vertx, new EgressPolicy(allowPrivate)), serve), tenant, "job-1", true);
     }
 
     private String url(String path) {
@@ -81,38 +85,30 @@ class NodeHostServicesTest {
 
     @Test
     void kvOperationsAreScopedToTheTenant() throws Exception {
-        await(host("acme", false).call("kv.set", new JsonObject().put("ns", "default").put("key", "k").put("value", 1)));
+        await(host("acme", false).kv().set("default", "k", 1, null));
 
-        assertThat(await(host("acme", false).call("kv.get", new JsonObject().put("ns", "default").put("key", "k")))).isEqualTo(1);
-        assertThat(await(host("globex", false).call("kv.get", new JsonObject().put("ns", "default").put("key", "k")))).isNull();
+        assertThat(await(host("acme", false).kv().get("default", "k"))).isEqualTo(1);
+        assertThat(await(host("globex", false).kv().get("default", "k"))).isNull();
     }
 
     @Test
     void kvValidatesArguments() {
-        HostServices host = host("acme", false);
+        KvApi kv = host("acme", false).kv();
 
-        assertHostError(host.call("kv.get", new JsonObject().put("ns", "default")), "TypeError", "invalid_argument");
-        assertHostError(host.call("kv.get", new JsonObject().put("ns", "default").put("key", "a\u001fb")), "TypeError", "invalid_argument");
-        assertHostError(host.call("kv.get", new JsonObject().put("ns", "default").put("key", "k".repeat(600))), "RangeError", "limit_exceeded");
-        assertHostError(host.call("kv.set", new JsonObject().put("ns", "default").put("key", "k")
-                .put("value", "v".repeat(NodeHostServices.MAX_VALUE_BYTES + 1))), "RangeError", "limit_exceeded");
-        assertHostError(host.call("kv.set", new JsonObject().put("ns", "default").put("key", "k").put("value", 1).put("ttlMs", -5)),
-                "TypeError", "invalid_argument");
-        assertHostError(host.call("kv.list", new JsonObject().put("ns", "default").put("prefix", "").put("limit", 5000)),
-                "TypeError", "invalid_argument");
-        assertHostError(host.call("nope", new JsonObject()), "Error", "unknown_operation");
+        assertHostError(kv.get("default", null), "TypeError", "invalid_argument");
+        assertHostError(kv.get("default", "a\u001fb"), "TypeError", "invalid_argument");
+        assertHostError(kv.get("default", "k".repeat(600)), "RangeError", "limit_exceeded");
+        assertHostError(kv.set("default", "k", "v".repeat(KvApi.MAX_VALUE_BYTES + 1), null), "RangeError", "limit_exceeded");
+        assertHostError(kv.set("default", "k", 1, -5L), "TypeError", "invalid_argument");
+        assertHostError(kv.list("default", "", 5000, null), "TypeError", "invalid_argument");
+        assertHostError(HostApis.NONE.kv().get("default", "k"), "Error", "unavailable");
     }
 
     // --- the tenant quota covers kv and files together (D-043) ---
 
-    private NodeHostServices quotaHost(automately.core.files.FileStore files, automately.core.storage.TenantQuota quota) {
-        return new NodeHostServices(vertx, "acme", "job-q", false, kv, new FetchClient(vertx, EgressPolicy.PUBLIC_ONLY), serve, files,
-                automately.core.files.StorageCapacity.UNLIMITED, quota,
-                (t, target) -> quota.remaining(t));
-    }
-
-    private static JsonObject entry(String key, Object value) {
-        return new JsonObject().put("ns", "default").put("key", key).put("value", value);
+    private NodeHostApis quotaHost(automately.core.files.FileStore files, automately.core.storage.TenantQuota quota) {
+        return new NodeHostApis(new NodeHostApis.Node(vertx, kv, new FetchClient(vertx, EgressPolicy.PUBLIC_ONLY), serve, files,
+                automately.core.files.StorageCapacity.UNLIMITED, quota, (t, target) -> quota.remaining(t), null), "acme", "job-q", false);
     }
 
     @Test
@@ -120,34 +116,33 @@ class NodeHostServicesTest {
         automately.core.files.FileStore files = new automately.core.files.SharedDataFileStore(vertx, automately.core.files.StorageCapacity.UNLIMITED);
         automately.core.storage.TenantQuota quota = new automately.core.storage.TenantQuota(1_000,
                 t -> files.usage(t).compose(f -> kv.usage(t).map(k -> f + k)));
-        NodeHostServices host = quotaHost(files, quota);
+        NodeHostApis host = quotaHost(files, quota);
         String big = "x".repeat(600);   // an entry of 7 + 1 + 602 = 610 bytes
 
-        await(host.call("kv.set", entry("a", big)));
-        assertHostError(host.call("kv.set", entry("b", big)), "RangeError", "limit_exceeded");
+        await(host.kv().set("default", "a", big, null));
+        assertHostError(host.kv().set("default", "b", big, null), "RangeError", "limit_exceeded");
 
         // Full or not, a tenant can shrink and regrow what it has, as long as the result fits.
-        await(host.call("kv.set", entry("a", "x".repeat(300))));
-        await(host.call("kv.set", entry("a", big)));
+        await(host.kv().set("default", "a", "x".repeat(300), null));
+        await(host.kv().set("default", "a", big, null));
         assertThat(await(kv.usage("acme"))).isEqualTo(610);
 
         // Files get what kv leaves: 390 bytes.
-        automately.core.files.FileWriter tooBig = await(host.createFile(new JsonObject().put("path", "big.bin")));
+        automately.core.files.FileWriter tooBig = await(host.files().create("big.bin", null));
         assertThatThrownBy(() -> await(tooBig.write(io.vertx.core.buffer.Buffer.buffer(new byte[391]))))
                 .isInstanceOf(ExecutionException.class).cause().hasMessageContaining("quota");
-        automately.core.files.FileWriter fits = await(host.createFile(new JsonObject().put("path", "fits.bin")));
+        automately.core.files.FileWriter fits = await(host.files().create("fits.bin", null));
         await(fits.write(io.vertx.core.buffer.Buffer.buffer(new byte[300])));
         await(fits.finish());
 
         // And kv gets what files leave: 90 bytes.
-        assertHostError(host.call("kv.set", entry("c", "y".repeat(100))), "RangeError", "limit_exceeded");
-        await(host.call("kv.set", entry("c", "y".repeat(50))));
-        assertHostError(host.call("kv.increment", new JsonObject().put("ns", "default").put("key", "visits").put("by", 1)),
-                "RangeError", "limit_exceeded");
+        assertHostError(host.kv().set("default", "c", "y".repeat(100), null), "RangeError", "limit_exceeded");
+        await(host.kv().set("default", "c", "y".repeat(50), null));
+        assertHostError(host.kv().increment("default", "visits", 1), "RangeError", "limit_exceeded");
 
         // Deleting makes room again.
-        await(host.call("kv.delete", new JsonObject().put("ns", "default").put("key", "a")));
-        await(host.call("kv.increment", new JsonObject().put("ns", "default").put("key", "visits").put("by", 1)));
+        await(host.kv().delete("default", "a"));
+        await(host.kv().increment("default", "visits", 1));
     }
 
     // --- bus ---
@@ -156,10 +151,10 @@ class NodeHostServicesTest {
     void publishReachesSubscribersOfTheSameTenantOnly() throws Exception {
         List<Object> acme = new CopyOnWriteArrayList<>();
         List<Object> globex = new CopyOnWriteArrayList<>();
-        await(host("acme", false).listen("bus.subscribe", new JsonObject().put("topic", "orders"), in -> acme.add(in.payload())));
-        await(host("globex", false).listen("bus.subscribe", new JsonObject().put("topic", "orders"), in -> globex.add(in.payload())));
+        await(host("acme", false).bus().subscribe("orders", in -> acme.add(in.payload())));
+        await(host("globex", false).bus().subscribe("orders", in -> globex.add(in.payload())));
 
-        await(host("acme", false).call("bus.publish", new JsonObject().put("topic", "orders").put("message", new JsonObject().put("id", 1))));
+        await(host("acme", false).bus().publish("orders", new JsonObject().put("id", 1)));
         Thread.sleep(200);
 
         assertThat(acme).containsExactly(new JsonObject().put("topic", "orders").put("message", new JsonObject().put("id", 1)));
@@ -168,38 +163,34 @@ class NodeHostServicesTest {
 
     @Test
     void requestsAreAnsweredByAHandler() throws Exception {
-        await(host("acme", false).listen("bus.handle", new JsonObject().put("topic", "math"), in -> {
+        await(host("acme", false).bus().handle("math", in -> {
             JsonObject message = ((JsonObject) in.payload()).getJsonObject("message");
             in.reply(message.getInteger("a") + message.getInteger("b"));
         }));
 
-        Object answer = await(host("acme", false).call("bus.request", new JsonObject().put("topic", "math")
-                .put("message", new JsonObject().put("a", 2).put("b", 3))));
+        Object answer = await(host("acme", false).bus().request("math", new JsonObject().put("a", 2).put("b", 3), 10_000));
 
         assertThat(answer).isEqualTo(5);
-        assertHostError(host("globex", false).call("bus.request", new JsonObject().put("topic", "math").put("message", 1)),
-                "Error", "no_handler");
+        assertHostError(host("globex", false).bus().request("math", 1, 10_000), "Error", "no_handler");
     }
 
     @Test
     void requestFailuresAndTimeoutsAreTyped() throws Exception {
-        await(host("acme", false).listen("bus.handle", new JsonObject().put("topic", "fails"), in -> in.fail(500, "handler broke")));
-        await(host("acme", false).listen("bus.handle", new JsonObject().put("topic", "silent"), in -> { }));
+        await(host("acme", false).bus().handle("fails", in -> in.fail(500, "handler broke")));
+        await(host("acme", false).bus().handle("silent", in -> { }));
 
-        assertHostError(host("acme", false).call("bus.request", new JsonObject().put("topic", "fails").put("message", 1)),
-                "Error", "handler_failed");
-        assertHostError(host("acme", false).call("bus.request", new JsonObject().put("topic", "silent").put("message", 1).put("timeoutMs", 200)),
-                "TimeoutError", "timeout");
+        assertHostError(host("acme", false).bus().request("fails", 1, 10_000), "Error", "handler_failed");
+        assertHostError(host("acme", false).bus().request("silent", 1, 200), "TimeoutError", "timeout");
     }
 
     @Test
     void closingStopsListeners() throws Exception {
         List<Object> seen = new CopyOnWriteArrayList<>();
-        NodeHostServices host = host("acme", false);
-        await(host.listen("bus.subscribe", new JsonObject().put("topic", "t"), in -> seen.add(in.payload())));
+        NodeHostApis host = host("acme", false);
+        await(host.bus().subscribe("t", in -> seen.add(in.payload())));
         await(host.close());
 
-        await(host("acme", false).call("bus.publish", new JsonObject().put("topic", "t").put("message", 1)));
+        await(host("acme", false).bus().publish("t", 1));
         Thread.sleep(200);
 
         assertThat(seen).isEmpty();
@@ -207,8 +198,7 @@ class NodeHostServicesTest {
 
     @Test
     void topicsAreValidated() {
-        assertHostError(host("acme", false).call("bus.publish", new JsonObject().put("topic", "has space").put("message", 1)),
-                "TypeError", "invalid_argument");
+        assertHostError(host("acme", false).bus().publish("has space", 1), "TypeError", "invalid_argument");
     }
 
     // --- fetch ---
@@ -222,8 +212,8 @@ class NodeHostServicesTest {
         return done.get(30, TimeUnit.SECONDS);
     }
 
-    private automately.core.runtime.FetchedResponse fetch(NodeHostServices host, JsonObject args) throws Exception {
-        return await(host.fetch(args));
+    private automately.core.runtime.FetchedResponse fetch(NodeHostApis host, JsonObject args) throws Exception {
+        return await(host.fetch().fetch(args));
     }
 
     @Test
@@ -262,18 +252,18 @@ class NodeHostServicesTest {
 
     @Test
     void fetchTimesOut() {
-        assertHostError(host("acme", true).fetch(new JsonObject().put("url", url("/slow")).put("timeoutMs", 300)), "TimeoutError", "timeout");
+        assertHostError(host("acme", true).fetch().fetch(new JsonObject().put("url", url("/slow")).put("timeoutMs", 300)), "TimeoutError", "timeout");
     }
 
     @Test
     void concurrentFetchesAreLimitedUntilBodiesAreDone() throws Exception {
-        NodeHostServices host = host("acme", true);
+        NodeHostApis host = host("acme", true);
         List<automately.core.runtime.FetchedResponse> open = new java.util.ArrayList<>();
-        for (int i = 0; i < NodeHostServices.MAX_CONCURRENT_FETCHES; i++) {
+        for (int i = 0; i < FetchApi.MAX_CONCURRENT; i++) {
             open.add(fetch(host, new JsonObject().put("url", url("/json"))));
         }
 
-        assertHostError(host.fetch(new JsonObject().put("url", url("/json"))), "RangeError", "limit_exceeded");
+        assertHostError(host.fetch().fetch(new JsonObject().put("url", url("/json"))), "RangeError", "limit_exceeded");
         readAll(open.getFirst());
         open.subList(1, open.size()).forEach(r -> r.body().cancel());
         Thread.sleep(100);
@@ -286,13 +276,13 @@ class NodeHostServicesTest {
             "http://169.254.169.254/latest/meta-data/", "http://[::1]/", "http://[fd00::1]/", "http://0.0.0.0/",
             "http://100.64.0.1/", "http://[::ffff:127.0.0.1]/"})
     void privateAndReservedAddressesAreRefusedByDefault(String target) {
-        assertHostError(host("acme", false).fetch(new JsonObject().put("url", target)), "TypeError", "egress_denied");
+        assertHostError(host("acme", false).fetch().fetch(new JsonObject().put("url", target)), "TypeError", "egress_denied");
     }
 
     @Test
     void onlyHttpSchemesAreAllowed() {
-        assertHostError(host("acme", true).fetch(new JsonObject().put("url", "file:///etc/passwd")), "TypeError", "invalid_argument");
-        assertHostError(host("acme", true).fetch(new JsonObject().put("url", "ftp://example.com/")), "TypeError", "invalid_argument");
+        assertHostError(host("acme", true).fetch().fetch(new JsonObject().put("url", "file:///etc/passwd")), "TypeError", "invalid_argument");
+        assertHostError(host("acme", true).fetch().fetch(new JsonObject().put("url", "ftp://example.com/")), "TypeError", "invalid_argument");
     }
 
     @Test
@@ -305,15 +295,15 @@ class NodeHostServicesTest {
 
     @Test
     void onlyOneServeRegistrationPerJobAndOnlyForServices() throws Exception {
-        NodeHostServices host = host("acme", false);
-        HostServices.Registration first = await(host.serve(exchange -> { }));
+        NodeHostApis host = host("acme", false);
+        Registration first = await(host.http().serve(exchange -> { }));
 
-        assertHostError(host.serve(exchange -> { }).map(Object.class::cast), "Error", "already_serving");
+        assertHostError(host.http().serve(exchange -> { }).map(Object.class::cast), "Error", "already_serving");
         await(first.cancel());
         assertThat(serve.handler("job-1")).isNull();
 
-        NodeHostServices job = new NodeHostServices(vertx, "acme", "job-2", false, kv, new FetchClient(vertx, EgressPolicy.PUBLIC_ONLY), serve);
-        assertHostError(job.serve(exchange -> { }).map(Object.class::cast), "Error", "not_a_service");
+        NodeHostApis job = new NodeHostApis(new NodeHostApis.Node(vertx, kv, new FetchClient(vertx, EgressPolicy.PUBLIC_ONLY), serve), "acme", "job-2", false);
+        assertHostError(job.http().serve(exchange -> { }).map(Object.class::cast), "Error", "not_a_service");
     }
 
     private static void assertHostError(Future<?> future, String name, String code) {

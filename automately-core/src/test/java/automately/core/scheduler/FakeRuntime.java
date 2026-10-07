@@ -54,7 +54,7 @@ final class FakeRuntime implements ScriptRuntime {
     }
 
     @Override
-    public RunningExecution execute(Execution execution, LogSink logs, StateSink state, automately.core.runtime.HostServices host) {
+    public RunningExecution execute(Execution execution, LogSink logs, StateSink state, automately.core.runtime.api.HostApis host) {
         logs.log("info", "running " + execution.script() + " attempt " + execution.context().attempt());
         String key = execution.jobId() + "#" + execution.context().attempt();
         started.add(key);

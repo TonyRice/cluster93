@@ -111,6 +111,54 @@ class HostApisTest {
         assertThat(otherTenant.getValue("output")).isNull();
     }
 
+    // --- queues (D-061) ---
+
+    @Test
+    void aServiceConsumesAQueueFedOverHttpFromTheOtherNode() throws Exception {
+        putService("mailer", """
+                export default async (input, ctx) => {
+                  await bus.queue('emails').consume(async (email, { attempt }) => {
+                    if (email.flaky && attempt === 1) throw new Error('smtp hiccup');
+                    await kv.namespace('sent').set(email.to, attempt);
+                  }, { concurrency: 4 });
+                  await ctx.stopRequested;
+                }
+                """);
+        awaitServiceRunning("mailer");
+
+        for (String to : List.of("a@example.com", "b@example.com")) {
+            HttpResponse<Buffer> pushed = await(client.post(nodeB.httpPort(), "localhost", "/v1/queues/emails")
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("message", new JsonObject().put("to", to))));
+            assertThat(pushed.statusCode()).as(pushed.bodyAsString()).isEqualTo(202);
+        }
+        await(client.post(nodeB.httpPort(), "localhost", "/v1/queues/emails").putHeader("Authorization", TestAuth.bearer(TENANT))
+                .sendJsonObject(new JsonObject().put("message", new JsonObject().put("to", "c@example.com").put("flaky", true))));
+
+        JsonObject sent = awaitJsonJob(nodeB, """
+                export default async () => {
+                  const sent = kv.namespace('sent');
+                  return { a: await sent.get('a@example.com'), b: await sent.get('b@example.com'), c: await sent.get('c@example.com') };
+                }
+                """, out -> out.getValue("c") != null);
+        assertThat(sent).isEqualTo(new JsonObject().put("a", 1).put("b", 1).put("c", 2));
+        awaitJson(nodeA, TENANT, "/v1/queues/emails", q -> q.getInteger("ready") == 0 && q.getInteger("inFlight") == 0);
+        assertThat(get(nodeA, "globex", "/v1/queues/emails").bodyAsJsonObject().getInteger("ready")).as("another tenant's queue").isZero();
+    }
+
+    /** Runs {@code script} as a job until its output satisfies {@code done}. */
+    private static JsonObject awaitJsonJob(RunningNode node, String script, Predicate<JsonObject> done) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+        JsonObject output = null;
+        while (System.nanoTime() < deadline) {
+            output = runJob(node, TENANT, script).getJsonObject("output");
+            if (output != null && done.test(output)) {
+                return output;
+            }
+            Thread.sleep(200);
+        }
+        throw new AssertionError("Never done; last output: " + output);
+    }
+
     // --- bus ---
 
     @Test

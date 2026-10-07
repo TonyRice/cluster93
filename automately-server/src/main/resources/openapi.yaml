@@ -31,6 +31,7 @@ tags:
   - name: services
   - name: files
   - name: bus
+  - name: queues
   - name: tokens
   - name: admin
   - name: cluster
@@ -952,6 +953,131 @@ paths:
                   value: {}
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/queues/{queue}:
+    parameters:
+      - $ref: '#/components/parameters/queue'
+    post:
+      operationId: pushQueueMessage
+      tags: [queues]
+      summary: Push a message onto a durable queue (at-least-once delivery to the queue's consumers)
+      security:
+        - bearer: ['queues:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  description: Any JSON, at most 256 KB.
+                delayMs: { type: integer, minimum: 0, maximum: 604800000 }
+                key:
+                  type: string
+                  pattern: '^[a-zA-Z0-9._-]{1,128}$'
+                  description: Makes the push idempotent while a message with this key is queued.
+                maxAttempts: { type: integer, minimum: 1, maximum: 20 }
+      responses:
+        '202':
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, queue]
+                properties:
+                  id: { type: string }
+                  queue: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+    get:
+      operationId: getQueue
+      tags: [queues]
+      summary: Count a queue's messages
+      security:
+        - bearer: ['queues:read']
+      responses:
+        '200':
+          description: The counts; ready includes delayed messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queue, ready, inFlight, dead]
+                properties:
+                  queue: { type: string }
+                  ready: { type: integer }
+                  inFlight: { type: integer }
+                  dead: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/queues/{queue}/dead:
+    parameters:
+      - $ref: '#/components/parameters/queue'
+    get:
+      operationId: listDeadMessages
+      tags: [queues]
+      summary: List messages that used up their attempts
+      security:
+        - bearer: ['queues:read']
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of dead-lettered messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items: { $ref: '#/components/schemas/QueueMessage' }
+                  cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/queues/{queue}/dead/{id}/retry:
+    parameters:
+      - $ref: '#/components/parameters/queue'
+      - $ref: '#/components/parameters/messageId'
+    post:
+      operationId: retryDeadMessage
+      tags: [queues]
+      summary: Put a dead-lettered message back on its queue, with its attempts reset
+      security:
+        - bearer: ['queues:write']
+      responses:
+        '200':
+          description: Queued again.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/queues/{queue}/dead/{id}:
+    parameters:
+      - $ref: '#/components/parameters/queue'
+      - $ref: '#/components/parameters/messageId'
+    delete:
+      operationId: discardDeadMessage
+      tags: [queues]
+      summary: Delete a dead-lettered message
+      security:
+        - bearer: ['queues:write']
+      responses:
+        '204': { description: 'Deleted.' }
+        default: { $ref: '#/components/responses/Error' }
+
 components:
   securitySchemes:
     bearer:
@@ -959,7 +1085,7 @@ components:
       scheme: bearer
       description: |
         `atly_…` tenant tokens, or the admin token. Scopes: `jobs:read`, `jobs:write`, `services:read`,
-        `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`,
+        `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`,
         `nodes:read`, `storage:read`, `storage:write`, or `*`. Operations marked `admin` need the admin token.
 
   parameters:
@@ -993,6 +1119,16 @@ components:
       in: path
       required: true
       schema: { type: string, pattern: '^[a-zA-Z0-9._-]{1,128}$' }
+    queue:
+      name: queue
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-zA-Z0-9._-]{1,128}$' }
+    messageId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 200 }
     filePath:
       name: path
       in: path
@@ -1029,7 +1165,8 @@ components:
                 items:
                   type: string
                   enum: ['*', 'jobs:read', 'jobs:write', 'services:read', 'services:write', 'files:read', 'files:write',
-                         'bus:publish', 'bus:request', 'tokens:write', 'nodes:read', 'storage:read', 'storage:write']
+                         'bus:publish', 'bus:request', 'queues:read', 'queues:write', 'tokens:write', 'nodes:read',
+                         'storage:read', 'storage:write']
               expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
 
   responses:
@@ -1109,6 +1246,19 @@ components:
         application/octet-stream: {}
 
   schemas:
+    QueueMessage:
+      type: object
+      required: [id, queue, status, attempt, maxAttempts, enqueuedAt]
+      properties:
+        id: { type: string }
+        queue: { type: string }
+        message: {}
+        status: { type: string, enum: [READY, IN_FLIGHT, DEAD] }
+        attempt: { type: integer }
+        maxAttempts: { type: integer }
+        enqueuedAt: { type: integer }
+        availableAt: { type: integer }
+        lastError: { type: [string, 'null'] }
     Name:
       type: string
       pattern: '^(?!.*--)[a-z0-9][a-z0-9_-]{0,62}$'

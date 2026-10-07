@@ -65,7 +65,7 @@ export default async (input, ctx) => {
 // `billing` stands for a host API that arrives in phase 3; `ctx` works today.
 ```
 
-Scripts can store data (`kv`), message each other (`bus`), call out (`fetch`, with SSRF protection) and log with structure (`log`); services can **serve HTTP** at `<service>--<tenant>.<domain>` or your own verified domain. See the **[host APIs reference](docs/scripting/host-apis.md)**.
+Scripts can store data (`kv`), message each other (`bus`, with durable **queues** that survive a node dying), call out (`fetch`, with SSRF protection) and log with structure (`log`); services can **serve HTTP** at `<service>--<tenant>.<domain>` or your own verified domain. See the **[host APIs reference](docs/scripting/host-apis.md)**.
 
 **Services** are scripts the cluster keeps running: if one crashes or its node dies, it's restarted (with backoff) somewhere healthy, carrying its checkpoint over. See the **[services guide](docs/scripting/services.md)**.
 
@@ -76,7 +76,7 @@ If the node running a job dies, the job's `onOrphan` policy decides what happens
 Every `/v1` call carries `Authorization: Bearer <token>`.
 
 - **Admin token.** It manages tenants and their tokens, and cannot read or change tenant data (D-044).
-- **Tenant tokens** (`atly_…`) belong to one tenant and carry **scopes**: `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`, `nodes:read`, `storage:read`, `storage:write`, or `*` for all of them.
+- **Tenant tokens** (`atly_…`) belong to one tenant and carry **scopes**: `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`, `nodes:read`, `storage:read`, `storage:write`, or `*` for all of them.
 - **Errors.** A missing or revoked token gets `401`, and a missing scope gets `403` naming it (D-045).
 - **Storage.** Only a SHA-256 of each token is stored. The `atly_` prefix and a checksum let secret scanners recognise a leaked token.
 
@@ -109,6 +109,7 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `POST` · `GET` | `/v1/services/{name}/domains` | Claim a custom domain (returns the TXT record to publish) · list |
 | `POST` | `/v1/services/{name}/domains/{domain}/verify` | Check the TXT record; the domain routes once verified |
 | `POST` | `/v1/bus/{topic}` · `/v1/bus/{topic}/request` | Publish to a topic · call a `bus.handle`r and get its reply |
+| `POST` `GET` | `/v1/queues/{queue}` · `/v1/queues/{queue}/dead` | Push onto a durable queue · its counts and dead letters (retry, discard) |
 | *ingress* | `:8000`, any path | Services' HTTP traffic, routed by host and proxied as a stream to the serving node |
 | `PUT` | `/v1/files/{path}` | Streamed upload (any size up to the quota) → `201` with `ETag`; `413` over quota, `507` when the cluster is out of room |
 | `GET` · `HEAD` | `/v1/files/{path}` | Download, with `Range` (206) and `If-None-Match` (304) |
@@ -234,7 +235,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
 | No tests | 387 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, files, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
-| Synchronous host objects running in the host JVM (Nashorn, `--no-java`); HTTP client with no address checks | Promise-based, tenant-scoped `kv`/`bus`/`fetch`/`log`; SSRF-safe egress; verified domains | `NodeHostServicesTest`, `HostApisTest` |
+| Synchronous host objects running in the host JVM (Nashorn, `--no-java`); HTTP client with no address checks | Promise-based, tenant-scoped `kv`/`bus`/`fetch`/`log`; SSRF-safe egress; verified domains | `NodeHostApisTest`, `HostApisTest` |
 | Service jobs: one per name, autostarted at boot, no restart on crash | Supervised services: restart with backoff, revision rolls, graceful stop, checkpoints across runs | Supervisor, chaos and Docker tests |
 | A crashed node's jobs were simply lost or restarted blindly | Attempts with fencing, `onOrphan` policy, resumable steps | Chaos test (kills the node mid-step) |
 
@@ -260,7 +261,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/design/](docs/design/): designs for upcoming work
 - [docs/scripting/job-context.md](docs/scripting/job-context.md): the job context API for scripts (attempts, steps, checkpoints)
 - [docs/scripting/services.md](docs/scripting/services.md): services, timers and cancellation
-- [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus`, `fetch`, `log`, `files`, and serving HTTP
+- [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus` and queues, `fetch`, `log`, `files`, and serving HTTP
 - [docs/guides/cli.md](docs/guides/cli.md): installing and using the CLI
 - [docs/guides/mcp.md](docs/guides/mcp.md): connecting AI agents over MCP
 - [docs/guides/storage.md](docs/guides/storage.md): file storage, from the cluster's default to tenants' own buckets and folders

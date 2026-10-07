@@ -110,7 +110,7 @@ class McpTest {
 
         List<String> names = rpc("tools/list", new JsonObject()).getJsonObject("result").getJsonArray("tools").stream()
                 .map(t -> ((JsonObject) t).getString("name")).toList();
-        assertThat(names).contains("run_job", "deploy_service", "service_logs", "write_file", "read_file", "request");
+        assertThat(names).contains("run_job", "deploy_service", "service_logs", "write_file", "read_file", "request", "queue_push", "queue_stats");
     }
 
     @Test
@@ -173,6 +173,10 @@ class McpTest {
         assertThat(ok("request", new JsonObject().put("topic", "greet").put("message", new JsonObject().put("name", "agent")))
                 .getString("value")).isEqualTo("hi agent");
         assertThat(ok("publish", new JsonObject().put("topic", "news").put("message", "x")).getString("published")).isEqualTo("news");
+        assertThat(ok("queue_push", new JsonObject().put("queue", "jobs-to-do").put("message", new JsonObject().put("n", 1))).getString("id"))
+                .isNotBlank();
+        assertThat(ok("queue_stats", new JsonObject().put("queue", "jobs-to-do")).getInteger("ready")).isEqualTo(1);
+        assertThat(ok("queue_dead", new JsonObject().put("queue", "jobs-to-do")).getJsonArray("messages")).isEmpty();
 
         ok("write_file", new JsonObject().put("path", "notes/todo.md").put("content", "- ship it").put("contentType", "text/markdown"));
         assertThat(ok("read_file", new JsonObject().put("path", "notes/todo.md")).getString("content")).isEqualTo("- ship it");

@@ -65,6 +65,7 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.auth.RateLimiter limiter;
     private final automately.core.files.Room room;
     private final StorageApi.Wiring storage;
+    private final automately.core.queue.QueueService queues;
     /** Why this node shouldn't take traffic yet; empty when it should. */
     private final java.util.function.Supplier<Future<List<String>>> notReady;
     /** Marks the MCP tools' own calls to this API, which the tool call already counted (D-047). */
@@ -80,8 +81,9 @@ public final class ApiVerticle extends VerticleBase {
                        ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter, FileStore files,
                        automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
                        automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage,
-                       java.util.function.Supplier<Future<List<String>>> notReady) {
+                       automately.core.queue.QueueService queues, java.util.function.Supplier<Future<List<String>>> notReady) {
         this.notReady = notReady;
+        this.queues = queues;
         this.room = room;
         this.storage = storage;
         this.limiter = new automately.core.auth.RateLimiter(config.rateLimitPerMinute());
@@ -146,6 +148,7 @@ public final class ApiVerticle extends VerticleBase {
         new StorageApi(storage, files, authStore, quota).mount(router);
         new FilesRoutes(files, quota, room).mount(router);
         new BusRoutes(vertx).mount(router);
+        new QueueRoutes(queues).mount(router);
         router.post("/v1/jobs").handler(this::submitJob);
         router.get("/v1/jobs").handler(this::listJobs);
         router.get("/v1/jobs/:id").handler(this::getJob);

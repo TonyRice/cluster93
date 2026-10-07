@@ -26,6 +26,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Core features, part 2 — Durable queues: `bus.queue(name)` (2026-10-07)
+
+### Added
+- **Durable queues, the bus's second mode (D-061).** `bus.queue('emails')` gives `push` (with `delayMs`, a deduplicating `key`, `maxAttempts`), `consume(handler, { concurrency })`, `stats`, `dead`, `retry` and `discard`.
+  - **Delivery** is at least once to competing consumers on any node.
+  - **Acknowledgement and retries:** a handler that resolves acknowledges its message; one that throws gets it retried with backoff (1 s, 4 s, 16 s, … up to 10 min), and then dead-lettered with its last error.
+  - **Leases:** a consumer holds a message under a lease it keeps extending. If the consumer's node dies, the lease runs out and another node delivers the message again.
+  - **Why:** in 2017, jobs and services talked over the message bus. The bus we have delivers at most once, so a message sent while nobody listens is lost, and Tony wanted a queue mode next to the default one.
+- **Storage:** a replicated `QUEUE` table on Ignite, and an in-memory store for single nodes. Both pass one contract, because the rules (claim by compare-and-set, ack only by the owning delivery, backoff, dead letters, expired leases taken back by the next claim) live in `QueueService`.
+- **REST:** `POST/GET /v1/queues/{queue}`, `GET /v1/queues/{queue}/dead`, `POST …/dead/{id}/retry`, `DELETE …/dead/{id}`, with new scopes `queues:read` and `queues:write`. The OpenAPI contract now has 57 operations.
+- **CLI:** `automately queues push · stats · dead · retry · discard`.
+- **MCP tools:** `queue_push`, `queue_stats`, `queue_dead` and `queue_retry`.
+- **Tests:**
+  - `QueueStoreContract` (13 tests, on both stores)
+  - a three-node failover test (a consumer's node stopped mid-message, and the message delivered on a survivor)
+  - `QueueScriptTest` (5 tests, real scripts)
+  - an end-to-end test where a service on one node consumes what REST pushes through the other
+  - contract, MCP and CLI coverage
+
+### Changed
+- **The tenant quota counts queued messages too,** with files and kv. The quota message says so.
+
+## Core features, part 1 — Host APIs as Java objects (2026-10-07)
+
+A review against the 2017 code found completion callbacks, jobs starting jobs, and queues missing. [docs/design/core-features.md](docs/design/core-features.md) plans all three, in four parts before the demo. This is the first part.
+
+### Changed
+- **The APIs scripts see are Java objects again, one per API (D-060).**
+  - **Core:** `automately.core.runtime.api` defines `KvApi`, `BusApi`, `FilesApi`, `FetchApi` and `HttpApi` (gathered in `HostApis`), which the node implements (`NodeKvApi`, …) over one shared `HostScope` that carries the tenant. They replace `HostServices` and its generic `call(op, json)` switch. They hold no script-engine types, so a later Python runtime can bind the same objects.
+  - **Javet:** one binding per API (`KvBinding`, …). Each returns promises created in Java, exposes only `@V8Function` methods, and converts values through V8's own `JSON`, captured before the script runs.
+  - **The 475-line JavaScript string is gone.** It's now 13 small files in `automately-runtime-javet/src/main/resources/automately/runtime/javet/js/`, only for what has to be idiomatic JavaScript. Host errors are created in Java as real `Error`s.
+  - **Why:** the API's shape lived in a string, every operation went through one `switch`, and nothing in the core described the API as types. Tony wanted the 2017 structure (APIs as objects) back, and a design another language could reuse.
+- **No behaviour change.** `NodeHostApisTest` (28 tests) covers each API without an engine. `HostBridgeTest` (21) and the rest of the runtime suite, hostile scripts included, pass with their scripts unchanged.
+
+### Docs
+- `docs/design/core-features.md`: the plan (host APIs as objects, `bus.queue(name)`, signed completion callbacks, a `jobs` API for scripts), with Tony's choices.
+- `docs/design/host-apis.md`: the mechanism as of D-060.
+- `NOTES.md`: parked outside subscriptions, reply-to-a-reply, modules and `require`, and a Python runtime through GraalPy, with the sandboxing, cold-start and compatibility gates a spike must pass.
+
 ## Phase 5, milestones 3–4 — Benchmarks and the security model (2026-10-07)
 
 ### Added

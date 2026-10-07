@@ -37,3 +37,28 @@ Deploy Automately remotely, on a server or in the cloud, and **attach workers fr
 
 ### Fit with the roadmap
 This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tokens, MCP). It would make a strong headline feature after phase 5: "AI agents drive real browsers on machines you own, safely."
+
+---
+
+## Parked from the core-features review
+
+*Captured 2026-10-07.* [docs/design/core-features.md](docs/design/core-features.md) has the review; these were left out on purpose.
+
+- **Outside clients subscribing** to bus topics or queues, over SSE or WebSocket. 2017 had this through the SDK's SockJS bridge. Today outsiders can only publish and request (`POST /v1/bus/...`).
+- **Reply to a reply.** In 2017, an answer to a `send` could itself be answered, so two scripts could hold a conversation. Tony: nice, not needed.
+- **Modules and `require`.** In 2017, admins registered "native modules" that scripts loaded with `require`. Sharing code between scripts, and per-tenant packages, needs its own review.
+- **Python through GraalPy, as a later phase that starts with a spike.** The runtime would be a `GraalPyScriptRuntime` behind `ScriptRuntime`, binding the same `*Api` objects (D-060) with `@HostAccess.Export` plus a thin `automately.py`. Tony: sandboxing is critical, so the spike has to pass each gate:
+  - **Sandbox (must pass):**
+    - GraalVM 25.1 brought polyglot isolates, `SandboxPolicy.ISOLATED`/`UNTRUSTED` and sandbox resource limits to Community Edition. ISOLATED runs guest code on a separate heap with a CPU-time limit. UNTRUSTED adds limits on guest memory, AST depth, stack frames and output, plus Spectre mitigations.
+    - **Unconfirmed:** whether GraalPy is supported under UNTRUSTED. The sandboxing guide speaks of ECMAScript, and Oracle documents running GraalPy out of process (`engine.IsolateMode=external`) to isolate its native code.
+    - **Regardless of that answer:** host access only to the exported APIs; no IO, threads, native access, processes or environment; and a wall-clock timeout through `Context.close(true)`.
+    - **Defence in depth:** run guest code in a runner process or container with cgroup memory and CPU limits, seccomp, no network and a read-only filesystem, talking to the node over the same narrow bridge. This is the original plan's `role=runner`, and it would also answer SECURITY.md's "isolates share the node's process" for V8.
+    - **Gate:** a Python port of the hostile-script suite (infinite loops, memory bombs, deep recursion, `import os/subprocess/ctypes/socket`, file reads, reaching another tenant). Each must be stopped or refused while the node stays healthy.
+  - **Cold start:**
+    - one shared `Engine` per node, so code caches and the JIT stay warm
+    - the precompiled isolate artifacts
+    - a small pool of fresh, never-reused contexts created in the background, which hides startup without breaking "no reuse"
+    - **Gate:** Bench `coldstart` for Python at p50 under 100 ms (V8 is 29 ms).
+  - **Compatibility:** pure Python plus part of the standard library. Native extensions such as numpy aren't offered inside the sandbox, because native access is what the sandbox forbids.
+  - Sources: [GraalVM sandboxing](https://www.graalvm.org/latest/security-guide/sandboxing/), [GraalVM 25.1 release notes](https://www.graalvm.org/release-notes/25.1/).
+

@@ -1,4 +1,4 @@
-# Host APIs reference: `kv`, `bus`, `fetch`, `log`, `files` and serving HTTP
+# Host APIs reference: `kv`, `bus`, queues, `fetch`, `log`, `files` and serving HTTP
 
 **Status:** Implemented in phase 3 (2026-10-06). Design: [../design/host-apis.md](../design/host-apis.md).
 
@@ -45,6 +45,46 @@ POST /v1/bus/orders                      → 202, publishes the JSON body
 POST /v1/bus/prices/request?timeoutMs=5000 → 200 {"value": ...}, or 404 / 504 / 502
 Authorization: Bearer atly_…
 ```
+
+## `bus.queue(name)`: durable queues
+
+The bus has two modes. `publish`/`subscribe` and `request`/`handle` are fast and **at most once**: a message nobody listens for is gone. A queue keeps messages in the cluster until a consumer has handled them: **at least once**, even if the consumer's node dies.
+
+```js
+const emails = bus.queue('emails');
+
+// Producers (any job, service, or the API):
+const id = await emails.push({ to: 'a@example.com' });
+await emails.push(reminder, { delayMs: 60_000 });              // not before a minute from now
+await emails.push(order, { key: `order-${order.id}` });        // pushed once while it's queued
+await emails.push(fragile, { maxAttempts: 10 });               // default 5
+
+// A consumer, usually a service; up to `concurrency` messages at a time:
+await emails.consume(async (email, { id, attempt, enqueuedAt }) => {
+  await send(email);          // resolving acknowledges: the message is done
+}, { concurrency: 4 });       // throwing retries it later (1 s, 4 s, 16 s, … up to 10 min)
+
+await emails.stats();                       // { ready, inFlight, dead }
+const { messages } = await emails.dead();   // used up their attempts, with lastError
+await emails.retry(messages[0].id);         // back on the queue, attempts reset
+await emails.discard(id);                   // delete a dead letter
+```
+
+- **Competing consumers.** Every consumer of a queue, on any node, shares the work, and each message goes to one of them at a time.
+- **Leases.** A consumer holds a message for 30 s and extends that while the handler is still working. If its node dies, the lease runs out and the message is delivered again. Handlers should therefore be idempotent, or use the delivery's `id` (or your own key) to skip work already done.
+- **Dead letters.** After its last attempt a message moves to the queue's dead letters instead of being retried forever.
+- **The script ends mid-message.** The message goes back at once, and that delivery doesn't count as an attempt.
+- **Names, size, quota.** Names match `[a-zA-Z0-9._-]{1,128}`, and messages are JSON of at most 256 KB. Queued messages count toward your storage quota, with files and `kv`.
+
+From outside the cluster:
+```http
+POST   /v1/queues/emails                  {"message": {...}, "delayMs"?, "key"?, "maxAttempts"?} → 202 {"id"}
+GET    /v1/queues/emails                  → {"ready", "inFlight", "dead"}
+GET    /v1/queues/emails/dead             → {"messages": [...], "cursor"}
+POST   /v1/queues/emails/dead/{id}/retry
+DELETE /v1/queues/emails/dead/{id}
+```
+Scopes: `queues:write` to push and manage dead letters, `queues:read` to look.
 
 ## Streams and text encoding
 

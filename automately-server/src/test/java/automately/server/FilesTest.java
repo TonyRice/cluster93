@@ -191,7 +191,7 @@ class FilesTest {
         JsonObject full = runJob("kvquota", "export default () => kv.set('one-more', 'k'.repeat(250 * 1024))");
 
         assertThat(refused.statusCode()).as(refused.bodyAsString()).isEqualTo(413);
-        assertThat(refused.bodyAsJsonObject().getJsonObject("error").getString("message")).contains("files and kv together");
+        assertThat(refused.bodyAsJsonObject().getJsonObject("error").getString("message")).contains("files, kv and queued messages together");
         assertThat(accepted.statusCode()).as(accepted.bodyAsString()).isEqualTo(201);
         assertThat(full.getString("status")).isEqualTo("FAILED");
         assertThat(full.getString("error")).contains("quota");

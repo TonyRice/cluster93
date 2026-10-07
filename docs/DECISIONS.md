@@ -523,3 +523,54 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **Not yet done:** profiling throughput under concurrent load. On one laptop, 32 clients finish about as many jobs per second as one client does.
 
+
+### D-060 — Host APIs are Java objects, bound per API; the JavaScript is thin glue in files
+**Date:** 2026-10-07 · **Status:** Accepted (supersedes the mechanism in D-019's host-call design and docs/design/host-apis.md)
+
+**Context:** Scripts saw their APIs through one generic `HostServices.call(op, argsJson)` and a 475-line JavaScript string (`JavetScriptRuntime.PRELUDE`) that built `kv`, `bus`, `fetch`, `files` and `ctx` on top of it. The real work was already in Java, but the API's shape lived in the string, every operation went through one `switch`, and nothing in the core described the API as types. In 2017 the APIs were Java objects exposed to Nashorn. Tony asked for objects again, and for a design another language (Python, later) could reuse.
+
+**Decision:**
+- **Core:** one Java interface per API in `automately.core.runtime.api` (`KvApi`, `BusApi`, `FilesApi`, `FetchApi`, `HttpApi`, gathered in `HostApis`), with JSON, `Buffer` and `Future` in their signatures and no script-engine types. The node implements each (`NodeKvApi`, …), and they share one `HostScope` that holds the tenant (from the job, never the script) and the listeners to undo. `HostArgs` converts loosely typed arguments with the same errors in every language.
+- **Javet:** one binding per API (`KvBinding`, `BusBinding`, `FilesBinding`, `FetchBinding`, `HttpBinding`), each bound with `V8ValueObject.bind()` under the hidden host object.
+  - **What `bind()` exposes:** only `@V8Function` methods, never `getClass` or reflection. Javet's proxy converter, which would expose Java objects, is not used.
+  - **Promises:** a binding returns a promise created in Java (`createV8ValuePromise`). `HostBridge` settles it on the isolate's event loop when the future completes; a failure becomes a real `Error` with `name` and `code`.
+  - **Value conversion:** `JsValues`, through V8's own `JSON`, whose functions are captured before the script runs, so a script replacing `JSON.parse` only affects itself.
+- **JavaScript:** 13 small files in `automately-runtime-javet/src/main/resources/automately/runtime/javet/js/`, only for what has to be idiomatic JavaScript: freezing globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, `ctx`. `JavetScriptRuntime.PRELUDE_FILES` lists them in order, and they run in one closure.
+
+**Why not bind Java objects with no JavaScript at all:** some things can only be built in the isolate, such as async iterators, frozen objects and a `Response` with methods. The remaining JavaScript is glue, without logic or limits.
+
+**Kept:** the event loop, the in-flight call limit (256), the listener limit (100), stream backpressure, and console, timers and state as they were.
+
+**Tests:**
+- `NodeHostApisTest` (28) exercises each API directly, with no engine.
+- `HostBridgeTest` (21) runs against fake `HostApis`, with its scripts unchanged.
+- The rest of the runtime suite, hostile scripts included, is unchanged.
+
+### D-061 — Durable queues as the bus's second mode: `bus.queue(name)`, at least once, leases and dead letters
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Context:** In 2017, jobs and services talked over the message bus, and Tony wants a queue next to it. The bus (`publish`/`subscribe`, `request`/`handle`) is the Vert.x event bus, which delivers at most once: a message published while nobody listens is gone, and nothing is acknowledged or redelivered. Tony chose the shape `bus.queue(name)`, so the default mode stays as it is and queues read as a different guarantee.
+
+**Decision:**
+- **Stored in the cluster.** One replicated table (`QUEUE`, FULL_SYNC like every table, D-041), indexed by (tenant, queue, status, due), where "due" is `availableAt` while ready and the lease deadline while in flight. Single-node and test setups use an in-memory store. Both pass the same contract (`QueueStoreContract`), because the rules live in one `QueueService` over a small store interface.
+- **Claiming:** compare-and-set from READY (and due) to IN_FLIGHT, with an owner, a 30 s lease and `attempt + 1`, the same fenced-transition pattern as jobs (D-010, D-011). Consumers try the due candidates in a random order, so racing consumers rarely collide.
+- **No sweeper.** A claim may also take an IN_FLIGHT message whose lease has run out, so a dead consumer's messages come back without a background job. A message whose lease runs out on its last attempt is dead-lettered on the way.
+- **Leases are extended** every third of the lease while the handler works, so slow handlers keep their message. If the node dies, the extensions stop.
+- **Ack and failure belong to the delivery.** An ack removes the message only if the caller still owns that delivery (owner and attempt); a late ack after the lease ran out does nothing. A failure retries after 1 s, 4 s, 16 s, … up to 10 min, then dead-letters with the last error. A consumer that stops mid-message (its script ended) gives the message back at once, and that delivery doesn't count.
+- **Waking consumers:** a push publishes a hint on the event bus, so idle consumers claim at once. Otherwise they look every second, backing off to every 5 s while the queue is empty, which also catches delayed messages and expired leases.
+- **Deduplication:** a `key` becomes the message id, so pushing it again while it's queued does nothing.
+- **Limits:** messages are JSON of at most 256 KB, like the bus. Queued bytes count toward the tenant's quota with files and kv (D-043). Delays are capped at 7 days, `maxAttempts` at 20 (default 5) and `concurrency` at 32.
+- **Surfaces:**
+  - **Scripts:** `bus.queue(name)` with `push`, `consume`, `stats`, `dead`, `retry` and `discard`, through `QueueApi` and `QueueBinding` (D-060).
+  - **REST:** `POST/GET /v1/queues/{queue}`, `GET /v1/queues/{queue}/dead`, `POST …/dead/{id}/retry`, `DELETE …/dead/{id}`, with new scopes `queues:read` and `queues:write`.
+  - **CLI and MCP:** `automately queues …`, and the tools `queue_push`, `queue_stats`, `queue_dead` and `queue_retry`.
+- **System queues:** the tenant `@system`, which no real tenant can be named (tenant names are `[a-z0-9][a-z0-9_-]*`), holds the system's own queues, starting with completion callbacks. These skip the tenant quota but not admission control.
+
+**Not done:** ordering guarantees (messages come out roughly in push order, with no FIFO promise), outside subscribers (parked in NOTES.md), and per-queue configuration.
+
+**Tests:**
+- `QueueStoreContract` (13 tests, run on both stores): racing consumers, retries, dead letters, lease expiry, extension, release, deduplication, delay, tenant scoping, quota and validation.
+- `DurabilityTest.aMessageInFlightOnALostNodeIsDeliveredElsewhere`: three Ignite nodes, a consumer's node stopped mid-message, and the message delivered again on a survivor.
+- `QueueScriptTest` (5 tests, real scripts in V8).
+- `HostApisTest`: a service on one node consumes what REST pushes through the other.
+- `ContractTest`, `McpTest` and `CliTest` cover the new operations.

@@ -103,6 +103,45 @@ class DurabilityTest {
         cluster.getFirst().stop();
     }
 
+    @Test
+    void aMessageInFlightOnALostNodeIsDeliveredElsewhere() throws Exception {
+        List<IgniteCluster> cluster = startAll("node-a", "node-b", "node-c");
+        Vertx onC = Vertx.vertx();
+        Vertx onB = Vertx.vertx();
+        automately.core.queue.QueueService queuesOnC = new automately.core.queue.QueueService(onC, IgniteStores.open(onC, cluster.get(2)).queues,
+                automately.core.storage.TenantQuota.unlimited(), automately.core.files.StorageCapacity.UNLIMITED, 500);
+        automately.core.queue.QueueService queuesOnB = new automately.core.queue.QueueService(onB, IgniteStores.open(onB, cluster.get(1)).queues,
+                automately.core.storage.TenantQuota.unlimited(), automately.core.files.StorageCapacity.UNLIMITED, 500);
+        for (int i = 0; i < 20; i++) {
+            await(queuesOnB.push("acme", "emails", i, null, null, null));
+        }
+
+        // A consumer on node C takes a message, and node C dies before it's done.
+        automately.core.queue.QueueMessage lost = await(queuesOnC.claim("acme", "emails", "consumer-on-c")).orElseThrow();
+        await(onC.close());
+        cluster.get(2).stop();
+
+        // Node B's consumer gets every message, the lost one included once its lease runs out.
+        java.util.Map<Object, Integer> delivered = new java.util.HashMap<>();
+        long deadline = System.currentTimeMillis() + 15_000;
+        while (delivered.size() < 20 && System.currentTimeMillis() < deadline) {
+            java.util.Optional<automately.core.queue.QueueMessage> claimed = await(queuesOnB.claim("acme", "emails", "consumer-on-b"));
+            if (claimed.isEmpty()) {
+                Thread.sleep(100);
+                continue;
+            }
+            delivered.put(claimed.get().body(), claimed.get().attempt());
+            assertThat(await(queuesOnB.ack(claimed.get()))).isTrue();
+        }
+
+        assertThat(delivered).hasSize(20);
+        assertThat(delivered.get(lost.body())).as("delivered again after the lease ran out").isEqualTo(2);
+        assertThat(await(queuesOnB.stats("acme", "emails"))).isEqualTo(new JsonObject().put("ready", 0L).put("inFlight", 0L).put("dead", 0L));
+        await(onB.close());
+        cluster.get(1).stop();
+        cluster.getFirst().stop();
+    }
+
     private static <T> T await(Future<T> future) throws Exception {
         return future.toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
     }

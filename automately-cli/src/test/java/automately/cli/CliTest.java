@@ -150,6 +150,24 @@ class CliTest {
     }
 
     @Test
+    void queuesPushShowStatsAndManageDeadLetters() throws Exception {
+        loginAsNewTenant("queues");
+
+        Result pushed = cli("queues", "push", "emails", "{\"to\":\"a@example.com\"}", "--key", "welcome-1");
+        assertThat(pushed.code()).as(pushed.err()).isZero();
+        assertThat(pushed.out().strip()).isEqualTo("k-welcome-1");
+        assertThat(cli("queues", "push", "emails", "{\"to\":\"a@example.com\"}", "--key", "welcome-1").out().strip())
+                .as("the same key pushes once").isEqualTo("k-welcome-1");
+
+        assertThat(cli("queues", "stats", "emails").out()).contains("emails").containsPattern("emails\\s+1\\s+0\\s+0");
+        assertThat(cli("--json", "queues", "dead", "emails").json().get("messages")).isEmpty();
+        Result missing = cli("queues", "retry", "emails", "nope");
+        assertThat(missing.code()).isNotZero();
+        assertThat(missing.err()).contains("No dead-lettered message nope");
+        assertThat(cli("queues", "push", "emails", "not json").err()).contains("must be JSON");
+    }
+
+    @Test
     void servicesDeployListStopAndRemove() throws Exception {
         loginAsNewTenant("svc");
         Path script = home.resolve("web.js");

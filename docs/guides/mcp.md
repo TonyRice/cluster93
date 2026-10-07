@@ -49,6 +49,9 @@ Each tool calls the REST API with the agent's token, so a missing scope comes ba
 | `read_file`, `list_files` | `files:read` | Text, up to 256 KB |
 | `publish` | `bus:publish` | |
 | `request` | `bus:request` | Call a script's `bus.handle` and get its reply |
+| `queue_push` | `queues:write` | Push onto a durable queue your services consume |
+| `queue_stats`, `queue_dead` | `queues:read` | Counts, and dead letters with their last error |
+| `queue_retry` | `queues:write` | Put a dead letter back |
 
 Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`), so clients can ask before destructive ones.
 

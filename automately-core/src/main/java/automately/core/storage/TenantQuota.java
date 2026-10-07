@@ -8,7 +8,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * A tenant's storage quota ({@code AUTOMATELY_TENANT_STORAGE_MB}), counting files and {@code kv} together (D-043).
+ * A tenant's storage quota ({@code AUTOMATELY_TENANT_STORAGE_MB}), counting files, {@code kv} and queued messages together
+ * (D-043, D-061).
  *
  * <p>An upload asks for {@link #remaining} once, fresh, and is cut off when it goes past it. {@code kv} writes are
  * small and frequent, so {@link #ensureFits} works from a usage figure at most {@link #FRESH} old plus whatever
@@ -83,7 +84,7 @@ public final class TenantQuota {
     }
 
     public static HostException exceeded(long bytes) {
-        return HostException.limit("Storage quota of " + bytes + " bytes reached (files and kv together)");
+        return HostException.limit("Storage quota of " + bytes + " bytes reached (files, kv and queued messages together)");
     }
 
     public static boolean isExceeded(Throwable error) {

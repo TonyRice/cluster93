@@ -88,7 +88,13 @@ final class RouteScopes {
             rule("DELETE", "/v1/files/.+", "deleteFile", Who.TENANT, Scopes.FILES_WRITE),
 
             json("POST", "/v1/bus/" + SEG + "/request", "request", Who.TENANT, Scopes.BUS_REQUEST, MESSAGE),
-            json("POST", "/v1/bus/" + SEG, "publish", Who.TENANT, Scopes.BUS_PUBLISH, MESSAGE));
+            json("POST", "/v1/bus/" + SEG, "publish", Who.TENANT, Scopes.BUS_PUBLISH, MESSAGE),
+
+            json("POST", "/v1/queues/" + SEG, "pushQueueMessage", Who.TENANT, Scopes.QUEUES_WRITE, MESSAGE + SMALL),
+            rule("GET", "/v1/queues/" + SEG, "getQueue", Who.TENANT, Scopes.QUEUES_READ),
+            rule("GET", "/v1/queues/" + SEG + "/dead", "listDeadMessages", Who.TENANT, Scopes.QUEUES_READ),
+            rule("POST", "/v1/queues/" + SEG + "/dead/" + SEG + "/retry", "retryDeadMessage", Who.TENANT, Scopes.QUEUES_WRITE),
+            rule("DELETE", "/v1/queues/" + SEG + "/dead/" + SEG, "discardDeadMessage", Who.TENANT, Scopes.QUEUES_WRITE));
 
     private RouteScopes() {
     }

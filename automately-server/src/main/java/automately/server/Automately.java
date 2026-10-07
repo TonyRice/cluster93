@@ -51,8 +51,9 @@ import automately.core.host.SharedDataDomainStore;
 import automately.core.host.EgressPolicy;
 import automately.core.host.FetchClient;
 import automately.core.host.HostRouter;
-import automately.core.host.HostServicesFactory;
-import automately.core.host.NodeHostServices;
+import automately.core.host.HostApisFactory;
+import automately.core.host.NodeHostApis;
+import automately.core.queue.QueueService;
 import automately.core.host.ServeRegistry;
 import automately.core.host.InternalHttpVerticle;
 import automately.core.host.SharedDataKvStore;
@@ -115,7 +116,7 @@ public final class Automately {
                     java.util.concurrent.atomic.AtomicBoolean diskRootShared = new java.util.concurrent.atomic.AtomicBoolean();
                     TenantBlobStores routed = tenantStores(vertx, config, blobs, durable.storage, diskRootShared);
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
-                            durable.files(routed), blobs, capacity, durable.auth, durable.storage, routed, diskRootShared);
+                            durable.files(routed), blobs, capacity, durable.auth, durable.storage, routed, diskRootShared, durable.queues);
                     return wire(config, txt, vertx, stores, cluster);
                 })
                 .recover(err -> {
@@ -207,7 +208,7 @@ public final class Automately {
     /** Where durable data lives: Ignite when clustered, in-memory maps for a single development node. */
     record Stores(JobStore jobs, JobStateStore state, ServiceStore services, DomainStore domains, KvStore kv, FileStore files,
                   BlobStore blobs, StorageCapacity capacity, AuthStore auth, StorageConfigStore storage, TenantBlobStores routed,
-                  java.util.concurrent.atomic.AtomicBoolean diskRootShared) {
+                  java.util.concurrent.atomic.AtomicBoolean diskRootShared, automately.core.queue.QueueStore queues) {
 
         static Stores inMemory(Vertx vertx, ServerConfig config) {
             // In-memory data lives on the JVM heap, so that's what admission control watches (D-038).
@@ -218,7 +219,8 @@ public final class Automately {
             TenantBlobStores routed = tenantStores(vertx, config, blobs, storage, diskRootShared);
             return new Stores(new SharedDataJobStore(vertx), new SharedDataJobStateStore(vertx), new SharedDataServiceStore(vertx),
                     new SharedDataDomainStore(vertx), new SharedDataKvStore(vertx),
-                    new SharedDataFileStore(vertx, routed), blobs, capacity, new SharedDataAuthStore(vertx), storage, routed, diskRootShared);
+                    new SharedDataFileStore(vertx, routed), blobs, capacity, new SharedDataAuthStore(vertx), storage, routed, diskRootShared,
+                    new automately.core.queue.SharedDataQueueStore(vertx));
         }
     }
 
@@ -234,18 +236,20 @@ public final class Automately {
         ScriptRuntime runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
         JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
         ServeRegistry serving = new ServeRegistry();
-        // One quota for everything a tenant stores: files and kv together (D-043).
+        // One quota for everything a tenant stores: files, kv and queued messages together (D-043, D-061).
         TenantQuota quota = new TenantQuota(config.tenantStorageBytes(),
-                tenant -> stores.files().usage(tenant).compose(files -> stores.kv().usage(tenant).map(kv -> files + kv)));
+                tenant -> stores.files().usage(tenant).compose(files -> stores.kv().usage(tenant).map(kv -> files + kv))
+                        .compose(sum -> stores.queues().usage(tenant).map(queued -> sum + queued)));
+        QueueService queues = new QueueService(vertx, stores.queues(), quota, stores.capacity());
         StorageRoom room = new StorageRoom(quota, stores.storage(), stores.files());
-        HostServicesFactory hostServices = NodeHostServices.factory(vertx, stores.kv(),
-                new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving, stores.files(), stores.capacity(), quota, room);
+        HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(),
+                new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving, stores.files(), stores.capacity(), quota, room, queues));
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken());
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         config.secretsKey() == null ? null : new SecretBox(config.secretsKey()), config.diskRoot(), stores.blobs().name()),
-                () -> readiness(nodes, instanceId, cluster));
+                queues, () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         // A node whose file backend can't be used refuses to start, saying why, rather than failing uploads later.
         // Tenant disk providers need a disk root every node sees (D-057); a single node always does.
@@ -267,7 +271,7 @@ public final class Automately {
                     config.ingressIdleTimeout(), config.maxRequestBytes());
             return vertx.deployVerticle(endpoint)
                     .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes,
-                            runtime, config.heartbeat(), config.stopGrace(), hostServices, config.advertiseHost() + ":" + endpoint.port())))
+                            runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port())))
                     .compose(id -> vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, config.heartbeat(),
                             config.orphanGrace(), config.requeueAfter())))
                     .compose(id -> vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler,

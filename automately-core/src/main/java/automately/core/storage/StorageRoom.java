@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * The room a new file gets, by where it goes (D-043, D-057): on the cluster's own backend, what's left of the tenant's
- * quota (files and kv together); in the tenant's own S3 bucket, no limit (its storage, its bill); in a disk provider,
+ * quota (files, kv and queued messages together); in the tenant's own S3 bucket, no limit (its storage, its bill); in a disk provider,
  * what's left of the disk allotment the admin gave it, across all its disk providers.
  */
 public final class StorageRoom implements Room {

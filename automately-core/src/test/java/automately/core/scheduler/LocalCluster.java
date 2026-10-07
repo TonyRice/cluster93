@@ -53,7 +53,7 @@ final class LocalCluster implements AutoCloseable {
     /** Starts a node. Instance ids sort in start order, so the first node started is the reaper leader. */
     String start(String nodeId, String instanceId, int capacity) throws Exception {
         String node = await(vertx.deployVerticle(new NodeVerticle(nodeId, instanceId, capacity, jobs, state, partitionable(), runtime,
-                HEARTBEAT, STOP_GRACE, automately.core.host.HostServicesFactory.NONE, null)));
+                HEARTBEAT, STOP_GRACE, automately.core.host.HostApisFactory.NONE, null)));
         String reaper = await(vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, HEARTBEAT, GRACE, REQUEUE_AFTER)));
         String supervisor = await(vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler, HEARTBEAT,
                 SERVICE_TIMING)));

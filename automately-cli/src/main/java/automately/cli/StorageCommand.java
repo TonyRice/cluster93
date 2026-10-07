@@ -27,7 +27,7 @@ final class StorageCommand extends Base {
         JsonNode quota = overview.path("quota");
         JsonNode disk = overview.path("disk");
         out().println("Cluster storage: " + Json.text(overview, "defaultBackend") + ", " + mb(quota.path("usedBytes").asLong()) + " of "
-                + mb(quota.path("bytes").asLong()) + " used (files and kv)");
+                + mb(quota.path("bytes").asLong()) + " used (files, kv and queued messages)");
         out().println("Allowed providers: " + (overview.path("policy").path("allow").isEmpty() ? "none (ask the admin)" : Json.write(overview.path("policy").path("allow")))
                 + (disk.path("allotmentBytes").asLong() > 0 ? ", disk " + mb(disk.path("usedBytes").asLong()) + " of " + mb(disk.path("allotmentBytes").asLong()) : ""));
         out().println("Routes: " + Json.write(overview.path("routes")));

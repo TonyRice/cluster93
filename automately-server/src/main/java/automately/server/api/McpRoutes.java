@@ -500,7 +500,32 @@ final class McpRoutes {
                                 "timeoutMs", integer("At most 30000.")), "topic"),
                         false, false, call -> api(call, HttpMethod.POST, "/v1/bus/" + seg(call.text("topic")) + "/request?timeoutMs="
                                         + call.args().getInteger("timeoutMs", 10_000),
-                                io.vertx.core.json.Json.encodeToBuffer(call.args().getValue("message")), "application/json")));
+                                io.vertx.core.json.Json.encodeToBuffer(call.args().getValue("message")), "application/json")),
+                new Tool("queue_push", "Push a JSON message onto a durable queue that your services consume (bus.queue(name).consume). "
+                        + "Delivered at least once; a failing consumer gets it again later.",
+                        schema(Map.of("queue", string("[a-zA-Z0-9._-]{1,128}"), "message", new JsonObject().put("description", "Any JSON."),
+                                "delayMs", integer("Deliver no sooner than this."),
+                                "key", string("Optional: push at most once while a message with this key is queued.")), "queue", "message"),
+                        false, false, call -> {
+                            JsonObject body = new JsonObject().put("message", call.args().getValue("message"));
+                            if (call.args().getValue("delayMs") != null) {
+                                body.put("delayMs", call.args().getValue("delayMs"));
+                            }
+                            if (call.args().getValue("key") != null) {
+                                body.put("key", call.args().getValue("key"));
+                            }
+                            return api(call, HttpMethod.POST, "/v1/queues/" + seg(call.text("queue")), body.toBuffer(), "application/json");
+                        }),
+                new Tool("queue_stats", "How many messages a queue has ready, in flight and dead-lettered.",
+                        schema(Map.of("queue", string("The queue's name.")), "queue"), true, false,
+                        call -> get(call, "/v1/queues/" + seg(call.text("queue")))),
+                new Tool("queue_dead", "A queue's dead-lettered messages (they used up their attempts), with their last error.",
+                        schema(Map.of("queue", string("The queue's name.")), "queue"), true, false,
+                        call -> get(call, "/v1/queues/" + seg(call.text("queue")) + "/dead?limit=100")),
+                new Tool("queue_retry", "Put a dead-lettered message back on its queue, with its attempts reset.",
+                        schema(Map.of("queue", string("The queue's name."), "id", string("The message's id, from queue_dead.")), "queue", "id"),
+                        false, false, call -> api(call, HttpMethod.POST, "/v1/queues/" + seg(call.text("queue")) + "/dead/" + seg(call.text("id"))
+                                + "/retry", null, null)));
     }
 
     /** What an agent needs from a job, without the script. */

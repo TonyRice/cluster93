@@ -116,7 +116,7 @@ public abstract class ClusterFileStore implements FileStore {
     }
 
     static HostException quota() {
-        return HostException.limit("Storage quota reached: the tenant has no room left for this upload (files and kv together)");
+        return HostException.limit("Storage quota reached: the tenant has no room left for this upload (files, kv and queued messages together)");
     }
 
     @Override

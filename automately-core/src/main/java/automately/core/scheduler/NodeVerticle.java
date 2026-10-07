@@ -4,7 +4,7 @@ import automately.core.job.Job;
 import automately.core.job.JobStore;
 import automately.core.job.OrphanPolicy;
 import automately.core.job.ServiceRef;
-import automately.core.host.HostServicesFactory;
+import automately.core.host.HostApisFactory;
 import automately.core.node.NodeInfo;
 import automately.core.node.NodeRegistry;
 import automately.core.runtime.Execution;
@@ -64,7 +64,7 @@ public final class NodeVerticle extends VerticleBase {
     private final ScriptRuntime runtime;
     private final Duration heartbeat;
     private final Duration stopGrace;
-    private final HostServicesFactory hostServices;
+    private final HostApisFactory hostApis;
     private final String endpoint;
 
     /** Jobs this node has accepted, by job id. The execution is null until the script has started. */
@@ -76,8 +76,8 @@ public final class NodeVerticle extends VerticleBase {
     }
 
     public NodeVerticle(String nodeId, String instanceId, int capacity, JobStore jobs, JobStateStore state, NodeRegistry nodes,
-                        ScriptRuntime runtime, Duration heartbeat, Duration stopGrace, HostServicesFactory hostServices, String endpoint) {
-        this.hostServices = hostServices;
+                        ScriptRuntime runtime, Duration heartbeat, Duration stopGrace, HostApisFactory hostApis, String endpoint) {
+        this.hostApis = hostApis;
         this.endpoint = endpoint;
         this.nodeId = nodeId;
         this.instanceId = instanceId;
@@ -193,7 +193,7 @@ public final class NodeVerticle extends VerticleBase {
             JobContext jobContext = new JobContext(job.id(), attempt, job.onOrphan(), job.previousAttempt(), carried.state(),
                     carried.service());
             RunningExecution execution = runtime.execute(execution(job, jobContext), logSink(job.id(), logs), stateSink(job.id(), attempt),
-                    hostServices.create(job.tenant(), job.id(), job.service() != null));
+                    hostApis.create(job.tenant(), job.id(), job.service() != null));
             slots.put(job.id(), new Slot(attempt, execution));
             if (job.cancelRequested() != null) {
                 execution.stop(job.cancelRequested(), stopGrace);

@@ -19,12 +19,13 @@
 2. **Host calls are asynchronous.** The script gets a promise. The Java side runs the operation on Vert.x and posts the result back to the isolate's event loop (D-019), so `Promise.all([fetch(a), fetch(b)])` really runs in parallel. Phase 2's `ctx.step`/`saveCheckpoint` stay synchronous because they must be durable before the script continues.
 3. **Pending host calls keep a job alive.** A job waiting on a fetch, a bus request or a subscription isn't "never settles".
 4. **Limits are explicit and tested.** Sizes, counts, timeouts and egress rules each have a hostile-script test.
-5. **Engine-neutral core.** The operations live in `automately-core` (`HostServices` SPI). The Javet runtime only bridges them into JavaScript.
+5. **Engine-neutral core.** The operations live in `automately-core`, one Java object per API since D-060 (`KvApi`, `BusApi`, …). The Javet runtime only binds them into JavaScript.
 
-## Mechanism
-- `HostServices` (core SPI): `Future<Object> call(String operation, JsonObject args)` plus `subscribe` and `close`. The node creates one per execution (tenant, job, attempt).
-- **JavaScript side.** The prelude exposes `host.call(op, argsJson, callId)` and keeps a map from `callId` to the promise's resolve/reject.
-- **Java side.** It runs the future and, on completion, posts a task to the event loop that calls `settle(callId, ok, resultJson)`. The loop counts in-flight calls; while any are pending, it waits instead of failing.
+## Mechanism (as of D-060)
+The first version had one generic `HostServices.call(op, argsJson)` and a 475-line JavaScript string that turned it into the APIs. D-060 replaced both:
+- **Core: one Java object per API** (`automately.core.runtime.api`: `KvApi`, `BusApi`, `FilesApi`, `FetchApi`, `HttpApi`, gathered in `HostApis`). The node implements them (`NodeKvApi`, … in `automately.core.host`), all sharing one `HostScope` (the tenant, the job, the listeners to undo). They take and return plain Java values (JSON, `Buffer`, `Future`) and know nothing about V8, so another language's runtime can bind the same objects.
+- **Javet: one binding per API** (`KvBinding`, `BusBinding`, …), bound under the host object with `bind()`, which exposes only `@V8Function` methods. A binding converts its arguments (`JsValues`, through V8's own `JSON`, captured before the script runs), calls the API, and returns a promise it created in Java. `HostBridge` settles that promise on the isolate's event loop when the future completes, as a real `Error` with `name` and `code` on failure. The loop counts in-flight calls; while any are pending, it waits instead of failing.
+- **JavaScript: small files, only where JavaScript has to be idiomatic** (`automately-runtime-javet/src/main/resources/automately/runtime/javet/js/`): freezing the globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, and `ctx`. `JavetScriptRuntime.PRELUDE_FILES` lists them in order; they run in one closure before the job's module.
 - **Subscriptions** (bus, HTTP handlers) are delivered the same way, as posted tasks that call back into JavaScript. Replies go back through a reply id.
 - **Cleanup.** When the run ends, all subscriptions are unregistered and in-flight calls are abandoned. Their results go nowhere, because the isolate is closed.
 - **Fencing.** The node's heartbeat already cancels superseded attempts (D-020). Host writes from a zombie are therefore possible for at most about one heartbeat; that's documented, the same as for outside side effects.

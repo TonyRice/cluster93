@@ -150,6 +150,13 @@ class ContractTest {
         calls.check("publish", "POST", "/v1/bus/news", tenant, new JsonObject().put("hello", true));
         calls.check("request", "POST", "/v1/bus/nobody-listens/request?timeoutMs=500", tenant, new JsonObject());
 
+        calls.check("pushQueueMessage", "POST", "/v1/queues/emails", tenant,
+                new JsonObject().put("message", new JsonObject().put("to", "a@example.com")).put("key", "welcome-1").put("maxAttempts", 3));
+        calls.check("getQueue", "GET", "/v1/queues/emails", tenant, null);
+        calls.check("listDeadMessages", "GET", "/v1/queues/emails/dead?limit=10", tenant, null);
+        calls.check("retryDeadMessage", "POST", "/v1/queues/emails/dead/nope/retry", tenant, null);
+        calls.check("discardDeadMessage", "DELETE", "/v1/queues/emails/dead/nope", tenant, null);
+
         calls.check("mcp", "POST", "/mcp", tenant, new JsonObject().put("jsonrpc", "2.0").put("id", 1).put("method", "ping"));
         calls.check("mcpStream", "GET", "/mcp", null, null);
         calls.check("mcpEndSession", "DELETE", "/mcp", null, null);

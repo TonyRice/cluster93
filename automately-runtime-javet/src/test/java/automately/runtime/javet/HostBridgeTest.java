@@ -8,7 +8,14 @@ import automately.core.runtime.BodyStream;
 import automately.core.runtime.FetchedResponse;
 import automately.core.runtime.HostException;
 import automately.core.runtime.HttpExchange;
-import automately.core.runtime.HostServices;
+import automately.core.runtime.api.BusApi;
+import automately.core.runtime.api.FetchApi;
+import automately.core.runtime.api.FilesApi;
+import automately.core.runtime.api.HostApis;
+import automately.core.runtime.api.HttpApi;
+import automately.core.runtime.api.KvApi;
+import automately.core.runtime.api.QueueApi;
+import automately.core.runtime.api.Registration;
 import automately.core.runtime.Inbound;
 import automately.core.runtime.JobContext;
 import automately.core.runtime.LogSink;
@@ -34,7 +41,7 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** The async host-call mechanism (docs/design/host-apis.md), against a scripted fake {@link HostServices}. */
+/** The async host-call mechanism (docs/design/host-apis.md), against fake {@link HostApis}. */
 class HostBridgeTest {
 
     private static Vertx vertx;
@@ -51,28 +58,23 @@ class HostBridgeTest {
         vertx.close().toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
     }
 
-    /** Ops: "echo" (after 20 ms), "slow" (after args.ms), "boom" (HostException). Listen kind "test.events". */
-    private static class FakeHost implements HostServices {
+    /**
+     * Fake host APIs: {@code kv.get} answers through {@link #kvGet} (by default an error), bus listeners and HTTP servers
+     * are recorded so the test can deliver to them, and fetch returns {@link #fetchChunks}.
+     */
+    private static class FakeHost implements HostApis {
 
         final List<Consumer<Inbound>> listeners = new CopyOnWriteArrayList<>();
-        final List<String> calls = new CopyOnWriteArrayList<>();
         volatile boolean closed;
+        volatile java.util.function.Function<String, Future<Object>> kvGet =
+                key -> Future.failedFuture(new HostException("Error", "unknown", "no such op kv.get"));
 
-        @Override
-        public Future<Object> call(String operation, JsonObject args) {
-            calls.add(operation);
-            Promise<Object> promise = Promise.promise();
-            switch (operation) {
-                case "echo" -> vertx.setTimer(20, id -> promise.complete(args.getValue("value")));
-                case "slow" -> vertx.setTimer(args.getLong("ms"), id -> promise.complete(args.getLong("ms")));
-                case "boom" -> promise.fail(new HostException("RangeError", "limit_exceeded", "value too large"));
-                default -> promise.fail(new HostException("Error", "unknown", "no such op " + operation));
-            }
-            return promise.future();
-        }
+        final List<Consumer<HttpExchange>> servers = new CopyOnWriteArrayList<>();
+        /** What fetch returns: a status and the body chunks. */
+        volatile List<String> fetchChunks = List.of("hello ", "world");
+        final List<String> fetchesCancelled = new CopyOnWriteArrayList<>();
 
-        @Override
-        public Future<Registration> listen(String kind, JsonObject args, Consumer<Inbound> listener) {
+        private Future<Registration> register(Consumer<Inbound> listener) {
             listeners.add(listener);
             return Future.succeededFuture(() -> {
                 listeners.remove(listener);
@@ -80,42 +82,121 @@ class HostBridgeTest {
             });
         }
 
-        final List<Consumer<HttpExchange>> servers = new CopyOnWriteArrayList<>();
-        /** What fetch returns: a status and the body chunks. */
-        volatile List<String> fetchChunks = List.of("hello ", "world");
-        final List<String> fetchesCancelled = new CopyOnWriteArrayList<>();
-
         @Override
-        public Future<Registration> serve(Consumer<HttpExchange> handler) {
-            servers.add(handler);
-            return Future.succeededFuture(() -> {
-                servers.remove(handler);
-                return Future.succeededFuture();
-            });
+        public KvApi kv() {
+            return new KvApi() {
+                @Override
+                public Future<Object> get(String namespace, String key) {
+                    return kvGet.apply(key);
+                }
+
+                @Override
+                public Future<Void> set(String namespace, String key, Object value, Long ttlMs) {
+                    return HostApis.NONE.kv().set(namespace, key, value, ttlMs);
+                }
+
+                @Override
+                public Future<Boolean> delete(String namespace, String key) {
+                    return HostApis.NONE.kv().delete(namespace, key);
+                }
+
+                @Override
+                public Future<JsonObject> list(String namespace, String prefix, int limit, String cursor) {
+                    return HostApis.NONE.kv().list(namespace, prefix, limit, cursor);
+                }
+
+                @Override
+                public Future<Long> increment(String namespace, String key, long by) {
+                    return HostApis.NONE.kv().increment(namespace, key, by);
+                }
+            };
         }
 
         @Override
-        public Future<FetchedResponse> fetch(JsonObject args) {
-            JsonObject meta = new JsonObject().put("status", 200).put("statusText", "OK").put("url", args.getString("url"))
-                    .put("headers", new JsonObject().put("content-type", "text/plain"));
-            return Future.succeededFuture(new FetchedResponse(meta, new ListStream(fetchChunks, () -> fetchesCancelled.add(args.getString("url")))));
+        public BusApi bus() {
+            return new BusApi() {
+                @Override
+                public Future<Void> publish(String topic, Object message) {
+                    return HostApis.NONE.bus().publish(topic, message);
+                }
+
+                @Override
+                public Future<Object> request(String topic, Object message, long timeoutMs) {
+                    return HostApis.NONE.bus().request(topic, message, timeoutMs);
+                }
+
+                @Override
+                public Future<Registration> subscribe(String topic, Consumer<Inbound> listener) {
+                    return register(listener);
+                }
+
+                @Override
+                public Future<Registration> handle(String topic, Consumer<Inbound> listener) {
+                    return register(listener);
+                }
+            };
         }
 
         @Override
-        public Future<automately.core.files.FileWriter> createFile(JsonObject args) {
-            return Future.failedFuture(new HostException("Error", "unavailable", "no files in this fake"));
+        public QueueApi queue() {
+            return HostApis.NONE.queue();
         }
 
         @Override
-        public Future<FetchedResponse> openFile(JsonObject args) {
-            return Future.failedFuture(new HostException("Error", "not_found", "No such file: " + args.getString("path")));
+        public HttpApi http() {
+            return handler -> {
+                servers.add(handler);
+                return Future.succeededFuture(() -> {
+                    servers.remove(handler);
+                    return Future.succeededFuture();
+                });
+            };
         }
 
         @Override
-        public Future<Void> respondFile(HttpExchange exchange, JsonObject args) {
-            exchange.respond(200, new JsonObject().put("x-file", args.getString("path")));
-            exchange.end();
-            return Future.succeededFuture();
+        public FetchApi fetch() {
+            return args -> {
+                JsonObject meta = new JsonObject().put("status", 200).put("statusText", "OK").put("url", args.getString("url"))
+                        .put("headers", new JsonObject().put("content-type", "text/plain"));
+                return Future.succeededFuture(new FetchedResponse(meta, new ListStream(fetchChunks, () -> fetchesCancelled.add(args.getString("url")))));
+            };
+        }
+
+        @Override
+        public FilesApi files() {
+            return new FilesApi() {
+                @Override
+                public Future<JsonObject> stat(String path) {
+                    return HostApis.NONE.files().stat(path);
+                }
+
+                @Override
+                public Future<JsonObject> list(String prefix, int limit, String cursor) {
+                    return HostApis.NONE.files().list(prefix, limit, cursor);
+                }
+
+                @Override
+                public Future<Boolean> delete(String path) {
+                    return HostApis.NONE.files().delete(path);
+                }
+
+                @Override
+                public Future<automately.core.files.FileWriter> create(String path, String contentType) {
+                    return Future.failedFuture(new HostException("Error", "unavailable", "no files in this fake"));
+                }
+
+                @Override
+                public Future<FetchedResponse> open(String path) {
+                    return Future.failedFuture(new HostException("Error", "not_found", "No such file: " + path));
+                }
+
+                @Override
+                public Future<Void> respond(HttpExchange exchange, String path, JsonObject headers) {
+                    exchange.respond(200, new JsonObject().put("x-file", path));
+                    exchange.end();
+                    return Future.succeededFuture();
+                }
+            };
         }
 
         void awaitServer() throws InterruptedException {
@@ -199,13 +280,11 @@ class HostBridgeTest {
 
     @Test
     void aJobWaitingOnAHostCallIsNotNeverSettles() throws Exception {
-        FakeHost host = new FakeHost() {
-            @Override
-            public Future<Object> call(String operation, JsonObject args) {
-                Promise<Object> promise = Promise.promise();
-                vertx.setTimer(300, id -> promise.complete("late"));
-                return promise.future();
-            }
+        FakeHost host = new FakeHost();
+        host.kvGet = key -> {
+            Promise<Object> promise = Promise.promise();
+            vertx.setTimer(300, id -> promise.complete("late"));
+            return promise.future();
         };
 
         ExecutionResult result = run("export default () => kv.get('k')", host);
@@ -216,13 +295,11 @@ class HostBridgeTest {
 
     @Test
     void parallelCallsOverlap() throws Exception {
-        FakeHost host = new FakeHost() {
-            @Override
-            public Future<Object> call(String operation, JsonObject args) {
-                Promise<Object> promise = Promise.promise();
-                vertx.setTimer(300, id -> promise.complete(args.getString("key")));
-                return promise.future();
-            }
+        FakeHost host = new FakeHost();
+        host.kvGet = key -> {
+            Promise<Object> promise = Promise.promise();
+            vertx.setTimer(300, id -> promise.complete(key));
+            return promise.future();
         };
         long start = System.nanoTime();
 
@@ -556,13 +633,11 @@ class HostBridgeTest {
 
     @Test
     void tooManyCallsInFlightAreRefused() throws Exception {
-        FakeHost host = new FakeHost() {
-            @Override
-            public Future<Object> call(String operation, JsonObject args) {
-                Promise<Object> promise = Promise.promise();
-                vertx.setTimer(200, id -> promise.complete(1));
-                return promise.future();
-            }
+        FakeHost host = new FakeHost();
+        host.kvGet = key -> {
+            Promise<Object> promise = Promise.promise();
+            vertx.setTimer(200, id -> promise.complete(1));
+            return promise.future();
         };
 
         ExecutionResult result = run("""
