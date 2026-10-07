@@ -1,6 +1,6 @@
 # Plan: API, auth, CLI and MCP (phase 4)
 
-**Status:** ✅ Done: milestones 1 to 4 (2026-10-06). Release hosting for the CLI is waiting on Tony (D-049) · **Date:** 2026-10-06
+**Status:** ✅ Done: milestones 1 to 4 (2026-10-06). CLI releases are built by GitHub Actions on tags and downloaded from GitHub Releases once the repo is public (D-055) · **Date:** 2026-10-06
 **Why:** Weak spots #4 (routing by hand, no contract) and #7 (Basic auth with a long-lived key) from the [revival plan](revival-plan.md), plus the part of the positioning that makes Automately current: AI agents can deploy and run code on it through MCP. The `X-Automately-Tenant` header was always a stand-in. Anyone who can reach the API can act as any tenant, so it has to go before anything else is exposed.
 
 ## Decisions taken with Tony

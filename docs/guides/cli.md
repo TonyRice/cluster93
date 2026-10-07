@@ -32,7 +32,7 @@ Options, as environment variables:
 
 `automately upgrade` reruns the installer.
 
-> The download URLs work once releases are public: a private repository's assets need a GitHub login. See D-049.
+> Releases are built by GitHub Actions when a version tag is pushed, and served from this repository's GitHub Releases (D-055). Until the repository is public, its assets need a GitHub login (`gh release download`).
 
 From source: `./mvnw -pl automately-cli -am package -DskipTests`, then `java -jar automately-cli/target/automately-cli.jar`. Add `-Pnative` (with GraalVM) for a native binary.
 

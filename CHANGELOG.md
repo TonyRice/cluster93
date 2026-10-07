@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - GitHub Actions CI. **Why:** the repo is private and local `./mvnw verify` is the gate for now (D-017).
 
 ### Docs
+- D-055: Tony approved GitHub Actions for the tag-only CLI release workflow, and public downloads come from the repository's GitHub Releases once it's public. The installers already default to that, so no code changed.
 - The phase 4 plan's milestone 3 now includes the one-line install (`curl … | sh` and `irm … | iex`), native builds for Windows, Linux (x64 static, arm64) and macOS (arm64, x64), checksums, and a tag-only release workflow (D-049, confirming D-048). **Why:** Tony wants the CLI "super easy to install via curl" on all three systems. Two questions are open: GitHub Actions for the release builds, and where public downloads come from while the repo is private.
 - `docs/design/phase-4-plan.md`: the phase 4 plan (tenants and scoped tokens, the OpenAPI contract and rate limits, the CLI, the MCP server), with D-044 to D-047 accepted and D-048 (the CLI as a native binary) proposed. **Why:** Tony chose the bootstrap, the contract-first approach and the MCP transport; the CLI question is still open.
 - D-018: name and rights recorded. Automately was renamed Executory after the acquisition, and Tony holds the rights to the pre-acquisition OSS code.
@@ -52,8 +53,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - **Tests:** `CliTest` runs every command in-process against a real node, and `InstallScriptTest` runs the real installer against a local release host, including a tampered checksum, and checks the PowerShell script parses.
 - [`docs/guides/cli.md`](docs/guides/cli.md).
 
-### Open
-- The release workflow uses GitHub Actions runners (macOS and Windows can't be built here), and anonymous downloads need public release assets. Both are Tony's call (D-049).
+### Settled afterwards
+- The release workflow may use GitHub Actions, and downloads come from GitHub Releases once the repo is public (D-055).
 
 ## Phase 4, milestone 2 — The OpenAPI contract, validation and rate limits (2026-10-06)
 

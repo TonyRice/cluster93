@@ -371,7 +371,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Constraint:** native-image can't cross-compile. Linux x64 can be built here in a GraalVM container. macOS, Windows and arm64 need those machines, or GitHub Actions runners in a release-only workflow (not CI, so D-017 stands).
 
 ### D-049 — The CLI installs with one line, on Windows, Linux and macOS
-**Date:** 2026-10-06 · **Status:** Accepted (Tony); release hosting open. Confirms D-048
+**Date:** 2026-10-06 · **Status:** Accepted (Tony); hosting settled 2026-10-07, see the update below. Confirms D-048
 
 **Decision:**
 - One native binary per platform: Linux x64 (static, musl) and arm64, macOS arm64 and x64, Windows x64.
@@ -432,4 +432,12 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - **Admin token.** It gets 403: tools act on a tenant.
 **Why not the MCP Java SDK?** Its server transports assume Servlet or Reactor, and the protocol surface used here is small. `McpTest` and the CLI bridge test exercise it end to end, including an agent deploying a service and calling it through the ingress.
 **Note:** Origin checks matter for MCP servers on localhost without auth (DNS rebinding). Here every request needs a bearer token, which a rebinding page can't supply.
+
+### D-055 — CLI releases are built by GitHub Actions and downloaded from the repo's GitHub Releases
+**Date:** 2026-10-07 · **Status:** Accepted (Tony). Settles D-049's open questions
+
+**Decision:**
+- The tag-only release workflow (`.github/workflows/release.yml`) may use GitHub Actions runners for the macOS, Windows and arm64 builds. It runs on version tags only, never on pushes, so D-017 (no CI) stands.
+- Public downloads come from `adamnlynn/automately-v2`'s own GitHub Releases, once Tony makes the repository public. The installers and `automately upgrade` already default to `https://github.com/adamnlynn/automately-v2/releases/latest/download`, so nothing changes at that point.
+**Until then:** a tag still builds and publishes a release, but its assets need a GitHub login to download. Use `gh release download`, or point `AUTOMATELY_INSTALL_URL` at a mirror.
 
