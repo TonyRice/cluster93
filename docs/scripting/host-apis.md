@@ -1,4 +1,4 @@
-# Host APIs reference: `kv`, `bus`, queues, `fetch`, `log`, `files` and serving HTTP
+# Host APIs reference: `kv`, `bus`, queues, `jobs`, `fetch`, `log`, `files` and serving HTTP
 
 **Status:** Implemented in phase 3 (2026-10-06). Design: [../design/host-apis.md](../design/host-apis.md).
 
@@ -85,6 +85,31 @@ POST   /v1/queues/emails/dead/{id}/retry
 DELETE /v1/queues/emails/dead/{id}
 ```
 Scopes: `queues:write` to push and manage dead letters, `queues:read` to look.
+
+## `jobs`: starting and following jobs
+
+A script can start other jobs and wait for them, as 2017's `Automately.startJob` did, but without blocking a thread:
+
+```js
+// A function is sent as its source: it can't use variables from around it, only its input.
+const child = await jobs.run(async (input, ctx) => ({ doubled: input.n * 2 }), { n: 21 });
+const { status, output, error } = await child.result();   // when it ends
+
+// Or an ES module's source, with the same options as POST /v1/jobs:
+const report = await jobs.run(source, { month: 9 }, { timeoutMs: 60_000, onOrphan: 'retry', callback: { url } });
+
+await report.events((event) => { if (event.type === 'log') console.log('report:', event.line); });
+await report.stop('no longer needed');
+
+await jobs.get(id);              // a job's summary, or null
+await jobs.handle(id).result();  // follow a job you know the id of
+```
+
+- **Who owns them.** Started jobs belong to your tenant and count toward its rate limit. Each records its `parent` and its `depth`.
+- **Limits.** Nesting stops at 5 levels, and one run can start at most 100 jobs. Both fail with `limit_exceeded`.
+- **Capacity.** A parent waiting on `result()` keeps its isolate. If no node has room for the child, the child fails at once, rather than the parent waiting for ever.
+- **Other tenants.** Another tenant's job ids look like missing ones: `get` gives `null`, and `result` and `stop` fail with `not_found`.
+- **Results after the run.** To receive a job's result after your own run has ended, use a [completion callback](../guides/callbacks.md) instead of `result()`.
 
 ## Streams and text encoding
 

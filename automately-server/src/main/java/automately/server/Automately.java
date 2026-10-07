@@ -249,14 +249,15 @@ public final class Automately {
         JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
         ServeRegistry serving = new ServeRegistry();
         StorageRoom room = new StorageRoom(quota, stores.storage(), stores.files());
+        automately.core.auth.RateLimiter limiter = new automately.core.auth.RateLimiter(config.rateLimitPerMinute());
         HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(), fetch, serving, stores.files(), stores.capacity(),
-                quota, room, queues, jobs));
+                quota, room, queues, new automately.core.host.JobsWiring(jobs, scheduler, config.defaultTimeout(), config.maxTimeout(), limiter)));
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken());
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, () -> readiness(nodes, instanceId, cluster));
+                queues, callbackSecrets, limiter, () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         // A node whose file backend can't be used refuses to start, saying why, rather than failing uploads later.
         // Tenant disk providers need a disk root every node sees (D-057); a single node always does.

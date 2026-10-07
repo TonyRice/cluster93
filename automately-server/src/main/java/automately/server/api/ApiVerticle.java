@@ -83,13 +83,14 @@ public final class ApiVerticle extends VerticleBase {
                        automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
                        automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage,
                        automately.core.queue.QueueService queues, automately.core.callback.CallbackSecrets callbackSecrets,
-                       java.util.function.Supplier<Future<List<String>>> notReady) {
+                       automately.core.auth.RateLimiter limiter, java.util.function.Supplier<Future<List<String>>> notReady) {
         this.notReady = notReady;
         this.queues = queues;
         this.callbackSecrets = callbackSecrets;
         this.room = room;
         this.storage = storage;
-        this.limiter = new automately.core.auth.RateLimiter(config.rateLimitPerMinute());
+        // Shared with the scripts' jobs API, so jobs started from scripts count toward the same limit (D-063).
+        this.limiter = limiter;
         this.authenticator = authenticator;
         this.authStore = authStore;
         this.files = files;

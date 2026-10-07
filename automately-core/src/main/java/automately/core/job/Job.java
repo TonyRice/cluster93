@@ -28,6 +28,8 @@ import java.util.Optional;
  * @param output          the JSON value the script returned
  * @param callback        where to POST the result when the job ends, and how delivering it went (D-062), or null:
  *                        {@code {url, data, status: PENDING|DELIVERED|FAILED, attempts, deliveredAt, lastError}}
+ * @param parent          the job whose script started this one ({@code jobs.run}, D-063), or null
+ * @param depth           how deeply nested it is: 0 for jobs submitted from outside, the parent's plus one otherwise
  */
 public record Job(
         String id,
@@ -51,7 +53,9 @@ public record Job(
         long queuedAt,
         Long startedAt,
         Long finishedAt,
-        JsonObject callback) {
+        JsonObject callback,
+        String parent,
+        int depth) {
 
     public Job {
         Objects.requireNonNull(id, "id");
@@ -72,7 +76,7 @@ public record Job(
     public static Job queued(String id, String tenant, String script, JsonObject input, long timeoutMs,
                              OrphanPolicy onOrphan, int maxAttempts, ServiceRef service, long now) {
         return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, JobStatus.QUEUED, 1,
-                null, null, null, service, null, null, List.of(), List.of(), now, now, null, null, null);
+                null, null, null, service, null, null, List.of(), List.of(), now, now, null, null, null, null, 0);
     }
 
     /** True when {@code attempt} on {@code nodeInstance} is still the one that owns this job. */
@@ -173,6 +177,12 @@ public record Job(
                 .build());
     }
 
+    /** A job started by another job's script (D-063). Only before it's saved. */
+    public Job startedBy(String parentId, int parentDepth) {
+        return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, status, attempt, node, nodeInstance, cancelRequested, service,
+                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parentId, parentDepth + 1);
+    }
+
     /** Records an attempt to deliver the callback. */
     public Optional<Job> callbackDelivery(String deliveryStatus, int deliveryAttempts, String lastError, Long deliveredAt) {
         if (callback == null) {
@@ -211,7 +221,9 @@ public record Job(
                 .put("queuedAt", queuedAt)
                 .put("startedAt", startedAt)
                 .put("finishedAt", finishedAt)
-                .put("callback", callback);
+                .put("callback", callback)
+                .put("parent", parent)
+                .put("depth", depth);
     }
 
     /** The public view of a job, without the script source or internal node instance ids. */
@@ -246,7 +258,9 @@ public record Job(
                 json.getLong("queuedAt", json.getLong("createdAt", 0L)),
                 json.getLong("startedAt"),
                 json.getLong("finishedAt"),
-                json.getJsonObject("callback"));
+                json.getJsonObject("callback"),
+                json.getString("parent"),
+                json.getInteger("depth", 0));
     }
 
     /** Starts a modified copy; used by transitions and tests. */
@@ -305,7 +319,7 @@ public record Job(
         Job build() {
             return new Job(base.id, base.tenant, base.script, base.input, base.timeoutMs, base.onOrphan, base.maxAttempts, status,
                     attempt, node, nodeInstance, cancelRequested, base.service, output, error, logs, attempts, base.createdAt,
-                    queuedAt, startedAt, finishedAt, callback);
+                    queuedAt, startedAt, finishedAt, callback, base.parent, base.depth);
         }
     }
 }

@@ -26,6 +26,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Core features, part 4 — Scripts start and follow jobs (2026-10-07)
+
+### Added
+- **`jobs.run(script, input, options)` (D-063)** returns `{id, result(), events(handler), stop()}`. There are also `jobs.get(id)`, `jobs.stop(id)` and `jobs.handle(id)`.
+  - **Scripts and options:** the script can be a module's source or a function. The options are those of `POST /v1/jobs`, callback included.
+  - **Why:** 2017's `Automately.startJob`, `getJob` and `stopJob` let jobs drive other jobs. Its `waitForJob` blocked a thread; `result()` is a promise.
+- **Started jobs** belong to the caller's tenant, count toward its rate limit, and record `parent` and `depth` (both now in the API's Job). Nesting stops at 5 levels and 100 starts per run.
+- **`JobsFromScriptsTest` (5):** a parent awaiting a child, the depth limit, stop and events, other tenants' jobs, and bad runs refused.
+
+### Changed
+- **The rate limiter is created once per node and shared** by the API, MCP and scripts, so jobs started from scripts use the same per-tenant budget.
+
 ## Core features, part 3 — Completion callbacks (2026-10-07)
 
 ### Added

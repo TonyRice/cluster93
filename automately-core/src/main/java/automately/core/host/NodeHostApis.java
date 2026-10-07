@@ -29,7 +29,7 @@ public final class NodeHostApis implements HostApis {
 
     /** The node's shared stores and clients; one per node. */
     public record Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
-                       TenantQuota quota, Room room, automately.core.queue.QueueService queues, automately.core.job.JobStore jobs) {
+                       TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs) {
 
         /** Without files, queues, jobs, storage limits or quotas: for tests. */
         public Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve) {

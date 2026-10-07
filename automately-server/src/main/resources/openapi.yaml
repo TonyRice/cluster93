@@ -1426,6 +1426,8 @@ components:
             attempts: { type: integer }
             deliveredAt: { type: [integer, 'null'] }
             lastError: { type: [string, 'null'] }
+        parent: { type: [string, 'null'], description: 'The job whose script started this one (jobs.run).' }
+        depth: { type: integer, description: '0 for jobs submitted from outside; one more than the parent otherwise.' }
     Service:
       type: object
       required: [name, status, enabled, revision, runs, hosts]

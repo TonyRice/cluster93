@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class JavetScriptRuntime implements ScriptRuntime {
 
     /** The prelude's files (src/main/resources/automately/runtime/javet/js), in order; each sees what the earlier ones define. */
-    static final List<String> PRELUDE_FILES = List.of("prelude.js", "console.js", "timers.js", "listeners.js", "kv.js", "bus.js",
+    static final List<String> PRELUDE_FILES = List.of("prelude.js", "console.js", "timers.js", "listeners.js", "kv.js", "bus.js", "jobs.js",
             "encoding.js", "streams.js", "fetch.js", "files.js", "serve.js", "context.js", "entry.js");
 
     /**

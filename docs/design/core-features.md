@@ -57,7 +57,7 @@ await q.stats();        // { ready, inFlight, dead }
 - **As built:** a `JobStore` wrapper queues the delivery on any update that ends a job with a callback, which covers every way a job ends in one place. Secrets live in the replicated kv store under the system tenant, created with put-if-absent. A refused address fails at once. See the [callbacks guide](../guides/callbacks.md).
 - **On the job:** `callback.deliveredAt`, `callback.attempts` and `callback.lastError` are shown.
 
-### 4. A `jobs` API for scripts
+### 4. A `jobs` API for scripts (D-063) — done
 - **Calls:** `jobs.run(script, input, options)` returns `{ id, result(), events(handler), stop() }`, and there are `jobs.get(id)` and `jobs.stop(id)`. `result()` resolves when the job ends; no thread is blocked, unlike 2017's `waitForJob`.
 - **Tenant and limits:** started jobs belong to the caller's tenant and count toward its rate limit and quota. They record their parent, and nesting is capped at depth 5.
 

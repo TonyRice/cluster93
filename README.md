@@ -65,7 +65,7 @@ export default async (input, ctx) => {
 // `billing` stands for a host API that arrives in phase 3; `ctx` works today.
 ```
 
-Scripts can store data (`kv`), message each other (`bus`, with durable **queues** that survive a node dying), call out (`fetch`, with SSRF protection) and log with structure (`log`); services can **serve HTTP** at `<service>--<tenant>.<domain>` or your own verified domain. See the **[host APIs reference](docs/scripting/host-apis.md)**.
+Scripts can store data (`kv`), start and await other jobs (`jobs`), message each other (`bus`, with durable **queues** that survive a node dying), call out (`fetch`, with SSRF protection) and log with structure (`log`); services can **serve HTTP** at `<service>--<tenant>.<domain>` or your own verified domain. See the **[host APIs reference](docs/scripting/host-apis.md)**.
 
 **Services** are scripts the cluster keeps running: if one crashes or its node dies, it's restarted (with backoff) somewhere healthy, carrying its checkpoint over. See the **[services guide](docs/scripting/services.md)**.
 

@@ -595,3 +595,30 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - `CallbacksTest`, a node posting to a local receiver: the signature and `data`, a retry after a 500, `ctx.setCallback`, failed jobs calling back, rotation, and bad callbacks refused at submission.
 - `CallbackDeliveryTest`: every way a job ends queues exactly one delivery; a metadata address fails once and isn't retried; secrets are created once and sealed.
 - The kv contract's `putIfAbsent`, and `ContractTest` (59 operations).
+
+### D-063 — Scripts start and follow jobs: `jobs.run`, `result()`, `events()`, `stop()`
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Context:** In 2017 a script could start a job with `Automately.startJob(script, config, callback, waitForJob)`, read one (`getJob`) and stop one (`stopJob`). `waitForJob` blocked the script's thread on a latch until the child finished. The rewrite had no way for a job to start another.
+
+**Decision:**
+- **The calls:**
+  - `jobs.run(script, input, options)` starts a job and returns a handle `{id, result(), events(handler), stop(reason)}`.
+  - `jobs.get(id)`, `jobs.stop(id, reason)` and `jobs.handle(id)` work on any of the tenant's jobs.
+  - The options are those of `POST /v1/jobs` (timeout, orphan policy, attempts, callback), checked the same way.
+  - The script can be an ES module's source or a function, which is sent as its source and so can't capture variables.
+- **Nothing blocks.** `result()` is a promise. It listens for the job's `end` event before looking at the job, so an end in between isn't missed, and looks again every 2 s in case the event was lost.
+- **Same tenant, same limits:**
+  - **Owner:** started jobs always belong to the caller's tenant. They're scheduled like API submissions (least-loaded node, D-005) and count toward the tenant's rate limit. The limiter is now created once per node and shared by the API, MCP and scripts.
+  - **Lineage:** each job records `parent` and `depth`.
+  - **Bounds:** depth stops at 5, and one run starts at most 100 jobs, so a script can't fork-bomb the cluster.
+  - **Other tenants:** their jobs look missing (`null` or `not_found`), as in the API.
+- **Waiting costs a slot.** A parent waiting on `result()` keeps its isolate. If the cluster has no room for the child, the child fails at once and the parent sees that, instead of the two waiting on each other. For a result after the parent's run has ended, completion callbacks (D-062) are the answer.
+
+**Tests:** `JobsFromScriptsTest` covers:
+- a parent awaiting a child, with function scripts
+- the parent link and depth
+- recursion stopping at level 5
+- stop and events
+- other tenants' jobs looking missing
+- bad runs refused

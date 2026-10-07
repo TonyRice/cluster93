@@ -136,7 +136,37 @@ final class Unavailable {
 
     static final FetchApi FETCH = request -> fail("fetch");
 
-    static final JobsApi JOBS = (url, data) -> fail("Jobs");
+    static final JobsApi JOBS = new JobsApi() {
+        @Override
+        public Future<Void> setCallback(String url, Object data) {
+            return fail("Jobs");
+        }
+
+        @Override
+        public Future<JsonObject> run(String script, JsonObject input, JsonObject options) {
+            return fail("Jobs");
+        }
+
+        @Override
+        public Future<JsonObject> get(String id) {
+            return fail("Jobs");
+        }
+
+        @Override
+        public Future<JsonObject> result(String id) {
+            return fail("Jobs");
+        }
+
+        @Override
+        public Future<JsonObject> stop(String id, String reason) {
+            return fail("Jobs");
+        }
+
+        @Override
+        public Future<Registration> events(String id, Consumer<Inbound> listener) {
+            return fail("Jobs");
+        }
+    };
 
     static final HttpApi HTTP = handler -> fail("Serving HTTP");
 
