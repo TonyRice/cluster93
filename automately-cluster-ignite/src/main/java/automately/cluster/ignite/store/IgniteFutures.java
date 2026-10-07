@@ -53,9 +53,13 @@ final class IgniteFutures {
 
     static boolean isTopologyChange(Throwable error) {
         for (Throwable t = error; t != null; t = t.getCause()) {
+            String message = String.valueOf(t.getMessage());
             if (t instanceof org.apache.ignite.cluster.ClusterTopologyException
                     || t instanceof org.apache.ignite.internal.cluster.ClusterTopologyCheckedException
-                    || String.valueOf(t.getMessage()).contains("topology")) {
+                    || message.contains("topology")
+                    // SQL while partitions are still moving (a fresh cluster, a node joining or leaving).
+                    || message.contains("Failed to reserve partitions for query")
+                    || message.contains("please retry the query")) {
                 return true;
             }
         }

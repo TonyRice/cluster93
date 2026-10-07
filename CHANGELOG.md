@@ -30,6 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - `FileStore.create` takes the most an upload may store; quotas moved out of the stores into `TenantQuota`.
 
 ### Fixed
+- **SQL during rebalancing is retried.** Ignite rejects a query with "Failed to reserve partitions" or "please retry the query" while partitions are still moving, for example right after a fresh cluster activates. Such errors now count as transient (D-033) and are retried. **Why:** one full Docker run got a 500 on the first upload to a fresh cluster. That upload runs two `SUM` queries for the quota, and this is the likely cause. It didn't reproduce, so the Docker test now includes container logs in its failure message.
 - The ArchUnit rule against mutable statics flagged a synthetic `$SWITCH_TABLE$` field that an IDE's Eclipse compiler had written into `target/classes`. Compiler-generated fields are now excluded.
 - **A 30 s stall when a node stopped** (D-042). The stall was listed as known in milestone 3. The cause was a binary schema (Vert.x's `RemoveRegistrationProcessor`) first sent while a node was leaving. Nodes now register every schema they'll send at start, and table rows always use one field order. **Why:** it would have hit every rolling restart, not just tests.
 
