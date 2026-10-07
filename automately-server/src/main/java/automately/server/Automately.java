@@ -54,6 +54,9 @@ import automately.core.host.HostRouter;
 import automately.core.host.HostApisFactory;
 import automately.core.host.NodeHostApis;
 import automately.core.queue.QueueService;
+import automately.core.callback.CallbackDelivery;
+import automately.core.callback.CallbackJobStore;
+import automately.core.callback.CallbackSecrets;
 import automately.core.host.ServeRegistry;
 import automately.core.host.InternalHttpVerticle;
 import automately.core.host.SharedDataKvStore;
@@ -228,7 +231,16 @@ public final class Automately {
                                             Stores stores, IgniteCluster cluster) {
         // A fresh id per process start: a restarted node must not be mistaken for its previous life (D-009).
         String instanceId = UUID.randomUUID().toString();
-        JobStore jobs = stores.jobs();
+        // One quota for everything a tenant stores: files, kv and queued messages together (D-043, D-061).
+        TenantQuota quota = new TenantQuota(config.tenantStorageBytes(),
+                tenant -> stores.files().usage(tenant).compose(files -> stores.kv().usage(tenant).map(kv -> files + kv))
+                        .compose(sum -> stores.queues().usage(tenant).map(queued -> sum + queued)));
+        QueueService queues = new QueueService(vertx, stores.queues(), quota, stores.capacity());
+        // Every way a job ends goes through this store, which queues the job's completion callback (D-062).
+        JobStore jobs = new CallbackJobStore(stores.jobs(), queues);
+        SecretBox secretBox = config.secretsKey() == null ? null : new SecretBox(config.secretsKey());
+        CallbackSecrets callbackSecrets = new CallbackSecrets(stores.kv(), secretBox);
+        FetchClient fetch = new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate()));
         JobStateStore state = stores.state();
         ServiceStore services = stores.services();
         DomainStore domains = stores.domains();
@@ -236,20 +248,15 @@ public final class Automately {
         ScriptRuntime runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
         JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
         ServeRegistry serving = new ServeRegistry();
-        // One quota for everything a tenant stores: files, kv and queued messages together (D-043, D-061).
-        TenantQuota quota = new TenantQuota(config.tenantStorageBytes(),
-                tenant -> stores.files().usage(tenant).compose(files -> stores.kv().usage(tenant).map(kv -> files + kv))
-                        .compose(sum -> stores.queues().usage(tenant).map(queued -> sum + queued)));
-        QueueService queues = new QueueService(vertx, stores.queues(), quota, stores.capacity());
         StorageRoom room = new StorageRoom(quota, stores.storage(), stores.files());
-        HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(),
-                new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving, stores.files(), stores.capacity(), quota, room, queues));
+        HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(), fetch, serving, stores.files(), stores.capacity(),
+                quota, room, queues, jobs));
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken());
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
-                        config.secretsKey() == null ? null : new SecretBox(config.secretsKey()), config.diskRoot(), stores.blobs().name()),
-                queues, () -> readiness(nodes, instanceId, cluster));
+                        secretBox, config.diskRoot(), stores.blobs().name()),
+                queues, callbackSecrets, () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         // A node whose file backend can't be used refuses to start, saying why, rather than failing uploads later.
         // Tenant disk providers need a disk root every node sees (D-057); a single node always does.
@@ -279,6 +286,7 @@ public final class Automately {
                     .compose(id -> vertx.deployVerticle(new RetentionVerticle(instanceId, jobs, state, nodes, config.jobRetention(),
                             RETENTION_INTERVAL)))
                     .compose(id -> vertx.deployVerticle(new FileGarbageVerticle(instanceId, stores.files(), nodes, FILE_GARBAGE_INTERVAL)))
+                    .compose(id -> new CallbackDelivery(queues, jobs, fetch, callbackSecrets).start())
                     .compose(id -> vertx.deployVerticle(api))
                     .compose(id -> vertx.deployVerticle(ingress))
                     .compose(id -> serveMetrics(vertx, config, instanceId, nodes, cluster))

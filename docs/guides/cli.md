@@ -51,6 +51,8 @@ The URL and token are saved in `~/.config/automately/config.json` (`%APPDATA%\au
 | | |
 |---|---|
 | `run hello.js --input '{"name":"x"}'` | Run a script and follow it. Logs go to **stderr**, the output to **stdout**, and the exit code is 0 only if it succeeded. `-d` returns the job id at once |
+| `run … --callback URL [--callback-data JSON]` | POST the signed result to `URL` when the job ends ([callbacks guide](callbacks.md)) |
+| `callbacks secret [--rotate]` | The secret that signs your callbacks |
 | `jobs ls · get · logs · steps · cancel` | Inspect jobs. `logs` replays a finished job, or follows a running one starting from its recent lines |
 | `services deploy NAME FILE [--config JSON] [--restart on-failure]` | Create or update a service; prints its status and hosts |
 | `services ls · get · logs · start · stop · restart · rm` | Manage services. `logs` follows the current run |

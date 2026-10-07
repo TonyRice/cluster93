@@ -18,6 +18,9 @@ public interface HostApis {
     /** The bus's durable mode, {@code bus.queue(name)}. */
     QueueApi queue();
 
+    /** The script's own job and the jobs it starts. */
+    JobsApi jobs();
+
     FilesApi files();
 
     FetchApi fetch();

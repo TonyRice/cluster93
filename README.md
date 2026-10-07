@@ -110,6 +110,7 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `POST` | `/v1/services/{name}/domains/{domain}/verify` | Check the TXT record; the domain routes once verified |
 | `POST` | `/v1/bus/{topic}` · `/v1/bus/{topic}/request` | Publish to a topic · call a `bus.handle`r and get its reply |
 | `POST` `GET` | `/v1/queues/{queue}` · `/v1/queues/{queue}/dead` | Push onto a durable queue · its counts and dead letters (retry, discard) |
+| `GET` `POST` | `/v1/callbacks/secret` · `/v1/callbacks/secret/rotate` | The secret that signs completion callbacks (`"callback": {url, data}` on a job) |
 | *ingress* | `:8000`, any path | Services' HTTP traffic, routed by host and proxied as a stream to the serving node |
 | `PUT` | `/v1/files/{path}` | Streamed upload (any size up to the quota) → `201` with `ETag`; `413` over quota, `507` when the cluster is out of room |
 | `GET` · `HEAD` | `/v1/files/{path}` | Download, with `Range` (206) and `If-None-Match` (304) |
@@ -264,6 +265,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus` and queues, `fetch`, `log`, `files`, and serving HTTP
 - [docs/guides/cli.md](docs/guides/cli.md): installing and using the CLI
 - [docs/guides/mcp.md](docs/guides/mcp.md): connecting AI agents over MCP
+- [docs/guides/callbacks.md](docs/guides/callbacks.md): receiving a job's result as a signed POST when it ends
 - [docs/guides/storage.md](docs/guides/storage.md): file storage, from the cluster's default to tenants' own buckets and folders
 
 ## Author

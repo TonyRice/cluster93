@@ -574,3 +574,24 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - `QueueScriptTest` (5 tests, real scripts in V8).
 - `HostApisTest`: a service on one node consumes what REST pushes through the other.
 - `ContractTest`, `McpTest` and `CliTest` cover the new operations.
+
+### D-062 — Completion callbacks: a signed POST when a job ends, delivered through a system queue
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Context:** In 2017 a job could carry a `callbackUrl`, and the job server POSTed `{token, status, success, error}` to it once when the job finished, with no signature, no retry and no output. The rewrite had nothing similar: callers polled or held an event stream open.
+
+**Decision:**
+- **Asking for one:** `callback: {url, data}` on `POST /v1/jobs`, or `ctx.setCallback(url, data)` from the script, which also works in a service's run. `data` (JSON, at most 16 KB) comes back unchanged. The URL must be http(s) with a host, at most 2,048 characters.
+- **One hook for every ending.** `CallbackJobStore` wraps the job store and queues a delivery whenever an update moves a job with a callback into a terminal status. Finishing, orphaning, cancelling and rejecting are all such updates, and compare-and-set lets only one of them end a job. The queue key is the job id, so a repeat is a no-op anyway.
+- **Delivery through a durable system queue** (D-061, tenant `@system`, queue `callbacks`), consumed by every node. Deliveries therefore survive the node that queued them and share the queue's retries: 8 attempts, at 1 s, 4 s, 16 s, 64 s, 256 s and then every 10 min, about half an hour in all.
+- **Each delivery reads the job as it is then,** and POSTs `{jobId, status, output, error, attempt, finishedAt, service, data}` through the `fetch` client. So the egress policy applies (D-026): private and metadata addresses are refused unless the operator allows them, and redirects aren't followed. A refused address fails at once rather than being retried.
+- **Signature:** `Automately-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, t + "." + body)>`, the scheme receivers already know from other webhook senders. Each delivery also carries its id (`Automately-Delivery`) and attempt number (`Automately-Attempt`).
+- **Secrets:** one per tenant, created on first use. They're stored in the replicated kv store under the system tenant, which no token can reach. Creation uses a new atomic `KvStore.putIfAbsent`, so racing nodes agree on one secret. They're sealed with `AUTOMATELY_SECRETS_KEY` when it's set (D-057); if that key changes, the secret is replaced as a rotation would. Read or rotate it with `GET /v1/callbacks/secret` and `POST …/rotate` (scope `tokens:write`), or `automately callbacks secret [--rotate]`.
+- **Progress is recorded on the job:** `callback: {url, data, status: PENDING | DELIVERED | FAILED, attempts, deliveredAt, lastError}`.
+
+**Why the cluster secret isn't used to derive tenant secrets:** it lives in the cluster manager's shared map, which isn't kept across a full restart, so the derived secrets would change under receivers.
+
+**Tests:**
+- `CallbacksTest`, a node posting to a local receiver: the signature and `data`, a retry after a 500, `ctx.setCallback`, failed jobs calling back, rotation, and bad callbacks refused at submission.
+- `CallbackDeliveryTest`: every way a job ends queues exactly one delivery; a metadata address fails once and isn't retried; secrets are created once and sealed.
+- The kv contract's `putIfAbsent`, and `ContractTest` (59 operations).

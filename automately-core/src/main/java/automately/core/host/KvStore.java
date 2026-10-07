@@ -15,6 +15,12 @@ public interface KvStore {
     /** {@code ttlMs} null means no expiry. */
     Future<Void> set(String tenant, String namespace, String key, Object value, Long ttlMs);
 
+    /**
+     * Stores {@code value} (without expiry) unless the key holds a value; completes with the value that is stored
+     * afterwards, so racing writers agree on one.
+     */
+    Future<Object> putIfAbsent(String tenant, String namespace, String key, Object value);
+
     /** Completes with whether a live entry was removed. */
     Future<Boolean> delete(String tenant, String namespace, String key);
 

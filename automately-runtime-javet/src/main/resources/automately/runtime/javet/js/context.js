@@ -50,6 +50,8 @@ const makeContext = (c) => {
       return serve(handler);
     },
     sleep: (ms) => new Promise((resolve) => schedule(resolve, ms, [], false)),
+    // Where this job's result is POSTed when it ends, signed (D-062); `data` comes back with it.
+    setCallback: (url, data) => host.jobs.setCallback(url, data),
     stepKey,
     async saveCheckpoint(value) {
       store('saveCheckpoint', toJson(value, 'A checkpoint'));

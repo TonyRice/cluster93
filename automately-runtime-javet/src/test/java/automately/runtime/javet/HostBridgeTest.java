@@ -143,6 +143,11 @@ class HostBridgeTest {
         }
 
         @Override
+        public automately.core.runtime.api.JobsApi jobs() {
+            return HostApis.NONE.jobs();
+        }
+
+        @Override
         public HttpApi http() {
             return handler -> {
                 servers.add(handler);

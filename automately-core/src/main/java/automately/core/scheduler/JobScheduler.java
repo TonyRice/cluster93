@@ -37,9 +37,15 @@ public final class JobScheduler {
     }
 
     public Future<Job> submit(String tenant, String script, JsonObject input, Duration timeout, OrphanPolicy onOrphan, int maxAttempts) {
+        return submit(tenant, script, input, timeout, onOrphan, maxAttempts, java.util.function.UnaryOperator.identity());
+    }
+
+    /** As {@link #submit}, with {@code prepare} applied to the job before it's saved, such as attaching a callback. */
+    public Future<Job> submit(String tenant, String script, JsonObject input, Duration timeout, OrphanPolicy onOrphan, int maxAttempts,
+                              java.util.function.UnaryOperator<Job> prepare) {
         automately.core.metrics.Metrics.of(vertx).jobSubmitted(false);
-        Job job = Job.queued(UUID.randomUUID().toString(), tenant, script, input, timeout.toMillis(), onOrphan, maxAttempts,
-                System.currentTimeMillis());
+        Job job = prepare.apply(Job.queued(UUID.randomUUID().toString(), tenant, script, input, timeout.toMillis(), onOrphan, maxAttempts,
+                System.currentTimeMillis()));
         return jobs.save(job)
                 .compose(v -> dispatch(job))
                 .recover(err -> jobs.update(job.id(), current -> current.rejected(err.getMessage(), System.currentTimeMillis()))

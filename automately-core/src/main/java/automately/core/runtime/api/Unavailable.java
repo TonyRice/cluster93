@@ -136,6 +136,8 @@ final class Unavailable {
 
     static final FetchApi FETCH = request -> fail("fetch");
 
+    static final JobsApi JOBS = (url, data) -> fail("Jobs");
+
     static final HttpApi HTTP = handler -> fail("Serving HTTP");
 
     static final HostApis APIS = new HostApis() {
@@ -152,6 +154,11 @@ final class Unavailable {
         @Override
         public QueueApi queue() {
             return QUEUE;
+        }
+
+        @Override
+        public JobsApi jobs() {
+            return JOBS;
         }
 
         @Override

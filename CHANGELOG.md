@@ -26,6 +26,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Core features, part 3 — Completion callbacks (2026-10-07)
+
+### Added
+- **A job's result can be POSTed to a URL when the job ends, signed (D-062).** Ask with `"callback": {"url", "data"}` on `POST /v1/jobs`, `automately run --callback URL --callback-data JSON`, or `ctx.setCallback(url, data)` from the script, which also works in a service's run.
+  - **What's sent:** the body is `{jobId, status, output, error, attempt, finishedAt, service, data}`, with `data` returned unchanged.
+  - **Signature:** `Automately-Signature: t=…,v1=HMAC-SHA256(secret, t + "." + body)`.
+  - **Retries:** up to 8 attempts with backoff, through a durable system queue (D-061), so a delivery survives the node that queued it. Each attempt is recorded on the job (`callback.status`, `attempts`, `deliveredAt`, `lastError`).
+  - **Why:** 2017's `callbackUrl` was a core feature that the rewrite didn't have. Its POST was unsigned, sent once, and left out the output.
+- **Every way a job ends** (finished, failed, timed out, cancelled, orphaned, rejected) queues exactly one delivery, through one `JobStore` wrapper.
+- **The address passes the `fetch` checks** (D-026). A refused address fails at once instead of retrying.
+- **Each tenant has a signing secret:** `GET /v1/callbacks/secret` and `POST /v1/callbacks/secret/rotate`, or `automately callbacks secret [--rotate]`. It's stored under the system tenant and sealed with `AUTOMATELY_SECRETS_KEY` when one is set.
+- **`KvStore.putIfAbsent`,** so nodes racing to create a secret agree on one.
+- `docs/guides/callbacks.md`: what a receiver gets, and how to check the signature in Node.js and Python.
+- **Tests:**
+  - `CallbacksTest` (5)
+  - `CallbackDeliveryTest` (3)
+  - the kv contract's `putIfAbsent`
+  - CLI coverage, and the OpenAPI contract with 59 operations
+
 ## Core features, part 2 — Durable queues: `bus.queue(name)` (2026-10-07)
 
 ### Added

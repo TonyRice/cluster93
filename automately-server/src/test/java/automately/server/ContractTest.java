@@ -118,7 +118,9 @@ class ContractTest {
 
         String jobId = calls.check("submitJob", "POST", "/v1/jobs", tenant, new JsonObject()
                 .put("script", "export default async (input, ctx) => { console.log('hi'); await ctx.step('one', async () => 1); return input; }")
-                .put("input", new JsonObject().put("a", 1))).bodyAsJsonObject().getString("id");
+                .put("input", new JsonObject().put("a", 1))
+                .put("callback", new JsonObject().put("url", "https://receiver.invalid/hook").put("data", new JsonObject().put("order", 7))))
+                .bodyAsJsonObject().getString("id");
         awaitStatus(tenant, jobId);
         calls.check("getJob", "GET", "/v1/jobs/" + jobId, tenant, null);
         calls.check("listJobs", "GET", "/v1/jobs?limit=10", tenant, null);
@@ -150,6 +152,8 @@ class ContractTest {
         calls.check("publish", "POST", "/v1/bus/news", tenant, new JsonObject().put("hello", true));
         calls.check("request", "POST", "/v1/bus/nobody-listens/request?timeoutMs=500", tenant, new JsonObject());
 
+        calls.check("getCallbackSecret", "GET", "/v1/callbacks/secret", tenant, null);
+        calls.check("rotateCallbackSecret", "POST", "/v1/callbacks/secret/rotate", tenant, null);
         calls.check("pushQueueMessage", "POST", "/v1/queues/emails", tenant,
                 new JsonObject().put("message", new JsonObject().put("to", "a@example.com")).put("key", "welcome-1").put("maxAttempts", 3));
         calls.check("getQueue", "GET", "/v1/queues/emails", tenant, null);

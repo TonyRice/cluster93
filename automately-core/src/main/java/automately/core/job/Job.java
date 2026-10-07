@@ -26,6 +26,8 @@ import java.util.Optional;
  * @param attempts        history of attempts that have ended, oldest first
  * @param queuedAt        when the current attempt was (re)queued, used to re-dispatch jobs no node picked up
  * @param output          the JSON value the script returned
+ * @param callback        where to POST the result when the job ends, and how delivering it went (D-062), or null:
+ *                        {@code {url, data, status: PENDING|DELIVERED|FAILED, attempts, deliveredAt, lastError}}
  */
 public record Job(
         String id,
@@ -48,7 +50,8 @@ public record Job(
         long createdAt,
         long queuedAt,
         Long startedAt,
-        Long finishedAt) {
+        Long finishedAt,
+        JsonObject callback) {
 
     public Job {
         Objects.requireNonNull(id, "id");
@@ -69,7 +72,7 @@ public record Job(
     public static Job queued(String id, String tenant, String script, JsonObject input, long timeoutMs,
                              OrphanPolicy onOrphan, int maxAttempts, ServiceRef service, long now) {
         return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, JobStatus.QUEUED, 1,
-                null, null, null, service, null, null, List.of(), List.of(), now, now, null, null);
+                null, null, null, service, null, null, List.of(), List.of(), now, now, null, null, null);
     }
 
     /** True when {@code attempt} on {@code nodeInstance} is still the one that owns this job. */
@@ -161,6 +164,24 @@ public record Job(
         return Optional.of(edit().node(null, null).queuedAt(now).build());
     }
 
+    /** Sets where the result goes when the job ends; only until it has ended (D-062). */
+    public Optional<Job> withCallback(String url, Object data) {
+        if (status.isTerminal()) {
+            return Optional.empty();
+        }
+        return Optional.of(edit().callback(new JsonObject().put("url", url).put("data", data).put("status", "PENDING").put("attempts", 0))
+                .build());
+    }
+
+    /** Records an attempt to deliver the callback. */
+    public Optional<Job> callbackDelivery(String deliveryStatus, int deliveryAttempts, String lastError, Long deliveredAt) {
+        if (callback == null) {
+            return Optional.empty();
+        }
+        return Optional.of(edit().callback(callback.copy().put("status", deliveryStatus).put("attempts", deliveryAttempts)
+                .put("lastError", lastError).put("deliveredAt", deliveredAt)).build());
+    }
+
     private List<Attempt> withHistory(JobStatus outcome, long now) {
         List<Attempt> history = new ArrayList<>(attempts);
         history.add(new Attempt(attempt, node, nodeInstance, startedAt, now, outcome));
@@ -189,7 +210,8 @@ public record Job(
                 .put("createdAt", createdAt)
                 .put("queuedAt", queuedAt)
                 .put("startedAt", startedAt)
-                .put("finishedAt", finishedAt);
+                .put("finishedAt", finishedAt)
+                .put("callback", callback);
     }
 
     /** The public view of a job, without the script source or internal node instance ids. */
@@ -223,7 +245,8 @@ public record Job(
                 json.getLong("createdAt", 0L),
                 json.getLong("queuedAt", json.getLong("createdAt", 0L)),
                 json.getLong("startedAt"),
-                json.getLong("finishedAt"));
+                json.getLong("finishedAt"),
+                json.getJsonObject("callback"));
     }
 
     /** Starts a modified copy; used by transitions and tests. */
@@ -247,6 +270,7 @@ public record Job(
         private long queuedAt;
         private Long startedAt;
         private Long finishedAt;
+        private JsonObject callback;
 
         private Editor(Job base) {
             this.base = base;
@@ -262,6 +286,7 @@ public record Job(
             this.queuedAt = base.queuedAt;
             this.startedAt = base.startedAt;
             this.finishedAt = base.finishedAt;
+            this.callback = base.callback;
         }
 
         Editor status(JobStatus value) { status = value; return this; }
@@ -275,11 +300,12 @@ public record Job(
         Editor queuedAt(long value) { queuedAt = value; return this; }
         Editor startedAt(Long value) { startedAt = value; return this; }
         Editor finishedAt(Long value) { finishedAt = value; return this; }
+        Editor callback(JsonObject value) { callback = value; return this; }
 
         Job build() {
             return new Job(base.id, base.tenant, base.script, base.input, base.timeoutMs, base.onOrphan, base.maxAttempts, status,
                     attempt, node, nodeInstance, cancelRequested, base.service, output, error, logs, attempts, base.createdAt,
-                    queuedAt, startedAt, finishedAt);
+                    queuedAt, startedAt, finishedAt, callback);
         }
     }
 }

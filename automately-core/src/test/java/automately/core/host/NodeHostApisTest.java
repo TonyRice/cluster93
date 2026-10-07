@@ -108,7 +108,7 @@ class NodeHostApisTest {
 
     private NodeHostApis quotaHost(automately.core.files.FileStore files, automately.core.storage.TenantQuota quota) {
         return new NodeHostApis(new NodeHostApis.Node(vertx, kv, new FetchClient(vertx, EgressPolicy.PUBLIC_ONLY), serve, files,
-                automately.core.files.StorageCapacity.UNLIMITED, quota, (t, target) -> quota.remaining(t), null), "acme", "job-q", false);
+                automately.core.files.StorageCapacity.UNLIMITED, quota, (t, target) -> quota.remaining(t), null, null), "acme", "job-q", false);
     }
 
     @Test

@@ -52,6 +52,23 @@ public final class SharedDataKvStore implements KvStore {
     }
 
     @Override
+    public Future<Object> putIfAbsent(String tenant, String namespace, String key, Object value) {
+        JsonObject entry = new JsonObject().put("value", value).put("size", KvStore.entrySize(namespace, key, value));
+        String mapKey = mapKey(tenant, namespace, key);
+        return map.compose(m -> m.putIfAbsent(mapKey, entry).compose(existing -> {
+            if (existing == null) {
+                return Future.succeededFuture(value);
+            }
+            if (live(existing, System.currentTimeMillis())) {
+                return Future.succeededFuture(existing.getValue("value"));
+            }
+            // An expired entry doesn't count: replace it, unless someone else just did.
+            return m.replaceIfPresent(mapKey, existing, entry)
+                    .compose(replaced -> replaced ? Future.succeededFuture(value) : m.get(mapKey).map(now -> now == null ? null : now.getValue("value")));
+        }));
+    }
+
+    @Override
     public Future<Boolean> delete(String tenant, String namespace, String key) {
         return map.compose(m -> m.remove(mapKey(tenant, namespace, key)))
                 .map(previous -> live(previous, System.currentTimeMillis()));

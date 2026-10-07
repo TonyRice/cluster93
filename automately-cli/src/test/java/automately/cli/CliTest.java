@@ -150,6 +150,22 @@ class CliTest {
     }
 
     @Test
+    void callbackSecretsCanBeShownAndRotated() throws Exception {
+        loginAsNewTenant("hooks");
+        String secret = cli("callbacks", "secret").out().strip();
+        assertThat(secret).startsWith("whsec_");
+        String rotated = cli("callbacks", "secret", "--rotate").out().strip();
+        assertThat(rotated).startsWith("whsec_").isNotEqualTo(secret);
+        assertThat(cli("callbacks", "secret").out().strip()).isEqualTo(rotated);
+
+        Path script = home.resolve("cb.js");
+        Files.writeString(script, "export default () => 1");
+        Result submitted = cli("--json", "run", "-d", script.toString(), "--callback", "https://example.com/hook", "--callback-data", "{\"n\":1}");
+        assertThat(submitted.code()).as(submitted.err()).isZero();
+        assertThat(submitted.json().get("callback").get("data").get("n").asInt()).isEqualTo(1);
+    }
+
+    @Test
     void queuesPushShowStatsAndManageDeadLetters() throws Exception {
         loginAsNewTenant("queues");
 

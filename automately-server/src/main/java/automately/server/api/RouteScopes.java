@@ -61,6 +61,8 @@ final class RouteScopes {
             rule("GET", "/v1/tokens", "listTokens", Who.TENANT, Scopes.TOKENS_WRITE),
             json("POST", "/v1/tokens", "createToken", Who.TENANT, Scopes.TOKENS_WRITE, SMALL),
             rule("DELETE", "/v1/tokens/" + SEG, "revokeToken", Who.TENANT, Scopes.TOKENS_WRITE),
+            rule("GET", "/v1/callbacks/secret", "getCallbackSecret", Who.TENANT, Scopes.TOKENS_WRITE),
+            rule("POST", "/v1/callbacks/secret/rotate", "rotateCallbackSecret", Who.TENANT, Scopes.TOKENS_WRITE),
 
             rule("GET", "/v1/jobs", "listJobs", Who.TENANT, Scopes.JOBS_READ),
             json("POST", "/v1/jobs", "submitJob", Who.TENANT, Scopes.JOBS_WRITE, ApiVerticle.MAX_SCRIPT_BYTES + 4_096),

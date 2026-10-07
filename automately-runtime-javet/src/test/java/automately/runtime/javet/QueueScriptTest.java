@@ -49,7 +49,7 @@ class QueueScriptTest {
         vertx = Vertx.vertx();
         queues = new QueueService(vertx, new SharedDataQueueStore(vertx), TenantQuota.unlimited(), StorageCapacity.UNLIMITED);
         node = new NodeHostApis.Node(vertx, new SharedDataKvStore(vertx), new FetchClient(vertx, EgressPolicy.PUBLIC_ONLY), new ServeRegistry(),
-                null, StorageCapacity.UNLIMITED, TenantQuota.unlimited(), Room.fixed(Long.MAX_VALUE), queues);
+                null, StorageCapacity.UNLIMITED, TenantQuota.unlimited(), Room.fixed(Long.MAX_VALUE), queues, null);
     }
 
     @AfterEach

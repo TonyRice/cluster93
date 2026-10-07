@@ -68,6 +68,16 @@ public final class IgniteKvStore implements KvStore {
     }
 
     @Override
+    public Future<Object> putIfAbsent(String tenant, String namespace, String key, Object value) {
+        String rowKey = key(tenant, namespace, key);
+        JsonObject row = row(tenant, namespace, key, value, null);
+        return table.putIfAbsent(rowKey, row).compose(created -> created ? Future.succeededFuture(value)
+                : table.update(rowKey, current -> live(current, System.currentTimeMillis()) ? Optional.empty() : Optional.of(row))
+                        .compose(replaced -> replaced.isPresent() ? Future.succeededFuture(value)
+                                : table.get(rowKey).map(current -> current == null ? null : current.getValue("value"))));
+    }
+
+    @Override
     public Future<Boolean> delete(String tenant, String namespace, String key) {
         return table.remove(key(tenant, namespace, key)).map(previous -> live(previous, System.currentTimeMillis()));
     }

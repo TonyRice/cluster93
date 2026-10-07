@@ -47,6 +47,7 @@ POST /v1/jobs
 | `await ctx.saveCheckpoint(value)` | `Promise<void>` | Stores `value` durably before resolving |
 | `await ctx.step(name, fn)` | `Promise<result>` | Runs `fn` at most once per job (see below) |
 | `ctx.stepKey(name)` | `string` | `"<jobId>:<name>"`, a stable idempotency key |
+| `await ctx.setCallback(url, data?)` | `Promise<void>` | POST the result, signed, to `url` when the job ends; `data` comes back with it ([callbacks guide](../guides/callbacks.md)) |
 
 ### `ctx.step(name, fn)`
 - If the step **already completed** in an earlier attempt (resume only), it returns the stored result. `fn` is **not called**.

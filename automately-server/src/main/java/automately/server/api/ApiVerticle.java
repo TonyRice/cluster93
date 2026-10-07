@@ -66,6 +66,7 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.files.Room room;
     private final StorageApi.Wiring storage;
     private final automately.core.queue.QueueService queues;
+    private final automately.core.callback.CallbackSecrets callbackSecrets;
     /** Why this node shouldn't take traffic yet; empty when it should. */
     private final java.util.function.Supplier<Future<List<String>>> notReady;
     /** Marks the MCP tools' own calls to this API, which the tool call already counted (D-047). */
@@ -81,9 +82,11 @@ public final class ApiVerticle extends VerticleBase {
                        ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter, FileStore files,
                        automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
                        automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage,
-                       automately.core.queue.QueueService queues, java.util.function.Supplier<Future<List<String>>> notReady) {
+                       automately.core.queue.QueueService queues, automately.core.callback.CallbackSecrets callbackSecrets,
+                       java.util.function.Supplier<Future<List<String>>> notReady) {
         this.notReady = notReady;
         this.queues = queues;
+        this.callbackSecrets = callbackSecrets;
         this.room = room;
         this.storage = storage;
         this.limiter = new automately.core.auth.RateLimiter(config.rateLimitPerMinute());
@@ -149,6 +152,10 @@ public final class ApiVerticle extends VerticleBase {
         new FilesRoutes(files, quota, room).mount(router);
         new BusRoutes(vertx).mount(router);
         new QueueRoutes(queues).mount(router);
+        router.get("/v1/callbacks/secret").handler(ctx -> callbackSecrets.secret(ctx.get("tenant"))
+                .onSuccess(secret -> ctx.json(new JsonObject().put("secret", secret))).onFailure(ctx::fail));
+        router.post("/v1/callbacks/secret/rotate").handler(ctx -> callbackSecrets.rotate(ctx.get("tenant"))
+                .onSuccess(secret -> ctx.json(new JsonObject().put("secret", secret))).onFailure(ctx::fail));
         router.post("/v1/jobs").handler(this::submitJob);
         router.get("/v1/jobs").handler(this::listJobs);
         router.get("/v1/jobs/:id").handler(this::getJob);
@@ -375,7 +382,22 @@ public final class ApiVerticle extends VerticleBase {
             maxAttempts = requested;
         }
 
-        scheduler.submit(ctx.get("tenant"), script, (JsonObject) input, timeout, onOrphan, maxAttempts)
+        java.util.function.UnaryOperator<Job> prepare = java.util.function.UnaryOperator.identity();
+        if (body.getValue("callback") != null) {
+            if (!(body.getValue("callback") instanceof JsonObject callback) || !(callback.getValue("url") instanceof String url)) {
+                error(ctx, 400, "invalid_request", "\"callback\" must be an object with a \"url\"");
+                return;
+            }
+            try {
+                automately.core.callback.Callbacks.validate(url, callback.getValue("data"));
+            } catch (automately.core.runtime.HostException e) {
+                error(ctx, 400, "invalid_request", e.getMessage());
+                return;
+            }
+            Object data = callback.getValue("data");
+            prepare = job -> job.withCallback(url, data).orElseThrow();
+        }
+        scheduler.submit(ctx.get("tenant"), script, (JsonObject) input, timeout, onOrphan, maxAttempts, prepare)
                 .onSuccess(job -> ctx.response()
                         .setStatusCode(202)
                         .putHeader("Location", "/v1/jobs/" + job.id())

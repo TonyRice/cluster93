@@ -34,7 +34,7 @@ Automately runs other people's code. This page describes who is trusted, what ea
 - **Validation.** Requests are validated against the OpenAPI contract before any handler runs.
 - **Limits.** Per-tenant rate limits and storage quotas (D-043, D-051) bound what one tenant can take. Admission control refuses writes before disk or memory runs out, so uploads can't crash a node (D-038).
 
-**Outbound requests (`fetch`, tenant S3 endpoints)** (D-026):
+**Outbound requests (`fetch`, completion callbacks, tenant S3 endpoints)** (D-026, D-062):
 - Private, loopback, link-local (including cloud metadata at 169.254.169.254), CGNAT and other reserved addresses are refused.
 - The connection goes to the exact address that was checked, so DNS rebinding can't swap one in.
 - Redirects aren't followed.
@@ -43,6 +43,7 @@ Automately runs other people's code. This page describes who is trusted, what ea
 **Secrets at rest:**
 - Tenants' storage credentials are encrypted with AES-256-GCM, using a key derived from `AUTOMATELY_SECRETS_KEY`, with the tenant and provider bound in as associated data. They're write-only in the API (D-057).
 - Token secrets are never stored, only their hashes.
+- Each tenant's callback signing secret is kept in the cluster under the system tenant, which no token can reach. It's sealed with `AUTOMATELY_SECRETS_KEY` when one is set, so set one in production (D-062).
 
 **Between nodes** (D-036):
 - The internal endpoint that carries service traffic between nodes requires a cluster secret, agreed once through the cluster.

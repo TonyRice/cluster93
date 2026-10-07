@@ -45,7 +45,7 @@ await q.stats();        // { ready, inFlight, dead }
 - **REST and tools:** `POST /v1/queues/{name}`, `GET /v1/queues/{name}`, and the dead-letter endpoints, with scopes `queues:read` and `queues:write`, plus CLI commands and MCP tools.
 - **As built:** there's no separate sweeper; the next claim takes back a message whose lease ran out. Consumers extend leases while handlers work, and a script that ends mid-message gives the message back without counting an attempt. See [the reference](../scripting/host-apis.md#busqueuename-durable-queues).
 
-### 3. Completion callbacks
+### 3. Completion callbacks (D-062) — done
 - **Setting one:** `POST /v1/jobs` (and services) accept `callback: { url, data? }`, and a script can set its own with `ctx.setCallback(url, data)`, as `setCallbackUrl` did in 2017.
 - **Delivery goes through an internal queue (part 2),** so retries and failover are shared. Whoever records the terminal status enqueues the delivery: the node finishing the job, the reaper orphaning it, or a cancel.
 - **The POST:**
@@ -54,6 +54,7 @@ await q.stats();        // { ready, inFlight, dead }
   - **Network:** the request passes the egress policy (D-026).
   - **Retries:** a failed POST is retried with backoff, then given up and counted.
 - **Secret:** one per tenant (`GET /v1/callbacks/secret`, `POST …/rotate`), sealed like storage credentials (D-057).
+- **As built:** a `JobStore` wrapper queues the delivery on any update that ends a job with a callback, which covers every way a job ends in one place. Secrets live in the replicated kv store under the system tenant, created with put-if-absent. A refused address fails at once. See the [callbacks guide](../guides/callbacks.md).
 - **On the job:** `callback.deliveredAt`, `callback.attempts` and `callback.lastError` are shown.
 
 ### 4. A `jobs` API for scripts

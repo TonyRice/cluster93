@@ -549,6 +549,13 @@ paths:
                 timeoutMs: { type: integer, minimum: 1 }
                 onOrphan: { type: string, enum: [fail, retry, resume] }
                 maxAttempts: { type: integer, minimum: 1, maximum: 10 }
+                callback:
+                  type: object
+                  description: Where the result is POSTed, signed, when the job ends (D-062). `data` comes back unchanged.
+                  required: [url]
+                  properties:
+                    url: { type: string, maxLength: 2048 }
+                    data: {}
       responses:
         '202':
           description: Accepted; the job is queued.
@@ -953,6 +960,36 @@ paths:
                   value: {}
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/callbacks/secret:
+    get:
+      operationId: getCallbackSecret
+      tags: [jobs]
+      summary: The secret that signs your completion callbacks (created on first use)
+      security:
+        - bearer: ['tokens:write']
+      responses:
+        '200':
+          description: Check `Automately-Signature` (`t=…,v1=…`) as HMAC-SHA256 of `t + "." + body` with this secret.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CallbackSecret' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/callbacks/secret/rotate:
+    post:
+      operationId: rotateCallbackSecret
+      tags: [jobs]
+      summary: Replace the callback secret; callbacks are signed with the new one from now on
+      security:
+        - bearer: ['tokens:write']
+      responses:
+        '200':
+          description: The new secret.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CallbackSecret' }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/queues/{queue}:
     parameters:
       - $ref: '#/components/parameters/queue'
@@ -1246,6 +1283,11 @@ components:
         application/octet-stream: {}
 
   schemas:
+    CallbackSecret:
+      type: object
+      required: [secret]
+      properties:
+        secret: { type: string }
     QueueMessage:
       type: object
       required: [id, queue, status, attempt, maxAttempts, enqueuedAt]
@@ -1375,6 +1417,15 @@ components:
         queuedAt: { type: [integer, 'null'] }
         startedAt: { type: [integer, 'null'] }
         finishedAt: { type: [integer, 'null'] }
+        callback:
+          type: [object, 'null']
+          properties:
+            url: { type: string }
+            data: {}
+            status: { type: string, enum: [PENDING, DELIVERED, FAILED] }
+            attempts: { type: integer }
+            deliveredAt: { type: [integer, 'null'] }
+            lastError: { type: [string, 'null'] }
     Service:
       type: object
       required: [name, status, enabled, revision, runs, hosts]

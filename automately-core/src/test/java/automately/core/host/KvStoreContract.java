@@ -33,6 +33,21 @@ public abstract class KvStoreContract {
     }
 
     @Test
+    public void putIfAbsentKeepsTheFirstValueAndRacersAgree() throws Exception {
+        java.util.List<io.vertx.core.Future<Object>> racing = new java.util.ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            racing.add(kv.putIfAbsent("t", "secrets", "s", "value-" + i));
+        }
+        await(io.vertx.core.Future.all(racing));
+        Object winner = await(kv.get("t", "secrets", "s"));
+        racing.forEach(f -> assertThat(f.result()).isEqualTo(winner));
+
+        await(kv.set("t", "secrets", "expiring", "old", 50L));
+        Thread.sleep(100);
+        assertThat(await(kv.putIfAbsent("t", "secrets", "expiring", "new"))).as("an expired value doesn't count").isEqualTo("new");
+    }
+
+    @Test
     public void tenantsAndNamespacesAreSeparate() throws Exception {
         await(kv.set("acme", "default", "k", "acme", null));
         await(kv.set("acme", "other", "k", "acme-other", null));

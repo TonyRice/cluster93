@@ -31,6 +31,12 @@ final class RunCommand extends Base {
     @Option(names = "--max-attempts", paramLabel = "N", description = "Attempts allowed with retry or resume.")
     Integer maxAttempts;
 
+    @Option(names = "--callback", paramLabel = "URL", description = "POST the signed result here when the job ends.")
+    String callback;
+
+    @Option(names = "--callback-data", paramLabel = "JSON", description = "JSON that comes back with the callback.")
+    String callbackData;
+
     @Option(names = {"-d", "--detach"}, description = "Print the job id and return without following it.")
     boolean detach;
 
@@ -52,6 +58,15 @@ final class RunCommand extends Base {
         }
         if (maxAttempts != null) {
             body.put("maxAttempts", maxAttempts);
+        }
+        if (callback != null) {
+            ObjectNode hook = Json.object().put("url", callback);
+            if (callbackData != null) {
+                hook.set("data", Json.parse(callbackData));
+            }
+            body.set("callback", hook);
+        } else if (callbackData != null) {
+            throw new CliException("--callback-data needs --callback", 2);
         }
         Api api = api();
         JsonNode job = api.post("/v1/jobs", body);
