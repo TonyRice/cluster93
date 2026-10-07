@@ -1,5 +1,8 @@
 package automately.core.host;
 
+import automately.core.files.FileResponder;
+import automately.core.files.FileStore;
+import automately.core.files.StorageCapacity;
 import automately.core.runtime.FetchedResponse;
 import automately.core.runtime.HostException;
 import automately.core.runtime.HttpExchange;
@@ -41,10 +44,20 @@ public final class NodeHostServices implements HostServices {
     private final KvStore kv;
     private final FetchClient fetch;
     private final ServeRegistry serve;
+    private final FileStore files;
+    private final StorageCapacity capacity;
+    private final List<automately.core.files.FileWriter> openWriters = new CopyOnWriteArrayList<>();
     private final List<Registration> registrations = new CopyOnWriteArrayList<>();
     private final AtomicInteger fetchesInFlight = new AtomicInteger();
 
     public NodeHostServices(Vertx vertx, String tenant, String jobId, boolean service, KvStore kv, FetchClient fetch, ServeRegistry serve) {
+        this(vertx, tenant, jobId, service, kv, fetch, serve, null, StorageCapacity.UNLIMITED);
+    }
+
+    public NodeHostServices(Vertx vertx, String tenant, String jobId, boolean service, KvStore kv, FetchClient fetch, ServeRegistry serve,
+                            FileStore files, StorageCapacity capacity) {
+        this.files = files;
+        this.capacity = capacity;
         this.vertx = vertx;
         this.tenant = tenant;
         this.jobId = jobId;
@@ -55,8 +68,9 @@ public final class NodeHostServices implements HostServices {
     }
 
     /** A factory sharing one store, client and registry across a node's executions. */
-    public static HostServicesFactory factory(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve) {
-        return (tenant, jobId, service) -> new NodeHostServices(vertx, tenant, jobId, service, kv, fetch, serve);
+    public static HostServicesFactory factory(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files,
+                                              StorageCapacity capacity) {
+        return (tenant, jobId, service) -> new NodeHostServices(vertx, tenant, jobId, service, kv, fetch, serve, files, capacity);
     }
 
     @Override
@@ -64,10 +78,13 @@ public final class NodeHostServices implements HostServices {
         try {
             return switch (operation) {
                 case "kv.get" -> kv.get(tenant, namespace(args), key(args));
-                case "kv.set" -> kv.set(tenant, namespace(args), key(args), value(args, "value"), ttl(args)).map(v -> null);
+                case "kv.set" -> withRoom(() -> kv.set(tenant, namespace(args), key(args), value(args, "value"), ttl(args)).map(v -> null));
                 case "kv.delete" -> kv.delete(tenant, namespace(args), key(args)).map(Object.class::cast);
                 case "kv.list" -> kv.list(tenant, namespace(args), prefix(args), limit(args), args.getString("cursor")).map(Object.class::cast);
-                case "kv.increment" -> kv.increment(tenant, namespace(args), key(args), by(args)).map(Object.class::cast);
+                case "kv.increment" -> withRoom(() -> kv.increment(tenant, namespace(args), key(args), by(args)).map(Object.class::cast));
+                case "files.stat" -> filesOrFail().stat(tenant, path(args)).map(info -> info == null ? null : (Object) info.toViewJson());
+                case "files.list" -> filesOrFail().list(tenant, prefix(args), limit(args), args.getString("cursor")).map(Object.class::cast);
+                case "files.delete" -> filesOrFail().delete(tenant, path(args)).map(Object.class::cast);
                 case "bus.publish" -> publish(args);
                 case "bus.request" -> request(args);
                 default -> Future.failedFuture(new HostException("Error", "unknown_operation", "Unknown host operation " + operation));
@@ -91,7 +108,70 @@ public final class NodeHostServices implements HostServices {
     }
 
     @Override
+    public Future<automately.core.files.FileWriter> createFile(JsonObject args) {
+        try {
+            String path = path(args);
+            return capacity.ensureRoom()
+                    .compose(room -> filesOrFail().create(tenant, path, args.getString("contentType")))
+                    .map(writer -> {
+                        openWriters.add(writer);
+                        return writer;
+                    });
+        } catch (HostException e) {
+            return Future.failedFuture(e);
+        }
+    }
+
+    @Override
+    public Future<FetchedResponse> openFile(JsonObject args) {
+        try {
+            String path = path(args);
+            return filesOrFail().stat(tenant, path).compose(info -> info == null
+                    ? Future.failedFuture(new HostException("Error", "not_found", "No such file: " + path))
+                    : Future.succeededFuture(new FetchedResponse(info.toViewJson(), files.open(info, 0, info.size() - 1))));
+        } catch (HostException e) {
+            return Future.failedFuture(e);
+        }
+    }
+
+    @Override
+    public Future<Void> respondFile(HttpExchange exchange, JsonObject args) {
+        try {
+            String path = path(args);
+            JsonObject request = exchange.request();
+            return FileResponder.respond(filesOrFail(), tenant, path, request.getString("method"), request.getJsonObject("headers", new JsonObject()),
+                    args.getJsonObject("headers"), exchange);
+        } catch (HostException e) {
+            exchange.fail(500, e.getMessage());
+            return Future.failedFuture(e);
+        }
+    }
+
+    private FileStore filesOrFail() {
+        if (files == null) {
+            throw new HostException("Error", "unavailable", "Files are not available here");
+        }
+        return files;
+    }
+
+    private Future<Object> withRoom(java.util.function.Supplier<Future<Object>> write) {
+        return capacity.ensureRoom().compose(v -> write.get());
+    }
+
+    private static String path(JsonObject args) {
+        String path = args.getValue("path") instanceof String p ? p : null;
+        String invalid = FileStore.invalidPath(path);
+        if (invalid != null) {
+            throw HostException.invalid(invalid);
+        }
+        return path;
+    }
+
+    @Override
     public Future<Void> close() {
+        // Uploads a script never finished are discarded.
+        openWriters.forEach(automately.core.files.FileWriter::abort);
+        openWriters.clear();
         List<Future<Void>> undone = registrations.stream().map(Registration::cancel).toList();
         registrations.clear();
         return Future.join(undone).mapEmpty();

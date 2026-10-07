@@ -11,6 +11,7 @@ import org.apache.ignite.cache.CacheWriteSynchronizationMode;
 import org.apache.ignite.cache.PartitionLossPolicy;
 import org.apache.ignite.cluster.ClusterState;
 import org.apache.ignite.configuration.CacheConfiguration;
+import org.apache.ignite.configuration.DataPageEvictionMode;
 import org.apache.ignite.configuration.DataRegionConfiguration;
 import org.apache.ignite.configuration.DataStorageConfiguration;
 import org.apache.ignite.configuration.IgniteConfiguration;
@@ -40,6 +41,10 @@ public final class IgniteCluster {
     private static final Logger LOG = LoggerFactory.getLogger(IgniteCluster.class);
 
     public static final String DATA_REGION = "automately";
+    /** Each table's partitions need their own pages; 256 per table (not Ignite's 1024) keeps that overhead small. */
+    public static final int PARTITIONS = 256;
+    /** Smallest durable region that holds every table's partition metadata with room for data (D-038). */
+    public static final int MIN_DATA_MEMORY_MB = 128;
     static final int DISCOVERY_PORT_RANGE = 10;
     static final int COMMUNICATION_OFFSET = 100;
 
@@ -53,6 +58,10 @@ public final class IgniteCluster {
 
     /** Starts this node's Ignite. Blocking; call before Vert.x is up. */
     public static IgniteCluster start(IgniteSettings settings) {
+        if (settings.dataMemoryMb() < MIN_DATA_MEMORY_MB) {
+            throw new IllegalArgumentException("AUTOMATELY_DATA_MEMORY_MB must be at least " + MIN_DATA_MEMORY_MB
+                    + " (it was " + settings.dataMemoryMb() + "): smaller regions can't hold the tables' metadata");
+        }
         System.setProperty("IGNITE_UPDATE_NOTIFIER", "false");
         System.setProperty("IGNITE_NO_ASCII", "true");
         // Decided before Ignite starts: a node that already has a database on disk is restarting, and must
@@ -64,8 +73,9 @@ public final class IgniteCluster {
             ignite.cluster().baselineAutoAdjustEnabled(true);
             ignite.cluster().baselineAutoAdjustTimeout(settings.baselineAdjust().toMillis());
         } else {
-            LOG.warn("No data directory configured: jobs, services, kv and files are kept in memory only and will be lost "
-                    + "if every node stops. Set AUTOMATELY_DATA_DIR for durable storage.");
+            LOG.warn("No data directory configured: jobs, services, kv and files are kept in memory only. They are lost if every "
+                    + "node stops, and the least recently used are evicted when the {} MB data region fills up. "
+                    + "Set AUTOMATELY_DATA_DIR for durable storage.", settings.dataMemoryMb());
         }
         return new IgniteCluster(ignite, settings);
     }
@@ -133,8 +143,14 @@ public final class IgniteCluster {
         DataRegionConfiguration durable = new DataRegionConfiguration()
                 .setName(DATA_REGION)
                 .setPersistenceEnabled(settings.persistent())
+                .setMetricsEnabled(true)
                 .setInitialSize(Math.min(64L, settings.dataMemoryMb()) * 1024 * 1024)
                 .setMaxSize(settings.dataMemoryMb() * 1024L * 1024);
+        if (!settings.persistent()) {
+            // In memory, a full region is an out-of-memory error that halts the JVM. Development mode evicts the
+            // least recently used data instead (D-038). With persistence, pages spill to disk, so this doesn't apply.
+            durable.setPageEvictionMode(DataPageEvictionMode.RANDOM_2_LRU).setEvictionThreshold(0.9);
+        }
         DataStorageConfiguration storage = new DataStorageConfiguration()
                 .setDefaultDataRegionConfiguration(new DataRegionConfiguration().setName("default")
                         .setInitialSize(32L * 1024 * 1024).setMaxSize(256L * 1024 * 1024))

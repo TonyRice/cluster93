@@ -32,11 +32,11 @@ class DurabilityTest {
 
     @AfterEach
     void stopEverything() {
-        Ignition.stopAll(true);
+        TestIgnite.stopAllExceptShared();
     }
 
     private IgniteSettings settings(String node, int clusterSize) {
-        return new IgniteSettings(node, data.resolve(node), 23500, List.of("127.0.0.1"), 1, 64, Duration.ofSeconds(1), clusterSize);
+        return new IgniteSettings(node, data.resolve(node), 23500, List.of("127.0.0.1"), 1, 128, Duration.ofSeconds(1), clusterSize);
     }
 
     /** Ignite nodes join each other, so start them in parallel the way a real cluster boots. */

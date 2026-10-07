@@ -196,6 +196,9 @@ class DockerClusterIT {
         String secondJob = restarted[0].getString("currentJobId");
         assertThat(job(survivor, secondJob).getString("node")).isNotEqualTo(victim);
         assertThat(restarted[0].getJsonObject("lastExit").getString("status")).isEqualTo("ORPHANED");
+        // The run shows RUNNING a moment before the previous run's checkpoint is seeded into it; a lost checkpoint
+        // would show up here as a fresh count (1, 2, ...), not as an absent one.
+        awaitCondition(Duration.ofSeconds(30), "second run has a checkpoint", () -> steps(survivor, secondJob).getValue("checkpoint") != null);
         assertThat(checkpointCount(survivor, secondJob)).as("continued from the killed run's count").isGreaterThanOrEqualTo(5);
     }
 

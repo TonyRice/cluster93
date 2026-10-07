@@ -10,7 +10,12 @@ import automately.core.scheduler.NodeVerticle;
 import automately.core.scheduler.OrphanReaper;
 import automately.core.scheduler.RetentionVerticle;
 import automately.core.host.KvStore;
+import automately.cluster.ignite.IgniteCapacity;
 import automately.cluster.ignite.IgniteCluster;
+import automately.core.files.FileGarbageVerticle;
+import automately.core.files.FileStore;
+import automately.core.files.SharedDataFileStore;
+import automately.core.files.StorageCapacity;
 import automately.cluster.ignite.IgniteSettings;
 import automately.cluster.ignite.store.IgniteStores;
 import automately.core.service.ServiceStore;
@@ -42,6 +47,7 @@ import java.util.UUID;
 public final class Automately {
 
     static final java.time.Duration RETENTION_INTERVAL = java.time.Duration.ofMinutes(10);
+    static final java.time.Duration FILE_GARBAGE_INTERVAL = java.time.Duration.ofMinutes(1);
 
     private Automately() {
     }
@@ -54,7 +60,7 @@ public final class Automately {
     public static Future<RunningNode> start(ServerConfig config, java.util.function.Function<Vertx, TxtResolver> txt) {
         if (!config.clustered()) {
             Vertx vertx = Vertx.vertx();
-            return wire(config, txt, vertx, Stores.inMemory(vertx), null);
+            return wire(config, txt, vertx, Stores.inMemory(vertx, config), null);
         }
         // The cluster is the database (D-030): Ignite comes up first (blocking, before Vert.x serves anything),
         // creates its tables, and then becomes Vert.x's cluster manager.
@@ -69,7 +75,9 @@ public final class Automately {
         return cluster.vertx()
                 .compose(vertx -> {
                     IgniteStores durable = IgniteStores.open(vertx, cluster);
-                    Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv);
+                    StorageCapacity capacity = IgniteCapacity.of(cluster, config.minFreeDiskBytes());
+                    Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
+                            durable.files(config.tenantStorageBytes(), capacity), capacity);
                     return wire(config, txt, vertx, stores, cluster);
                 })
                 .recover(err -> {
@@ -79,11 +87,15 @@ public final class Automately {
     }
 
     /** Where durable data lives: Ignite when clustered, in-memory maps for a single development node. */
-    record Stores(JobStore jobs, JobStateStore state, ServiceStore services, DomainStore domains, KvStore kv) {
+    record Stores(JobStore jobs, JobStateStore state, ServiceStore services, DomainStore domains, KvStore kv, FileStore files,
+                  StorageCapacity capacity) {
 
-        static Stores inMemory(Vertx vertx) {
+        static Stores inMemory(Vertx vertx, ServerConfig config) {
+            // In-memory data lives on the JVM heap, so that's what admission control watches (D-038).
+            StorageCapacity capacity = StorageCapacity.heap(0.8);
             return new Stores(new SharedDataJobStore(vertx), new SharedDataJobStateStore(vertx), new SharedDataServiceStore(vertx),
-                    new SharedDataDomainStore(vertx), new SharedDataKvStore(vertx));
+                    new SharedDataDomainStore(vertx), new SharedDataKvStore(vertx),
+                    new SharedDataFileStore(vertx, config.tenantStorageBytes(), capacity), capacity);
         }
     }
 
@@ -100,9 +112,9 @@ public final class Automately {
         JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
         ServeRegistry serving = new ServeRegistry();
         HostServicesFactory hostServices = NodeHostServices.factory(vertx, stores.kv(),
-                new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving);
+                new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving, stores.files(), stores.capacity());
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
-        ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter);
+        ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files());
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         return clusterSecret(vertx).compose(secret -> {
             InternalHttpVerticle endpoint = new InternalHttpVerticle(config.internalPort(), secret, serving);
@@ -117,6 +129,7 @@ public final class Automately {
                             config.heartbeat(), ServiceSupervisor.Timing.DEFAULT)))
                     .compose(id -> vertx.deployVerticle(new RetentionVerticle(instanceId, jobs, state, nodes, config.jobRetention(),
                             RETENTION_INTERVAL)))
+                    .compose(id -> vertx.deployVerticle(new FileGarbageVerticle(instanceId, stores.files(), nodes, FILE_GARBAGE_INTERVAL)))
                     .compose(id -> vertx.deployVerticle(api))
                     .compose(id -> vertx.deployVerticle(ingress))
                     .map(id -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster));

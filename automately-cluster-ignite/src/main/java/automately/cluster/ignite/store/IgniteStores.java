@@ -2,6 +2,8 @@ package automately.cluster.ignite.store;
 
 import automately.cluster.ignite.IgniteCluster;
 import automately.core.host.DomainStore;
+import automately.core.files.FileStore;
+import automately.core.files.StorageCapacity;
 import automately.core.host.KvStore;
 import automately.core.job.JobStore;
 import automately.core.service.ServiceStore;
@@ -14,13 +16,16 @@ import java.util.List;
 public final class IgniteStores {
 
     private static final List<Table.Definition> TABLES = List.of(
-            IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE, IgniteDomainStore.TABLE, IgniteKvStore.TABLE);
+            IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE, IgniteDomainStore.TABLE, IgniteKvStore.TABLE,
+            IgniteFileStore.FILES, IgniteFileStore.GARBAGE);
 
     public final JobStore jobs;
     public final JobStateStore state;
     public final ServiceStore services;
     public final DomainStore domains;
     public final KvStore kv;
+    private final Vertx vertx;
+    private final IgniteCluster cluster;
 
     private IgniteStores(Vertx vertx, IgniteCluster cluster) {
         this.jobs = new IgniteJobStore(vertx, cluster.ignite());
@@ -28,11 +33,19 @@ public final class IgniteStores {
         this.services = new IgniteServiceStore(vertx, cluster.ignite());
         this.domains = new IgniteDomainStore(vertx, cluster.ignite());
         this.kv = new IgniteKvStore(vertx, cluster.ignite());
+        this.vertx = vertx;
+        this.cluster = cluster;
+    }
+
+    /** Files, with a per-tenant storage quota and this node's storage admission control (D-038). */
+    public FileStore files(long quotaBytes, StorageCapacity capacity) {
+        return new IgniteFileStore(vertx, cluster.ignite(), quotaBytes, capacity);
     }
 
     /** Creates any missing tables. Blocking; call once at startup, before Vert.x serves traffic. */
     public static void createTables(IgniteCluster cluster) {
         TABLES.forEach(table -> Table.create(cluster.ignite(), table, cluster.settings().backups()));
+        IgniteFileStore.createChunkCache(cluster.ignite(), cluster.settings().backups());
     }
 
     public static IgniteStores open(Vertx vertx, IgniteCluster cluster) {

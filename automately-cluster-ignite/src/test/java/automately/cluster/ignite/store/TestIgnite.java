@@ -17,17 +17,37 @@ final class TestIgnite {
     private TestIgnite() {
     }
 
+    static IgniteCluster cluster() {
+        stores();
+        return cluster;
+    }
+
+    static Vertx vertx() {
+        stores();
+        return vertx;
+    }
+
+    /** Stops every Ignite a test started, but not the one shared by the contract tests. */
+    static void stopAllExceptShared() {
+        for (org.apache.ignite.Ignite ignite : org.apache.ignite.Ignition.allGrids()) {
+            if (!ignite.name().equals("automately-contract")) {
+                org.apache.ignite.Ignition.stop(ignite.name(), true);
+            }
+        }
+    }
+
     static synchronized IgniteStores stores() {
         if (cluster == null) {
-            cluster = IgniteCluster.start(new IgniteSettings("contract", null, 22500, List.of("127.0.0.1"), 0, 64, Duration.ofSeconds(1), 1));
+            cluster = IgniteCluster.start(new IgniteSettings("contract", null, 22500, List.of("127.0.0.1"), 0, 512, Duration.ofSeconds(1), 1));
             IgniteStores.createTables(cluster);
             vertx = Vertx.vertx();
             stores = IgniteStores.open(vertx, cluster);
         }
         for (Table.Definition table : List.of(IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE,
-                IgniteDomainStore.TABLE, IgniteKvStore.TABLE)) {
+                IgniteDomainStore.TABLE, IgniteKvStore.TABLE, IgniteFileStore.FILES, IgniteFileStore.GARBAGE)) {
             cluster.ignite().cache(table.name()).clear();
         }
+        cluster.ignite().cache(IgniteFileStore.CHUNKS).clear();
         return stores;
     }
 }

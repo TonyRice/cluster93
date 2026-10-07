@@ -101,6 +101,23 @@ class HostBridgeTest {
             return Future.succeededFuture(new FetchedResponse(meta, new ListStream(fetchChunks, () -> fetchesCancelled.add(args.getString("url")))));
         }
 
+        @Override
+        public Future<automately.core.files.FileWriter> createFile(JsonObject args) {
+            return Future.failedFuture(new HostException("Error", "unavailable", "no files in this fake"));
+        }
+
+        @Override
+        public Future<FetchedResponse> openFile(JsonObject args) {
+            return Future.failedFuture(new HostException("Error", "not_found", "No such file: " + args.getString("path")));
+        }
+
+        @Override
+        public Future<Void> respondFile(HttpExchange exchange, JsonObject args) {
+            exchange.respond(200, new JsonObject().put("x-file", args.getString("path")));
+            exchange.end();
+            return Future.succeededFuture();
+        }
+
         void awaitServer() throws InterruptedException {
             long deadline = System.currentTimeMillis() + 5_000;
             while (servers.isEmpty() && System.currentTimeMillis() < deadline) {

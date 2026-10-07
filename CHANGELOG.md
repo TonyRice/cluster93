@@ -23,6 +23,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase 3b, milestone 3 — Files (2026-10-06)
+
+### Added
+- **`files` for scripts:** `files.write(path, data, {contentType})`, where `data` is a string, bytes, JSON, an (async) iterable, a request body or a `fetch` response. Also `read`, `text`, `json`, `stream(path, {headers})`, `stat`, `list({prefix, limit, cursor})` and `delete`. A handler can return `files.stream(path)`, or `{headers, body: files.stream(path)}`. Java then serves it with `Range`, `ETag`/304, `HEAD` and `Content-Length`, and the bytes never enter the isolate (D-040). **Why:** Tony asked for services that can serve large files. Video seeking needs ranges and an exact length.
+- **Files from outside:** `PUT /v1/files/{path}` (streamed upload, 201 with an `ETag`), `GET`/`HEAD /v1/files/{path}` (with ranges and 304), `GET /v1/files?prefix=&limit=&cursor=`, and `DELETE /v1/files/{path}`.
+- **Storage:** 1 MB chunks in a replicated Ignite cache, metadata in an indexed `FILES` table, a new file id per write with an atomic swap, and a leader-run garbage collector (`FileGarbageVerticle`) with a 10-minute grace period for reads in progress (D-040). In non-clustered mode it uses SharedData maps.
+- **Admission control (D-038):** writes that grow storage are refused with `insufficient_storage` (HTTP **507**) before the disk or memory fills, and the node keeps running. The per-tenant file quota is refused with 413. **Why:** a large upload into a small in-memory node halted the JVM; Tony: "i don't want to be able to crash the jvm with a fucking file upload".
+- **Config:** `AUTOMATELY_TENANT_STORAGE_MB` (1024) and `AUTOMATELY_MIN_FREE_DISK_MB` (1024).
+- **Tests:**
+  - `FullRestartTest` now also uploads a 3 MB file, restarts every node, and downloads it byte for byte from another node
+  - a `FileStore` contract (10 tests) run against SharedData and Ignite, including a replace while a read is in progress
+  - `StorageCapacityTest`: an in-memory 128 MB node refuses an oversized upload and stays alive; a durable node refuses below the free-disk floor
+  - `FilesTest` on a real two-node cluster: a 10 MB REST round trip (written on one node, read on the other), ranges/416/304/HEAD, list/delete/path validation, the quota, the script API, and a service storing a streamed 6 MB upload and serving it through the ingress with ranges
+
+### Changed
+- **Ignite:** 256 partitions instead of 1 024, a 128 MB minimum data region (validated at start), region metrics on, and page eviction as a last resort for in-memory regions (D-038).
+- **Early answers drain the body** (up to 64 MB) instead of closing at once, so a refused upload reaches the client as a 413 or 507 rather than a reset (D-039, superseding part of D-037). The REST upload checks `Content-Length` against the quota before reading.
+- A service's `content-length` header is kept when it's exact (files). Script-set `content-length` is still dropped.
+
+### Fixed (found by the new tests)
+- An in-memory region could run out (`IgniteOutOfMemoryException`) and halt the JVM, once with a large upload and once just from creating tables in 64 MB (D-038).
+- Tests that called `Ignition.stopAll()` also stopped the shared contract-test node.
+- **Stale reads across nodes:** Ignite's default `PRIMARY_SYNC` let a node read a backup copy before a write reached it, so a file just written on node A was sometimes "missing" on node B. Tables and file chunks now use `FULL_SYNC` (D-041).
+- **An error replacing an unsent file response kept its `Content-Length`**, so the JSON error body overran it and broke the next response on the connection. Error answers now drop the replaced response's entity headers (REST API, ingress, and services).
+- `DockerClusterIT` read a restarted service's checkpoint in the moment between the run showing `RUNNING` and the previous checkpoint being seeded. It now waits for the checkpoint first, as `ChaosTest` does.
+- `FilesTest` read response bodies after the response had been handed to the test thread, so early chunks were sometimes lost and the test was flaky. Bodies are now read in the same future chain.
+
+### Known
+- Stopping a node while another is resolving a binary schema it just sent can stall the survivor's striped thread for up to 30 s (Ignite's metadata timeout). It was seen only during test teardown, and it recovers on its own.
+
 ## Phase 3b, milestone 2 — Streaming (2026-10-06)
 
 ### Added

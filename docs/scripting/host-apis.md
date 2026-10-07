@@ -1,4 +1,4 @@
-# Host APIs reference: `kv`, `bus`, `fetch`, `log` and serving HTTP
+# Host APIs reference: `kv`, `bus`, `fetch`, `log`, `files` and serving HTTP
 
 **Status:** Implemented in phase 3 (2026-10-06). Design: [../design/host-apis.md](../design/host-apis.md).
 
@@ -18,7 +18,7 @@ const orders = kv.namespace('orders');                     // same API, separate
 
 Limits: key ≤ 512 bytes, value ≤ 256 KB of JSON, `list` ≤ 1 000 keys per page.
 
-> Storage is the cluster's in-memory map for now. It survives node failures, but not a restart of the whole cluster.
+> Storage is the cluster's database: replicated, and durable across full restarts when nodes have a data directory. When the cluster is out of room, writes fail with `code: 'insufficient_storage'`.
 
 ## `bus`: messaging
 
@@ -88,6 +88,45 @@ log.info('order placed', { orderId: 7, total: 19.5 });   // also debug, warn, er
 ```
 
 Each call is a log line (`order placed {"orderId":7,"total":19.5}`). The live event stream carries `message` and `fields` separately. `console.log` still works too.
+
+## `files`: file storage
+
+```js
+await files.write('reports/q3.csv', csvText, { contentType: 'text/csv' });   // string, bytes, JSON, or a stream
+await files.write('uploads/movie.mp4', req.body);                           // a request body, streamed in
+await files.write('cache/logo.png', await fetch(url));                      // a fetch response, streamed in
+const bytes = await files.read('cache/logo.png');                           // Uint8Array (buffers, up to 32 MB)
+const text  = await files.text('reports/q3.csv');                           // also files.json(path)
+for await (const chunk of files.stream('uploads/movie.mp4')) { ... }        // any size
+const info  = await files.stat('uploads/movie.mp4');  // {path, size, contentType, etag, createdAt}, or null
+const { files: list, cursor } = await files.list({ prefix: 'uploads/', limit: 100 });
+await files.delete('uploads/movie.mp4');                                    // true if it existed
+```
+
+- **Serving a file.** Return `files.stream(path)` from a `ctx.serve` handler, or `{ headers, body: files.stream(path) }` to add headers such as `cache-control`. Java serves it directly, so the bytes never pass through your script. You get `Content-Length`, `ETag`, `Range` requests (206, so video seeking works), `If-None-Match` (304), `HEAD`, and a 404 if the file doesn't exist.
+  ```js
+  await ctx.serve(async (req) => {
+    if (req.method === 'PUT') return { status: 201, body: await files.write('media' + req.path, req.body) };
+    return { headers: { 'cache-control': 'max-age=3600' }, body: files.stream('media' + req.path) };
+  });
+  ```
+- **Writes are atomic.** A reader sees the old file or the new one, never a mix, and a read already in progress finishes even if the file is replaced or deleted meanwhile. A write that fails or is abandoned leaves nothing behind.
+- **Paths** are relative, at most 1 024 bytes, with no `.`, `..` or empty segments, backslashes or control characters.
+- **Limits.**
+  - Each tenant has `AUTOMATELY_TENANT_STORAGE_MB` (1 GiB by default) for files. Going over fails with `code: 'limit_exceeded'`.
+  - If the cluster itself is running out of disk (or memory, without a data directory), writes fail with `code: 'insufficient_storage'`.
+  - Either way, the node keeps running.
+- Files are replicated and survive node loss, like the rest of the cluster's data.
+
+From outside the cluster:
+```http
+PUT    /v1/files/reports/q3.csv          (body streamed) → 201 {"path", "size", "contentType", "etag", "createdAt"}
+GET    /v1/files/reports/q3.csv          → 200, or 206 with Range, 304 with If-None-Match
+GET    /v1/files?prefix=reports/&limit=100 → {"files": [...], "cursor": ...}
+DELETE /v1/files/reports/q3.csv          → 204
+X-Automately-Tenant: acme
+```
+Uploads over the quota get **413** (straight away when `Content-Length` is sent), and uploads when the cluster is out of room get **507**.
 
 ## Serving HTTP from a service
 

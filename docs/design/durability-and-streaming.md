@@ -1,6 +1,6 @@
 # Design and plan: the cluster is the database, streaming, and files (phase 3b)
 
-**Status:** Milestones 1 and 2 ✅ done (2026-10-06); milestone 3 in progress · **Date:** 2026-10-06
+**Status:** ✅ Done: milestones 1, 2 and 3 (2026-10-06) · **Date:** 2026-10-06
 **Why now:** before phase 4, close the three gaps phase 3 left open. Tony asked for them directly ("shouldn't we have a central database…", "what if someone wants to deploy a service that can serve large files or offer streaming?"), and chose a database **built into the cluster** rather than an external one.
 
 ## Decisions taken with Tony
@@ -51,7 +51,7 @@
 - **Storage.** Files are split into 1 MB chunks in the replicated, durable store, so any node can stream any file and files survive node loss and full restarts. Each file has metadata (size, content type, SHA-256 ETag, chunk count) and a new id per write. The metadata swap is atomic (compare-and-set), so readers never see a half-written file, and old chunks are deleted afterwards.
 - **Serving.** When a handler returns `files.stream(path)`, Java pipes chunks straight from the store to the socket; the bytes never pass through JavaScript. It supports `Range`/`206` (video seeking), `ETag`/`If-None-Match` (304), and `Content-Length`.
 - **From outside.** `PUT /v1/files/{path}` (streamed upload), `GET /v1/files/{path}`, `GET /v1/files?prefix=`, `DELETE /v1/files/{path}`. The CLI in phase 4 will use these to deploy static assets.
-- **Quota.** `AUTOMATELY_TENANT_STORAGE_MB` (default 1024) per tenant, for files and `kv` together.
+- **Quota.** `AUTOMATELY_TENANT_STORAGE_MB` (default 1024) per tenant, for files and `kv` together. *(As built: files only; see below.)*
 
 ## Tests to add
 - **Milestone 1:**
@@ -91,3 +91,13 @@
 - **Early answers close the connection.** A 413 sent without reading the body broke the next request on that connection.
 - **`fetch` binary request bodies** aren't supported yet (request bodies are strings or JSON). Response bodies stream as binary.
 - **Measured:** a 48 MB upload through the single-node ingress took 292 ms. With a paused client, about 22 MB ended up in kernel socket buffers on loopback (two hops), against 250 MB without backpressure.
+
+## What changed during milestone 3
+- **Admission control** (D-038). A large upload into a small in-memory node halted the JVM. Writes that grow storage are now checked first (free disk on durable nodes, region fill in memory) and refused with 507. In-memory regions also evict as a last resort, partitions went from 1 024 to 256, and the data region must be at least 128 MB. A temp-file staging area was considered and rejected: uploads already stream, and durable storage is already disk.
+- **The quota covers files only.** `kv` writes are checked against cluster capacity but don't count toward `AUTOMATELY_TENANT_STORAGE_MB` yet.
+- **Early answers drain** the body up to 64 MB rather than closing straight away (D-039), so clients actually see a 413 or 507.
+- **Metadata swap.** It's a plain put that returns the previous row, not a compare-and-set: the new file id makes the write itself unambiguous, and last writer wins, as with `kv.set`.
+- **`FULL_SYNC` writes** (D-041): the default `PRIMARY_SYNC` allowed a read on another node to miss a write that had just completed.
+- **Files survive a full restart**, tested in `FullRestartTest`.
+- **Not covered by tests yet:** a node killed while a file is streaming. Replication is the same as for the other tables, which the chaos and Docker tests cover.
+

@@ -265,6 +265,78 @@ public final class HostBridge {
         }));
     }
 
+    // --- files ---
+
+    private final Map<Integer, automately.core.files.FileWriter> writers = new ConcurrentHashMap<>();
+
+    @V8Function(name = "fileCreate")
+    public void fileCreate(String argsJson, int callId) {
+        loop.callStarted();
+        settleLater(callId, start(() -> host.createFile(new JsonObject(argsJson))).map(writer -> {
+            int id = nextId.getAndIncrement();
+            writers.put(id, writer);
+            return (Object) id;
+        }));
+    }
+
+    /** Writes a chunk of an upload; settles once it's stored, so the script waits instead of piling data up. */
+    @V8Function(name = "fileWrite")
+    public void fileWrite(int writerId, V8Value data, int callId) throws com.caoccao.javet.exceptions.JavetException {
+        loop.callStarted();
+        automately.core.files.FileWriter writer = writers.get(writerId);
+        if (writer == null) {
+            settleLater(callId, Future.failedFuture(new HostException("Error", "closed", "The upload is already finished")));
+            return;
+        }
+        settleLater(callId, writer.write(Buffer.buffer(bytes(data))).map(v -> (Object) null));
+    }
+
+    @V8Function(name = "fileFinish")
+    public void fileFinish(int writerId, int callId) {
+        loop.callStarted();
+        automately.core.files.FileWriter writer = writers.remove(writerId);
+        if (writer == null) {
+            settleLater(callId, Future.failedFuture(new HostException("Error", "closed", "The upload is already finished")));
+            return;
+        }
+        settleLater(callId, writer.finish().map(info -> (Object) info.toViewJson()));
+    }
+
+    @V8Function(name = "fileAbort")
+    public void fileAbort(int writerId) {
+        automately.core.files.FileWriter writer = writers.remove(writerId);
+        if (writer != null) {
+            writer.abort();
+        }
+    }
+
+    @V8Function(name = "fileOpen")
+    public void fileOpen(String argsJson, int callId) {
+        loop.callStarted();
+        Future<FetchedResponse> opened = start(() -> host.openFile(new JsonObject(argsJson)));
+        opened.onComplete(ar -> loop.post(js -> {
+            loop.callSettled();
+            if (ar.succeeded()) {
+                int streamId = openStream(ar.result().body());
+                js.settle(callId, true, new JsonObject().put("file", ar.result().meta()).put("streamId", streamId).encode());
+            } else {
+                js.settle(callId, false, errorJson(ar.cause()));
+            }
+        }));
+    }
+
+    /** Hands the response over to the file responder (Range, ETag); the bytes never pass through the script. */
+    @V8Function(name = "respondFile")
+    public void respondFile(int exchangeId, String argsJson, int callId) {
+        loop.callStarted();
+        HttpExchange exchange = exchanges.remove(exchangeId);
+        if (exchange == null) {
+            settleLater(callId, Future.failedFuture(new HostException("Error", "closed", "The response is already finished")));
+            return;
+        }
+        settleLater(callId, start(() -> host.respondFile(exchange, new JsonObject(argsJson))).map(v -> (Object) null));
+    }
+
     @V8Function(name = "unlisten")
     public void unlisten(int listenerId) {
         HostServices.Registration registration = registrations.remove(listenerId);
@@ -299,6 +371,8 @@ public final class HostBridge {
         streams.clear();
         exchanges.values().forEach(exchange -> exchange.fail(503, "The script ended before it answered"));
         exchanges.clear();
+        writers.values().forEach(automately.core.files.FileWriter::abort);
+        writers.clear();
         awaitingReply.values().forEach(inbound -> inbound.fail(503, "The script ended before it answered"));
         awaitingReply.clear();
         host.close();

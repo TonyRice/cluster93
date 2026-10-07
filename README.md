@@ -4,7 +4,7 @@ A self-hostable, clustered runtime for sandboxed JavaScript functions, built on 
 
 You submit a script to any node. The cluster runs it on the least-loaded node in a fresh V8 isolate, streams its console output live, and stores the result where every node can read it.
 
-> **Status: phase 3 done; phase 3b in progress.** The cluster is now the database (embedded Apache Ignite: durable, replicated, survives full restarts), and services stream HTTP: large uploads and downloads, and server-sent events. A files API is next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
+> **Status: phase 3b done.** The cluster is the database (embedded Apache Ignite: durable, replicated, survives full restarts). Services stream HTTP (large uploads and downloads, server-sent events) and store and serve files, with ranges for video. Writes are refused with 507 before memory or disk runs out, rather than crashing the node. Phase 4 (API, auth, CLI, MCP) is next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
 
 ## Try it
 
@@ -56,6 +56,10 @@ If the node running a job dies, the job's `onOrphan` policy decides what happens
 | `POST` | `/v1/services/{name}/domains/{domain}/verify` | Check the TXT record; the domain routes once verified |
 | `POST` | `/v1/bus/{topic}` · `/v1/bus/{topic}/request` | Publish to a topic · call a `bus.handle`r and get its reply |
 | *ingress* | `:8000`, any path | Services' HTTP traffic, routed by host and proxied as a stream to the serving node |
+| `PUT` | `/v1/files/{path}` | Streamed upload (any size up to the quota) → `201` with `ETag`; `413` over quota, `507` when the cluster is out of room |
+| `GET` · `HEAD` | `/v1/files/{path}` | Download, with `Range` (206) and `If-None-Match` (304) |
+| `GET` | `/v1/files?prefix=&limit=&cursor=` | List files, sorted by path |
+| `DELETE` | `/v1/files/{path}` | Delete a file |
 | `GET` | `/v1/nodes` | Live nodes with capacity and load |
 | `GET` | `/health` | Liveness |
 
@@ -126,7 +130,9 @@ The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each o
 | `AUTOMATELY_DATA_DIR` | *(unset: in memory)* | Durable storage for this node; the image sets `/var/lib/automately` |
 | `AUTOMATELY_DATA_BACKUPS` | `1` | Extra copies of all data; survives that many simultaneous node losses |
 | `AUTOMATELY_CLUSTER_SIZE` | `1` | Nodes a brand-new durable cluster waits for before activating |
-| `AUTOMATELY_DATA_MEMORY_MB` | `256` | Off-heap memory for the data region (the rest stays on disk) |
+| `AUTOMATELY_DATA_MEMORY_MB` | `256` | Off-heap memory for the data region (the rest stays on disk). At least `128` |
+| `AUTOMATELY_TENANT_STORAGE_MB` | `1024` | Files per tenant; over it, uploads get 413 |
+| `AUTOMATELY_MIN_FREE_DISK_MB` | `1024` | Durable nodes refuse writes (507) below this much free disk |
 | `AUTOMATELY_BASELINE_ADJUST_MS` | `60000` | How long a missing data node is waited for before its data is rebalanced |
 | `AUTOMATELY_JOB_RETENTION_DAYS` | `7` | Finished jobs older than this are deleted |
 
@@ -159,6 +165,7 @@ Javet's native library is included for linux-x86_64 only for now.
 2. ~~**Orphaned jobs**~~ ✅ `onOrphan` policy (`fail` by default), attempts visible to scripts, `ctx.step` and checkpoints, fencing, and a chaos test ([design](docs/design/orphaned-jobs.md), [script API](docs/scripting/job-context.md), [plan](docs/design/phase-2-plan.md))
 2b. ~~**Long-running services**~~ ✅ Supervised services, timers and an event loop per isolate, job cancellation ([design](docs/design/services.md), [guide](docs/scripting/services.md))
 3. ~~**Host APIs**~~ ✅ `kv`, `bus`, `fetch`, `log`, HTTP hosting with automatic and verified domains; isolate pooling measured and declined ([design](docs/design/host-apis.md), [reference](docs/scripting/host-apis.md))
+3b. ~~**The cluster is the database, streaming, files**~~ ✅ Embedded Ignite (durable, replicated), streamed HTTP, a `files` API with ranges, storage admission control ([design](docs/design/durability-and-streaming.md))
 4. **API, auth, CLI and MCP.** OpenAPI contract, scoped tokens, rate limits, an MCP server for AI agents
 5. **Observability and polish.** Metrics, tracing, Grafana, benchmarks, `SECURITY.md`
 
@@ -172,7 +179,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/design/](docs/design/): designs for upcoming work
 - [docs/scripting/job-context.md](docs/scripting/job-context.md): the job context API for scripts (attempts, steps, checkpoints)
 - [docs/scripting/services.md](docs/scripting/services.md): services, timers and cancellation
-- [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus`, `fetch`, `log`, and serving HTTP
+- [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus`, `fetch`, `log`, `files`, and serving HTTP
 
 ## Author
 

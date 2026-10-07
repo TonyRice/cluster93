@@ -274,3 +274,45 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - Errors are answered before the upstream is reset.
 - Request bodies are capped by `AUTOMATELY_MAX_REQUEST_BYTES` (default 1 GiB), checked from `Content-Length` and while streaming.
 - In scripts, response writes wait for the client to drain, and a client disconnecting ends the generator.
+
+### D-038 — Storage admission control: refuse writes before memory or disk runs out
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Evidence:** an in-memory node with a small data region took a large upload, hit `IgniteOutOfMemoryException`, and Ignite's failure handler **halted the JVM**. A 64 MB region ran out while just creating the tables, because each partition carries fixed metadata. Tony: "i don't want to be able to crash the jvm with a fucking file upload".
+**Decision:**
+- **Admission control.** A `StorageCapacity` check runs before every write that grows storage: each file creation, each 1 MB file chunk, and `kv.set`/`kv.increment`. When it fails, the write is refused with `insufficient_storage` (HTTP 507, or a script error), the partial upload is discarded, and the node keeps running.
+  - Durable nodes: refused when the data directory's disk has less than `AUTOMATELY_MIN_FREE_DISK_MB` (default 1024) free. Ignite keeps a bounded hot set in memory and pages to disk, so disk is the real limit.
+  - In-memory Ignite nodes: refused when the data region is more than 80 % full.
+  - Non-clustered nodes (SharedData stores, on the heap): refused when the heap is more than 80 % full.
+- **A safety net behind it.** In-memory Ignite regions use page eviction (`RANDOM_2_LRU` at 90 %), so a burst that gets past the check costs evicted entries rather than the process. This is a last resort, and it can drop data, so the node warns about it at start. Durable regions don't need it.
+- **Partitions: 256** instead of Ignite's 1 024, and a **minimum data region of 128 MB**, checked at start-up with a clear error. Small regions fit the fixed per-partition overhead, and 256 is plenty below about 100 nodes.
+- **Per-tenant quota.** `AUTOMATELY_TENANT_STORAGE_MB` (default 1024) caps a tenant's files. It is checked up front from `Content-Length` when the size is known, and while streaming otherwise.
+**Why not stage uploads in a temp file?** Uploads already stream in 1 MB chunks with backpressure, so memory per upload is bounded. Durable storage is already disk-backed, so a temp file would only add a second copy and a second disk to fill. What actually crashed the node was running out of storage, and refusing before that point fixes it in every mode.
+**Cost:** the check is a point-in-time estimate, so concurrent uploads can overshoot by about 1 MB each. That headroom is what the 80 % and 90 % thresholds leave. `kv` doesn't count against the tenant quota yet, only against cluster capacity.
+
+### D-039 — Early answers drain the request body instead of closing at once
+**Date:** 2026-10-06 · **Status:** Accepted. Supersedes D-037's "an early answer closes the connection"
+
+**Evidence:** a refused upload (413 over quota) closed the connection while the client was still sending, so the client saw "Connection was closed" instead of the 413 and the reason for it.
+**Decision:** When the server answers before reading the body (413, 404 for an unknown host, 507), it reads and discards the rest of the body ("lingering close") so the client receives the answer, and the connection stays usable. A body over 64 MB, by `Content-Length` or as counted, isn't worth the bandwidth, so the server sends `Connection: close` and closes. The REST upload also checks a declared `Content-Length` against the quota **before** reading anything, so a well-behaved client gets its 413 immediately.
+
+### D-040 — Files: chunked in the cluster store, a new id per write, Java serves the bytes
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Decision:**
+- **Chunks.** A file is split into 1 MB chunks stored in a replicated cache (`FILE_CHUNKS`, key `fileId:index`), with its metadata row in `FILES` (size, content type, SHA-256 ETag, chunk count). Files are replicated like everything else (`AUTOMATELY_DATA_BACKUPS`), survive full restarts on durable nodes, and any node can stream any file.
+- **Replacing is atomic.** Each write gets a new file id. Chunks are written first, then the metadata row is swapped in one put, so readers see the old file or the new one, never a mix.
+- **Garbage collection.** A file id that is no longer current is recorded in `FILE_GARBAGE` with a deletion time: 10 minutes after it was replaced or deleted (so reads already in progress finish), or 6 hours after an upload that never finished started. The leader deletes due chunks every minute.
+- **Serving.** `files.stream(path)` returned from a handler is served by Java (`FileResponder`): chunks go from the store to the socket and never enter the isolate. It supports `Range` (single ranges → 206, 416), `ETag`/`If-None-Match` → 304, `HEAD`, and an exact `Content-Length`, so video seeking works.
+- **Paths.** Relative, at most 1 024 bytes, no `.`/`..`/empty segments, no backslashes or control characters. Tenant-scoped like `kv`.
+**Why not a blob store such as S3 or MinIO?** The goal is "the cluster is the database", with nothing else to run. An S3-compatible `FileStore` can be added behind the same interface later.
+**Cost:** Without a data directory, files live in memory and count against the data region. Large media libraries want durable nodes.
+
+### D-041 — Durable tables and file chunks use FULL_SYNC writes
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Evidence:** in one full-verify run, node A wrote a file and node B got "file data is missing" reading it straight away. Ignite's default `PRIMARY_SYNC` completes a write once the primary copy has it, and reads may be served from a backup, so a read on another node can come before the backup is updated.
+**Decision:** Every Automately table and the `FILE_CHUNKS` cache use `FULL_SYNC`: a write completes only when every copy has it. Vert.x's own caches already did (D-032).
+**Cost:** a write waits for the slowest copy. That is the right trade for a database people expect to read their writes from on any node.
+**Note:** Ignite stores a cache's configuration with its data, so data directories created before this keep the old mode. The project hasn't been released, so no migration is provided.
+

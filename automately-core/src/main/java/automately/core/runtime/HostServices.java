@@ -31,6 +31,15 @@ public interface HostServices {
     /** Outbound HTTP ({@code fetch}); the response body is a paused stream. */
     Future<FetchedResponse> fetch(JsonObject args);
 
+    /** Starts writing a file ({@code files.write}); {@code args}: path, contentType. */
+    Future<automately.core.files.FileWriter> createFile(JsonObject args);
+
+    /** Opens a file for reading ({@code files.read}, {@code files.stream}); meta is the file's view, or fails if missing. */
+    Future<FetchedResponse> openFile(JsonObject args);
+
+    /** Serves a file as the response to {@code exchange}, with Range and ETag support; {@code args}: path, headers. */
+    Future<Void> respondFile(HttpExchange exchange, JsonObject args);
+
     /** Stops every listener this execution registered. Called once the script has ended. */
     Future<Void> close();
 
@@ -58,6 +67,21 @@ public interface HostServices {
         @Override
         public Future<FetchedResponse> fetch(JsonObject args) {
             return Future.failedFuture(new HostException("Error", "unavailable", "fetch is not available here"));
+        }
+
+        @Override
+        public Future<automately.core.files.FileWriter> createFile(JsonObject args) {
+            return Future.failedFuture(new HostException("Error", "unavailable", "Files are not available here"));
+        }
+
+        @Override
+        public Future<FetchedResponse> openFile(JsonObject args) {
+            return Future.failedFuture(new HostException("Error", "unavailable", "Files are not available here"));
+        }
+
+        @Override
+        public Future<Void> respondFile(HttpExchange exchange, JsonObject args) {
+            return Future.failedFuture(new HostException("Error", "unavailable", "Files are not available here"));
         }
 
         @Override

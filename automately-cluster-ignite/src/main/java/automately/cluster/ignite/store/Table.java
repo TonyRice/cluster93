@@ -1,7 +1,6 @@
 package automately.cluster.ignite.store;
 
 import automately.cluster.ignite.IgniteCluster;
-import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
@@ -68,7 +67,10 @@ final class Table {
         CacheConfiguration<String, BinaryObject> config = new CacheConfiguration<String, BinaryObject>(definition.name())
                 .setCacheMode(CacheMode.PARTITIONED)
                 .setBackups(backups)
+                .setAffinity(new org.apache.ignite.cache.affinity.rendezvous.RendezvousAffinityFunction(false, IgniteCluster.PARTITIONS))
                 .setAtomicityMode(CacheAtomicityMode.ATOMIC)
+                // A write completes once every copy has it, so a read on any node sees it (D-041).
+                .setWriteSynchronizationMode(org.apache.ignite.cache.CacheWriteSynchronizationMode.FULL_SYNC)
                 .setDataRegionName(IgniteCluster.DATA_REGION)
                 .setSqlSchema(SCHEMA)
                 .setQueryEntities(List.of(entity))
@@ -109,6 +111,11 @@ final class Table {
     Future<Void> put(String key, JsonObject json, long ttlMs) {
         return async(() -> cache.withExpiryPolicy(new CreatedExpiryPolicy(new javax.cache.expiry.Duration(java.util.concurrent.TimeUnit.MILLISECONDS, ttlMs)))
                 .putAsync(key, row(json))).mapEmpty();
+    }
+
+    /** Stores the row and completes with what it replaced, or null. */
+    Future<JsonObject> getAndPut(String key, JsonObject json) {
+        return async(() -> cache.getAndPutAsync(key, row(json))).map(Table::json);
     }
 
     Future<Boolean> putIfAbsent(String key, JsonObject json) {
@@ -185,53 +192,12 @@ final class Table {
         return row == null ? null : new JsonObject((String) row.field("json"));
     }
 
-    /** Starts an Ignite operation, retrying it if it fails only because the topology changed. */
     private <T> Future<T> async(java.util.function.Supplier<IgniteFuture<T>> operation) {
-        return retrying(() -> {
-            Context context = vertx.getOrCreateContext();
-            Promise<T> promise = Promise.promise();
-            try {
-                operation.get().listen(done -> context.runOnContext(v -> {
-                    try {
-                        promise.complete(done.get());
-                    } catch (RuntimeException e) {
-                        promise.fail(e);
-                    }
-                }));
-            } catch (RuntimeException e) {
-                promise.fail(e);
-            }
-            return promise.future();
-        }, 1);
+        return IgniteFutures.async(vertx, operation);
     }
 
-    static final int MAX_TOPOLOGY_RETRIES = 10;
-
-    /**
-     * While a node joins or leaves, Ignite can fail an operation with a topology error that succeeds when
-     * retried a moment later. Only those are retried (operations here are reads, idempotent puts, or
-     * compare-and-set, which re-reads); anything else fails at once.
-     */
     private <T> Future<T> retrying(java.util.function.Supplier<Future<T>> operation, int attempt) {
-        return operation.get().recover(err -> {
-            if (attempt >= MAX_TOPOLOGY_RETRIES || !isTopologyChange(err)) {
-                return Future.failedFuture(err);
-            }
-            Promise<T> retried = Promise.promise();
-            vertx.setTimer(100L * attempt, id -> retrying(operation, attempt + 1).onComplete(retried));
-            return retried.future();
-        });
-    }
-
-    static boolean isTopologyChange(Throwable error) {
-        for (Throwable t = error; t != null; t = t.getCause()) {
-            if (t instanceof org.apache.ignite.cluster.ClusterTopologyException
-                    || t instanceof org.apache.ignite.internal.cluster.ClusterTopologyCheckedException
-                    || String.valueOf(t.getMessage()).contains("topology")) {
-                return true;
-            }
-        }
-        return false;
+        return IgniteFutures.retrying(vertx, operation, attempt);
     }
 
     static QueryIndex index(String... columns) {

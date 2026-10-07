@@ -298,13 +298,14 @@ public final class IngressVerticle extends VerticleBase {
             response.reset();
             return;
         }
+        automately.core.http.EarlyAnswer.dropEntityHeaders(response);
         response.setStatusCode(status).putHeader("content-type", "application/json").putHeader("Server", "automately");
         if (retry) {
             response.putHeader("Retry-After", "1");
         }
-        // Answering before the request body was read (a 413, or a route that never existed) leaves unread bytes on
-        // the connection, so it can't be reused: say so and close it once the answer is out.
-        boolean unread = !request.isEnded();
+        // Answering before the body was read (a 413, an unknown host): drain it so the client sees this answer, or
+        // close the connection if it's too big to be worth it (D-039).
+        boolean unread = automately.core.http.EarlyAnswer.prepare(request);
         if (unread) {
             response.putHeader("Connection", "close");
         }

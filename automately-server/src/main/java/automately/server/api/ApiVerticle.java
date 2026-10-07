@@ -9,6 +9,7 @@ import automately.core.node.NodeRegistry;
 import automately.core.scheduler.Addresses;
 import automately.core.scheduler.JobScheduler;
 import automately.core.service.ServiceStore;
+import automately.core.files.FileStore;
 import automately.core.host.DomainStore;
 import automately.core.host.HostRouter;
 import automately.core.host.TxtResolver;
@@ -57,11 +58,13 @@ public final class ApiVerticle extends VerticleBase {
     private final DomainStore domains;
     private final TxtResolver txt;
     private final HostRouter hostRouter;
+    private final FileStore files;
 
     private HttpServer server;
 
     public ApiVerticle(ServerConfig config, JobStore jobs, JobStateStore state, NodeRegistry nodes, JobScheduler scheduler,
-                       ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter) {
+                       ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter, FileStore files) {
+        this.files = files;
         this.services = services;
         this.domains = domains;
         this.txt = txt;
@@ -86,6 +89,8 @@ public final class ApiVerticle extends VerticleBase {
         router.route("/v1/jobs*").handler(this::requireTenant);
         router.route("/v1/services*").handler(this::requireTenant);
         router.route("/v1/bus*").handler(this::requireTenant);
+        router.route("/v1/files*").handler(this::requireTenant);
+        new FilesRoutes(files).mount(router);
         new BusRoutes(vertx).mount(router);
         router.post("/v1/jobs").handler(BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 4_096)).handler(this::submitJob);
         router.get("/v1/jobs").handler(this::listJobs);
@@ -292,10 +297,24 @@ public final class ApiVerticle extends VerticleBase {
     }
 
     static void error(RoutingContext ctx, int status, String code, String message) {
+        if (ctx.response().ended()) {
+            return;
+        }
+        automately.core.http.EarlyAnswer.dropEntityHeaders(ctx.response());
+        // Answering before the body was read (a refused upload): drain it so the client sees this answer (D-039).
+        boolean unread = automately.core.http.EarlyAnswer.prepare(ctx.request());
+        if (unread) {
+            ctx.response().putHeader("Connection", "close");
+        }
         ctx.response()
                 .setStatusCode(status)
                 .putHeader("Content-Type", "application/json")
-                .end(new JsonObject().put("error", new JsonObject().put("code", code).put("message", message)).encode());
+                .end(new JsonObject().put("error", new JsonObject().put("code", code).put("message", message)).encode())
+                .onComplete(ar -> {
+                    if (unread) {
+                        ctx.request().connection().close();
+                    }
+                });
     }
 
     /** Buffers live events until it knows whether the job is still running or must be replayed. */

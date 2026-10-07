@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The cluster is the database (D-030): stop every node, start them again from their data directories, and
- * everything is still there: finished jobs, kv, domains, and the service, which is running again and
+ * everything is still there: finished jobs, kv, files, domains, and the service, which is running again and
  * continues from its checkpoint.
  */
 class FullRestartTest {
@@ -58,7 +58,7 @@ class FullRestartTest {
                 Map.entry("AUTOMATELY_HEARTBEAT_MS", "200"),
                 Map.entry("AUTOMATELY_ORPHAN_GRACE_MS", "400"),
                 Map.entry("AUTOMATELY_DATA_DIR", data.resolve(nodeId).toString()),
-                Map.entry("AUTOMATELY_DATA_MEMORY_MB", "64"),
+                Map.entry("AUTOMATELY_DATA_MEMORY_MB", "128"),
                 Map.entry("AUTOMATELY_BASELINE_ADJUST_MS", "2000"),
                 Map.entry("AUTOMATELY_CLUSTER_SIZE", "3"),
                 Map.entry("AUTOMATELY_CLUSTERED", "true"),
@@ -107,6 +107,11 @@ class FullRestartTest {
                 && ((JsonObject) s.getValue("checkpoint")).getInteger("count") >= 5);
         String jobId = runJob("export default async () => { await kv.set('greeting', 'survives'); return 'stored'; }");
         assertThat(post("/v1/services/counter/domains", new JsonObject().put("domain", "shop.example.com")).statusCode()).isEqualTo(201);
+        byte[] file = new byte[3 * 1024 * 1024 + 123];
+        new java.util.Random(7).nextBytes(file);
+        HttpResponse<Buffer> uploaded = await(client.put(nodes.getFirst().httpPort(), "localhost", "/v1/files/assets/blob.bin")
+                .putHeader("X-Automately-Tenant", TENANT).sendBuffer(Buffer.buffer(file)));
+        assertThat(uploaded.statusCode()).as(uploaded.bodyAsString()).isEqualTo(201);
 
         stopNodes();
         startNodes();
@@ -115,6 +120,11 @@ class FullRestartTest {
         JsonObject kvJob = get("/v1/jobs/" + runJob("export default () => kv.get('greeting')")).bodyAsJsonObject();
         assertThat(kvJob.getString("output")).isEqualTo("survives");
         assertThat(get("/v1/services/counter/domains").bodyAsJsonObject().getJsonArray("domains")).hasSize(1);
+        HttpResponse<Buffer> downloaded = await(client.get(nodes.getLast().httpPort(), "localhost", "/v1/files/assets/blob.bin")
+                .putHeader("X-Automately-Tenant", TENANT).send());
+        assertThat(downloaded.statusCode()).isEqualTo(200);
+        assertThat(downloaded.getHeader("ETag")).isEqualTo(uploaded.getHeader("ETag"));
+        assertThat(downloaded.body().getBytes()).as("the file survived").isEqualTo(file);
 
         JsonObject restarted = awaitJson("/v1/services/counter", s -> "RUNNING".equals(s.getString("status")) && s.getInteger("runs") >= 2);
         String secondRun = restarted.getString("currentJobId");

@@ -301,6 +301,63 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 });
               });
 
+              // --- files: chunked, replicated storage (docs/scripting/host-apis.md) ---
+              const viaHost = (invoke) => new Promise((resolve, reject) => {
+                const id = nextCall++;
+                pending.set(id, { resolve, reject });
+                invoke(id);
+              });
+              const FILE = Symbol('automately.file');
+              const openFile = async (path) => {
+                const r = await viaHost((id) => host.fileOpen(JSON.stringify({ path: String(path) }), id));
+                return { file: r.file, body: readable(r.streamId) };
+              };
+              const writeParts = async (writer, data) => {
+                const put = (part) => viaHost((id) => host.fileWrite(writer, toBytes(part), id));
+                if (data === undefined || data === null) return;
+                if (typeof data === 'string' || data instanceof Uint8Array || data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+                  await put(data);
+                } else if (data && (typeof data[Symbol.asyncIterator] === 'function' || typeof data[Symbol.iterator] === 'function')) {
+                  for await (const part of data) if (part !== undefined && part !== null) await put(part);
+                } else {
+                  await put(JSON.stringify(data));
+                }
+              };
+              define('files', Object.freeze({
+                async write(path, data, options) {
+                  const contentType = options?.contentType ?? (typeof data === 'object' && !(data instanceof Uint8Array) && !isIterable(data) && data !== null
+                      ? 'application/json' : null);
+                  const writer = await viaHost((id) => host.fileCreate(JSON.stringify({ path: String(path), contentType }), id));
+                  try {
+                    await writeParts(writer, data?.body && typeof data.body[Symbol.asyncIterator] === 'function' && !isIterable(data) ? data.body : data);
+                    return await viaHost((id) => host.fileFinish(writer, id));
+                  } catch (e) {
+                    host.fileAbort(writer);
+                    throw e;
+                  }
+                },
+                read: async (path) => collect((await openFile(path)).body, BUFFER_LIMIT, `File ${path}`),
+                text: async (path) => utf8Decode(await collect((await openFile(path)).body, BUFFER_LIMIT, `File ${path}`)),
+                json: async (path) => JSON.parse(utf8Decode(await collect((await openFile(path)).body, BUFFER_LIMIT, `File ${path}`))),
+                stream(path, options) {
+                  const ref = { path: String(path), [FILE]: { path: String(path), headers: options?.headers ?? {} } };
+                  ref[Symbol.asyncIterator] = () => {
+                    let inner = null;
+                    return {
+                      async next() {
+                        if (!inner) inner = (await openFile(path)).body[Symbol.asyncIterator]();
+                        return inner.next();
+                      },
+                      async return() { return inner ? inner.return() : { value: undefined, done: true }; },
+                    };
+                  };
+                  return Object.freeze(ref);
+                },
+                stat: (path) => callHost('files.stat', { path: String(path) }),
+                list: (options) => callHost('files.list', { prefix: options?.prefix ?? '', limit: options?.limit ?? 100, cursor: options?.cursor ?? null }),
+                delete: (path) => callHost('files.delete', { path: String(path) }),
+              }));
+
               // --- serving HTTP: a request body streams in, a response streams out ---
               const isIterable = (v) => v && typeof v !== 'string' && !(v instanceof Uint8Array)
                   && (typeof v[Symbol.asyncIterator] === 'function' || typeof v[Symbol.iterator] === 'function');
@@ -309,7 +366,10 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 if (typeof value === 'string') return { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: value };
                 if (value instanceof Uint8Array || isIterable(value)) return { status: 200, headers: {}, body: value };
                 const headers = {};
-                for (const [k, v] of Object.entries(value.headers ?? {})) headers[String(k).toLowerCase()] = String(v);
+                for (const [k, v] of Object.entries(value.headers ?? {})) {
+                  // Only the host knows the exact length (files set it themselves); a wrong one would corrupt the response.
+                  if (String(k).toLowerCase() !== 'content-length') headers[String(k).toLowerCase()] = String(v);
+                }
                 let body = value.body ?? null;
                 if (body !== null && typeof body !== 'string' && !(body instanceof Uint8Array) && !isIterable(body)) {
                   body = JSON.stringify(body);
@@ -323,6 +383,16 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 host.write(exchangeId, toBytes(part), id);
               });
               const respond = async (exchangeId, value) => {
+                const ref = value?.[FILE] ?? value?.body?.[FILE];
+                if (ref) {
+                  // Served by the host straight from storage, with Range and ETag support.
+                  const headers = { ...ref.headers };
+                  for (const [k, v] of Object.entries(value?.[FILE] ? {} : value.headers ?? {})) {
+                    if (String(k).toLowerCase() !== 'content-length') headers[String(k).toLowerCase()] = String(v);
+                  }
+                  await viaHost((id) => host.respondFile(exchangeId, JSON.stringify({ path: ref.path, headers }), id));
+                  return;
+                }
                 const res = toResponse(value);
                 host.respond(exchangeId, res.status, JSON.stringify(res.headers));
                 const body = res.body;

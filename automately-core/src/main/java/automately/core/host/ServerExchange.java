@@ -18,12 +18,12 @@ import java.util.Set;
  * complete when the socket has drained, so a script producing faster than the client reads waits instead of
  * filling memory.
  */
-final class ServerExchange implements HttpExchange {
+public final class ServerExchange implements HttpExchange {
 
     static final Set<String> INTERNAL_HEADERS = Set.of(InternalHttpVerticle.SECRET_HEADER.toLowerCase(Locale.ROOT),
             InternalHttpVerticle.JOB_HEADER.toLowerCase(Locale.ROOT));
     static final Set<String> HOP_BY_HOP = Set.of("connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
-            "proxy-authorization", "proxy-authenticate", "content-length");
+            "proxy-authorization", "proxy-authenticate");
 
     private final HttpServerRequest request;
     private final HttpServerResponse response;
@@ -32,7 +32,7 @@ final class ServerExchange implements HttpExchange {
     private final BodyStream body;
     private volatile boolean closed;
 
-    ServerExchange(HttpServerRequest request, Context context) {
+    public ServerExchange(HttpServerRequest request, Context context) {
         this.request = request;
         this.response = request.response();
         this.context = context;
@@ -84,7 +84,10 @@ final class ServerExchange implements HttpExchange {
                     response.putHeader(h.getKey(), String.valueOf(h.getValue()));
                 }
             });
-            response.setChunked(true);
+            // An exact length (set by FileResponder) is kept so players can seek; anything else is chunked.
+            if (!headers.containsKey("content-length")) {
+                response.setChunked(true);
+            }
         });
     }
 
@@ -129,6 +132,7 @@ final class ServerExchange implements HttpExchange {
                 response.reset();
                 return;
             }
+            automately.core.http.EarlyAnswer.dropEntityHeaders(response);
             response.setStatusCode(status).putHeader("content-type", "application/json")
                     .end(new JsonObject().put("error", new JsonObject().put("code", status).put("message", message)).encode());
         });
