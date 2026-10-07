@@ -17,6 +17,10 @@ import automately.core.files.FileStore;
 import automately.core.files.SharedDataFileStore;
 import automately.core.files.StorageCapacity;
 import automately.core.storage.TenantQuota;
+import automately.core.files.BlobStore;
+import automately.core.files.DiskBlobStore;
+import automately.core.files.SharedDataChunks;
+import automately.core.files.s3.S3BlobStore;
 import automately.core.auth.AuthStore;
 import automately.core.auth.Authenticator;
 import automately.core.auth.SharedDataAuthStore;
@@ -87,8 +91,9 @@ public final class Automately {
                 .compose(vertx -> {
                     IgniteStores durable = IgniteStores.open(vertx, cluster);
                     StorageCapacity capacity = IgniteCapacity.of(cluster, config.minFreeDiskBytes());
+                    BlobStore blobs = fileBackend(vertx, config, () -> durable.chunks(capacity));
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
-                            durable.files(capacity), capacity, durable.auth);
+                            durable.files(blobs), blobs, capacity, durable.auth);
                     return wire(config, txt, vertx, stores, cluster);
                 })
                 .recover(err -> {
@@ -97,16 +102,26 @@ public final class Automately {
                 });
     }
 
+    /** Where file bytes go (D-056): the cluster by default, or a folder, or an S3-compatible bucket. */
+    static BlobStore fileBackend(Vertx vertx, ServerConfig config, java.util.function.Supplier<BlobStore> cluster) {
+        return switch (config.filesBackend()) {
+            case DiskBlobStore.NAME -> new DiskBlobStore(vertx, config.filesDirectory(), config.minFreeDiskBytes());
+            case S3BlobStore.NAME -> new S3BlobStore(vertx, config.s3());
+            default -> cluster.get();
+        };
+    }
+
     /** Where durable data lives: Ignite when clustered, in-memory maps for a single development node. */
     record Stores(JobStore jobs, JobStateStore state, ServiceStore services, DomainStore domains, KvStore kv, FileStore files,
-                  StorageCapacity capacity, AuthStore auth) {
+                  BlobStore blobs, StorageCapacity capacity, AuthStore auth) {
 
         static Stores inMemory(Vertx vertx, ServerConfig config) {
             // In-memory data lives on the JVM heap, so that's what admission control watches (D-038).
             StorageCapacity capacity = StorageCapacity.heap(0.8);
+            BlobStore blobs = fileBackend(vertx, config, () -> new SharedDataChunks(vertx, capacity));
             return new Stores(new SharedDataJobStore(vertx), new SharedDataJobStateStore(vertx), new SharedDataServiceStore(vertx),
                     new SharedDataDomainStore(vertx), new SharedDataKvStore(vertx),
-                    new SharedDataFileStore(vertx, capacity), capacity, new SharedDataAuthStore(vertx));
+                    new SharedDataFileStore(vertx, blobs), blobs, capacity, new SharedDataAuthStore(vertx));
         }
     }
 
@@ -132,7 +147,11 @@ public final class Automately {
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth());
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
-        return authenticator.ensureAdminToken(new SecureRandom()).onSuccess(generated -> generated.ifPresent(token -> LOG.warn(
+        // A node whose file backend can't be used refuses to start, saying why, rather than failing uploads later.
+        return stores.blobs().check()
+                .onSuccess(v -> LOG.info("Files are stored in the {} backend{}", stores.blobs().name(), config.filesBackend().equals(S3BlobStore.NAME)
+                        ? ": " + config.s3().describe() : config.filesBackend().equals(DiskBlobStore.NAME) ? ": " + config.filesDirectory() : ""))
+                .compose(v -> authenticator.ensureAdminToken(new SecureRandom())).onSuccess(generated -> generated.ifPresent(token -> LOG.warn(
                         "\n\n  No AUTOMATELY_ADMIN_TOKEN was set, so this cluster generated its admin token (shown once, save it now):\n\n"
                         + "    {}\n\n  It manages tenants and tokens only. Rotate it with POST /v1/admin/rotate (D-044).\n", token)))
                 .compose(v -> clusterSecret(vertx)).compose(secret -> {
@@ -152,7 +171,11 @@ public final class Automately {
                     .compose(id -> vertx.deployVerticle(api))
                     .compose(id -> vertx.deployVerticle(ingress))
                     .map(id -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster, api.routes()));
-        }).recover(err -> vertx.close().transform(v -> Future.failedFuture(err)));
+        }).recover(err -> {
+            // Not waited for: this runs on one of Vert.x's own threads, which a close can't report back to.
+            vertx.close();
+            return Future.failedFuture(err);
+        });
     }
 
     /** One random secret per cluster, agreed through shared data (the first node to ask sets it). */

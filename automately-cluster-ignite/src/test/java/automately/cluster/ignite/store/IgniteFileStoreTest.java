@@ -9,6 +9,6 @@ class IgniteFileStoreTest extends FileStoreContract {
 
     @BeforeEach
     void setUp() {
-        store = TestIgnite.stores().files(automately.core.files.StorageCapacity.UNLIMITED);
+        store = TestIgnite.stores().files(TestIgnite.stores().chunks(automately.core.files.StorageCapacity.UNLIMITED));
     }
 }

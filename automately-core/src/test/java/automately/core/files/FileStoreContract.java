@@ -23,7 +23,7 @@ public abstract class FileStoreContract {
     /** Set by the implementation's test before each test. */
     protected FileStore store;
 
-    private static final int CHUNK = ChunkedFileStore.CHUNK_SIZE;
+    private static final int CHUNK = ChunkedBlobStore.CHUNK_SIZE;
 
     protected static byte[] bytes(int size, long seed) {
         byte[] data = new byte[size];
@@ -78,7 +78,8 @@ public abstract class FileStoreContract {
 
         FileInfo info = write(store, "acme", "big.bin", data, 100_000);
 
-        assertThat(info.chunks()).isEqualTo(4);
+        assertThat(info.backend()).as("recorded with the file (D-056)").isNotBlank();
+        assertThat(info.size()).isEqualTo(data.length);
         assertThat(info.etag()).isEqualTo(etag(data));
         assertThat(readAll("acme", "big.bin")).isEqualTo(data);
     }
@@ -112,8 +113,9 @@ public abstract class FileStoreContract {
         Buffer got = Buffer.buffer();
         reader.handler(chunk -> {
             got.appendBuffer(chunk);
-            if (got.length() == CHUNK) {
-                // Stop after the first chunk; the test thread replaces the file, then resumes (never block a handler).
+            if (got.length() >= CHUNK && !firstChunk.isDone()) {
+                // Stop after the first megabyte (however the backend splits it); the test thread replaces the file,
+                // then resumes (never block a handler).
                 reader.pause();
                 firstChunk.complete(null);
             }
@@ -138,7 +140,7 @@ public abstract class FileStoreContract {
         assertThat(await(store.collectGarbage(System.currentTimeMillis()))).as("still within the grace period").isZero();
         assertThat(read(store.open(info, 0, 2))).isEqualTo("bye".getBytes());
 
-        long later = System.currentTimeMillis() + ChunkedFileStore.READER_GRACE.toMillis() + 1;
+        long later = System.currentTimeMillis() + ClusterFileStore.READER_GRACE.toMillis() + 1;
         assertThat(await(store.collectGarbage(later))).isGreaterThanOrEqualTo(1);
         assertThatThrownBy(() -> read(store.open(info, 0, 2))).hasMessageContaining("missing");
     }

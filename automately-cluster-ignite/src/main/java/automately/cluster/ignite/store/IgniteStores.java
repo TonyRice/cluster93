@@ -39,9 +39,14 @@ public final class IgniteStores {
         this.cluster = cluster;
     }
 
-    /** Files, with this node's storage admission control (D-038). The tenant quota is applied by callers (D-043). */
-    public FileStore files(StorageCapacity capacity) {
-        return new IgniteFileStore(vertx, cluster.ignite(), capacity);
+    /** File metadata in the cluster, bytes in {@code blobs} (D-056). The tenant quota is applied by callers (D-043). */
+    public FileStore files(automately.core.files.BlobStore blobs) {
+        return new IgniteFileStore(vertx, cluster.ignite(), blobs);
+    }
+
+    /** The default file backend: chunks in the cluster, with this node's storage admission control (D-038). */
+    public automately.core.files.BlobStore chunks(StorageCapacity capacity) {
+        return new IgniteChunks(vertx, cluster.ignite(), capacity);
     }
 
     /** Creates any missing tables. Blocking; call once at startup, before Vert.x serves traffic. */
@@ -50,7 +55,7 @@ public final class IgniteStores {
             Table.create(cluster.ignite(), table, cluster.settings().backups());
             Table.registerSchema(cluster.ignite(), table);
         });
-        IgniteFileStore.createChunkCache(cluster.ignite(), cluster.settings().backups());
+        IgniteChunks.createCache(cluster.ignite(), cluster.settings().backups());
     }
 
     public static IgniteStores open(Vertx vertx, IgniteCluster cluster) {

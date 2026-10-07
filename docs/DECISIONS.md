@@ -441,3 +441,22 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - Public downloads come from `adamnlynn/automately-v2`'s own GitHub Releases, once Tony makes the repository public. The installers and `automately upgrade` already default to `https://github.com/adamnlynn/automately-v2/releases/latest/download`, so nothing changes at that point.
 **Until then:** a tag still builds and publishes a release, but its assets need a GitHub login to download. Use `gh release download`, or point `AUTOMATELY_INSTALL_URL` at a mirror.
 
+### D-056 — File storage backends: metadata in the cluster, bytes in a pluggable BlobStore
+**Date:** 2026-10-07 · **Status:** Accepted (Tony). Extends D-040
+
+**Decision:**
+- **What stays in the cluster database:** paths, versions, the atomic swap to a new version, garbage collection and quotas, whatever holds the bytes.
+- **The bytes go to a `BlobStore`**, chosen with `AUTOMATELY_FILES_BACKEND`:
+  - `cluster` (default): 1 MB chunks in the replicated store, as before
+  - `disk`: one file per blob under `AUTOMATELY_FILES_DIR`, written to `.part`, flushed to disk and renamed, with free space checked as it writes. In a cluster, every node must mount the same folder.
+  - `s3`: one object per blob in an S3-compatible bucket: 8 MiB multipart parts (one PUT if smaller), ranged GETs for reads, and deleting aborts unfinished uploads
+- **Each file records its backend**, so it's always read from where it was written. Reading a file after switching backends gives a clear error rather than "missing".
+- **A node checks its backend at start** (the bucket answers with these credentials, or the folder is writable) and refuses to start otherwise.
+- **The S3 client is our own**: about 300 lines of SigV4 signing on Vert.x's HTTP client, checked against AWS's published example. The AWS SDK brings its own Netty, which would clash with Vert.x's, and only a dozen calls are needed. XML answers are parsed with DTDs and external entities off.
+- **Tests:**
+  - every backend passes one contract (multipart boundaries, uneven write sizes, ranges, empty blobs, abort, delete, missing blobs)
+  - the S3 tests run against Versity's S3 gateway in Docker, which really checks signatures
+  - the file-store contract runs on each backend
+  - a two-node cluster serves a 20 MB file from the bucket, including ranges through a service
+**Not chosen:** MinIO for tests, whose community images are no longer on Docker Hub; SeaweedFS and s3mock, which accept unsigned requests by default and so wouldn't catch signing bugs.
+

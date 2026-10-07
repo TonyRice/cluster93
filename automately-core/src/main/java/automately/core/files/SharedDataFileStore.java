@@ -2,30 +2,32 @@ package automately.core.files;
 
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
-import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.AsyncMap;
 
 import java.util.Comparator;
 import java.util.List;
 
-/** {@link ChunkedFileStore} on Vert.x {@link AsyncMap}s. For development and tests; listings scan. */
-public final class SharedDataFileStore extends ChunkedFileStore {
+/** {@link ClusterFileStore} metadata on Vert.x {@link AsyncMap}s. For development and tests; listings scan. */
+public final class SharedDataFileStore extends ClusterFileStore {
 
     private static final char SEPARATOR = '\u001f';
 
     private final Future<AsyncMap<String, JsonObject>> meta;
-    private final Future<AsyncMap<String, Buffer>> chunks;
     private final Future<AsyncMap<String, Long>> garbage;
 
+    /** Bytes in the same shared maps, with the heap as the capacity that's watched (D-038). */
     public SharedDataFileStore(Vertx vertx) {
         this(vertx, StorageCapacity.heap(0.8));
     }
 
     public SharedDataFileStore(Vertx vertx, StorageCapacity capacity) {
-        super(vertx, capacity);
+        this(vertx, new SharedDataChunks(vertx, capacity));
+    }
+
+    public SharedDataFileStore(Vertx vertx, BlobStore blobs) {
+        super(vertx, blobs);
         this.meta = vertx.sharedData().getAsyncMap("automately.files");
-        this.chunks = vertx.sharedData().getAsyncMap("automately.file-chunks");
         this.garbage = vertx.sharedData().getAsyncMap("automately.file-garbage");
     }
 
@@ -62,21 +64,6 @@ public final class SharedDataFileStore extends ChunkedFileStore {
     protected Future<Long> sumSizes(String tenant) {
         return meta.compose(AsyncMap::values).map(values -> values.stream()
                 .filter(v -> v.getString("tenant").equals(tenant)).mapToLong(v -> v.getLong("size")).sum());
-    }
-
-    @Override
-    protected Future<Void> putChunk(String fileId, int index, Buffer data) {
-        return chunks.compose(m -> m.put(fileId + ":" + index, data));
-    }
-
-    @Override
-    protected Future<Buffer> getChunk(String fileId, int index) {
-        return chunks.compose(m -> m.get(fileId + ":" + index));
-    }
-
-    @Override
-    protected Future<Void> removeChunk(String fileId, int index) {
-        return chunks.compose(m -> m.remove(fileId + ":" + index)).mapEmpty();
     }
 
     @Override

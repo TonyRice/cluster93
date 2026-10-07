@@ -153,6 +153,7 @@ final class FilesRoutes {
         if (err instanceof HostException host) {
             switch (host.code()) {
                 case "insufficient_storage" -> error(ctx, 507, host.code(), host.getMessage());
+                case "storage_unavailable" -> error(ctx, 503, host.code(), host.getMessage());
                 case "limit_exceeded" -> error(ctx, 413, host.code(), host.getMessage());
                 default -> error(ctx, 400, host.code(), host.getMessage());
             }

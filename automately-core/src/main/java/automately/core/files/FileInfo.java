@@ -3,17 +3,15 @@ package automately.core.files;
 import io.vertx.core.json.JsonObject;
 
 /**
- * One stored file version.
- *
- * @param fileId  a new id per write; chunks are stored under it, so replacing a file never disturbs a reader of the old version
- * @param etag    quoted SHA-256 of the content, for If-None-Match
+ * One version of a file: its metadata row. {@code fileId} names its blob, and {@code backend} says which
+ * {@link BlobStore} holds it (D-056); rows written before backends existed are in the cluster.
  */
-public record FileInfo(String tenant, String path, String fileId, long size, String contentType, String etag, int chunkSize, int chunks,
+public record FileInfo(String tenant, String path, String fileId, long size, String contentType, String etag, String backend,
                        long createdAt) {
 
     public JsonObject toJson() {
         return new JsonObject().put("tenant", tenant).put("path", path).put("fileId", fileId).put("size", size)
-                .put("contentType", contentType).put("etag", etag).put("chunkSize", chunkSize).put("chunks", chunks).put("createdAt", createdAt);
+                .put("contentType", contentType).put("etag", etag).put("backend", backend).put("createdAt", createdAt);
     }
 
     /** What scripts and the API see. */
@@ -23,6 +21,6 @@ public record FileInfo(String tenant, String path, String fileId, long size, Str
 
     public static FileInfo fromJson(JsonObject json) {
         return json == null ? null : new FileInfo(json.getString("tenant"), json.getString("path"), json.getString("fileId"), json.getLong("size"),
-                json.getString("contentType"), json.getString("etag"), json.getInteger("chunkSize"), json.getInteger("chunks"), json.getLong("createdAt"));
+                json.getString("contentType"), json.getString("etag"), json.getString("backend", ChunkedBlobStore.NAME), json.getLong("createdAt"));
     }
 }

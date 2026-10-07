@@ -22,6 +22,8 @@ class ArchitectureTest {
     static void importClasses() {
         classes = new ClassFileImporter()
                 .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+                // Core's test helpers arrive as a test-jar, which DO_NOT_INCLUDE_TESTS doesn't recognise.
+                .withImportOption(location -> !location.contains("-tests.jar"))
                 .importPackages("automately");
     }
 

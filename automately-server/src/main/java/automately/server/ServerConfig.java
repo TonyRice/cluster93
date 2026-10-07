@@ -66,9 +66,20 @@ public record ServerConfig(
         int clusterPort,
         List<String> clusterMembers,
         String adminToken,
-        long rateLimitPerMinute) {
+        long rateLimitPerMinute,
+        String filesBackend,
+        Path filesDirectory,
+        automately.core.files.s3.S3Settings s3) {
+
+    public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
 
     public ServerConfig {
+        if (!FILES_BACKENDS.contains(filesBackend)) {
+            throw new IllegalArgumentException("AUTOMATELY_FILES_BACKEND must be one of " + FILES_BACKENDS + " (it was " + filesBackend + ")");
+        }
+        if (filesBackend.equals("disk") && filesDirectory == null) {
+            throw new IllegalArgumentException("AUTOMATELY_FILES_DIR is required with AUTOMATELY_FILES_BACKEND=disk");
+        }
         if (adminToken != null && adminToken.length() < automately.core.auth.Authenticator.MIN_ADMIN_TOKEN_LENGTH) {
             throw new IllegalArgumentException("AUTOMATELY_ADMIN_TOKEN must be at least "
                     + automately.core.auth.Authenticator.MIN_ADMIN_TOKEN_LENGTH + " characters");
@@ -111,7 +122,10 @@ public record ServerConfig(
                         .filter(member -> !member.isEmpty())
                         .toList(),
                 blankToNull(env.get("AUTOMATELY_ADMIN_TOKEN")),
-                Long.parseLong(env.getOrDefault("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "1200")));
+                Long.parseLong(env.getOrDefault("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "1200")),
+                env.getOrDefault("AUTOMATELY_FILES_BACKEND", "cluster").trim().toLowerCase(java.util.Locale.ROOT),
+                blankToNull(env.get("AUTOMATELY_FILES_DIR")) == null ? null : Path.of(env.get("AUTOMATELY_FILES_DIR").trim()),
+                "s3".equalsIgnoreCase(env.getOrDefault("AUTOMATELY_FILES_BACKEND", "").trim()) ? automately.core.files.s3.S3Settings.fromEnv(env) : null);
     }
 
     private static String blankToNull(String value) {

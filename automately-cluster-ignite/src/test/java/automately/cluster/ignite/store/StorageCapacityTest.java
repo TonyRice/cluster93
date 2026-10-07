@@ -46,7 +46,7 @@ class StorageCapacityTest {
         IgniteStores.createTables(cluster);
         vertx = Vertx.vertx();
         IgniteStores stores = IgniteStores.open(vertx, cluster);
-        FileStore files = stores.files(IgniteCapacity.of(cluster, 0));
+        FileStore files = stores.files(stores.chunks(IgniteCapacity.of(cluster, 0)));
         byte[] megabyte = new byte[1024 * 1024];
 
         // Keep uploading 4 MB files into a 128 MB region until the node says no.
@@ -82,7 +82,7 @@ class StorageCapacityTest {
         IgniteStores.createTables(cluster);
         vertx = Vertx.vertx();
         // Pretend the disk is nearly full by demanding more free space than any disk has.
-        FileStore files = IgniteStores.open(vertx, cluster).files(IgniteCapacity.of(cluster, Long.MAX_VALUE / 2));
+        FileStore files = IgniteStores.open(vertx, cluster).files(IgniteStores.open(vertx, cluster).chunks(IgniteCapacity.of(cluster, Long.MAX_VALUE / 2)));
 
         assertThatThrownBy(() -> await(files.create("acme", "big.bin", null, Long.MAX_VALUE)))
                 .cause().isInstanceOf(HostException.class).hasMessageContaining("disk left");

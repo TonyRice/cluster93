@@ -48,7 +48,7 @@ final class TestIgnite {
                 IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS)) {
             cluster.ignite().cache(table.name()).clear();
         }
-        cluster.ignite().cache(IgniteFileStore.CHUNKS).clear();
+        cluster.ignite().cache(IgniteChunks.CACHE).clear();
         return stores;
     }
 }

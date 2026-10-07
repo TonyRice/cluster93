@@ -182,6 +182,10 @@ The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each o
 | `AUTOMATELY_CLUSTER_SIZE` | `1` | Nodes a brand-new durable cluster waits for before activating |
 | `AUTOMATELY_DATA_MEMORY_MB` | `256` | Off-heap memory for the data region (the rest stays on disk). At least `128` |
 | `AUTOMATELY_TENANT_STORAGE_MB` | `1024` | Per tenant, files and `kv` together; over it, uploads get 413 and `kv` writes fail |
+| `AUTOMATELY_FILES_BACKEND` | `cluster` | Where file bytes live: `cluster` (replicated in the cluster), `disk` or `s3` ([storage](docs/design/storage-providers.md)) |
+| `AUTOMATELY_FILES_DIR` | | The folder for `disk` (shared by every node in a cluster) |
+| `AUTOMATELY_S3_BUCKET` · `_ENDPOINT` · `_REGION` · `_PREFIX` · `_PATH_STYLE` | | The bucket for `s3`; any S3-compatible endpoint (MinIO, R2, B2, Wasabi) |
+| `AUTOMATELY_S3_ACCESS_KEY_ID` · `_SECRET_ACCESS_KEY` | `AWS_*` | Credentials for `s3`; the standard `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` also work |
 | `AUTOMATELY_MIN_FREE_DISK_MB` | `1024` | Durable nodes refuse writes (507) below this much free disk |
 | `AUTOMATELY_BASELINE_ADJUST_MS` | `60000` | How long a missing data node is waited for before its data is rebalanced |
 | `AUTOMATELY_JOB_RETENTION_DAYS` | `7` | Finished jobs older than this are deleted |
@@ -205,7 +209,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
-| No tests | 315 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, files, auth, the API contract, MCP, the CLI and its installer, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
+| No tests | 370 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, files, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
 | Synchronous host objects running in the host JVM (Nashorn, `--no-java`); HTTP client with no address checks | Promise-based, tenant-scoped `kv`/`bus`/`fetch`/`log`; SSRF-safe egress; verified domains | `NodeHostServicesTest`, `HostApisTest` |
 | Service jobs: one per name, autostarted at boot, no restart on crash | Supervised services: restart with backoff, revision rolls, graceful stop, checkpoints across runs | Supervisor, chaos and Docker tests |
 | A crashed node's jobs were simply lost or restarted blindly | Attempts with fencing, `onOrphan` policy, resumable steps | Chaos test (kills the node mid-step) |

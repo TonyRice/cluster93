@@ -26,6 +26,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## File storage backends, step 1: the global default (2026-10-07)
+
+### Added
+- **`AUTOMATELY_FILES_BACKEND` = `cluster` | `disk` | `s3`** (D-056). File metadata stays in the cluster database. The bytes go to the chosen backend, and each file records which one holds it. **Why:** the original Automately had pluggable stores (local, S3, Azure), and Tony asked for providers back, with tenants able to bring their own next ([plan](docs/design/storage-providers.md)).
+- **The `s3` backend:** AWS S3 and S3-compatible stores (MinIO, R2, B2, Wasabi, GCS through its S3 keys), with streaming multipart uploads and ranged reads. It is configured with `AUTOMATELY_S3_BUCKET`, `_ENDPOINT`, `_REGION`, `_PREFIX`, `_PATH_STYLE`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`, falling back to the standard `AWS_*` variables.
+- **The `disk` backend:** a folder (`AUTOMATELY_FILES_DIR`), local or shared over NFS, with crash-safe writes and free-space checks.
+- **Startup check:** a node whose backend can't be used refuses to start and says why.
+- 503 `storage_unavailable` when the backend fails mid-request.
+- **Tests:** `BlobStoreContract` on all four implementations (Versity's S3 gateway in Docker for S3), the file-store contract on disk and S3, `FileBackendsTest` (a cluster on S3, a node on disk, refused starts), and a SigV4 test against AWS's example.
+
+### Changed
+- `ChunkedFileStore` is now `ClusterFileStore` (metadata and versioning). The chunks moved behind `BlobStore` (`SharedDataChunks`, `IgniteChunks`), and `FileInfo` records `backend` instead of chunk counts.
+
+### Fixed
+- A node that failed during startup could hang instead of reporting the failure: it waited, on a Vert.x thread, for Vert.x to close.
+
 ## Phase 4, milestone 4 — The MCP server (2026-10-06)
 
 ### Added
