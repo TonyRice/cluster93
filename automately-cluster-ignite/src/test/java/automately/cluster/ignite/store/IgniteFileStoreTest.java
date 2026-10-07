@@ -9,11 +9,6 @@ class IgniteFileStoreTest extends FileStoreContract {
 
     @BeforeEach
     void setUp() {
-        store = TestIgnite.stores().files(Long.MAX_VALUE, automately.core.files.StorageCapacity.UNLIMITED);
-    }
-
-    @Override
-    protected FileStore storeWithQuota(long quotaBytes) {
-        return TestIgnite.stores().files(quotaBytes, automately.core.files.StorageCapacity.UNLIMITED);
+        store = TestIgnite.stores().files(automately.core.files.StorageCapacity.UNLIMITED);
     }
 }

@@ -46,18 +46,20 @@ public final class NodeHostServices implements HostServices {
     private final ServeRegistry serve;
     private final FileStore files;
     private final StorageCapacity capacity;
+    private final automately.core.storage.TenantQuota quota;
     private final List<automately.core.files.FileWriter> openWriters = new CopyOnWriteArrayList<>();
     private final List<Registration> registrations = new CopyOnWriteArrayList<>();
     private final AtomicInteger fetchesInFlight = new AtomicInteger();
 
     public NodeHostServices(Vertx vertx, String tenant, String jobId, boolean service, KvStore kv, FetchClient fetch, ServeRegistry serve) {
-        this(vertx, tenant, jobId, service, kv, fetch, serve, null, StorageCapacity.UNLIMITED);
+        this(vertx, tenant, jobId, service, kv, fetch, serve, null, StorageCapacity.UNLIMITED, automately.core.storage.TenantQuota.unlimited());
     }
 
     public NodeHostServices(Vertx vertx, String tenant, String jobId, boolean service, KvStore kv, FetchClient fetch, ServeRegistry serve,
-                            FileStore files, StorageCapacity capacity) {
+                            FileStore files, StorageCapacity capacity, automately.core.storage.TenantQuota quota) {
         this.files = files;
         this.capacity = capacity;
+        this.quota = quota;
         this.vertx = vertx;
         this.tenant = tenant;
         this.jobId = jobId;
@@ -69,8 +71,8 @@ public final class NodeHostServices implements HostServices {
 
     /** A factory sharing one store, client and registry across a node's executions. */
     public static HostServicesFactory factory(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files,
-                                              StorageCapacity capacity) {
-        return (tenant, jobId, service) -> new NodeHostServices(vertx, tenant, jobId, service, kv, fetch, serve, files, capacity);
+                                              StorageCapacity capacity, automately.core.storage.TenantQuota quota) {
+        return (tenant, jobId, service) -> new NodeHostServices(vertx, tenant, jobId, service, kv, fetch, serve, files, capacity, quota);
     }
 
     @Override
@@ -78,10 +80,23 @@ public final class NodeHostServices implements HostServices {
         try {
             return switch (operation) {
                 case "kv.get" -> kv.get(tenant, namespace(args), key(args));
-                case "kv.set" -> withRoom(() -> kv.set(tenant, namespace(args), key(args), value(args, "value"), ttl(args)).map(v -> null));
+                case "kv.set" -> {
+                    String namespace = namespace(args);
+                    String key = key(args);
+                    Object value = value(args, "value");
+                    Long ttl = ttl(args);
+                    yield withRoom(() -> fitsQuota(namespace, key, KvStore.entrySize(namespace, key, value))
+                            .compose(v -> kv.set(tenant, namespace, key, value, ttl)).map(v -> null));
+                }
                 case "kv.delete" -> kv.delete(tenant, namespace(args), key(args)).map(Object.class::cast);
                 case "kv.list" -> kv.list(tenant, namespace(args), prefix(args), limit(args), args.getString("cursor")).map(Object.class::cast);
-                case "kv.increment" -> withRoom(() -> kv.increment(tenant, namespace(args), key(args), by(args)).map(Object.class::cast));
+                case "kv.increment" -> {
+                    String namespace = namespace(args);
+                    String key = key(args);
+                    long by = by(args);
+                    yield withRoom(() -> fitsQuota(namespace, key, KvStore.entrySize(namespace, key, Long.MIN_VALUE))
+                            .compose(v -> kv.increment(tenant, namespace, key, by)).map(Object.class::cast));
+                }
                 case "files.stat" -> filesOrFail().stat(tenant, path(args)).map(info -> info == null ? null : (Object) info.toViewJson());
                 case "files.list" -> filesOrFail().list(tenant, prefix(args), limit(args), args.getString("cursor")).map(Object.class::cast);
                 case "files.delete" -> filesOrFail().delete(tenant, path(args)).map(Object.class::cast);
@@ -111,8 +126,11 @@ public final class NodeHostServices implements HostServices {
     public Future<automately.core.files.FileWriter> createFile(JsonObject args) {
         try {
             String path = path(args);
+            FileStore store = filesOrFail();
             return capacity.ensureRoom()
-                    .compose(room -> filesOrFail().create(tenant, path, args.getString("contentType")))
+                    .compose(room -> quota.remaining(tenant))
+                    .compose(left -> store.create(tenant, path, args.getString("contentType"), left))
+                    .map(this::counted)
                     .map(writer -> {
                         openWriters.add(writer);
                         return writer;
@@ -152,6 +170,43 @@ public final class NodeHostServices implements HostServices {
             throw new HostException("Error", "unavailable", "Files are not available here");
         }
         return files;
+    }
+
+    /** A writer whose finished upload is counted towards the tenant's quota straight away. */
+    private automately.core.files.FileWriter counted(automately.core.files.FileWriter writer) {
+        return new automately.core.files.FileWriter() {
+            @Override
+            public Future<Void> write(io.vertx.core.buffer.Buffer data) {
+                return writer.write(data);
+            }
+
+            @Override
+            public Future<automately.core.files.FileInfo> finish() {
+                return writer.finish().onSuccess(info -> quota.added(tenant, info.size()));
+            }
+
+            @Override
+            public Future<Void> abort() {
+                return writer.abort();
+            }
+        };
+    }
+
+    /**
+     * The tenant's quota covers kv too (D-043). The quick check counts the whole entry as new; only when that says no
+     * is it rechecked properly, from a fresh count and against what the write really adds over the entry it replaces,
+     * so a full tenant can still update or shrink what it has.
+     */
+    private Future<Void> fitsQuota(String namespace, String key, long size) {
+        return quota.ensureFits(tenant, size).recover(err -> {
+            if (!automately.core.storage.TenantQuota.isExceeded(err)) {
+                return Future.failedFuture(err);
+            }
+            return kv.get(tenant, namespace, key).compose(old -> {
+                long added = size - (old == null ? 0 : KvStore.entrySize(namespace, key, old));
+                return added <= 0 ? Future.succeededFuture() : quota.remaining(tenant).compose(left -> quota.ensureFits(tenant, added));
+            });
+        });
     }
 
     private Future<Object> withRoom(java.util.function.Supplier<Future<Object>> write) {

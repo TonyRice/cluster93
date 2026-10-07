@@ -16,6 +16,7 @@ import automately.core.files.FileGarbageVerticle;
 import automately.core.files.FileStore;
 import automately.core.files.SharedDataFileStore;
 import automately.core.files.StorageCapacity;
+import automately.core.storage.TenantQuota;
 import automately.cluster.ignite.IgniteSettings;
 import automately.cluster.ignite.store.IgniteStores;
 import automately.core.service.ServiceStore;
@@ -77,7 +78,7 @@ public final class Automately {
                     IgniteStores durable = IgniteStores.open(vertx, cluster);
                     StorageCapacity capacity = IgniteCapacity.of(cluster, config.minFreeDiskBytes());
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
-                            durable.files(config.tenantStorageBytes(), capacity), capacity);
+                            durable.files(capacity), capacity);
                     return wire(config, txt, vertx, stores, cluster);
                 })
                 .recover(err -> {
@@ -95,7 +96,7 @@ public final class Automately {
             StorageCapacity capacity = StorageCapacity.heap(0.8);
             return new Stores(new SharedDataJobStore(vertx), new SharedDataJobStateStore(vertx), new SharedDataServiceStore(vertx),
                     new SharedDataDomainStore(vertx), new SharedDataKvStore(vertx),
-                    new SharedDataFileStore(vertx, config.tenantStorageBytes(), capacity), capacity);
+                    new SharedDataFileStore(vertx, capacity), capacity);
         }
     }
 
@@ -111,10 +112,13 @@ public final class Automately {
         ScriptRuntime runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
         JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
         ServeRegistry serving = new ServeRegistry();
+        // One quota for everything a tenant stores: files and kv together (D-043).
+        TenantQuota quota = new TenantQuota(config.tenantStorageBytes(),
+                tenant -> stores.files().usage(tenant).compose(files -> stores.kv().usage(tenant).map(kv -> files + kv)));
         HostServicesFactory hostServices = NodeHostServices.factory(vertx, stores.kv(),
-                new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving, stores.files(), stores.capacity());
+                new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving, stores.files(), stores.capacity(), quota);
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
-        ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files());
+        ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(), quota);
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         return clusterSecret(vertx).compose(secret -> {
             InternalHttpVerticle endpoint = new InternalHttpVerticle(config.internalPort(), secret, serving);

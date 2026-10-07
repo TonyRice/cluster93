@@ -33,6 +33,8 @@ class ArchitectureTest {
     static final ArchRule noMutableStaticState = fields()
             .that().areDeclaredInClassesThat().resideInAPackage("automately..")
             .and().areStatic()
+            // Compilers add their own static fields (an IDE's Eclipse compiler adds $SWITCH_TABLE$ caches).
+            .and().doNotHaveModifier(com.tngtech.archunit.core.domain.JavaModifier.SYNTHETIC)
             .should().beFinal()
             .because("static mutable state made the old JobServer untestable and singleton-bound");
 

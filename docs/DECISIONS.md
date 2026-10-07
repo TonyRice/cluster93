@@ -316,3 +316,23 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Cost:** a write waits for the slowest copy. That is the right trade for a database people expect to read their writes from on any node.
 **Note:** Ignite stores a cache's configuration with its data, so data directories created before this keep the old mode. The project hasn't been released, so no migration is provided.
 
+### D-042 — Every binary schema is registered when a node starts
+**Date:** 2026-10-06 · **Status:** Accepted
+
+**Evidence:** test teardowns sometimes stalled for about 30 s with "Timed out while waiting for schema update" and a blocked striped thread. The stalled type was vertx-ignite's `SubsMapHelper$RemoveRegistrationProcessor`, the entry processor that removes an event-bus subscription. A node first sends it while **shutting down**. Ignite registers a schema with the cluster the first time a node sends it, so the stopping node started a registration, sent the update, and left before the registration completed. The receiver waited `IGNITE_WAIT_SCHEMA_UPDATE` (30 s) for a schema that never came. Every rolling restart would hit this. A probe also showed that a schema includes **field order**, and `Table` wrote columns in `HashMap` order, so rows could gain new schemas at runtime too.
+**Decision:**
+- While starting, before serving, a node registers the schemas of every type Vert.x's cluster manager sends (the three subscription processors, registration and node info, wrapped shared-data values) and one row of every table.
+- Rows always carry `json` and then every column in declared order, nulls included, so each table has exactly one schema.
+- `BinarySchemaTest` checks the invariant: after start-up, nothing a node does, including stopping, adds a schema the survivors haven't seen. Before the fix it failed (every table and the remove processor were new), and the run took 46 s. After it, the test passes in 19 s with no stall.
+**Cost:** reflection on three package-private vertx-ignite classes. If an upgrade renames them, the node fails to start with a message naming D-042, rather than stalling silently.
+
+### D-043 — The tenant quota counts files and kv together
+**Date:** 2026-10-06 · **Status:** Accepted. Supersedes D-038's "kv doesn't count against the tenant quota yet"
+
+**Decision:**
+- `AUTOMATELY_TENANT_STORAGE_MB` covers everything a tenant stores. A kv entry counts as the UTF-8 bytes of its namespace, key and JSON value (`KvStore.entrySize`); stores record it with the entry and sum it by tenant (an SQL `SUM` on Ignite).
+- One `TenantQuota` applies it, and the stores no longer know about quotas: `FileStore.create` takes the most the upload may store.
+- **Uploads** ask for a fresh count once, are refused up front if `Content-Length` doesn't fit, and are cut off when they pass what was left.
+- **kv writes** are checked against a count at most 2 s old, plus what this node admitted since, so a write doesn't sum the tenant's storage each time. When that quick check says no, it's redone from a fresh count against what the write really adds over the entry it replaces. A full tenant can still update, shrink or delete what it has.
+**Cost:** writes made on other nodes in the last 2 s aren't in the quick count, so a tenant can overshoot by what it writes cluster-wide in that window. This is small next to a quota measured in megabytes, and it can't run a node out of storage: admission control (D-038) is separate and always checks.
+

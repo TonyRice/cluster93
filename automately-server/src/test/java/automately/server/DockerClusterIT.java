@@ -202,6 +202,49 @@ class DockerClusterIT {
         assertThat(checkpointCount(survivor, secondJob)).as("continued from the killed run's count").isGreaterThanOrEqualTo(5);
     }
 
+    @Test
+    void fileDownloadsSurviveSigkillOfANode() throws Exception {
+        byte[] data = new byte[32 * 1024 * 1024];
+        new java.util.Random(11).nextBytes(data);
+        HttpResponse<String> created = http.send(request("node1", "/v1/files/media/movie.mp4")
+                .PUT(HttpRequest.BodyPublishers.ofByteArray(data)).build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(created.statusCode()).as(created.body() + "\n" + diagnostics()).isEqualTo(201);
+        String etag = created.headers().firstValue("ETag").orElseThrow();
+
+        // Two downloads, both paused early: one served by node2 (about to die), one served by node1 from chunks spread
+        // over all three nodes, node2 included.
+        HttpResponse<java.io.InputStream> doomed = http.send(request("node2", "/v1/files/media/movie.mp4").GET().build(),
+                HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<java.io.InputStream> survivor = http.send(request("node1", "/v1/files/media/movie.mp4").GET().build(),
+                HttpResponse.BodyHandlers.ofInputStream());
+        java.io.ByteArrayOutputStream doomedBytes = new java.io.ByteArrayOutputStream();
+        java.io.ByteArrayOutputStream survivorBytes = new java.io.ByteArrayOutputStream();
+        doomedBytes.write(doomed.body().readNBytes(2 * 1024 * 1024));
+        survivorBytes.write(survivor.body().readNBytes(2 * 1024 * 1024));
+
+        sigkill("node2");
+
+        try (java.io.InputStream rest = doomed.body()) {
+            byte[] buffer = new byte[64 * 1024];
+            for (int n; (n = rest.read(buffer)) > 0; ) {
+                doomedBytes.write(buffer, 0, n);
+            }
+        } catch (java.io.IOException expected) {
+            // The connection to the dead node broke; what arrived before that is kept.
+        }
+        survivorBytes.write(survivor.body().readAllBytes());
+        assertThat(survivorBytes.toByteArray()).as("the download from node1 lost nothing").isEqualTo(data);
+
+        int received = doomedBytes.size();
+        assertThat(received).as("node2's download was cut off").isLessThan(data.length);
+        HttpResponse<byte[]> resumed = http.send(request("node3", "/v1/files/media/movie.mp4").header("Range", "bytes=" + received + "-")
+                .GET().build(), HttpResponse.BodyHandlers.ofByteArray());
+        assertThat(resumed.statusCode()).as(diagnostics()).isEqualTo(206);
+        assertThat(resumed.headers().firstValue("ETag")).hasValue(etag);
+        doomedBytes.write(resumed.body());
+        assertThat(doomedBytes.toByteArray()).as("cut off on node2, finished on node3").isEqualTo(data);
+    }
+
     private int checkpointCount(String node, String jobId) {
         Object checkpoint = steps(node, jobId).getValue("checkpoint");
         return checkpoint == null ? 0 : ((JsonObject) checkpoint).getInteger("count");
@@ -300,7 +343,7 @@ class DockerClusterIT {
 
     private String diagnostics() {
         return logs.entrySet().stream()
-                .map(e -> "--- " + e.getKey() + " (last 30 lines) ---\n" + tail(e.getValue().toUtf8String(), 30))
+                .map(e -> "--- " + e.getKey() + " (last 80 lines) ---\n" + tail(e.getValue().toUtf8String(), 80))
                 .collect(Collectors.joining("\n"));
     }
 

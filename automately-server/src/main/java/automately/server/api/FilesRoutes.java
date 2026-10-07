@@ -2,8 +2,11 @@ package automately.server.api;
 
 import automately.core.files.FileResponder;
 import automately.core.files.FileStore;
+import automately.core.files.FileWriter;
 import automately.core.host.ServerExchange;
 import automately.core.runtime.HostException;
+import automately.core.storage.TenantQuota;
+import io.vertx.core.Future;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -23,9 +26,11 @@ final class FilesRoutes {
     static final String PREFIX = "/v1/files/";
 
     private final FileStore files;
+    private final TenantQuota quota;
 
-    FilesRoutes(FileStore files) {
+    FilesRoutes(FileStore files, TenantQuota quota) {
         this.files = files;
+        this.quota = quota;
     }
 
     void mount(Router router) {
@@ -63,9 +68,12 @@ final class FilesRoutes {
             error(ctx, 400, "invalid_request", "Content-Length must be a number");
             return;
         }
-        // A known size is checked against the quota before a byte is read.
-        files.ensureFits(ctx.get("tenant"), declared)
-                .compose(fits -> files.create(ctx.get("tenant"), path, request.getHeader("Content-Type")))
+        // A known size is checked against the quota (files and kv, D-043) before a byte is read.
+        String tenant = ctx.get("tenant");
+        quota.remaining(tenant)
+                .compose(left -> declared > left
+                        ? Future.<FileWriter>failedFuture(TenantQuota.exceeded(quota.bytes()))
+                        : files.create(tenant, path, request.getHeader("Content-Type"), left))
                 .onFailure(err -> fail(ctx, err)).onSuccess(writer -> {
             boolean[] failed = {false};
             request.handler(chunk -> {
@@ -85,6 +93,7 @@ final class FilesRoutes {
                     return;
                 }
                 writer.finish()
+                        .onSuccess(info -> quota.added(tenant, info.size()))
                         .onSuccess(info -> ctx.response().setStatusCode(201).putHeader("Content-Type", "application/json")
                                 .putHeader("ETag", info.etag()).end(info.toViewJson().encode()))
                         .onFailure(err -> fail(ctx, err));

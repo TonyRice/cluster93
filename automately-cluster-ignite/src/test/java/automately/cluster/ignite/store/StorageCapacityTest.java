@@ -46,7 +46,7 @@ class StorageCapacityTest {
         IgniteStores.createTables(cluster);
         vertx = Vertx.vertx();
         IgniteStores stores = IgniteStores.open(vertx, cluster);
-        FileStore files = stores.files(Long.MAX_VALUE, IgniteCapacity.of(cluster, 0));
+        FileStore files = stores.files(IgniteCapacity.of(cluster, 0));
         byte[] megabyte = new byte[1024 * 1024];
 
         // Keep uploading 4 MB files into a 128 MB region until the node says no.
@@ -54,7 +54,7 @@ class StorageCapacityTest {
         int stored = 0;
         for (int i = 0; i < 100 && refused == null; i++) {
             try {
-                FileWriter writer = await(files.create("acme", "fill/" + i, null));
+                FileWriter writer = await(files.create("acme", "fill/" + i, null, Long.MAX_VALUE));
                 for (int mb = 0; mb < 4; mb++) {
                     await(writer.write(Buffer.buffer(megabyte)));
                 }
@@ -82,9 +82,9 @@ class StorageCapacityTest {
         IgniteStores.createTables(cluster);
         vertx = Vertx.vertx();
         // Pretend the disk is nearly full by demanding more free space than any disk has.
-        FileStore files = IgniteStores.open(vertx, cluster).files(Long.MAX_VALUE, IgniteCapacity.of(cluster, Long.MAX_VALUE / 2));
+        FileStore files = IgniteStores.open(vertx, cluster).files(IgniteCapacity.of(cluster, Long.MAX_VALUE / 2));
 
-        assertThatThrownBy(() -> await(files.create("acme", "big.bin", null)))
+        assertThatThrownBy(() -> await(files.create("acme", "big.bin", null, Long.MAX_VALUE)))
                 .cause().isInstanceOf(HostException.class).hasMessageContaining("disk left");
     }
 

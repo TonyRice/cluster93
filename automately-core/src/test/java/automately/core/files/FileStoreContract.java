@@ -20,11 +20,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Behaviour every {@link FileStore} must have; each implementation's test extends this. */
 public abstract class FileStoreContract {
 
-    /** A store with plenty of quota, set by the implementation's test before each test. */
+    /** Set by the implementation's test before each test. */
     protected FileStore store;
-
-    /** A store with the given quota, sharing the same storage. */
-    protected abstract FileStore storeWithQuota(long quotaBytes);
 
     private static final int CHUNK = ChunkedFileStore.CHUNK_SIZE;
 
@@ -36,7 +33,11 @@ public abstract class FileStoreContract {
 
     /** Writes in pieces of {@code piece} bytes, as a stream would arrive. */
     protected static FileInfo write(FileStore store, String tenant, String path, byte[] data, int piece) throws Exception {
-        FileWriter writer = await(store.create(tenant, path, "application/test"));
+        return write(store, tenant, path, data, piece, Long.MAX_VALUE);
+    }
+
+    protected static FileInfo write(FileStore store, String tenant, String path, byte[] data, int piece, long maxBytes) throws Exception {
+        FileWriter writer = await(store.create(tenant, path, "application/test", maxBytes));
         for (int i = 0; i < data.length; i += piece) {
             await(writer.write(Buffer.buffer(data).getBuffer(i, Math.min(data.length, i + piece))));
         }
@@ -144,7 +145,7 @@ public abstract class FileStoreContract {
 
     @Test
     public void abortedUploadsLeaveNothing() throws Exception {
-        FileWriter writer = await(store.create("acme", "half.bin", null));
+        FileWriter writer = await(store.create("acme", "half.bin", null, Long.MAX_VALUE));
         await(writer.write(Buffer.buffer(bytes(CHUNK + 10, 5))));
 
         await(writer.abort());
@@ -179,13 +180,15 @@ public abstract class FileStoreContract {
     }
 
     @Test
-    public void theQuotaIsEnforcedWhileWriting() throws Exception {
-        FileStore small = storeWithQuota(CHUNK + 100);
-        write(small, "quota", "first.bin", bytes(CHUNK, 6), CHUNK);
+    public void anUploadIsCutOffAtItsLimit() throws Exception {
+        write(store, "quota", "fits.bin", bytes(CHUNK + 100, 6), CHUNK, CHUNK + 100);
 
-        assertThatThrownBy(() -> write(small, "quota", "second.bin", bytes(200, 7), 50))
+        assertThatThrownBy(() -> write(store, "quota", "over.bin", bytes(200, 7), 50, 100))
                 .isInstanceOf(ExecutionException.class).cause().isInstanceOf(HostException.class).hasMessageContaining("quota");
-        assertThat(await(small.stat("quota", "second.bin"))).isNull();
+        assertThatThrownBy(() -> await(store.create("quota", "none.bin", null, 0)))
+                .isInstanceOf(ExecutionException.class).cause().isInstanceOf(HostException.class).hasMessageContaining("quota");
+        assertThat(await(store.stat("quota", "over.bin"))).isNull();
+        assertThat(await(store.usage("quota"))).isEqualTo(CHUNK + 100);
     }
 
     protected static <T> T await(Future<T> future) throws Exception {

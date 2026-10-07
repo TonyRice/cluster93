@@ -18,12 +18,12 @@ public final class SharedDataFileStore extends ChunkedFileStore {
     private final Future<AsyncMap<String, Buffer>> chunks;
     private final Future<AsyncMap<String, Long>> garbage;
 
-    public SharedDataFileStore(Vertx vertx, long quotaBytes) {
-        this(vertx, quotaBytes, StorageCapacity.heap(0.8));
+    public SharedDataFileStore(Vertx vertx) {
+        this(vertx, StorageCapacity.heap(0.8));
     }
 
-    public SharedDataFileStore(Vertx vertx, long quotaBytes, StorageCapacity capacity) {
-        super(vertx, quotaBytes, capacity);
+    public SharedDataFileStore(Vertx vertx, StorageCapacity capacity) {
+        super(vertx, capacity);
         this.meta = vertx.sharedData().getAsyncMap("automately.files");
         this.chunks = vertx.sharedData().getAsyncMap("automately.file-chunks");
         this.garbage = vertx.sharedData().getAsyncMap("automately.file-garbage");

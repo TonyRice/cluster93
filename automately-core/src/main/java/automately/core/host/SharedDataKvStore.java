@@ -43,7 +43,7 @@ public final class SharedDataKvStore implements KvStore {
 
     @Override
     public Future<Void> set(String tenant, String namespace, String key, Object value, Long ttlMs) {
-        JsonObject entry = new JsonObject().put("value", value);
+        JsonObject entry = new JsonObject().put("value", value).put("size", KvStore.entrySize(namespace, key, value));
         if (ttlMs == null) {
             return map.compose(m -> m.put(mapKey(tenant, namespace, key), entry));
         }
@@ -76,6 +76,24 @@ public final class SharedDataKvStore implements KvStore {
     }
 
     @Override
+    public Future<Long> usage(String tenant) {
+        String base = tenant + SEPARATOR;
+        long now = System.currentTimeMillis();
+        return map.compose(AsyncMap::entries).map(entries -> entries.entrySet().stream()
+                .filter(e -> e.getKey().startsWith(base) && live(e.getValue(), now))
+                .mapToLong(e -> e.getValue().getLong("size", 0L))
+                .sum());
+    }
+
+    private static String namespaceOf(String mapKey) {
+        return mapKey.split(String.valueOf(SEPARATOR), 3)[1];
+    }
+
+    private static String keyOf(String mapKey) {
+        return mapKey.split(String.valueOf(SEPARATOR), 3)[2];
+    }
+
+    @Override
     public Future<Long> increment(String tenant, String namespace, String key, long by) {
         String mapKey = mapKey(tenant, namespace, key);
         return map.compose(m -> increment(m, mapKey, by, 1));
@@ -91,7 +109,7 @@ public final class SharedDataKvStore implements KvStore {
                         "kv.increment needs a numeric value; the key holds " + value.getClass().getSimpleName()));
             }
             long next = (value == null ? 0 : ((Number) value).longValue()) + by;
-            JsonObject entry = new JsonObject().put("value", next);
+            JsonObject entry = new JsonObject().put("value", next).put("size", KvStore.entrySize(namespaceOf(mapKey), keyOf(mapKey), next));
             if (exists && current.getLong("expiresAt") != null) {
                 entry.put("expiresAt", current.getLong("expiresAt"));
             }

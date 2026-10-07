@@ -23,6 +23,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase 3b, milestone 3 follow-ups — kv in the quota, failover tests, the shutdown stall (2026-10-06)
+
+### Changed
+- **The tenant quota counts `kv` too** (D-043). `AUTOMATELY_TENANT_STORAGE_MB` now covers files and `kv` together. kv entries count as the bytes of their namespace, key and JSON value. Over the quota, `kv.set` and `kv.increment` fail with `limit_exceeded`, and uploads get 413. A full tenant can still update, shrink or delete its entries. **Why:** Tony asked for it; until now a tenant could fill the cluster through `kv` with no limit except cluster capacity.
+- `FileStore.create` takes the most an upload may store; quotas moved out of the stores into `TenantQuota`.
+
+### Fixed
+- The ArchUnit rule against mutable statics flagged a synthetic `$SWITCH_TABLE$` field that an IDE's Eclipse compiler had written into `target/classes`. Compiler-generated fields are now excluded.
+- **A 30 s stall when a node stopped** (D-042). The stall was listed as known in milestone 3. The cause was a binary schema (Vert.x's `RemoveRegistrationProcessor`) first sent while a node was leaving. Nodes now register every schema they'll send at start, and table rows always use one field order. **Why:** it would have hit every rolling restart, not just tests.
+
+### Added
+- **`FileFailoverTest`** (3 nodes, one backup):
+  - a 40 MB download outlives the death of a node holding its data, byte for byte
+  - a download cut off with its serving node resumes on another node with `Range`, with the same ETag and identical bytes
+  - an upload cut off with its node leaves the previous version intact and nothing else behind
+- **`DockerClusterIT.fileDownloadsSurviveSigkillOfANode`:** with a real `SIGKILL`, a download served by the killed node resumes on another with `Range`, and a download from a surviving node, reading chunks the dead node held, loses nothing.
+- **`BinarySchemaTest`:** after start-up, no binary schema is first seen, even when a node stops (D-042).
+- `TenantQuotaTest`, a `kv` usage contract test (both stores), and quota tests for `kv` and files together in `NodeHostServicesTest` and `FilesTest`.
+
 ## Phase 3b, milestone 3 — Files (2026-10-06)
 
 ### Added

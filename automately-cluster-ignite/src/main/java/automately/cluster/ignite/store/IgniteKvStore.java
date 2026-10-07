@@ -21,7 +21,7 @@ import java.util.Optional;
 public final class IgniteKvStore implements KvStore {
 
     static final Table.Definition TABLE = new Table.Definition("KV",
-            Table.columns("tenant", String.class, "ns", String.class, "k", String.class, "expiresAt", Long.class),
+            Table.columns("tenant", String.class, "ns", String.class, "k", String.class, "expiresAt", Long.class, "size", Long.class),
             List.of(Table.index("tenant", "ns", "k")));
     static final long CLEANUP_SLACK_MS = 5_000;
     static final char SEPARATOR = '\u001f';
@@ -35,6 +35,7 @@ public final class IgniteKvStore implements KvStore {
             columns.put("ns", json.getString("ns"));
             columns.put("k", json.getString("k"));
             columns.put("expiresAt", json.getLong("expiresAt"));
+            columns.put("size", json.getLong("size"));
             return columns;
         });
     }
@@ -48,7 +49,8 @@ public final class IgniteKvStore implements KvStore {
     }
 
     private static JsonObject row(String tenant, String namespace, String key, Object value, Long expiresAt) {
-        return new JsonObject().put("tenant", tenant).put("ns", namespace).put("k", key).put("value", value).put("expiresAt", expiresAt);
+        return new JsonObject().put("tenant", tenant).put("ns", namespace).put("k", key).put("value", value).put("expiresAt", expiresAt)
+                .put("size", KvStore.entrySize(namespace, key, value));
     }
 
     @Override
@@ -92,6 +94,12 @@ public final class IgniteKvStore implements KvStore {
             List<String> page = more ? keys.subList(0, limit) : keys;
             return new JsonObject().put("keys", new JsonArray(page)).put("cursor", more ? page.getLast() : null);
         });
+    }
+
+    @Override
+    public Future<Long> usage(String tenant) {
+        return table.query("SELECT COALESCE(SUM(size), 0) FROM KV WHERE tenant = ? AND (expiresAt IS NULL OR expiresAt > ?)",
+                tenant, System.currentTimeMillis()).map(rows -> ((Number) rows.getFirst().getFirst()).longValue());
     }
 
     @Override

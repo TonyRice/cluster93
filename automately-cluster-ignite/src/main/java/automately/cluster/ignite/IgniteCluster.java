@@ -69,6 +69,7 @@ public final class IgniteCluster {
         boolean firstStart = !settings.persistent() || !Files.isDirectory(settings.dataDirectory().resolve("db"));
         Ignite ignite = Ignition.start(configuration(settings));
         awaitActive(ignite, settings, firstStart);
+        BinaryWarmup.vertxTypes(ignite);
         if (settings.persistent()) {
             ignite.cluster().baselineAutoAdjustEnabled(true);
             ignite.cluster().baselineAutoAdjustTimeout(settings.baselineAdjust().toMillis());
@@ -215,6 +216,25 @@ public final class IgniteCluster {
     }
 
     /** Stops this node's Ignite (after Vert.x has closed). Blocking. */
+    /**
+     * Every binary type this node knows, with how many schemas (field layouts) it has. Diagnostic: after start, this
+     * should never change, since a schema first used while a node is leaving stalls the survivors (D-042).
+     */
+    public java.util.Map<String, Integer> binarySchemas() {
+        java.util.Map<String, Integer> schemas = new java.util.TreeMap<>();
+        for (org.apache.ignite.binary.BinaryType type : ignite.binary().types()) {
+            try {
+                Object metadata = ((org.apache.ignite.internal.binary.BinaryTypeImpl) type).metadata();
+                java.lang.reflect.Method method = metadata.getClass().getDeclaredMethod("schemas");
+                method.setAccessible(true);
+                schemas.put(type.typeName(), ((java.util.Collection<?>) method.invoke(metadata)).size());
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("Can't read Ignite's binary metadata", e);
+            }
+        }
+        return schemas;
+    }
+
     public void stop() {
         Ignition.stop(ignite.name(), true);
     }

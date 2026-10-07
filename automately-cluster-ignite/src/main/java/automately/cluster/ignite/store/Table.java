@@ -46,6 +46,7 @@ final class Table {
     private final IgniteCache<String, BinaryObject> cache;
     private final Ignite ignite;
     private final Function<JsonObject, Map<String, Object>> columnsOf;
+    private final List<String> columns;
 
     Table(Vertx vertx, Ignite ignite, Definition definition, Function<JsonObject, Map<String, Object>> columnsOf) {
         this.vertx = vertx;
@@ -53,6 +54,15 @@ final class Table {
         this.name = definition.name();
         this.cache = ignite.cache(definition.name()).withKeepBinary();
         this.columnsOf = columnsOf;
+        this.columns = List.copyOf(definition.columns().keySet());
+    }
+
+    /**
+     * Registers the table's one binary schema with the cluster. Rows always carry every column in the declared order
+     * (nulls included), so this is the only schema a row can have, and none is ever first sent later (D-042).
+     */
+    static void registerSchema(Ignite ignite, Definition definition) {
+        ignite.binary().toBinary(build(ignite, definition.name(), List.copyOf(definition.columns().keySet()), "{}", Map.of()));
     }
 
     /** Creates the table's cache if it doesn't exist. Blocking; called once at startup. */
@@ -183,8 +193,15 @@ final class Table {
     }
 
     private BinaryObject row(JsonObject json) {
-        BinaryObjectBuilder builder = ignite.binary().builder(name).setField("json", json.encode());
-        columnsOf.apply(json).forEach((column, value) -> builder.setField(column, value));
+        return build(ignite, name, columns, json.encode(), columnsOf.apply(json));
+    }
+
+    /** Field order is part of a binary schema, so it's always json, then the columns in declared order. */
+    private static BinaryObject build(Ignite ignite, String type, List<String> columns, String json, Map<String, Object> values) {
+        BinaryObjectBuilder builder = ignite.binary().builder(type).setField("json", json);
+        for (String column : columns) {
+            builder.setField(column, values.get(column));
+        }
         return builder.build();
     }
 

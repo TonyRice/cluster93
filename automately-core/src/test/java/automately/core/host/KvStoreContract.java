@@ -89,6 +89,27 @@ public abstract class KvStoreContract {
                 .isInstanceOf(ExecutionException.class).cause().isInstanceOf(HostException.class).hasMessageContaining("numeric");
     }
 
+    @Test
+    public void usageCountsLiveEntriesPerTenant() throws Exception {
+        JsonObject order = new JsonObject().put("total", 9.5);
+        await(kv.set("usage-a", "default", "order:1", order, null));
+        await(kv.set("usage-a", "other", "k", "x", null));
+        await(kv.increment("usage-a", "default", "visits", 41));
+        await(kv.increment("usage-a", "default", "visits", 1));
+        await(kv.set("usage-a", "default", "gone", "soon", 1L));
+        await(kv.set("usage-b", "default", "order:1", order, null));
+        Thread.sleep(20);
+
+        long expected = KvStore.entrySize("default", "order:1", order) + KvStore.entrySize("other", "k", "x")
+                + KvStore.entrySize("default", "visits", 42L);
+        assertThat(await(kv.usage("usage-a"))).isEqualTo(expected);
+        assertThat(await(kv.usage("usage-b"))).isEqualTo(KvStore.entrySize("default", "order:1", order));
+        assertThat(await(kv.usage("nobody"))).isZero();
+
+        await(kv.delete("usage-a", "other", "k"));
+        assertThat(await(kv.usage("usage-a"))).isEqualTo(expected - KvStore.entrySize("other", "k", "x"));
+    }
+
     protected static <T> T await(Future<T> future) throws Exception {
         return future.toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
     }

@@ -37,14 +37,17 @@ public final class IgniteStores {
         this.cluster = cluster;
     }
 
-    /** Files, with a per-tenant storage quota and this node's storage admission control (D-038). */
-    public FileStore files(long quotaBytes, StorageCapacity capacity) {
-        return new IgniteFileStore(vertx, cluster.ignite(), quotaBytes, capacity);
+    /** Files, with this node's storage admission control (D-038). The tenant quota is applied by callers (D-043). */
+    public FileStore files(StorageCapacity capacity) {
+        return new IgniteFileStore(vertx, cluster.ignite(), capacity);
     }
 
     /** Creates any missing tables. Blocking; call once at startup, before Vert.x serves traffic. */
     public static void createTables(IgniteCluster cluster) {
-        TABLES.forEach(table -> Table.create(cluster.ignite(), table, cluster.settings().backups()));
+        TABLES.forEach(table -> {
+            Table.create(cluster.ignite(), table, cluster.settings().backups());
+            Table.registerSchema(cluster.ignite(), table);
+        });
         IgniteFileStore.createChunkCache(cluster.ignite(), cluster.settings().backups());
     }
 

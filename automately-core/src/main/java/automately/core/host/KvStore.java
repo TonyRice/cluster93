@@ -26,4 +26,16 @@ public interface KvStore {
 
     /** Atomically adds {@code by} to a numeric value (missing counts as 0) and returns the new value. */
     Future<Long> increment(String tenant, String namespace, String key, long by);
+
+    /** Bytes a tenant's live entries take, by {@link #entrySize}; counted against its storage quota (D-043). */
+    Future<Long> usage(String tenant);
+
+    /** What an entry counts for: its namespace, key and JSON value, in UTF-8 bytes. */
+    static long entrySize(String namespace, String key, Object value) {
+        return utf8(namespace) + utf8(key) + utf8(io.vertx.core.json.Json.encode(value));
+    }
+
+    private static long utf8(String text) {
+        return text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+    }
 }

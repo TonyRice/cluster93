@@ -58,13 +58,16 @@ public final class ApiVerticle extends VerticleBase {
     private final DomainStore domains;
     private final TxtResolver txt;
     private final HostRouter hostRouter;
+    private final automately.core.storage.TenantQuota quota;
     private final FileStore files;
 
     private HttpServer server;
 
     public ApiVerticle(ServerConfig config, JobStore jobs, JobStateStore state, NodeRegistry nodes, JobScheduler scheduler,
-                       ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter, FileStore files) {
+                       ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter, FileStore files,
+                       automately.core.storage.TenantQuota quota) {
         this.files = files;
+        this.quota = quota;
         this.services = services;
         this.domains = domains;
         this.txt = txt;
@@ -90,7 +93,7 @@ public final class ApiVerticle extends VerticleBase {
         router.route("/v1/services*").handler(this::requireTenant);
         router.route("/v1/bus*").handler(this::requireTenant);
         router.route("/v1/files*").handler(this::requireTenant);
-        new FilesRoutes(files).mount(router);
+        new FilesRoutes(files, quota).mount(router);
         new BusRoutes(vertx).mount(router);
         router.post("/v1/jobs").handler(BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 4_096)).handler(this::submitJob);
         router.get("/v1/jobs").handler(this::listJobs);

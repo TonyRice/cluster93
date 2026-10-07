@@ -97,7 +97,11 @@ class FilesTest {
     }
 
     private static HttpResponse<Buffer> upload(RunningNode node, String path, byte[] data, String contentType) throws Exception {
-        return await(client.put(node.httpPort(), "localhost", "/v1/files/" + path).putHeader("X-Automately-Tenant", TENANT)
+        return upload(node, TENANT, path, data, contentType);
+    }
+
+    private static HttpResponse<Buffer> upload(RunningNode node, String tenant, String path, byte[] data, String contentType) throws Exception {
+        return await(client.put(node.httpPort(), "localhost", "/v1/files/" + path).putHeader("X-Automately-Tenant", tenant)
                 .putHeader("Content-Type", contentType).sendBuffer(Buffer.buffer(data)));
     }
 
@@ -163,6 +167,28 @@ class FilesTest {
         assertThat(upload(nodeA, "a/%2E%2E/escape.txt", "x".getBytes(), "text/plain").statusCode()).isEqualTo(400);
         assertThat(await(client.get(nodeA.httpPort(), "localhost", "/v1/files/site/index.html").putHeader("X-Automately-Tenant", "globex").send())
                 .statusCode()).as("another tenant can't see it").isEqualTo(404);
+    }
+
+    @Test
+    void kvDataCountsTowardsTheQuotaForUploads() throws Exception {
+        // About 1 MB of kv: four 250 KB values.
+        JsonObject stored = runJob("kvquota", """
+                export default async () => {
+                  for (let i = 0; i < 4; i++) await kv.set(`blob:${i}`, 'k'.repeat(250 * 1024));
+                  return 'stored';
+                }
+                """);
+        assertThat(stored.getString("output")).as(stored.encode()).isEqualTo("stored");
+
+        HttpResponse<Buffer> refused = upload(nodeB, "kvquota", "almost-40mb.bin", bytes(40 * MB - 512 * 1024, 8), "application/octet-stream");
+        HttpResponse<Buffer> accepted = upload(nodeB, "kvquota", "39mb.bin", bytes(39 * MB, 9), "application/octet-stream");   // leaves about 24 KB
+        JsonObject full = runJob("kvquota", "export default () => kv.set('one-more', 'k'.repeat(250 * 1024))");
+
+        assertThat(refused.statusCode()).as(refused.bodyAsString()).isEqualTo(413);
+        assertThat(refused.bodyAsJsonObject().getJsonObject("error").getString("message")).contains("files and kv together");
+        assertThat(accepted.statusCode()).as(accepted.bodyAsString()).isEqualTo(201);
+        assertThat(full.getString("status")).isEqualTo("FAILED");
+        assertThat(full.getString("error")).contains("quota");
     }
 
     @Test
@@ -281,10 +307,14 @@ class FilesTest {
     }
 
     private static JsonObject runJob(String script) throws Exception {
-        HttpResponse<Buffer> submitted = await(client.post(nodeA.httpPort(), "localhost", "/v1/jobs").putHeader("X-Automately-Tenant", TENANT)
+        return runJob(TENANT, script);
+    }
+
+    private static JsonObject runJob(String tenant, String script) throws Exception {
+        HttpResponse<Buffer> submitted = await(client.post(nodeA.httpPort(), "localhost", "/v1/jobs").putHeader("X-Automately-Tenant", tenant)
                 .sendJsonObject(new JsonObject().put("script", script).put("timeoutMs", 20_000)));
         String id = submitted.bodyAsJsonObject().getString("id");
-        return awaitJson(nodeA, "/v1/jobs/" + id, j -> !List.of("QUEUED", "RUNNING").contains(j.getString("status")));
+        return awaitJson(nodeA, tenant, "/v1/jobs/" + id, j -> !List.of("QUEUED", "RUNNING").contains(j.getString("status")));
     }
 
     private static HttpResponse<Buffer> get(RunningNode node, String path) throws Exception {
@@ -292,10 +322,14 @@ class FilesTest {
     }
 
     private static JsonObject awaitJson(RunningNode node, String path, Predicate<JsonObject> condition) throws Exception {
+        return awaitJson(node, TENANT, path, condition);
+    }
+
+    private static JsonObject awaitJson(RunningNode node, String tenant, String path, Predicate<JsonObject> condition) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
         JsonObject last = null;
         while (System.nanoTime() < deadline) {
-            last = get(node, path).bodyAsJsonObject();
+            last = await(client.get(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", tenant).send()).bodyAsJsonObject();
             if (condition.test(last)) {
                 return last;
             }

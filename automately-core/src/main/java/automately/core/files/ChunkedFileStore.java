@@ -31,12 +31,10 @@ public abstract class ChunkedFileStore implements FileStore {
     public static final Duration ABANDONED_UPLOAD = Duration.ofHours(6);
 
     protected final Vertx vertx;
-    private final long quotaBytes;
     private final StorageCapacity capacity;
 
-    protected ChunkedFileStore(Vertx vertx, long quotaBytes, StorageCapacity capacity) {
+    protected ChunkedFileStore(Vertx vertx, StorageCapacity capacity) {
         this.vertx = vertx;
-        this.quotaBytes = quotaBytes;
         this.capacity = capacity;
     }
 
@@ -81,25 +79,19 @@ public abstract class ChunkedFileStore implements FileStore {
     }
 
     @Override
-    public Future<Void> ensureFits(String tenant, long bytes) {
-        return usage(tenant).compose(used -> used + bytes > quotaBytes ? Future.failedFuture(quota()) : Future.succeededFuture());
-    }
-
-    @Override
-    public Future<FileWriter> create(String tenant, String path, String contentType) {
+    public Future<FileWriter> create(String tenant, String path, String contentType, long maxBytes) {
+        if (maxBytes <= 0) {
+            return Future.failedFuture(quota());
+        }
         String fileId = UUID.randomUUID().toString();
-        return capacity.ensureRoom().compose(room -> usage(tenant)).compose(used -> {
-            if (used >= quotaBytes) {
-                return Future.failedFuture(quota());
-            }
-            // Recorded first, so a writer that dies mid-upload leaves nothing behind for long.
-            return putGarbage(fileId, System.currentTimeMillis() + ABANDONED_UPLOAD.toMillis())
-                    .map(v -> new Writer(tenant, path, contentType, fileId, quotaBytes - used));
-        });
+        // Recorded first, so a writer that dies mid-upload leaves nothing behind for long.
+        return capacity.ensureRoom()
+                .compose(room -> putGarbage(fileId, System.currentTimeMillis() + ABANDONED_UPLOAD.toMillis()))
+                .map(v -> new Writer(tenant, path, contentType, fileId, maxBytes));
     }
 
-    private HostException quota() {
-        return HostException.limit("Storage quota of " + quotaBytes + " bytes reached");
+    private static HostException quota() {
+        return HostException.limit("Storage quota reached: the tenant has no room left for this upload (files and kv together)");
     }
 
     @Override

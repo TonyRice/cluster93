@@ -131,7 +131,7 @@ The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each o
 | `AUTOMATELY_DATA_BACKUPS` | `1` | Extra copies of all data; survives that many simultaneous node losses |
 | `AUTOMATELY_CLUSTER_SIZE` | `1` | Nodes a brand-new durable cluster waits for before activating |
 | `AUTOMATELY_DATA_MEMORY_MB` | `256` | Off-heap memory for the data region (the rest stays on disk). At least `128` |
-| `AUTOMATELY_TENANT_STORAGE_MB` | `1024` | Files per tenant; over it, uploads get 413 |
+| `AUTOMATELY_TENANT_STORAGE_MB` | `1024` | Per tenant, files and `kv` together; over it, uploads get 413 and `kv` writes fail |
 | `AUTOMATELY_MIN_FREE_DISK_MB` | `1024` | Durable nodes refuse writes (507) below this much free disk |
 | `AUTOMATELY_BASELINE_ADJUST_MS` | `60000` | How long a missing data node is waited for before its data is rebalanced |
 | `AUTOMATELY_JOB_RETENTION_DAYS` | `7` | Finished jobs older than this are deleted |

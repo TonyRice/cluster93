@@ -103,6 +103,52 @@ class NodeHostServicesTest {
         assertHostError(host.call("nope", new JsonObject()), "Error", "unknown_operation");
     }
 
+    // --- the tenant quota covers kv and files together (D-043) ---
+
+    private NodeHostServices quotaHost(automately.core.files.FileStore files, automately.core.storage.TenantQuota quota) {
+        return new NodeHostServices(vertx, "acme", "job-q", false, kv, new FetchClient(vertx, EgressPolicy.PUBLIC_ONLY), serve, files,
+                automately.core.files.StorageCapacity.UNLIMITED, quota);
+    }
+
+    private static JsonObject entry(String key, Object value) {
+        return new JsonObject().put("ns", "default").put("key", key).put("value", value);
+    }
+
+    @Test
+    void kvAndFilesShareTheTenantQuota() throws Exception {
+        automately.core.files.FileStore files = new automately.core.files.SharedDataFileStore(vertx, automately.core.files.StorageCapacity.UNLIMITED);
+        automately.core.storage.TenantQuota quota = new automately.core.storage.TenantQuota(1_000,
+                t -> files.usage(t).compose(f -> kv.usage(t).map(k -> f + k)));
+        NodeHostServices host = quotaHost(files, quota);
+        String big = "x".repeat(600);   // an entry of 7 + 1 + 602 = 610 bytes
+
+        await(host.call("kv.set", entry("a", big)));
+        assertHostError(host.call("kv.set", entry("b", big)), "RangeError", "limit_exceeded");
+
+        // Full or not, a tenant can shrink and regrow what it has, as long as the result fits.
+        await(host.call("kv.set", entry("a", "x".repeat(300))));
+        await(host.call("kv.set", entry("a", big)));
+        assertThat(await(kv.usage("acme"))).isEqualTo(610);
+
+        // Files get what kv leaves: 390 bytes.
+        automately.core.files.FileWriter tooBig = await(host.createFile(new JsonObject().put("path", "big.bin")));
+        assertThatThrownBy(() -> await(tooBig.write(io.vertx.core.buffer.Buffer.buffer(new byte[391]))))
+                .isInstanceOf(ExecutionException.class).cause().hasMessageContaining("quota");
+        automately.core.files.FileWriter fits = await(host.createFile(new JsonObject().put("path", "fits.bin")));
+        await(fits.write(io.vertx.core.buffer.Buffer.buffer(new byte[300])));
+        await(fits.finish());
+
+        // And kv gets what files leave: 90 bytes.
+        assertHostError(host.call("kv.set", entry("c", "y".repeat(100))), "RangeError", "limit_exceeded");
+        await(host.call("kv.set", entry("c", "y".repeat(50))));
+        assertHostError(host.call("kv.increment", new JsonObject().put("ns", "default").put("key", "visits").put("by", 1)),
+                "RangeError", "limit_exceeded");
+
+        // Deleting makes room again.
+        await(host.call("kv.delete", new JsonObject().put("ns", "default").put("key", "a")));
+        await(host.call("kv.increment", new JsonObject().put("ns", "default").put("key", "visits").put("by", 1)));
+    }
+
     // --- bus ---
 
     @Test

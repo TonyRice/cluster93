@@ -16,7 +16,7 @@ const visits = await kv.increment('visits');               // atomic; missing co
 const orders = kv.namespace('orders');                     // same API, separate key space
 ```
 
-Limits: key ≤ 512 bytes, value ≤ 256 KB of JSON, `list` ≤ 1 000 keys per page.
+Limits: key ≤ 512 bytes, value ≤ 256 KB of JSON, `list` ≤ 1 000 keys per page. Entries count towards the tenant's storage quota, shared with `files`: an entry counts as the bytes of its namespace, key and JSON value. Over the quota, `set` and `increment` fail with `code: 'limit_exceeded'`, but updating an entry to the same size or smaller, and deleting, always work.
 
 > Storage is the cluster's database: replicated, and durable across full restarts when nodes have a data directory. When the cluster is out of room, writes fail with `code: 'insufficient_storage'`.
 
@@ -113,7 +113,7 @@ await files.delete('uploads/movie.mp4');                                    // t
 - **Writes are atomic.** A reader sees the old file or the new one, never a mix, and a read already in progress finishes even if the file is replaced or deleted meanwhile. A write that fails or is abandoned leaves nothing behind.
 - **Paths** are relative, at most 1 024 bytes, with no `.`, `..` or empty segments, backslashes or control characters.
 - **Limits.**
-  - Each tenant has `AUTOMATELY_TENANT_STORAGE_MB` (1 GiB by default) for files. Going over fails with `code: 'limit_exceeded'`.
+  - Each tenant has `AUTOMATELY_TENANT_STORAGE_MB` (1 GiB by default) for files and `kv` together. Going over fails with `code: 'limit_exceeded'`.
   - If the cluster itself is running out of disk (or memory, without a data directory), writes fail with `code: 'insufficient_storage'`.
   - Either way, the node keeps running.
 - Files are replicated and survive node loss, like the rest of the cluster's data.

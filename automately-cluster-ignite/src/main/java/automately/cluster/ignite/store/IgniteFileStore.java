@@ -35,8 +35,8 @@ public final class IgniteFileStore extends ChunkedFileStore {
     private final Table garbage;
     private final IgniteCache<String, byte[]> chunks;
 
-    public IgniteFileStore(Vertx vertx, Ignite ignite, long quotaBytes, StorageCapacity capacity) {
-        super(vertx, quotaBytes, capacity);
+    public IgniteFileStore(Vertx vertx, Ignite ignite, StorageCapacity capacity) {
+        super(vertx, capacity);
         this.files = new Table(vertx, ignite, FILES, json -> Map.of("tenant", json.getString("tenant"), "path", json.getString("path"),
                 "size", json.getLong("size")));
         this.garbage = new Table(vertx, ignite, GARBAGE, json -> Map.of("deleteAfter", json.getLong("deleteAfter")));

@@ -13,12 +13,7 @@ class SharedDataFileStoreTest extends FileStoreContract {
     @BeforeEach
     void setUp() {
         vertx = Vertx.vertx();
-        store = new SharedDataFileStore(vertx, Long.MAX_VALUE);
-    }
-
-    @Override
-    protected FileStore storeWithQuota(long quotaBytes) {
-        return new SharedDataFileStore(vertx, quotaBytes);
+        store = new SharedDataFileStore(vertx);
     }
 
     @AfterEach

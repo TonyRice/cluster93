@@ -40,8 +40,11 @@ public interface FileStore {
     /** Completes with null if there is no such file. */
     Future<FileInfo> stat(String tenant, String path);
 
-    /** Starts an upload. Fails with a limit error if the tenant is already over its storage quota. */
-    Future<FileWriter> create(String tenant, String path, String contentType);
+    /**
+     * Starts an upload that may store at most {@code maxBytes} (what the tenant's quota has left, D-043). Fails with
+     * a quota error if that's nothing; a write that goes past it fails and discards the upload.
+     */
+    Future<FileWriter> create(String tenant, String path, String contentType, long maxBytes);
 
     /** Bytes {@code start} to {@code endInclusive} of a version, as a paused stream. */
     BodyStream open(FileInfo file, long start, long endInclusive);
@@ -54,9 +57,6 @@ public interface FileStore {
 
     /** Bytes stored by a tenant. */
     Future<Long> usage(String tenant);
-
-    /** Fails with a quota error if {@code bytes} more wouldn't fit in the tenant's quota (checked up front when the size is known). */
-    Future<Void> ensureFits(String tenant, long bytes);
 
     /** Deletes chunks of versions that were replaced, deleted or abandoned and are past their grace period. */
     Future<Integer> collectGarbage(long now);
