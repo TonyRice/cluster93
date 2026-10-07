@@ -150,6 +150,44 @@ class CliTest {
     }
 
     @Test
+    void clusterInitAndNodeInviteMakeOneLineJoins() throws Exception {
+        Path out = home.resolve("cluster-tls");
+        Result init = cli("cluster", "init", "--nodes", "node1,node2", "--host", "node1=10.0.0.11", "--out", out.toString());
+        assertThat(init.code()).as(init.err()).isZero();
+        assertThat(init.out()).contains("Cluster CA ").contains("ca.key").contains("node1.join");
+        assertThat(out.resolve("ca.key")).exists();
+        String node1 = Files.readString(out.resolve("node1.join")).strip();
+        automately.tls.NodeIdentity identity = automately.tls.NodeBundle.decode(node1).identity(null);
+        assertThat(identity.nodeId()).isEqualTo("node1");
+        assertThat(identity.hosts()).contains("node1", "10.0.0.11");
+        assertThat(cli("cluster", "init", "--nodes", "x", "--out", out.toString()).err()).contains("exists already");
+
+        Result invite = cli("node", "invite", "node3", "--host", "10.0.0.13", "--ca", out.resolve("ca.key").toString());
+        assertThat(invite.code()).as(invite.err()).isZero();
+        assertThat(invite.out().strip()).startsWith("AUTOMATELY_JOIN=atly_nodebundle_");
+        assertThat(invite.err()).contains("treat it like a password");
+
+        // The strict way: the node keeps its key and sends only the public half.
+        java.security.KeyPairGenerator generator = java.security.KeyPairGenerator.getInstance("EC");
+        generator.initialize(new java.security.spec.ECGenParameterSpec("secp256r1"));
+        java.security.KeyPair own = generator.generateKeyPair();
+        Result strict = cli("node", "invite", "node4", "--ca", out.resolve("ca.key").toString(),
+                "--key", automately.tls.NodeBundle.publicKeyLine(own.getPublic()));
+        String line = strict.out().strip().substring("AUTOMATELY_JOIN=".length());
+        assertThat(line).startsWith(automately.tls.NodeBundle.CERT_PREFIX);
+        assertThat(automately.tls.NodeBundle.decode(line).identity(own.getPrivate()).nodeId()).isEqualTo("node4");
+
+        assertThat(cli("node", "invite", "node5", "--ca", home.resolve("missing.key").toString()).err()).contains("No CA key");
+    }
+
+    @Test
+    void revokingANodeNeedsACertificateCluster() {
+        Result revoke = cli("--url", url, "--token", ADMIN, "node", "revoke", "node2");
+        assertThat(revoke.code()).isNotZero();
+        assertThat(revoke.err()).contains("doesn't use node certificates");
+    }
+
+    @Test
     void callbackSecretsCanBeShownAndRotated() throws Exception {
         loginAsNewTenant("hooks");
         String secret = cli("callbacks", "secret").out().strip();

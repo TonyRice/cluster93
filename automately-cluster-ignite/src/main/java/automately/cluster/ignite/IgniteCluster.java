@@ -171,6 +171,7 @@ public final class IgniteCluster {
                 .setSqlConfiguration(new SqlConfiguration().setQueryEnginesConfiguration(
                         new CalciteQueryEngineConfiguration().setDefault(true)))
                 .setDiscoverySpi(new TcpDiscoverySpi()
+                        .setJoinTimeout(settings.joinTimeout().toMillis())
                         .setLocalPort(settings.discoveryPort())
                         .setLocalPortRange(DISCOVERY_PORT_RANGE)
                         .setIpFinder(new TcpDiscoveryVmIpFinder().setAddresses(addresses)))
@@ -183,6 +184,10 @@ public final class IgniteCluster {
                 .setConnectorConfiguration(null);
         if (settings.bindHost() != null) {
             configuration.setLocalHost(settings.bindHost());
+        }
+        if (settings.ssl() != null) {
+            // Discovery and communication both use it when it's set; the context requires the peer's node certificate (D-066).
+            configuration.setSslContextFactory(settings.ssl());
         }
         return configuration;
     }
@@ -224,6 +229,25 @@ public final class IgniteCluster {
     public long dataRegionUsedBytes() {
         org.apache.ignite.DataRegionMetrics metrics = ignite.dataRegionMetrics(DATA_REGION);
         return metrics == null ? 0 : metrics.getTotalUsedSize();
+    }
+
+    /**
+     * Forces node {@code nodeId} (its consistent id) out of the cluster, if it's in it now; for revocation (D-066).
+     * Discovery marks it failed for every node, which isn't up to the node itself (unlike {@code stopNodes}, which asks
+     * it to stop). Its attempts to reconnect then fail the TLS check. Returns whether it was in the cluster.
+     */
+    public boolean failNode(String nodeId) {
+        if (nodeId.equals(settings.nodeId())) {
+            return false;
+        }
+        var target = ignite.cluster().forPredicate(node -> nodeId.equals(String.valueOf(node.consistentId())));
+        if (target.nodes().isEmpty()) {
+            return false;
+        }
+        org.apache.ignite.spi.discovery.tcp.TcpDiscoverySpi discovery =
+                (org.apache.ignite.spi.discovery.tcp.TcpDiscoverySpi) ignite.configuration().getDiscoverySpi();
+        target.nodes().forEach(node -> discovery.failNode(node.id(), "Node " + nodeId + " was revoked"));
+        return true;
     }
 
     public boolean active() {

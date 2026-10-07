@@ -73,7 +73,11 @@ public record ServerConfig(
         String secretsKey,
         Path diskRoot,
         int metricsPort,
-        String clusterBind) {
+        String clusterBind,
+        boolean clusterTls,
+        Path tlsDirectory,
+        String join,
+        Duration clusterJoinTimeout) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
 
@@ -137,7 +141,30 @@ public record ServerConfig(
                 blankToNull(env.get("AUTOMATELY_DISK_ROOT")) == null ? null : Path.of(env.get("AUTOMATELY_DISK_ROOT").trim()),
                 parsePort(env.getOrDefault("AUTOMATELY_METRICS_PORT", "9090")),
                 // Ignite listens on this address only: AUTOMATELY_CLUSTER_BIND, or an explicitly set advertised host (D-065).
-                blankToNull(env.getOrDefault("AUTOMATELY_CLUSTER_BIND", env.get("AUTOMATELY_ADVERTISE_HOST"))));
+                blankToNull(env.getOrDefault("AUTOMATELY_CLUSTER_BIND", env.get("AUTOMATELY_ADVERTISE_HOST"))),
+                // Node certificates are required between clustered nodes unless explicitly turned off (D-066).
+                clusterTlsRequired(env.getOrDefault("AUTOMATELY_CLUSTER_TLS", "required")),
+                tlsDirectory(env),
+                blankToNull(env.get("AUTOMATELY_JOIN")),
+                Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS", "60000"))));
+    }
+
+    private static boolean clusterTlsRequired(String value) {
+        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "required" -> true;
+            case "off" -> false;
+            default -> throw new IllegalArgumentException("AUTOMATELY_CLUSTER_TLS must be \"required\" or \"off\" (it was " + value + ")");
+        };
+    }
+
+    /** Where the node's key and certificates live: AUTOMATELY_TLS_DIR, else {@code <data dir>/tls}. */
+    private static Path tlsDirectory(Map<String, String> env) {
+        String explicit = blankToNull(env.get("AUTOMATELY_TLS_DIR"));
+        if (explicit != null) {
+            return Path.of(explicit);
+        }
+        String data = blankToNull(env.get("AUTOMATELY_DATA_DIR"));
+        return data == null ? null : Path.of(data).resolve("tls");
     }
 
     /** A port number, 0 for a random one, or "off" (-1). */

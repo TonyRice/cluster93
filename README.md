@@ -234,6 +234,10 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_CLUSTER_PORT` | `5701` | Ignite discovery (communication uses port + 100) |
 | `AUTOMATELY_CLUSTER_MEMBERS` | `127.0.0.1` | Hosts to join (`host` or `host:port`) |
 | `AUTOMATELY_CLUSTER_BIND` | `AUTOMATELY_ADVERTISE_HOST` if set, else every interface | The one private address Ignite listens on (D-065) |
+| `AUTOMATELY_CLUSTER_TLS` | `required` | Node certificates between nodes (D-066); `off` for development only |
+| `AUTOMATELY_JOIN` | none | A one-line join bundle from `automately cluster init` or `automately node invite` (D-067) |
+| `AUTOMATELY_TLS_DIR` | `<data dir>/tls` | Where a node keeps its key and certificates |
+| `AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS` | `60000` | How long a refused node keeps trying before its start fails |
 | `AUTOMATELY_DATA_DIR` | *(unset: in memory)* | Durable storage for this node; the image sets `/var/lib/automately` |
 | `AUTOMATELY_DATA_BACKUPS` | `1` | Extra copies of all data; survives that many simultaneous node losses |
 | `AUTOMATELY_CLUSTER_SIZE` | `1` | Nodes a brand-new durable cluster waits for before activating |
@@ -305,6 +309,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/guides/cli.md](docs/guides/cli.md): installing and using the CLI
 - [docs/guides/mcp.md](docs/guides/mcp.md): connecting AI agents over MCP
 - [docs/guides/callbacks.md](docs/guides/callbacks.md): receiving a job's result as a signed POST when it ends
+- [docs/guides/cluster.md](docs/guides/cluster.md): node certificates: creating a cluster, adding, removing and renewing nodes
 - [docs/guides/storage.md](docs/guides/storage.md): file storage, from the cluster's default to tenants' own buckets and folders
 
 ## Author

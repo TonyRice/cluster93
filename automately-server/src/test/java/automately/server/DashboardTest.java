@@ -45,7 +45,7 @@ class DashboardTest {
         }
         assertThat(used).hasSizeGreaterThan(15);
 
-        RunningNode node = await(Automately.start(ServerConfig.fromEnv(Map.ofEntries(
+        RunningNode node = await(Automately.start(ServerConfig.fromEnv(TestTls.secure(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", "dash"),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "40"),
@@ -60,7 +60,7 @@ class DashboardTest {
                 Map.entry("AUTOMATELY_HEARTBEAT_MS", "200"),
                 Map.entry("AUTOMATELY_CLUSTERED", "true"),
                 Map.entry("AUTOMATELY_CLUSTER_PORT", "32701"),
-                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")))));
+                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"))))));
         Vertx clientVertx = Vertx.vertx();
         WebClient client = WebClient.create(clientVertx);
         try {

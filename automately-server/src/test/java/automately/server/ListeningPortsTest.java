@@ -29,7 +29,7 @@ class ListeningPortsTest {
     @Test
     void aClusteredNodeListensOnlyOnItsOwnPorts() throws Exception {
         Set<Listener> before = listeners();
-        RunningNode node = await(Automately.start(ServerConfig.fromEnv(Map.ofEntries(
+        RunningNode node = await(Automately.start(ServerConfig.fromEnv(TestTls.secure(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", "ports"),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
@@ -43,7 +43,7 @@ class ListeningPortsTest {
                 Map.entry("AUTOMATELY_HEARTBEAT_MS", "200"),
                 Map.entry("AUTOMATELY_CLUSTERED", "true"),
                 Map.entry("AUTOMATELY_CLUSTER_PORT", "33701"),
-                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")))));
+                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"))))));
         try {
             Set<Listener> opened = new TreeSet<>(listeners());
             opened.removeAll(before);

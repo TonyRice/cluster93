@@ -1,6 +1,10 @@
 # The demo cluster tuned for benchmarks: the locally built image, room for many isolates, no rate limit.
 # A fixed, pre-touched Java heap keeps its resident size constant, so growth in a node's memory is native (isolates).
 services:
+  tls-init:
+    image: "automately-bench:local"
+    build: !reset null
+    pull_policy: never
   node1: &bench
     image: "automately-bench:local"
     build: !reset null

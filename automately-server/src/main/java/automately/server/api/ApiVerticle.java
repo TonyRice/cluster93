@@ -67,6 +67,8 @@ public final class ApiVerticle extends VerticleBase {
     private final StorageApi.Wiring storage;
     private final automately.core.queue.QueueService queues;
     private final automately.core.callback.CallbackSecrets callbackSecrets;
+    /** Revokes a node's certificate (D-066); null when the cluster doesn't use node certificates. */
+    private final java.util.function.Function<String, Future<JsonObject>> revokeNode;
     /** Why this node shouldn't take traffic yet; empty when it should. */
     private final java.util.function.Supplier<Future<List<String>>> notReady;
     /** Marks the MCP tools' own calls to this API, which the tool call already counted (D-047). */
@@ -83,7 +85,9 @@ public final class ApiVerticle extends VerticleBase {
                        automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
                        automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage,
                        automately.core.queue.QueueService queues, automately.core.callback.CallbackSecrets callbackSecrets,
-                       automately.core.auth.RateLimiter limiter, java.util.function.Supplier<Future<List<String>>> notReady) {
+                       automately.core.auth.RateLimiter limiter, java.util.function.Function<String, Future<JsonObject>> revokeNode,
+                       java.util.function.Supplier<Future<List<String>>> notReady) {
+        this.revokeNode = revokeNode;
         this.notReady = notReady;
         this.queues = queues;
         this.callbackSecrets = callbackSecrets;
@@ -153,6 +157,18 @@ public final class ApiVerticle extends VerticleBase {
         new FilesRoutes(files, quota, room).mount(router);
         new BusRoutes(vertx).mount(router);
         new QueueRoutes(queues).mount(router);
+        router.post("/v1/cluster/nodes/:id/revoke").handler(ctx -> {
+            if (revokeNode == null) {
+                error(ctx, 409, "not_available", "This cluster doesn't use node certificates (AUTOMATELY_CLUSTER_TLS=off, or a single node)");
+                return;
+            }
+            String id = ctx.pathParam("id");
+            if (!id.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,62}")) {
+                error(ctx, 400, "invalid_request", "Not a node id: " + id);
+                return;
+            }
+            revokeNode.apply(id).onSuccess(ctx::json).onFailure(ctx::fail);
+        });
         router.get("/v1/callbacks/secret").handler(ctx -> callbackSecrets.secret(ctx.get("tenant"))
                 .onSuccess(secret -> ctx.json(new JsonObject().put("secret", secret))).onFailure(ctx::fail));
         router.post("/v1/callbacks/secret/rotate").handler(ctx -> callbackSecrets.rotate(ctx.get("tenant"))

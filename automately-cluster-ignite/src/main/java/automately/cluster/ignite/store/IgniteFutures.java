@@ -59,7 +59,9 @@ final class IgniteFutures {
                     || message.contains("topology")
                     // SQL while partitions are still moving (a fresh cluster, a node joining or leaving).
                     || message.contains("Failed to reserve partitions for query")
-                    || message.contains("please retry the query")) {
+                    || message.contains("please retry the query")
+                    // A query planned or running while partitions move is cancelled by Ignite; retried like the above.
+                    || t instanceof org.apache.ignite.cache.query.QueryCancelledException) {
                 return true;
             }
         }

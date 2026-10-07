@@ -44,6 +44,7 @@ final class RouteScopes {
             json("POST", "/v1/tenants/" + SEG + "/tokens", "createTenantToken", Who.ADMIN, null, SMALL),
             rule("DELETE", "/v1/tenants/" + SEG + "/tokens/" + SEG, "revokeTenantToken", Who.ADMIN, null),
             rule("POST", "/v1/admin/rotate", "rotateAdminToken", Who.ADMIN, null),
+            rule("POST", "/v1/cluster/nodes/" + SEG + "/revoke", "revokeNode", Who.ADMIN, null),
             rule("GET", "/v1/tenants/" + SEG + "/storage-policy", "getStoragePolicy", Who.ADMIN, null),
             json("PUT", "/v1/tenants/" + SEG + "/storage-policy", "putStoragePolicy", Who.ADMIN, null, SMALL),
 

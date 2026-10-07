@@ -95,15 +95,17 @@ public final class Automately {
             PrometheusMeterRegistry registry = registry(config);
             Vertx vertx = Vertx.builder().with(vertxOptions()).withMetrics(new MicrometerMetricsFactory(registry)).build();
             Metrics.install(vertx, registry);
-            return wire(config, txt, vertx, Stores.inMemory(vertx, config), null);
+            return wire(config, txt, vertx, Stores.inMemory(vertx, config), null, Security.NONE);
         }
         // The cluster is the database (D-030): Ignite comes up first (blocking, before Vert.x serves anything),
         // creates its tables, and then becomes Vert.x's cluster manager.
         IgniteCluster cluster;
+        Security security;
         try {
+            security = Security.of(config);
             cluster = IgniteCluster.start(new IgniteSettings(config.nodeId(), config.dataDirectory(), config.clusterPort(),
                     config.clusterMembers(), config.dataBackups(), config.dataMemoryMb(), config.baselineAdjust(), config.clusterSize(),
-                    config.clusterBind()));
+                    config.clusterBind(), security.tls() == null ? null : security.tls()::sslContext, config.clusterJoinTimeout()));
             if (config.clusterBind() == null) {
                 LOG.warn("Ignite listens on every interface; set AUTOMATELY_CLUSTER_BIND (or AUTOMATELY_ADVERTISE_HOST) to the "
                         + "private address other nodes use (SECURITY.md)");
@@ -113,7 +115,7 @@ public final class Automately {
             return Future.failedFuture(e);
         }
         PrometheusMeterRegistry registry = registry(config);
-        return cluster.vertx(vertxOptions(), new MicrometerMetricsFactory(registry))
+        return cluster.vertx(vertxOptions(security), new MicrometerMetricsFactory(registry))
                 .compose(vertx -> {
                     Metrics.install(vertx, registry);
                     io.micrometer.core.instrument.Gauge.builder("automately.ignite.data.region.used", cluster, IgniteCluster::dataRegionUsedBytes)
@@ -125,7 +127,7 @@ public final class Automately {
                     TenantBlobStores routed = tenantStores(vertx, config, blobs, durable.storage, diskRootShared);
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
                             durable.files(routed), blobs, capacity, durable.auth, durable.storage, routed, diskRootShared, durable.queues);
-                    return wire(config, txt, vertx, stores, cluster);
+                    return wire(config, txt, vertx, stores, cluster, security);
                 })
                 .recover(err -> {
                     cluster.stop();
@@ -163,8 +165,37 @@ public final class Automately {
      * which would make a series per request.
      */
     static VertxOptions vertxOptions() {
-        return new VertxOptions().setMetricsOptions(new MicrometerMetricsOptions().setEnabled(true)
+        return vertxOptions(Security.NONE);
+    }
+
+    static VertxOptions vertxOptions(Security security) {
+        VertxOptions options = new VertxOptions().setMetricsOptions(new MicrometerMetricsOptions().setEnabled(true)
                 .setLabels(java.util.EnumSet.of(Label.HTTP_METHOD, Label.HTTP_CODE, Label.HTTP_ROUTE, Label.LOCAL, Label.POOL_TYPE, Label.POOL_NAME)));
+        if (security.tls() != null) {
+            ClusterSecurity.secure(options.getEventBusOptions(), security.tls());
+        }
+        return options;
+    }
+
+    /**
+     * Node certificates for this node (D-066), or none: single nodes, and clusters started with AUTOMATELY_CLUSTER_TLS=off.
+     * The revocations are shared with the TLS context, which consults them on every handshake.
+     */
+    record Security(automately.tls.ClusterTls tls, automately.tls.Revocations revocations, java.nio.file.Path directory) {
+
+        static final Security NONE = new Security(null, null, null);
+
+        static Security of(ServerConfig config) {
+            if (!config.clusterTls()) {
+                LOG.warn("AUTOMATELY_CLUSTER_TLS=off: nodes talk to each other without authentication or encryption. Development only.");
+                return NONE;
+            }
+            automately.tls.NodeIdentity identity = ClusterSecurity.identity(config);
+            automately.tls.Revocations revocations = ClusterSecurity.revocations(config.tlsDirectory());
+            LOG.info("Node certificate for {} (expires {}); cluster CA {}", identity.nodeId(), identity.expiresAt(),
+                    automately.tls.ClusterCa.fingerprint(identity.ca().getPublicKey()));
+            return new Security(new automately.tls.ClusterTls(identity, revocations), revocations, config.tlsDirectory());
+        }
     }
 
     /**
@@ -233,7 +264,7 @@ public final class Automately {
     }
 
     private static Future<RunningNode> wire(ServerConfig config, java.util.function.Function<Vertx, TxtResolver> txt, Vertx vertx,
-                                            Stores stores, IgniteCluster cluster) {
+                                            Stores stores, IgniteCluster cluster, Security security) {
         // A fresh id per process start: a restarted node must not be mistaken for its previous life (D-009).
         String instanceId = UUID.randomUUID().toString();
         // One quota for everything a tenant stores: files, kv and queued messages together (D-043, D-061).
@@ -262,7 +293,9 @@ public final class Automately {
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, limiter, () -> readiness(nodes, instanceId, cluster));
+                queues, callbackSecrets, limiter,
+                security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
+                () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         // A node whose file backend can't be used refuses to start, saying why, rather than failing uploads later.
         // Tenant disk providers need a disk root every node sees (D-057); a single node always does.
@@ -279,9 +312,13 @@ public final class Automately {
                         "\n\n  No AUTOMATELY_ADMIN_TOKEN was set, so this cluster generated its admin token (shown once, save it now):\n\n"
                         + "    {}\n\n  It manages tenants and tokens only. Rotate it with POST /v1/admin/rotate (D-044).\n", token)))
                 .compose(v -> clusterSecret(vertx)).compose(secret -> {
-            InternalHttpVerticle endpoint = new InternalHttpVerticle(config.internalPort(), secret, serving);
-            IngressVerticle ingress = new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes, secret,
-                    config.ingressIdleTimeout(), config.maxRequestBytes());
+            // With node certificates, only another node can reach the internal endpoint, so D-036's secret is retired (D-066).
+            InternalHttpVerticle endpoint = security.tls() == null
+                    ? new InternalHttpVerticle(config.internalPort(), secret, serving)
+                    : new InternalHttpVerticle(config.internalPort(), null, serving, ClusterSecurity.internalServer(security.tls()));
+            IngressVerticle ingress = new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes,
+                    security.tls() == null ? secret : null, config.ingressIdleTimeout(), config.maxRequestBytes(),
+                    security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls()));
             return vertx.deployVerticle(endpoint)
                     .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes,
                             runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port())))
@@ -293,6 +330,13 @@ public final class Automately {
                             RETENTION_INTERVAL)))
                     .compose(id -> vertx.deployVerticle(new FileGarbageVerticle(instanceId, stores.files(), nodes, FILE_GARBAGE_INTERVAL)))
                     .compose(id -> new CallbackDelivery(queues, jobs, fetch, callbackSecrets).start())
+                    .compose(id -> security.tls() == null ? Future.succeededFuture()
+                            : ClusterSecurity.follow(vertx, stores.kv(), security.revocations(), security.directory(), config.nodeId(),
+                            () -> vertx.close().onComplete(ar -> {
+                                if (cluster != null) {
+                                    cluster.stop();
+                                }
+                            })))
                     .compose(id -> vertx.deployVerticle(api))
                     .compose(id -> vertx.deployVerticle(ingress))
                     .compose(id -> serveMetrics(vertx, config, instanceId, nodes, cluster))

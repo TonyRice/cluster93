@@ -32,6 +32,7 @@
     </licenses>
 
     <modules>
+        <module>automately-tls</module>
         <module>automately-core</module>
         <module>automately-runtime-javet</module>
         <module>automately-cluster-ignite</module>
@@ -53,6 +54,7 @@
         <ignite.version>2.18.0</ignite.version>
         <micrometer.version>1.17.1</micrometer.version>
         <logback.version>1.5.20</logback.version>
+        <bouncycastle.version>1.86</bouncycastle.version>
         <!-- JVM flags Apache Ignite 2.x needs on JDK 17+ (also set in the Dockerfile). -->
         <ignite.jvm.args>--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.management/com.sun.jmx.mbeanserver=ALL-UNNAMED --add-opens=jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED --add-opens=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED --add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.math=ALL-UNNAMED --add-opens=java.sql/java.sql=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.time=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.management/sun.management=ALL-UNNAMED --add-opens=java.desktop/java.awt.font=ALL-UNNAMED</ignite.jvm.args>
     </properties>
@@ -129,6 +131,16 @@
                 <groupId>com.caoccao.javet</groupId>
                 <artifactId>javet-v8-linux-x86_64</artifactId>
                 <version>${javet.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>automately</groupId>
+                <artifactId>automately-tls</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcpkix-jdk18on</artifactId>
+                <version>${bouncycastle.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.assertj</groupId>

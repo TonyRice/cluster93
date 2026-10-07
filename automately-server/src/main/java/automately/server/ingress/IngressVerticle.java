@@ -51,8 +51,15 @@ public final class IngressVerticle extends VerticleBase {
     private HttpServer server;
     private HttpClient client;
 
+    private final java.util.function.UnaryOperator<HttpClientOptions> internalTls;
+
+    /**
+     * @param secret      D-036's shared secret for the internal endpoint, or null when node certificates secure it (D-066)
+     * @param internalTls adds TLS with this node's certificate to the client for the internal endpoint (identity if none)
+     */
     public IngressVerticle(int port, HostRouter router, ServiceStore services, JobStore jobs, NodeRegistry nodes, String secret,
-                           Duration idleTimeout, long maxRequestBytes) {
+                           Duration idleTimeout, long maxRequestBytes, java.util.function.UnaryOperator<HttpClientOptions> internalTls) {
+        this.internalTls = internalTls;
         this.port = port;
         this.router = router;
         this.services = services;
@@ -69,7 +76,7 @@ public final class IngressVerticle extends VerticleBase {
 
     @Override
     public Future<?> start() {
-        client = vertx.createHttpClient(new HttpClientOptions().setKeepAlive(true), new PoolOptions().setHttp1MaxSize(256));
+        client = vertx.createHttpClient(internalTls.apply(new HttpClientOptions().setKeepAlive(true)), new PoolOptions().setHttp1MaxSize(256));
         return vertx.createHttpServer().requestHandler(this::handle).listen(port).onSuccess(bound -> server = bound);
     }
 
@@ -149,7 +156,11 @@ public final class IngressVerticle extends VerticleBase {
         headers.set("X-Forwarded-For", forwardedFor == null ? remote : forwardedFor + ", " + remote);
         headers.set("X-Forwarded-Host", host);
         headers.set("X-Forwarded-Proto", request.isSSL() ? "https" : "http");
-        headers.set(InternalHttpVerticle.SECRET_HEADER, secret);
+        if (secret != null) {
+            headers.set(InternalHttpVerticle.SECRET_HEADER, secret);
+        } else {
+            headers.remove(InternalHttpVerticle.SECRET_HEADER);
+        }
         headers.set(InternalHttpVerticle.JOB_HEADER, target.jobId());
         RequestOptions options = new RequestOptions()
                 .setMethod(request.method())

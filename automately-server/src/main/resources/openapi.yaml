@@ -960,6 +960,32 @@ paths:
                   value: {}
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/cluster/nodes/{id}/revoke:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$' }
+    post:
+      operationId: revokeNode
+      tags: [admin]
+      summary: Revoke a core node's certificate; every node refuses it from now on, and it's stopped if it's in the cluster (D-066)
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nodeId, revokedAt, stopped]
+                properties:
+                  nodeId: { type: string }
+                  revokedAt: { type: integer }
+                  stopped: { type: boolean }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/callbacks/secret:
     get:
       operationId: getCallbackSecret

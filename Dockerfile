@@ -50,6 +50,7 @@ FROM eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY .mvn .mvn
 COPY mvnw pom.xml ./
+COPY automately-tls/pom.xml automately-tls/
 COPY automately-core/pom.xml automately-core/
 COPY automately-runtime-javet/pom.xml automately-runtime-javet/
 COPY automately-server/pom.xml automately-server/

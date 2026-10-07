@@ -6,6 +6,8 @@
 #   curl -s -H 'Host: <service>--<tenant>.localhost' localhost:8001/
 x-node: &node
   build: .
+  depends_on:
+    tls-init: { condition: service_completed_successfully }
   environment: &env
     AUTOMATELY_CLUSTERED: "true"
     AUTOMATELY_CLUSTER_MEMBERS: node1,node2,node3
@@ -20,24 +22,34 @@ x-node: &node
     retries: 12
 
 services:
+  # Node certificates (D-066): on the first `up`, a one-shot container creates the cluster CA and a certificate for each
+  # node in the cluster-tls volume; later `up`s leave them alone. Development convenience: ca.key is in that volume too.
+  # In production, run `automately cluster init` on your own machine and keep ca.key there (docs/guides/cluster.md).
+  tls-init:
+    build: .
+    user: root
+    entrypoint: ["sh", "-c", "java -cp /opt/automately/automately.jar automately.tls.ClusterInit /tls node1 node2 node3 && chown -R automately /tls"]
+    volumes: ["cluster-tls:/tls"]
+    restart: "no"
+
   node1:
     <<: *node
     hostname: node1
-    environment: { <<: *env, AUTOMATELY_NODE_ID: node1, AUTOMATELY_CLUSTER_BIND: node1 }
+    environment: { <<: *env, AUTOMATELY_NODE_ID: node1, AUTOMATELY_CLUSTER_BIND: node1, AUTOMATELY_TLS_DIR: /tls/node1 }
     ports: ["8081:8080", "8001:8000"]
-    volumes: ["node1-data:/var/lib/automately"]
+    volumes: ["node1-data:/var/lib/automately", "cluster-tls:/tls:ro"]
   node2:
     <<: *node
     hostname: node2
-    environment: { <<: *env, AUTOMATELY_NODE_ID: node2, AUTOMATELY_CLUSTER_BIND: node2 }
+    environment: { <<: *env, AUTOMATELY_NODE_ID: node2, AUTOMATELY_CLUSTER_BIND: node2, AUTOMATELY_TLS_DIR: /tls/node2 }
     ports: ["8082:8080", "8002:8000"]
-    volumes: ["node2-data:/var/lib/automately"]
+    volumes: ["node2-data:/var/lib/automately", "cluster-tls:/tls:ro"]
   node3:
     <<: *node
     hostname: node3
-    environment: { <<: *env, AUTOMATELY_NODE_ID: node3, AUTOMATELY_CLUSTER_BIND: node3 }
+    environment: { <<: *env, AUTOMATELY_NODE_ID: node3, AUTOMATELY_CLUSTER_BIND: node3, AUTOMATELY_TLS_DIR: /tls/node3 }
     ports: ["8083:8080", "8003:8000"]
-    volumes: ["node3-data:/var/lib/automately"]
+    volumes: ["node3-data:/var/lib/automately", "cluster-tls:/tls:ro"]
 
   # docker compose --profile observability up: Prometheus scrapes the nodes, Grafana shows the Automately dashboard
   # at http://localhost:3000 (anonymous viewers; admin/admin to edit). Phase 5.
@@ -61,6 +73,7 @@ services:
 
 # Each node keeps its share of the cluster's data here; `docker compose down` keeps it, `down -v` deletes it.
 volumes:
+  cluster-tls:
   node1-data:
   node2-data:
   node3-data:

@@ -47,7 +47,7 @@ class FullRestartTest {
     }
 
     private ServerConfig config(String nodeId) {
-        return ServerConfig.fromEnv(Map.ofEntries(
+        return ServerConfig.fromEnv(TestTls.secure(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
@@ -66,7 +66,7 @@ class FullRestartTest {
                 Map.entry("AUTOMATELY_CLUSTER_SIZE", "3"),
                 Map.entry("AUTOMATELY_CLUSTERED", "true"),
                 Map.entry("AUTOMATELY_CLUSTER_PORT", "21701"),
-                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")));
+                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"))));
     }
 
     /** Nodes of a persistent cluster wait for each other on restart, so they're started in parallel, like a real cluster. */

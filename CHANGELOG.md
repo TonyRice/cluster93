@@ -26,6 +26,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Security groundwork, part 1B — Node certificates between core nodes (2026-10-07)
+
+### Added
+- **Core nodes authenticate each other with certificates from the cluster's own CA (D-066).**
+  - **What's covered:** Ignite discovery and communication, the clustered event bus and the internal endpoint now use TLS 1.3 with **a node certificate required on both sides**. A machine without one can't join or read traffic.
+  - **On by default** for clustered nodes. A node without certificates refuses to start and says how to get them. `AUTOMATELY_CLUSTER_TLS=off` is for development only, with a warning at every start.
+  - **D-036's shared secret** on the internal endpoint is retired when certificates are on.
+- **One-line joins (D-067):**
+  - **`automately cluster init`** creates the CA and a join line per node. **`ca.key` stays on your machine**, and the cluster never stores it.
+  - **`automately node invite node4 --host … --ca ca.key`** signs node4's certificate locally and prints `AUTOMATELY_JOIN=atly_nodebundle_…`, carrying node4's own key and certificate, never the CA key.
+  - **The strict variant:** `automately-server --prepare` with `node invite --key` sends no secrets.
+- **`automately node revoke`:** every node refuses the node's certificate from then on, and if it's in the cluster it's forced out through discovery (`failNode`), its process stopping. Inviting it again lets it back.
+- **`AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS`** (60 s): a node whose certificate is refused fails its start instead of retrying forever, which is Ignite's default.
+- **A new module, `automately-tls`** (BouncyCastle for building certificates; PEM, bundles and TLS contexts with the JDK), shared by the server and the CLI.
+- **Docker Compose:** a one-shot `tls-init` service makes the certificates on the first `up`, so the compose cluster, the demo and the benchmarks stay one command (development only; `ca.key` is in a volume).
+- **`docs/guides/cluster.md`:** creating a cluster, adding, removing and renewing nodes.
+- **Tests:**
+  - TLS-module handshakes: no certificate, a foreign CA and a revoked node are refused; a re-invited node gets in
+  - `ClusterSecurityTest`
+  - CLI tests for `cluster` and `node`
+  - every in-JVM cluster test now runs with TLS required
+  - DockerClusterIT joins with bundles and revokes a live node
+- **The native CLI still builds with BouncyCastle in it,** with no extra reflection config. It was checked here: a static musl binary (50 MB) ran `cluster init`, `node invite` and `node invite --key`, and the JVM decoded and verified the lines it printed.
+
+### Changed
+- `POST /v1/cluster/nodes/{id}/revoke` (admin). The OpenAPI contract now has 60 operations.
+- **SQL that Ignite cancels while partitions move** (`QueryCancelledException`) is retried like the other topology errors (D-033). The Docker test caught a node failing its start that way.
+
+### Fixed
+- **Certificate dates have one-second precision,** so a node invited again within the second of its revocation looked revoked. Certificate serials now carry the exact issue time, which revocation compares.
+
 ## Security groundwork, part 1A — Closing Ignite's unused ports (2026-10-07)
 
 ### Fixed

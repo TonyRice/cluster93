@@ -30,6 +30,11 @@
             <artifactId>jackson-databind</artifactId>
             <version>${jackson.version}</version>
         </dependency>
+        <!-- cluster init / node invite: the cluster CA and node certificates (D-066, D-067). -->
+        <dependency>
+            <groupId>automately</groupId>
+            <artifactId>automately-tls</artifactId>
+        </dependency>
 
         <!-- Tests run every command against a real in-memory node. -->
         <dependency>

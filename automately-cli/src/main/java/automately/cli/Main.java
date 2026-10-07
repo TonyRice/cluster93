@@ -12,7 +12,7 @@ import java.util.Properties;
 @Command(name = "automately", mixinStandardHelpOptions = true, versionProvider = Main.VersionProvider.class,
         description = "Run sandboxed JavaScript jobs and services on an Automately cluster.",
         subcommands = {LoginCommand.class, LogoutCommand.class, WhoamiCommand.class, RunCommand.class, JobsCommand.class,
-                ServicesCommand.class, DomainsCommand.class, FilesCommand.class, QueuesCommand.class, CallbacksCommand.class, StorageCommand.class, TokensCommand.class, TenantsCommand.class,
+                ServicesCommand.class, DomainsCommand.class, FilesCommand.class, QueuesCommand.class, CallbacksCommand.class, StorageCommand.class, ClusterCommand.class, NodeCommand.class, TokensCommand.class, TenantsCommand.class,
                 McpCommand.class, VersionCommand.class, UpgradeCommand.class, CommandLine.HelpCommand.class})
 public final class Main implements Runnable {
 

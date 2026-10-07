@@ -62,7 +62,7 @@ class HostApisTest {
     }
 
     private static ServerConfig config(String nodeId) {
-        return ServerConfig.fromEnv(Map.ofEntries(
+        return ServerConfig.fromEnv(TestTls.secure(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
@@ -78,7 +78,7 @@ class HostApisTest {
                 Map.entry("AUTOMATELY_STOP_GRACE_MS", "1000"),
                 Map.entry("AUTOMATELY_CLUSTERED", "true"),
                 Map.entry("AUTOMATELY_CLUSTER_PORT", "20701"),
-                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")));
+                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"))));
     }
 
     // --- kv ---

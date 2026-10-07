@@ -654,3 +654,59 @@ Docker didn't publish them to the host, but every container on the network could
 - **`ListeningPortsTest`:** it reads the JVM's own listening sockets from `/proc` and asserts a clustered node opens only the API, ingress, internal, metrics, discovery and communication ports plus the event bus. Any new listener fails the build until it's added on purpose. It was checked to fail, naming 10800 and 11211, with the connectors turned back on.
 
 **Not yet:** authentication and encryption between nodes. That's the rest of the design (D-066, D-067): a cluster CA whose key stays on the operator's machine, and node bundles for one-line joins.
+
+### D-066 — Core nodes authenticate each other with certificates from the cluster's own CA
+**Date:** 2026-10-07 · **Status:** Accepted (design: docs/design/cluster-security.md)
+
+**Context:** Ignite discovery and communication, the clustered event bus and the internal endpoint were unauthenticated and unencrypted. Anything that could reach the discovery port could join the cluster and receive replicated data. D-065 closed Ignite's unused ports; this closes the rest.
+
+**Decision:**
+- **The CA:** each cluster has its own CA. EC P-256 throughout; the CA lasts 10 years and node certificates 3. **Its private key stays on the operator's machine** (Tony): `automately cluster init` writes `ca.key`, and the cluster never stores it.
+- **A node certificate** names the node (common name and DNS name) and its addresses, and is good for TLS server and client use.
+- **TLS 1.3 with a node certificate required on both sides** for:
+  - **Ignite discovery and communication:** `IgniteConfiguration.setSslContextFactory`. The context is wrapped so every server-side socket and engine requires the peer's certificate, whatever Ignite asks for.
+  - **The clustered event bus:** `EventBusOptions` with PEM key and trust and `ClientAuth.REQUIRED`.
+  - **The internal endpoint:** HTTPS with required client certificates; the ingress presents its node certificate.
+- **D-036's shared secret is retired** when certificates are on (Tony).
+- **On by default for clustered nodes** (`AUTOMATELY_CLUSTER_TLS=required`). A node without certificates refuses to start and says how to get them. `off` is for development and logs a warning at every start.
+- **Revocation by node id:**
+  - **How it works:** a certificate issued before a node's revocation is refused, and one issued after (the node was invited again) is accepted.
+  - **Storage:** revocations are kept in the cluster (the system tenant's kv), broadcast to every node, and saved by each node in its TLS directory, so a node refuses revoked peers even before it has rejoined.
+  - **A node in the cluster is forced out** through Ignite discovery's `failNode`, which isn't up to the node, unlike `stopNodes`; a well-behaved node also stops itself on the broadcast.
+  - **The event bus** trusts the CA but doesn't check revocations: Vert.x copies event-bus options in a way that loses custom trust managers. Ignite discovery does check, so a revoked node can't rejoin, and forcing it out takes its connections with it.
+- **A join timeout** (`AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS`, 60 s): a node whose certificate the members refuse fails its start instead of retrying forever, which is Ignite's default.
+- **Exact issue times:** certificate dates have one-second precision, which made a node invited again within the second of its revocation look revoked. Found by the full test run. Our serial numbers carry the issue time in milliseconds in their high bits, and revocation compares that. Certificates from another CA fall back to their start date.
+- **What a refused node does:**
+  - **When Ignite reports the TLS refusal:** the node's start fails.
+  - **When Ignite reads the refusal as an unreachable address:** the node may start alone, as a one-node cluster of its own.
+
+  Either way it isn't a member: it holds no data, and members refuse its certificate.
+- **Following revocations never holds up a start.** Found by the Docker test: reading the list with SQL as part of startup failed on a freshly forming cluster, because Ignite cancels queries while partitions move. The list now loads in the background, retrying, and every minute after (in case a broadcast was missed), with each node's saved copy covering the meantime. Queries cancelled that way (`QueryCancelledException`) are now retried everywhere, like the other topology errors (D-033).
+
+**Tests:**
+- **`automately-tls`:** real handshakes. A member gets in; no certificate, a foreign CA and a revoked node are refused; a node invited again gets in.
+- **`ClusterSecurityTest`:**
+  - no certificates → refused, with the fix in the message
+  - a join line for another node → refused
+  - the internal endpoint doesn't answer plain HTTP
+  - a foreign CA and TLS off can't join
+  - a revoked node's certificate is refused
+  - invited again, it rejoins
+- **Every in-JVM cluster test** now runs with TLS required (`TestTls`).
+- **`DockerClusterIT`:** its nodes join with `AUTOMATELY_JOIN` bundles, and **a live node is revoked and forced out**, its process stopping.
+
+### D-067 — Joining a node is one line: a per-node bundle signed on the operator's machine, never the CA key
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Decision:**
+- **Creating a cluster:** `automately cluster init --nodes …` writes `ca.key`, `ca.crt`, and one `<node>.join` line per node.
+- **Adding a node:** `automately node invite node4 --host … --ca ./ca.key` signs node4's certificate **locally** and prints `AUTOMATELY_JOIN=atly_nodebundle_…`: node4's key, its certificate and the CA certificate, gzipped PEM in base64url. The new node installs it in its TLS directory and starts. Tony asked for a one-liner with the key base64-encoded; it carries **the node's** key, never the CA's, because putting `ca.key` in a one-liner would hand the master key to every node and every shell history.
+- **The bundle is a secret for one node:**
+  - it can't create other nodes
+  - it's bound to the node's name and addresses
+  - a line for one node can't start another
+- **The strict variant:** `automately-server --prepare node4` keeps the key on the new machine and prints its public key, and `node invite --key …` returns a certificate-only line (`atly_nodecert_…`).
+- **Renewing is inviting again.** Nodes warn from 90 days before expiry.
+- **Compose:** a one-shot `tls-init` service makes the CA and certificates in a volume on the first start (`automately.tls.ClusterInit`), so `docker compose up`, the demo and the benchmarks stay one command. That's development only, since `ca.key` sits in the volume.
+
+**Tests:** CLI tests for `cluster init`, `node invite` (bundle and `--key`) and `node revoke`. DockerClusterIT joins every node with a bundle.

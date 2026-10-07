@@ -152,6 +152,7 @@ class ContractTest {
         calls.check("publish", "POST", "/v1/bus/news", tenant, new JsonObject().put("hello", true));
         calls.check("request", "POST", "/v1/bus/nobody-listens/request?timeoutMs=500", tenant, new JsonObject());
 
+        calls.check("revokeNode", "POST", "/v1/cluster/nodes/node9/revoke", admin, null);
         calls.check("getCallbackSecret", "GET", "/v1/callbacks/secret", tenant, null);
         calls.check("rotateCallbackSecret", "POST", "/v1/callbacks/secret/rotate", tenant, null);
         calls.check("pushQueueMessage", "POST", "/v1/queues/emails", tenant,

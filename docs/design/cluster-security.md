@@ -1,6 +1,14 @@
 # Design: securing the cluster itself (security groundwork, part 1)
 
-**Status:** Part A done (D-065, 2026-10-07). Parts B–D proposed (D-066, D-067); Tony decided CA custody and retiring the D-036 secret.
+**Status:** done (2026-10-07). Part A is D-065; Parts B–D are D-066 and D-067, with the operator's guide in [../guides/cluster.md](../guides/cluster.md). Tony decided CA custody and retiring the D-036 secret.
+
+**What changed while building it (recorded in D-066 and D-067):**
+- **Revoking is forced, not cooperative.** It uses Ignite's discovery `failNode` rather than `stopNodes`, which asks the node to stop itself and, in one JVM, interrupted the other node.
+- **A join timeout.** A node whose certificate is refused stops trying after `AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS` instead of retrying forever.
+- **The event bus's trust** is the CA as PEM, because Vert.x copies event-bus options and loses wrapped trust managers. So it doesn't consult revocations; Ignite discovery does.
+- **Compose's `tls-init` service** makes the certificates for development, with `ca.key` in a volume.
+- **Revocation is by node, not serial.** A revocation records the node id and when; certificates issued to that node before then are refused, so inviting it again lets it back in. The exact issue time is in the serial, because certificate dates only have second precision.
+- **No `cluster renew` yet.** Renewing is `node invite <node>` again; nodes warn from 90 days before expiry. A bulk `cluster renew` can come later.
 
 ## Why
 Automately's tenant-facing surfaces are hardened: tokens, scopes, the OpenAPI contract, isolates, egress rules (SECURITY.md). **Node-to-node traffic isn't.** A probe of a running node (2026-10-07) found:

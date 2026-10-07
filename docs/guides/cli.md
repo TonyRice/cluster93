@@ -65,6 +65,8 @@ The URL and token are saved in `~/.config/automately/config.json` (`%APPDATA%\au
 | `tokens create NAME --scope jobs:read · ls · revoke` | Your tenant's tokens. The secret is printed once, to stdout |
 | `tenants create · ls · rm · token · tokens · revoke · storage-policy` | Admin only |
 | `mcp` | The MCP stdio bridge for AI agents ([MCP guide](mcp.md)) |
+| `cluster init --nodes a,b,c [--host a=10.0.0.11]` | Operator: create the cluster's CA and a join line per node. `ca.key` stays with you ([cluster guide](cluster.md)) |
+| `node invite ID [--host ADDR] [--key PUBLIC_KEY] --ca ca.key` · `node revoke ID` | Operator: a one-line join for a new node (also renews); revoke a node |
 | `version · upgrade` | |
 
 Add `--json` to any command for the API's JSON instead of a summary.

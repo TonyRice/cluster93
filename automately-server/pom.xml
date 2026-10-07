@@ -35,6 +35,10 @@
             <groupId>automately</groupId>
             <artifactId>automately-cluster-ignite</artifactId>
         </dependency>
+        <dependency>
+            <groupId>automately</groupId>
+            <artifactId>automately-tls</artifactId>
+        </dependency>
         <!-- Logs: text by default, JSON lines with AUTOMATELY_LOG_FORMAT=json (phase 5). -->
         <dependency>
             <groupId>ch.qos.logback</groupId>

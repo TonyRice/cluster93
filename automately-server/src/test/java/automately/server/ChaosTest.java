@@ -50,7 +50,7 @@ class ChaosTest {
     @BeforeEach
     void startCluster() throws Exception {
         for (String id : List.of("node-a", "node-b", "node-c")) {
-            nodes.add(await(Automately.start(ServerConfig.fromEnv(Map.ofEntries(
+            nodes.add(await(Automately.start(ServerConfig.fromEnv(TestTls.secure(Map.ofEntries(
                     Map.entry("AUTOMATELY_NODE_ID", id),
                     Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                     Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
@@ -65,7 +65,7 @@ class ChaosTest {
                     Map.entry("AUTOMATELY_ORPHAN_GRACE_MS", "400"),
                     Map.entry("AUTOMATELY_CLUSTERED", "true"),
                     Map.entry("AUTOMATELY_CLUSTER_PORT", "17701"),
-                    Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"))))));
+                    Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")))))));
         }
         TestAuth.use(nodes.getFirst());
         clientVertx = Vertx.vertx();

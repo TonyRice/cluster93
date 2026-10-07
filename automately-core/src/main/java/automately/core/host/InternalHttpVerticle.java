@@ -31,10 +31,21 @@ public final class InternalHttpVerticle extends VerticleBase {
     private final Map<String, AtomicInteger> inFlight = new ConcurrentHashMap<>();
     private HttpServer server;
 
+    private final io.vertx.core.http.HttpServerOptions options;
+
     public InternalHttpVerticle(int port, String secret, ServeRegistry registry) {
+        this(port, secret, registry, new io.vertx.core.http.HttpServerOptions());
+    }
+
+    /**
+     * @param secret  D-036's shared secret, or null when {@code options} require node certificates (D-066), which then
+     *                are the only check: only another node of the cluster can complete the TLS handshake
+     */
+    public InternalHttpVerticle(int port, String secret, ServeRegistry registry, io.vertx.core.http.HttpServerOptions options) {
         this.port = port;
-        this.secret = secret.getBytes(StandardCharsets.UTF_8);
+        this.secret = secret == null ? null : secret.getBytes(StandardCharsets.UTF_8);
         this.registry = registry;
+        this.options = options;
     }
 
     public int port() {
@@ -43,13 +54,13 @@ public final class InternalHttpVerticle extends VerticleBase {
 
     @Override
     public Future<?> start() {
-        return vertx.createHttpServer().requestHandler(this::handle).listen(port).onSuccess(bound -> server = bound);
+        return vertx.createHttpServer(options).requestHandler(this::handle).listen(port).onSuccess(bound -> server = bound);
     }
 
     private void handle(HttpServerRequest request) {
         request.pause();
         String presented = request.getHeader(SECRET_HEADER);
-        if (presented == null || !MessageDigest.isEqual(presented.getBytes(StandardCharsets.UTF_8), secret)) {
+        if (secret != null && (presented == null || !MessageDigest.isEqual(presented.getBytes(StandardCharsets.UTF_8), secret))) {
             reject(request, 403, "Not a cluster request");
             return;
         }

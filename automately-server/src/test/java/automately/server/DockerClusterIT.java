@@ -98,6 +98,8 @@ class DockerClusterIT {
                     .withNetworkAliases(id)
                     .withEnv("AUTOMATELY_NODE_ID", id)
                     .withEnv("AUTOMATELY_CLUSTER_BIND", id)
+                    // The one-line join (D-067): each node starts with its bundle, signed by the test CA.
+                    .withEnv("AUTOMATELY_JOIN", automately.tls.NodeBundle.bundle(TestTls.CA.issueNode(id, List.of(id))))
                     .withEnv("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN)
                     .withEnv("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0")
                     .withEnv("AUTOMATELY_CLUSTERED", "true")
@@ -325,6 +327,24 @@ class DockerClusterIT {
         var ports = DockerClientFactory.instance().client().inspectContainerCmd(nodes.get(node).getContainerId()).exec()
                 .getNetworkSettings().getPorts().getBindings();
         return Integer.parseInt(ports.get(new com.github.dockerjava.api.model.ExposedPort(containerPort))[0].getHostPortSpec());
+    }
+
+    /**
+     * Revoking a node that's in the cluster (D-066) forces it out: the others drop it from discovery and refuse its
+     * certificate from then on, and the node stops, with its own process. Real separate processes, so the revoked
+     * node's halt doesn't take the test with it.
+     */
+    @Test
+    void aRevokedNodeIsForcedOutOfTheCluster() throws Exception {
+        String base = "http://" + nodes.get("node1").getHost() + ":" + hostPort("node1", 8080);
+        HttpResponse<String> revoked = http.send(HttpRequest.newBuilder(URI.create(base + "/v1/cluster/nodes/node3/revoke"))
+                .header("Authorization", TestAuth.ADMIN).POST(HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(revoked.statusCode()).as(revoked.body()).isEqualTo(200);
+        assertThat(new JsonObject(revoked.body()).getBoolean("stopped")).isTrue();
+
+        awaitCondition(Duration.ofSeconds(60), "node3 dropped from the cluster", () -> liveNodes("node1").equals(Set.of("node1", "node2")));
+        awaitCondition(Duration.ofSeconds(60), "node3's process stopped", () -> !isRunning("node3"));
+        assertThat(liveNodes("node2")).isEqualTo(Set.of("node1", "node2"));
     }
 
     // --- cluster helpers ---

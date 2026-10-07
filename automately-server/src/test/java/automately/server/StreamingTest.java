@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Streaming through the real ingress (docs/design/durability-and-streaming.md, milestone 2). Requests enter on
@@ -68,7 +69,7 @@ class StreamingTest {
     }
 
     private static ServerConfig config(String nodeId) {
-        return ServerConfig.fromEnv(Map.ofEntries(
+        return ServerConfig.fromEnv(TestTls.secure(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
@@ -86,7 +87,7 @@ class StreamingTest {
                 Map.entry("AUTOMATELY_STOP_GRACE_MS", "1000"),
                 Map.entry("AUTOMATELY_CLUSTERED", "true"),
                 Map.entry("AUTOMATELY_CLUSTER_PORT", "24701"),
-                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")));
+                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"))));
     }
 
     /** Defines a service that serves {@code handler} and waits until it runs on node A (requests then come in through B). */
@@ -250,16 +251,20 @@ class StreamingTest {
     }
 
     @Test
-    void theInternalEndpointRefusesCallersWithoutTheClusterSecret() throws Exception {
+    void theInternalEndpointRefusesCallersWithoutANodeCertificate() throws Exception {
         String endpoint = get("/v1/nodes").bodyAsJsonObject().getJsonArray("nodes").getJsonObject(0).getString("endpoint");
         int colon = endpoint.lastIndexOf(':');
+        RequestOptions request = new RequestOptions().setHost(endpoint.substring(0, colon)).setPort(Integer.parseInt(endpoint.substring(colon + 1)))
+                .setURI("/").putHeader("X-Automately-Job", "anything").putHeader("X-Automately-Cluster-Secret", "guess");
 
-        HttpClientResponse response = await(raw.request(new RequestOptions().setHost(endpoint.substring(0, colon))
-                        .setPort(Integer.parseInt(endpoint.substring(colon + 1))).setURI("/").putHeader("X-Automately-Job", "anything")
-                        .putHeader("X-Automately-Cluster-Secret", "guess"))
-                .compose(req -> req.send()).map(StreamingTest::paused));
-
-        assertThat(response.statusCode()).isEqualTo(403);
+        // Plain HTTP, even with a guessed secret, gets nowhere: the endpoint speaks TLS with node certificates only (D-066).
+        assertThatThrownBy(() -> await(raw.request(request).compose(req -> req.send())))
+                .isInstanceOf(java.util.concurrent.ExecutionException.class);
+        // TLS without a certificate is refused at the handshake.
+        io.vertx.core.http.HttpClient tlsWithoutCertificate = clientVertx.createHttpClient(new io.vertx.core.http.HttpClientOptions()
+                .setSsl(true).setTrustAll(true).setVerifyHost(false));
+        assertThatThrownBy(() -> await(tlsWithoutCertificate.request(request).compose(req -> req.send())))
+                .isInstanceOf(java.util.concurrent.ExecutionException.class);
     }
 
     // --- helpers ---

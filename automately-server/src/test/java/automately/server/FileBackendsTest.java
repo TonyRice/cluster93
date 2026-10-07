@@ -84,8 +84,8 @@ class FileBackendsTest {
     void aClusterServesFilesFromS3() throws Exception {
         assumeThat(S3TestServer.available()).as("Docker is available").isTrue();
         S3Settings s3 = S3TestServer.bucket("cluster");
-        RunningNode nodeA = await(Automately.start(ServerConfig.fromEnv(config("node-a", true, s3Env(s3, s3.secretAccessKey())))));
-        RunningNode nodeB = await(Automately.start(ServerConfig.fromEnv(config("node-b", true, s3Env(s3, s3.secretAccessKey())))));
+        RunningNode nodeA = await(Automately.start(ServerConfig.fromEnv(TestTls.secure(config("node-a", true, s3Env(s3, s3.secretAccessKey()))))));
+        RunningNode nodeB = await(Automately.start(ServerConfig.fromEnv(TestTls.secure(config("node-b", true, s3Env(s3, s3.secretAccessKey()))))));
         try {
             TestAuth.use(nodeA);
             String bearer = TestAuth.bearer(TENANT);
@@ -127,8 +127,8 @@ class FileBackendsTest {
     @Test
     void aNodeStoresFilesInAFolder() throws Exception {
         Path files = dir.resolve("files");
-        RunningNode node = await(Automately.start(ServerConfig.fromEnv(config("disk", false,
-                Map.of("AUTOMATELY_FILES_BACKEND", "disk", "AUTOMATELY_FILES_DIR", files.toString())))));
+        RunningNode node = await(Automately.start(ServerConfig.fromEnv(TestTls.secure(config("disk", false,
+                Map.of("AUTOMATELY_FILES_BACKEND", "disk", "AUTOMATELY_FILES_DIR", files.toString()))))));
         try {
             TestAuth.use(node);
             String bearer = TestAuth.bearer(TENANT);
@@ -151,11 +151,11 @@ class FileBackendsTest {
         assumeThat(S3TestServer.available()).as("Docker is available").isTrue();
         S3Settings s3 = S3TestServer.bucket("refused");
 
-        assertThatThrownBy(() -> await(Automately.start(ServerConfig.fromEnv(config("bad-s3", false, s3Env(s3, "wrong-secret"))))))
+        assertThatThrownBy(() -> await(Automately.start(ServerConfig.fromEnv(TestTls.secure(config("bad-s3", false, s3Env(s3, "wrong-secret")))))))
                 .hasMessageContaining("Can't use s3://refused");
-        assertThatThrownBy(() -> ServerConfig.fromEnv(config("bad-disk", false, Map.of("AUTOMATELY_FILES_BACKEND", "disk"))))
+        assertThatThrownBy(() -> ServerConfig.fromEnv(TestTls.secure(config("bad-disk", false, Map.of("AUTOMATELY_FILES_BACKEND", "disk")))))
                 .hasMessageContaining("AUTOMATELY_FILES_DIR");
-        assertThatThrownBy(() -> ServerConfig.fromEnv(config("bad-kind", false, Map.of("AUTOMATELY_FILES_BACKEND", "ftp"))))
+        assertThatThrownBy(() -> ServerConfig.fromEnv(TestTls.secure(config("bad-kind", false, Map.of("AUTOMATELY_FILES_BACKEND", "ftp")))))
                 .hasMessageContaining("cluster, disk, s3");
     }
 
