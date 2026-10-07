@@ -510,3 +510,16 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - **Logs:** Logback replaces slf4j-simple. `AUTOMATELY_LOG_FORMAT=json` uses Logback's own JSON encoder: one object per line, with SLF4J key-value pairs (`jobId`, `tenant`, `status`, `durationMs` on "job ended") as fields. In JSON mode Ignite logs through the logger (`IGNITE_QUIET=false`), so its console lines don't break the format.
 **Deferred:** OpenTelemetry tracing. The plan made it optional, and metrics, readiness and structured logs cover operating the cluster. It can be added with `vertx-opentelemetry` behind `AUTOMATELY_OTLP_ENDPOINT` later.
 
+### D-059 — Benchmarks: a rerunnable script, honest methodology, and no change without a measured gain
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Decision:**
+- **The numbers come from `benchmarks/run.sh`,** which runs the three-node Docker cluster from the freshly built jar and regenerates `docs/benchmarks.md`, machine details included. The README quotes that page and says runs on one machine vary by up to 2x.
+- **Time what a user waits for.** Jobs are timed to the `end` event on their event stream, which is how the CLI waits. Polling every 5 ms put load on the API and measured the polling interval as much as the job.
+- **Measure isolate memory as resident memory.** `docker stats` counts page cache and the Java heap's growth, and once gave a negative cost per isolate. The bench pins and pre-touches the heap (`-Xms1g -Xmx1g -XX:+AlwaysPreTouch`), then sums `VmRSS` of each node's Java process, so growth is native memory. Two runs both gave 1.6 MB per idle isolate.
+- **Medians for one-off transfers.** The file scenario runs three rounds and reports the median.
+
+**Rejected: storing several upload chunks at once.** Uploads looked slow (13 MB/s) in the first run, so the chunked writer was changed to keep four 1 MB chunks in flight, with a gap-tolerant delete for interrupted uploads. An A/B run measured 48 MB/s with it and 45 MB/s without it (one chunk at a time), within the noise between runs. The 13 MB/s was an outlier. It touched the file store's correctness (ordering, cleanup after failures) for no measured gain, so it was reverted.
+
+**Not yet done:** profiling throughput under concurrent load. On one laptop, 32 clients finish about as many jobs per second as one client does.
+

@@ -1,0 +1,69 @@
+# Security
+
+Automately runs other people's code. This page describes who is trusted, what each boundary defends, how (with the decision that covers it), and what isn't defended, so you can deploy it knowing where the edges are.
+
+**Reporting a vulnerability:** email **tony@adamnlynn.com** with "SECURITY" in the subject. Please don't open a public issue. You'll get an answer within a few days, and fixes are credited if you'd like.
+
+## Who is trusted
+
+| Party | Trusted to | Not trusted to |
+|---|---|---|
+| **The operator** (runs the nodes, holds the admin token and env config) | Everything | — |
+| **A tenant** (holds tokens for its own tenant) | Run code, store data, serve HTTP, within its scopes, quota and rate limit | Read or affect another tenant, reach the host or the cluster's internals |
+| **A tenant's script** (code in an isolate) | What its tenant may do, through the host APIs | Anything else: it is assumed hostile |
+| **The public** (calls services through the ingress) | Send requests to services | Anything else |
+| **An AI agent over MCP** | What its token's scopes allow | Manage credentials (storage tools aren't exposed, D-057) |
+
+## Boundaries and what defends them
+
+**Scripts are sandboxed in V8 isolates** (D-002, D-003, D-019, D-024):
+- **No Java access.** Each job gets a fresh isolate with no Java interop and no Node.js APIs. A script reaches the outside only through the allow-listed host APIs (`kv`, `bus`, `fetch`, `files`, `log`, `ctx`), and every call is checked against the job's tenant (D-025).
+- **Memory.** The isolate's heap is capped (`AUTOMATELY_MAX_HEAP_MB`). Hitting the cap ends the script, not the node.
+- **Time.** Jobs have a timeout (`AUTOMATELY_MAX_TIMEOUT_MS`), and a stop request is followed by forced termination after a grace period (D-020).
+- **No reuse.** Isolates are never reused between jobs, let alone between tenants.
+- **Tested.** The hostile-script tests (`JavetScriptRuntimeTest.HostileScripts`) cover infinite loops (plain, after an `await`, at module top level), memory bombs, global state and prototype pollution leaking between jobs, and reaching host internals. Each must be stopped or refused while the node keeps working. Tenant scoping of every host API is tested separately (`NodeHostServicesTest`, `HostApisTest`).
+
+**Tenants are kept apart:**
+- Every key, topic, file path, service, domain and job is scoped to the tenant that owns it, taken from the token rather than the request (D-045).
+- A custom domain routes only after its owner publishes a TXT record (D-028).
+- A tenant's storage provider only ever serves that tenant's files, and its sealed secret can't be moved to another provider (D-057).
+
+**API access** (D-044 to D-046, D-050, D-051):
+- **Tokens.** Every `/v1` call needs a bearer token. Tokens are 256-bit random with a checksum and a scanner-friendly `atly_` prefix. Only their SHA-256 is stored, and revocation takes effect on the next request.
+- **Scopes and the admin.** Scopes limit each token. The admin token manages tenants and tokens but can't read tenant data.
+- **Validation.** Requests are validated against the OpenAPI contract before any handler runs.
+- **Limits.** Per-tenant rate limits and storage quotas (D-043, D-051) bound what one tenant can take. Admission control refuses writes before disk or memory runs out, so uploads can't crash a node (D-038).
+
+**Outbound requests (`fetch`, tenant S3 endpoints)** (D-026):
+- Private, loopback, link-local (including cloud metadata at 169.254.169.254), CGNAT and other reserved addresses are refused.
+- The connection goes to the exact address that was checked, so DNS rebinding can't swap one in.
+- Redirects aren't followed.
+- Only the operator (`AUTOMATELY_EGRESS_ALLOW_PRIVATE`) or a tenant's storage policy can allow private addresses.
+
+**Secrets at rest:**
+- Tenants' storage credentials are encrypted with AES-256-GCM, using a key derived from `AUTOMATELY_SECRETS_KEY`, with the tenant and provider bound in as associated data. They're write-only in the API (D-057).
+- Token secrets are never stored, only their hashes.
+
+**Between nodes** (D-036):
+- The internal endpoint that carries service traffic between nodes requires a cluster secret, agreed once through the cluster.
+
+## What isn't defended, so deploy accordingly
+
+- **Isolates share the node's process.** V8 isolates are memory-safe sandboxes, but they aren't separate processes or VMs. A V8 vulnerability that escapes the isolate would compromise the node, so keep the JVM and Javet up to date. For hostile multi-tenant use at scale, run nodes as unprivileged containers on dedicated hosts.
+- **CPU is bounded by time, not quota.** A job's timeout and the node's capacity bound how much CPU a tenant uses, but a running service has no CPU cap beyond holding one of the node's isolate slots. The per-tenant service limit (`AUTOMATELY_MAX_SERVICES_PER_TENANT`) bounds how many it can hold.
+- **The cluster's own ports are trusted.** Ignite discovery and communication (5701 and 5801 by default) and the Vert.x event bus are **neither authenticated nor encrypted**. Put nodes on a private network, and never expose those ports. The internal endpoint's secret protects only that endpoint.
+- **TLS is yours to add.** Nodes speak plain HTTP. Terminate TLS in front of the API (8080) and the ingress (8000) with a reverse proxy or load balancer, and keep the internal (8090) and metrics (9090) ports private.
+- **Operators can read logs.** Scripts' console output is stored with their jobs (the last 1 000 lines) and appears in node logs, so tenants shouldn't log secrets.
+- **Services serve the public.** Anything a service exposes through the ingress is public; services authenticate their own users.
+- **Disk providers rely on the shared storage's own security and redundancy** (NFS, Ceph) for the folder under `AUTOMATELY_DISK_ROOT`.
+- **Rotating keys:** changing `AUTOMATELY_SECRETS_KEY` makes stored tenant credentials unreadable (tenants re-enter them). Rotate the admin token with `POST /v1/admin/rotate`, or by changing `AUTOMATELY_ADMIN_TOKEN` and restarting.
+
+## Deployment checklist
+
+- [ ] `AUTOMATELY_ADMIN_TOKEN` is set and stored securely, or the generated one was saved and rotated.
+- [ ] Ignite ports (5701, 5801), the internal port (8090) and the metrics port (9090) are reachable only between nodes, and by Prometheus.
+- [ ] TLS terminates in front of 8080 and 8000.
+- [ ] `AUTOMATELY_SECRETS_KEY` is set (at least 32 random characters) if tenants will bring their own storage, and backed up.
+- [ ] `AUTOMATELY_EGRESS_ALLOW_PRIVATE` is left off in production.
+- [ ] Tenant tokens are scoped to what each client needs, with expiry for CI tokens.
+- [ ] `AUTOMATELY_DATA_DIR` is on durable storage and backed up (the cluster replicates, but a backup protects against operator error).

@@ -26,6 +26,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase 5, milestones 3–4 — Benchmarks and the security model (2026-10-07)
+
+### Added
+- **`benchmarks/run.sh`** brings up the three-node cluster from the freshly built jar, runs every scenario, writes [docs/benchmarks.md](docs/benchmarks.md) and tears the cluster down. **`benchmarks/Bench.java`** is a dependency-free single-file client (`java Bench.java …`). Scenarios: cold start (submit → finished), job throughput with 1 and 32 clients, ingress → service with 64 clients, a 256 MB upload and download (median of 3), and idle-isolate density. **Why:** the README's numbers should come from a script anyone can rerun (D-059).
+- **`SECURITY.md`**: who is trusted, each boundary and the decisions behind it, what isn't defended (isolates share the node's process, the cluster's ports are unauthenticated, TLS is the operator's), a deployment checklist, and how to report a vulnerability.
+- README: a numbers table, links to both pages, and the roadmap updated.
+
+### Changed
+- **Methodology** (D-059):
+  - Jobs are timed to the `end` event on their event stream, as the CLI waits, not by polling.
+  - Density reads the Java processes' resident memory with a pre-touched fixed heap, not `docker stats`, which counts page cache and gave negative results.
+  - The ingress client sends the service's `Host` header (`-Djdk.httpclient.allowRestrictedHeaders=host`).
+- **Tried and not kept:** storing four upload chunks at once. A/B: 48 vs 45 MB/s, within run-to-run noise, not worth the extra complexity in the file store. The first run's 13 MB/s was an outlier.
+
+### Fixed
+- README: the sandbox's egress bullet repeated the "no `Java`" line.
+
 ## Phase 5, milestone 2 — A dashboard you can run (2026-10-07)
 
 ### Added

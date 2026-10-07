@@ -1,0 +1,47 @@
+# The demo cluster tuned for benchmarks: the locally built image, room for many isolates, no rate limit.
+# A fixed, pre-touched Java heap keeps its resident size constant, so growth in a node's memory is native (isolates).
+services:
+  node1: &bench
+    image: "automately-bench:local"
+    build: !reset null
+    pull_policy: never
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms1g -Xmx1g -XX:+AlwaysPreTouch"
+      AUTOMATELY_CLUSTERED: "true"
+      AUTOMATELY_CLUSTER_MEMBERS: node1,node2,node3
+      AUTOMATELY_CLUSTER_SIZE: "3"
+      AUTOMATELY_DATA_BACKUPS: "1"
+      AUTOMATELY_CAPACITY: "32"
+      AUTOMATELY_MAX_HEAP_MB: "64"
+      AUTOMATELY_MAX_SERVICES_PER_TENANT: "200"
+      AUTOMATELY_RATE_LIMIT_PER_MINUTE: "0"
+      AUTOMATELY_ADMIN_TOKEN: ${AUTOMATELY_ADMIN_TOKEN}
+      AUTOMATELY_NODE_ID: node1
+  node2:
+    <<: *bench
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms1g -Xmx1g -XX:+AlwaysPreTouch"
+      AUTOMATELY_CLUSTERED: "true"
+      AUTOMATELY_CLUSTER_MEMBERS: node1,node2,node3
+      AUTOMATELY_CLUSTER_SIZE: "3"
+      AUTOMATELY_DATA_BACKUPS: "1"
+      AUTOMATELY_CAPACITY: "32"
+      AUTOMATELY_MAX_HEAP_MB: "64"
+      AUTOMATELY_MAX_SERVICES_PER_TENANT: "200"
+      AUTOMATELY_RATE_LIMIT_PER_MINUTE: "0"
+      AUTOMATELY_ADMIN_TOKEN: ${AUTOMATELY_ADMIN_TOKEN}
+      AUTOMATELY_NODE_ID: node2
+  node3:
+    <<: *bench
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms1g -Xmx1g -XX:+AlwaysPreTouch"
+      AUTOMATELY_CLUSTERED: "true"
+      AUTOMATELY_CLUSTER_MEMBERS: node1,node2,node3
+      AUTOMATELY_CLUSTER_SIZE: "3"
+      AUTOMATELY_DATA_BACKUPS: "1"
+      AUTOMATELY_CAPACITY: "32"
+      AUTOMATELY_MAX_HEAP_MB: "64"
+      AUTOMATELY_MAX_SERVICES_PER_TENANT: "200"
+      AUTOMATELY_RATE_LIMIT_PER_MINUTE: "0"
+      AUTOMATELY_ADMIN_TOKEN: ${AUTOMATELY_ADMIN_TOKEN}
+      AUTOMATELY_NODE_ID: node3

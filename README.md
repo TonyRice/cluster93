@@ -11,7 +11,7 @@ You submit a script to any node. The cluster runs it on the least-loaded node in
 > - **API.** The API has an OpenAPI contract that validates every request, scoped tokens and rate limits.
 > - **Tools.** A native CLI installs with one line, and every node serves an **MCP server**, so AI agents can deploy and run code.
 >
-> Phase 5 (observability and polish) is next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
+> Phase 5 (observability and polish) is nearly done: metrics, a Grafana dashboard, benchmarks and the security model are in, and the demo is next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
 
 ## Install the CLI
 
@@ -152,11 +152,24 @@ The API is **contract-first**: [`openapi.yaml`](automately-server/src/main/resou
 Each job gets a **new isolate**, which is closed when the job finishes. Nothing carries over between jobs, including globals and prototype pollution.
 
 - **No host access.** The script can reach only frozen, tenant-scoped APIs (`console`, timers, `ctx`, `kv`, `bus`, `fetch`, `log`). There is no `Java`, `require` or `process`.
-- **Egress.** `fetch` refuses private and reserved addresses (cloud metadata included), connects to the address it checked, and follows no redirects. There is no `Java`, `require` or `process`, and no reflection.
+- **Egress.** `fetch` refuses private and reserved addresses (cloud metadata included), connects to the address it checked, and follows no redirects.
 - **Wall-clock timeout.** Enforced from the event loop with `terminateExecution()`. It also covers loops at module top level and loops after an `await`.
 - **Heap limit** (`AUTOMATELY_MAX_HEAP_MB`). When an isolate runs out of memory, V8 normally aborts the whole process. Here a near-heap-limit callback terminates the script instead and grants a little headroom so V8 can unwind, and the node keeps serving.
 
-The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each of these.
+The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each of these. [SECURITY.md](SECURITY.md) has the full threat model: who is trusted, each boundary, and what isn't defended.
+
+### Numbers
+
+Three nodes in Docker on one laptop (i7-1185G7, 8 CPUs), measured by [`benchmarks/run.sh`](benchmarks/run.sh):
+
+| | |
+|---|---|
+| Submit → finished, trivial job | p50 29 ms, p95 159 ms |
+| Ingress → service, 64 clients | ~1 900 req/s, p50 23 ms |
+| Idle isolate | ~1.6 MB resident |
+| 256 MB file (replicated) | upload 60 MB/s, download 338 MB/s |
+
+Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) has every scenario and how to read them.
 
 ## Configuration
 
@@ -233,13 +246,15 @@ Javet's native library is included for linux-x86_64 only for now.
 3. ~~**Host APIs**~~ ✅ `kv`, `bus`, `fetch`, `log`, HTTP hosting with automatic and verified domains; isolate pooling measured and declined ([design](docs/design/host-apis.md), [reference](docs/scripting/host-apis.md))
 3b. ~~**The cluster is the database, streaming, files**~~ ✅ Embedded Ignite (durable, replicated), streamed HTTP, a `files` API with ranges, storage admission control ([design](docs/design/durability-and-streaming.md))
 4. ~~**API, auth, CLI and MCP**~~ ✅ Scoped tokens, an OpenAPI contract that validates every request, rate limits, a native CLI with a one-line install, and an MCP server for AI agents ([plan](docs/design/phase-4-plan.md), [CLI](docs/guides/cli.md), [MCP](docs/guides/mcp.md))
-5. **Observability and polish.** Metrics, tracing, Grafana, benchmarks, `SECURITY.md`
+5. **Observability and polish.** ✅ Metrics, readiness, JSON logs, a Grafana dashboard ([plan](docs/design/phase-5-plan.md)), [benchmarks](docs/benchmarks.md), [SECURITY.md](SECURITY.md). Next: the demo
 
 Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES.md](NOTES.md).
 
 ## Docs
 
 - [CHANGELOG.md](CHANGELOG.md): what changed and why
+- [SECURITY.md](SECURITY.md): the threat model, and how to report a vulnerability
+- [docs/benchmarks.md](docs/benchmarks.md): measured performance, and how to rerun it
 - [docs/DECISIONS.md](docs/DECISIONS.md): the decision log
 - [docs/design/revival-plan.md](docs/design/revival-plan.md): the original plan (why and what), with current status
 - [docs/design/](docs/design/): designs for upcoming work
