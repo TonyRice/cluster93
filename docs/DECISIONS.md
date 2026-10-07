@@ -336,3 +336,37 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - **kv writes** are checked against a count at most 2 s old, plus what this node admitted since, so a write doesn't sum the tenant's storage each time. When that quick check says no, it's redone from a fresh count against what the write really adds over the entry it replaces. A full tenant can still update, shrink or delete what it has.
 **Cost:** writes made on other nodes in the last 2 s aren't in the quick count, so a tenant can overshoot by what it writes cluster-wide in that window. This is small next to a quota measured in megabytes, and it can't run a node out of storage: admission control (D-038) is separate and always checks.
 
+### D-044 — The first credential is an admin token from the environment, or generated once
+**Date:** 2026-10-06 · **Status:** Accepted (Tony)
+
+**Decision:** `AUTOMATELY_ADMIN_TOKEN`, if set, is the admin token on every node. Otherwise the first node of a new cluster generates one, stores only its hash in the cluster, and logs it once. The admin token manages tenants and tokens, and nothing else: it can't read tenant data. To act as a tenant, mint that tenant a token.
+**Why:** something has to exist before any token does. An environment variable suits deployments, and a generated, logged-once token suits a first `docker run`. Keeping admin out of tenant data means a leaked admin token can't silently read everything; it can only mint tokens, which is visible.
+
+### D-045 — Scoped, revocable bearer tokens replace the tenant header
+**Date:** 2026-10-06 · **Status:** Accepted. Replaces the `X-Automately-Tenant` stand-in
+
+**Decision:**
+- Tokens look like `atly_` + 32 random bytes (base62) + a checksum, and are sent as `Authorization: Bearer`.
+- Only their SHA-256 is stored. They are 256-bit random, so a slow hash adds nothing.
+- Each token belongs to one tenant and carries scopes (`jobs:read`, `files:write`, …, or `*`), an optional expiry, and can be revoked.
+- A missing token gets 401, and a missing scope gets 403 naming the scope.
+**Why:** the 2017 API sent a long-lived username and key with every request (weak spot #7), and the stand-in header let anyone act as any tenant. The prefix and checksum let secret scanners spot leaked tokens.
+
+### D-046 — The API is contract-first
+**Date:** 2026-10-06 · **Status:** Accepted (Tony)
+
+**Decision:** A hand-written OpenAPI 3.1 spec in the repo is the source of truth. It's served at `/v1/openapi.json`, and requests are validated against it before handlers run. Tests fail if a route and the spec disagree, and they validate real responses against it. The CLI and the MCP tools follow the spec.
+**Why:** weak spot #4. A spec that only documents the code drifts, while a validated one can't.
+
+### D-047 — MCP is built into every node, with a stdio bridge in the CLI
+**Date:** 2026-10-06 · **Status:** Accepted (Tony)
+
+**Decision:** Every node serves MCP over Streamable HTTP at `/mcp`, with the same tokens and scopes as the REST API. `automately mcp` bridges stdio for clients that only launch local processes. The protocol is implemented directly on Vert.x.
+**Why:** agents that support remote MCP servers need nothing installed, and the rest still work through the CLI. One auth model covers both. The Java SDK's transports assume Servlet or Reactor, which this project doesn't use.
+
+### D-048 — The CLI: Java and picocli, compiled to native binaries
+**Date:** 2026-10-06 · **Status:** Proposed; Tony to confirm before milestone 3
+
+**Proposal:** a new `automately-cli` module using picocli, the JDK HTTP client and a small JSON library. It is compiled with GraalVM native-image into one binary per platform, so no JDK is needed on machines that talk to the cluster, and published as GitHub release assets. npm packages wrapping the binaries, as esbuild does, could follow.
+**Constraint:** native-image can't cross-compile. Linux x64 can be built here in a GraalVM container. macOS, Windows and arm64 need those machines, or GitHub Actions runners in a release-only workflow (not CI, so D-017 stands).
+

@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - GitHub Actions CI. **Why:** the repo is private and local `./mvnw verify` is the gate for now (D-017).
 
 ### Docs
+- `docs/design/phase-4-plan.md`: the phase 4 plan (tenants and scoped tokens, the OpenAPI contract and rate limits, the CLI, the MCP server), with D-044 to D-047 accepted and D-048 (the CLI as a native binary) proposed. **Why:** Tony chose the bootstrap, the contract-first approach and the MCP transport; the CLI question is still open.
 - D-018: name and rights recorded. Automately was renamed Executory after the acquisition, and Tony holds the rights to the pre-acquisition OSS code.
 
 ### Added

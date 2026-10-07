@@ -166,7 +166,7 @@ Javet's native library is included for linux-x86_64 only for now.
 2b. ~~**Long-running services**~~ ✅ Supervised services, timers and an event loop per isolate, job cancellation ([design](docs/design/services.md), [guide](docs/scripting/services.md))
 3. ~~**Host APIs**~~ ✅ `kv`, `bus`, `fetch`, `log`, HTTP hosting with automatic and verified domains; isolate pooling measured and declined ([design](docs/design/host-apis.md), [reference](docs/scripting/host-apis.md))
 3b. ~~**The cluster is the database, streaming, files**~~ ✅ Embedded Ignite (durable, replicated), streamed HTTP, a `files` API with ranges, storage admission control ([design](docs/design/durability-and-streaming.md))
-4. **API, auth, CLI and MCP.** OpenAPI contract, scoped tokens, rate limits, an MCP server for AI agents
+4. **API, auth, CLI and MCP** *(in progress)*: scoped tokens, the OpenAPI contract and rate limits, a native CLI, and an MCP server for AI agents ([plan](docs/design/phase-4-plan.md))
 5. **Observability and polish.** Metrics, tracing, Grafana, benchmarks, `SECURITY.md`
 
 Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES.md](NOTES.md).
