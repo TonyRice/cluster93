@@ -37,6 +37,7 @@ class HostApisTest {
     @BeforeAll
     static void startCluster() throws Exception {
         nodeA = await(Automately.start(config("node-a"), vertx -> name -> Future.succeededFuture(TXT_RECORDS.getOrDefault(name, List.of()))));
+        TestAuth.use(nodeA);
         nodeB = await(Automately.start(config("node-b"), vertx -> name -> Future.succeededFuture(TXT_RECORDS.getOrDefault(name, List.of()))));
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
@@ -55,7 +56,7 @@ class HostApisTest {
         for (String tenant : List.of(TENANT, "globex")) {
             for (Object service : get(nodeA, tenant, "/v1/services").bodyAsJsonObject().getJsonArray("services")) {
                 await(client.delete(nodeA.httpPort(), "localhost", "/v1/services/" + ((JsonObject) service).getString("name"))
-                        .putHeader("X-Automately-Tenant", tenant).send());
+                        .putHeader("Authorization", TestAuth.bearer(tenant)).send());
             }
         }
     }
@@ -63,6 +64,7 @@ class HostApisTest {
     private static ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
+                Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -121,9 +123,9 @@ class HostApisTest {
 
         JsonObject job = runJob(nodeB, TENANT, "export default () => bus.request('add', { a: 2, b: 40 })");
         HttpResponse<Buffer> overHttp = await(client.post(nodeB.httpPort(), "localhost", "/v1/bus/add/request")
-                .putHeader("X-Automately-Tenant", TENANT).sendJsonObject(new JsonObject().put("a", 1).put("b", 1)));
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("a", 1).put("b", 1)));
         HttpResponse<Buffer> wrongTenant = await(client.post(nodeB.httpPort(), "localhost", "/v1/bus/add/request")
-                .putHeader("X-Automately-Tenant", "globex").sendJsonObject(new JsonObject().put("a", 1).put("b", 1)));
+                .putHeader("Authorization", TestAuth.bearer("globex")).sendJsonObject(new JsonObject().put("a", 1).put("b", 1)));
 
         assertThat(job.getValue("output")).isEqualTo(42);
         assertThat(overHttp.bodyAsJsonObject()).isEqualTo(new JsonObject().put("value", 2));
@@ -142,7 +144,7 @@ class HostApisTest {
         Thread.sleep(300);
 
         for (int items : new int[]{1, 2, 3}) {
-            assertThat(await(client.post(nodeB.httpPort(), "localhost", "/v1/bus/orders").putHeader("X-Automately-Tenant", TENANT)
+            assertThat(await(client.post(nodeB.httpPort(), "localhost", "/v1/bus/orders").putHeader("Authorization", TestAuth.bearer(TENANT))
                     .sendJsonObject(new JsonObject().put("items", items))).statusCode()).isEqualTo(202);
         }
 
@@ -223,7 +225,7 @@ class HostApisTest {
 
         putService("web", WEB);
         awaitServiceRunning("web");
-        await(client.post(nodeA.httpPort(), "localhost", "/v1/services/web/stop").putHeader("X-Automately-Tenant", TENANT).send());
+        await(client.post(nodeA.httpPort(), "localhost", "/v1/services/web/stop").putHeader("Authorization", TestAuth.bearer(TENANT)).send());
         awaitJson(nodeA, TENANT, "/v1/services/web", s -> s.getValue("currentJobId") == null);
 
         HttpResponse<Buffer> stopped = await(ingress(nodeA, "web--acme.apps.test", "GET", "/hello").send());
@@ -237,7 +239,7 @@ class HostApisTest {
         awaitServiceRunning("web");
 
         HttpResponse<Buffer> claimed = await(client.post(nodeA.httpPort(), "localhost", "/v1/services/web/domains")
-                .putHeader("X-Automately-Tenant", TENANT).sendJsonObject(new JsonObject().put("domain", "Shop.Example.com")));
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("domain", "Shop.Example.com")));
         assertThat(claimed.statusCode()).as(claimed.bodyAsString()).isEqualTo(201);
         JsonObject verification = claimed.bodyAsJsonObject().getJsonObject("verification");
         assertThat(verification.getString("name")).isEqualTo("_automately.shop.example.com");
@@ -246,7 +248,7 @@ class HostApisTest {
         assertThat(post(nodeA, TENANT, "/v1/services/web/domains/shop.example.com/verify").statusCode()).isEqualTo(409);
 
         HttpResponse<Buffer> stolen = await(client.post(nodeA.httpPort(), "localhost", "/v1/services/web/domains")
-                .putHeader("X-Automately-Tenant", "globex").sendJsonObject(new JsonObject().put("domain", "shop.example.com")));
+                .putHeader("Authorization", TestAuth.bearer("globex")).sendJsonObject(new JsonObject().put("domain", "shop.example.com")));
         assertThat(stolen.statusCode()).as("globex has no service named web").isEqualTo(404);
 
         TXT_RECORDS.put("_automately.shop.example.com", List.of(verification.getString("value")));
@@ -259,16 +261,18 @@ class HostApisTest {
         assertThat(get(nodeA, TENANT, "/v1/services/web").bodyAsJsonObject().getJsonArray("hosts")).contains("shop.example.com");
 
         // Deleting the service releases the domain: it stops routing, and a new "web" doesn't inherit it.
-        await(client.delete(nodeA.httpPort(), "localhost", "/v1/services/web").putHeader("X-Automately-Tenant", TENANT).send());
+        await(client.delete(nodeA.httpPort(), "localhost", "/v1/services/web").putHeader("Authorization", TestAuth.bearer(TENANT)).send());
         assertThat(await(ingress(nodeB, "shop.example.com", "GET", "/hello").send()).statusCode()).isEqualTo(404);
         assertThat(putService("web", WEB).getJsonArray("hosts")).isEqualTo(new JsonArray().add("web--acme.apps.test"));
     }
 
     @Test
     void namesWithDoubleHyphensAreRejected() throws Exception {
-        assertThat(await(client.put(nodeA.httpPort(), "localhost", "/v1/services/my--web").putHeader("X-Automately-Tenant", TENANT)
+        assertThat(await(client.put(nodeA.httpPort(), "localhost", "/v1/services/my--web").putHeader("Authorization", TestAuth.bearer(TENANT))
                 .sendJsonObject(new JsonObject().put("script", WEB))).statusCode()).isEqualTo(400);
-        assertThat(get(nodeA, "a--b", "/v1/services").statusCode()).isEqualTo(401);
+        // Tenant names become part of hostnames too, so the admin can't create one with "--".
+        assertThat(await(client.post(nodeA.httpPort(), "localhost", "/v1/tenants").putHeader("Authorization", TestAuth.ADMIN)
+                .sendJsonObject(new JsonObject().put("name", "a--b"))).statusCode()).isEqualTo(400);
     }
 
     // --- helpers ---
@@ -279,7 +283,7 @@ class HostApisTest {
 
     private static JsonObject putService(String name, String script) throws Exception {
         HttpResponse<Buffer> response = await(client.put(nodeA.httpPort(), "localhost", "/v1/services/" + name)
-                .putHeader("X-Automately-Tenant", TENANT).sendJsonObject(new JsonObject().put("script", script)));
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("script", script)));
         assertThat(response.statusCode()).as(response.bodyAsString()).isIn(200, 201);
         return response.bodyAsJsonObject();
     }
@@ -290,7 +294,7 @@ class HostApisTest {
     }
 
     private static JsonObject runJob(RunningNode node, String tenant, String script) throws Exception {
-        HttpResponse<Buffer> submitted = await(client.post(node.httpPort(), "localhost", "/v1/jobs").putHeader("X-Automately-Tenant", tenant)
+        HttpResponse<Buffer> submitted = await(client.post(node.httpPort(), "localhost", "/v1/jobs").putHeader("Authorization", TestAuth.bearer(tenant))
                 .sendJsonObject(new JsonObject().put("script", script).put("timeoutMs", 10_000)));
         assertThat(submitted.statusCode()).as(submitted.bodyAsString()).isEqualTo(202);
         String id = submitted.bodyAsJsonObject().getString("id");
@@ -298,11 +302,11 @@ class HostApisTest {
     }
 
     private static HttpResponse<Buffer> get(RunningNode node, String tenant, String path) throws Exception {
-        return await(client.get(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", tenant).send());
+        return await(client.get(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(tenant)).send());
     }
 
     private static HttpResponse<Buffer> post(RunningNode node, String tenant, String path) throws Exception {
-        return await(client.post(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", tenant).send());
+        return await(client.post(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(tenant)).send());
     }
 
     private static JsonObject awaitJson(RunningNode node, String tenant, String path, Predicate<JsonObject> condition) throws Exception {

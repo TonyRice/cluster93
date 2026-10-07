@@ -42,11 +42,12 @@ class ServicesTest {
     @BeforeAll
     static void startCluster() throws Exception {
         nodeA = await(Automately.start(config("node-a")));
+        TestAuth.use(nodeA);
         nodeB = await(Automately.start(config("node-b")));
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
         long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
-        while (await(client.get(nodeA.httpPort(), "localhost", "/v1/nodes").send()).bodyAsJsonObject().getJsonArray("nodes").size() < 2) {
+        while (await(client.get(nodeA.httpPort(), "localhost", "/v1/nodes").putHeader("Authorization", TestAuth.ADMIN).send()).bodyAsJsonObject().getJsonArray("nodes").size() < 2) {
             assertThat(System.nanoTime()).as("cluster formed").isLessThan(deadline);
             Thread.sleep(100);
         }
@@ -63,13 +64,14 @@ class ServicesTest {
     void deleteServices() throws Exception {
         for (Object service : get("/v1/services").bodyAsJsonObject().getJsonArray("services")) {
             await(client.delete(nodeA.httpPort(), "localhost", "/v1/services/" + ((JsonObject) service).getString("name"))
-                    .putHeader("X-Automately-Tenant", TENANT).send());
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).send());
         }
     }
 
     private static ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
+                Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -164,7 +166,7 @@ class ServicesTest {
     @Test
     void cancellingAJobLetsItCleanUp() throws Exception {
         HttpResponse<Buffer> submitted = await(client.post(nodeB.httpPort(), "localhost", "/v1/jobs")
-                .putHeader("X-Automately-Tenant", TENANT)
+                .putHeader("Authorization", TestAuth.bearer(TENANT))
                 .sendJsonObject(new JsonObject().put("timeoutMs", 30_000).put("script", """
                         export default async (input, ctx) => {
                           await ctx.stopRequested;
@@ -185,15 +187,15 @@ class ServicesTest {
 
     private static HttpResponse<Buffer> put(String name, JsonObject body) throws Exception {
         return await(client.put(nodeA.httpPort(), "localhost", "/v1/services/" + name.replace(" ", "%20"))
-                .putHeader("X-Automately-Tenant", TENANT).sendJsonObject(body));
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(body));
     }
 
     private static HttpResponse<Buffer> post(String path) throws Exception {
-        return await(client.post(nodeB.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+        return await(client.post(nodeB.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
     }
 
     private static HttpResponse<Buffer> get(String path) throws Exception {
-        return await(client.get(nodeA.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+        return await(client.get(nodeA.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
     }
 
     private static JsonObject awaitService(String name, Predicate<JsonObject> condition) throws Exception {

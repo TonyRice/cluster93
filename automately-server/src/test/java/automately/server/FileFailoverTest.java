@@ -49,6 +49,7 @@ class FileFailoverTest {
         for (String id : List.of("node-a", "node-b", "node-c")) {
             nodes.add(await(Automately.start(config(id))));
         }
+        TestAuth.use(nodes.getFirst());
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
         raw = clientVertx.createHttpClient();
@@ -119,7 +120,7 @@ class FileFailoverTest {
 
         // Stream a replacement slowly, then lose the node halfway through.
         RequestOptions options = new RequestOptions().setMethod(HttpMethod.PUT).setHost("localhost").setPort(receiving.httpPort())
-                .setURI("/v1/files/report.bin").putHeader("X-Automately-Tenant", TENANT).putHeader("Content-Length", String.valueOf(16 * MB));
+                .setURI("/v1/files/report.bin").putHeader("Authorization", TestAuth.bearer(TENANT)).putHeader("Content-Length", String.valueOf(16 * MB));
         HttpClientRequest request = await(raw.request(options));
         CompletableFuture<Throwable> failed = new CompletableFuture<>();
         request.exceptionHandler(failed::complete);
@@ -154,7 +155,7 @@ class FileFailoverTest {
 
         Download(RunningNode node, String range, long pauseAt) {
             RequestOptions options = new RequestOptions().setHost("localhost").setPort(node.httpPort()).setURI("/v1/files/movie.mp4")
-                    .putHeader("X-Automately-Tenant", TENANT);
+                    .putHeader("Authorization", TestAuth.bearer(TENANT));
             if (range != null) {
                 options.putHeader("Range", range);
             }
@@ -188,14 +189,14 @@ class FileFailoverTest {
 
     private String upload(RunningNode node, String path, byte[] data) throws Exception {
         HttpResponse<Buffer> created = await(client.put(node.httpPort(), "localhost", "/v1/files/" + path)
-                .putHeader("X-Automately-Tenant", TENANT).sendBuffer(Buffer.buffer(data)));
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendBuffer(Buffer.buffer(data)));
         assertThat(created.statusCode()).as(created.bodyAsString()).isEqualTo(201);
         assertThat(created.getHeader("ETag")).isEqualTo(etag(data));
         return created.getHeader("ETag");
     }
 
     private HttpResponse<Buffer> get(RunningNode node, String path) throws Exception {
-        return await(client.get(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+        return await(client.get(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
     }
 
     private void awaitLiveNodes(RunningNode node, int count) throws Exception {
@@ -213,6 +214,7 @@ class FileFailoverTest {
     private static ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
+                Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),

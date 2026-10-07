@@ -17,13 +17,14 @@ public final class IgniteStores {
 
     private static final List<Table.Definition> TABLES = List.of(
             IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE, IgniteDomainStore.TABLE, IgniteKvStore.TABLE,
-            IgniteFileStore.FILES, IgniteFileStore.GARBAGE);
+            IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS);
 
     public final JobStore jobs;
     public final JobStateStore state;
     public final ServiceStore services;
     public final DomainStore domains;
     public final KvStore kv;
+    public final automately.core.auth.AuthStore auth;
     private final Vertx vertx;
     private final IgniteCluster cluster;
 
@@ -33,6 +34,7 @@ public final class IgniteStores {
         this.services = new IgniteServiceStore(vertx, cluster.ignite());
         this.domains = new IgniteDomainStore(vertx, cluster.ignite());
         this.kv = new IgniteKvStore(vertx, cluster.ignite());
+        this.auth = new IgniteAuthStore(vertx, cluster.ignite());
         this.vertx = vertx;
         this.cluster = cluster;
     }

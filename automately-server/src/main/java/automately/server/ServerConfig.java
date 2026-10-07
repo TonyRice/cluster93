@@ -64,7 +64,15 @@ public record ServerConfig(
         int clusterSize,
         boolean clustered,
         int clusterPort,
-        List<String> clusterMembers) {
+        List<String> clusterMembers,
+        String adminToken) {
+
+    public ServerConfig {
+        if (adminToken != null && adminToken.length() < automately.core.auth.Authenticator.MIN_ADMIN_TOKEN_LENGTH) {
+            throw new IllegalArgumentException("AUTOMATELY_ADMIN_TOKEN must be at least "
+                    + automately.core.auth.Authenticator.MIN_ADMIN_TOKEN_LENGTH + " characters");
+        }
+    }
 
     public static ServerConfig fromEnv(Map<String, String> env) {
         Duration heartbeat = Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_HEARTBEAT_MS", "1000")));
@@ -100,7 +108,12 @@ public record ServerConfig(
                 Arrays.stream(env.getOrDefault("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1").split(","))
                         .map(String::trim)
                         .filter(member -> !member.isEmpty())
-                        .toList());
+                        .toList(),
+                blankToNull(env.get("AUTOMATELY_ADMIN_TOKEN")));
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private static String defaultAdvertiseHost() {

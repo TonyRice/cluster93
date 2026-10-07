@@ -44,7 +44,8 @@ final class TestIgnite {
             stores = IgniteStores.open(vertx, cluster);
         }
         for (Table.Definition table : List.of(IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE,
-                IgniteDomainStore.TABLE, IgniteKvStore.TABLE, IgniteFileStore.FILES, IgniteFileStore.GARBAGE)) {
+                IgniteDomainStore.TABLE, IgniteKvStore.TABLE, IgniteFileStore.FILES, IgniteFileStore.GARBAGE,
+                IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS)) {
             cluster.ignite().cache(table.name()).clear();
         }
         cluster.ignite().cache(IgniteFileStore.CHUNKS).clear();

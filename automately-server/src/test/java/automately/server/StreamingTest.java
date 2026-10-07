@@ -44,6 +44,7 @@ class StreamingTest {
     @BeforeAll
     static void startCluster() throws Exception {
         nodeA = await(Automately.start(config("node-a")));
+        TestAuth.use(nodeA);
         nodeB = await(Automately.start(config("node-b")));
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
@@ -62,13 +63,14 @@ class StreamingTest {
     void deleteServices() throws Exception {
         for (Object service : get("/v1/services").bodyAsJsonObject().getJsonArray("services")) {
             await(client.delete(nodeA.httpPort(), "localhost", "/v1/services/" + ((JsonObject) service).getString("name"))
-                    .putHeader("X-Automately-Tenant", TENANT).send());
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).send());
         }
     }
 
     private static ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
+                Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -88,7 +90,7 @@ class StreamingTest {
     /** Defines a service that serves {@code handler} and waits until it runs on node A (requests then come in through B). */
     private static void serve(String name, String handler) throws Exception {
         HttpResponse<Buffer> created = await(client.put(nodeA.httpPort(), "localhost", "/v1/services/" + name)
-                .putHeader("X-Automately-Tenant", TENANT).sendJsonObject(new JsonObject().put("script", """
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("script", """
                         export default async (input, ctx) => {
                           await ctx.serve(%s);
                           return ctx.stopRequested;
@@ -214,7 +216,7 @@ class StreamingTest {
         HttpClientResponse response = await(raw.request(ingress("firehose", HttpMethod.GET, "/all")).compose(req -> req.send()).map(StreamingTest::paused));
         Thread.sleep(1500);
         Object progress = await(client.post(nodeB.httpPort(), "localhost", "/v1/bus/firehose-progress/request")
-                .putHeader("X-Automately-Tenant", TENANT).send()).bodyAsJsonObject().getValue("value");
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).send()).bodyAsJsonObject().getValue("value");
         response.request().connection().close();
 
         // Without backpressure the generator would run to all 4000 chunks (250 MB). With it, only what fits in the
@@ -283,7 +285,7 @@ class StreamingTest {
         long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
         Object last = null;
         while (System.nanoTime() < deadline) {
-            HttpResponse<Buffer> submitted = await(client.post(nodeA.httpPort(), "localhost", "/v1/jobs").putHeader("X-Automately-Tenant", TENANT)
+            HttpResponse<Buffer> submitted = await(client.post(nodeA.httpPort(), "localhost", "/v1/jobs").putHeader("Authorization", TestAuth.bearer(TENANT))
                     .sendJsonObject(new JsonObject().put("script", script)));
             String id = submitted.bodyAsJsonObject().getString("id");
             JsonObject job = awaitJson("/v1/jobs/" + id, j -> !List.of("QUEUED", "RUNNING").contains(j.getString("status")));
@@ -297,7 +299,7 @@ class StreamingTest {
     }
 
     private static HttpResponse<Buffer> get(String path) throws Exception {
-        return await(client.get(nodeA.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+        return await(client.get(nodeA.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
     }
 
     private static JsonObject awaitJson(String path, Predicate<JsonObject> condition) throws Exception {

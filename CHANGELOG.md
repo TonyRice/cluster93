@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - GitHub Actions CI. **Why:** the repo is private and local `./mvnw verify` is the gate for now (D-017).
 
 ### Docs
+- The phase 4 plan's milestone 3 now includes the one-line install (`curl … | sh` and `irm … | iex`), native builds for Windows, Linux (x64 static, arm64) and macOS (arm64, x64), checksums, and a tag-only release workflow (D-049, confirming D-048). **Why:** Tony wants the CLI "super easy to install via curl" on all three systems. Two questions are open: GitHub Actions for the release builds, and where public downloads come from while the repo is private.
 - `docs/design/phase-4-plan.md`: the phase 4 plan (tenants and scoped tokens, the OpenAPI contract and rate limits, the CLI, the MCP server), with D-044 to D-047 accepted and D-048 (the CLI as a native binary) proposed. **Why:** Tony chose the bootstrap, the contract-first approach and the MCP transport; the CLI question is still open.
 - D-018: name and rights recorded. Automately was renamed Executory after the acquisition, and Tony holds the rights to the pre-acquisition OSS code.
 
@@ -23,6 +24,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - `docs/design/phase-2-plan.md`: the phase 2 implementation plan. It adds node instance ids, per-attempt state, compare-and-set transitions and a lock-free reaper (D-009 to D-012). **Why:** planning against the real code showed that a restarted node would hide its own orphans, and that state needs fencing.
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
+
+## Phase 4, milestone 1 — Tenants and scoped tokens (2026-10-06)
+
+### Added
+- **Bearer tokens on every `/v1` call** (D-045):
+  - Tokens look like `atly_` + 43 base62 characters + a 6-character checksum. Only their SHA-256 is stored.
+  - Each belongs to one tenant, carries scopes (`jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`, `nodes:read`, or `*`), may expire, and can be revoked with effect on the next request, on every node.
+  - A missing token gets 401 with `WWW-Authenticate: Bearer`, and a missing scope gets 403 naming it.
+  - **Why:** weak spot #7. The tenant header let anyone act as any tenant.
+- **The admin token** (D-044) comes from `AUTOMATELY_ADMIN_TOKEN`, or is generated once by the first node and logged. It manages tenants and tokens only, and gets 403 on tenant data. `POST /v1/admin/rotate` replaces a generated one.
+- **Tenants and tokens API:** `/v1/tenants` (admin: create, list, get, delete once empty), `/v1/tenants/{name}/tokens` (admin), `/v1/tokens` (a tenant's own; tokens can only mint narrower ones), and `/v1/whoami`.
+- **`RouteScopes`**, one table saying what each route needs. It fails closed, so a route without a rule can't be reached.
+- `AuthStore` with SharedData and Ignite implementations (`TENANTS`, `TOKENS`, `SETTINGS` tables) and a shared contract; `Authenticator`; `TokenFormat`.
+- **Tests:**
+  - `AuthTest` walks every route (each must answer 401 without a token), and covers scopes, admin separation, narrowing, revocation, tenant deletion, and bodies arriving intact after the async check
+  - contract tests on both stores, `TokenFormatTest`, `AuthenticatorTest`
+  - every existing test, and the Docker test, now authenticates with tokens (`TestAuth`)
+
+### Changed
+- **`X-Automately-Tenant` is gone.** The tenant comes from the token.
+- `/v1/nodes` now needs `nodes:read` or the admin token.
+- `docker-compose.yml` passes `AUTOMATELY_ADMIN_TOKEN` through, and the README's quick start mints a token.
+
+### Known
+- **An intermittent 500 on the first write to a freshly started three-container cluster.** It happened twice in about ten clean full runs: once uploading a file, once creating a service. It happens before any node is killed, and isn't tied to files or auth. It didn't reproduce in 8 later Docker runs, three of them from clean builds. `DockerClusterIT` now includes every container's ERROR lines, with stack traces, in its failure messages, so the next occurrence will show the cause.
 
 ## Phase 3b, milestone 3 follow-ups — kv in the quota, failover tests, the shutdown stall (2026-10-06)
 

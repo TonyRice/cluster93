@@ -81,6 +81,7 @@ class DockerClusterIT {
     private final Map<String, GenericContainer<?>> nodes = new LinkedHashMap<>();
     private final Map<String, ToStringConsumer> logs = new LinkedHashMap<>();
     private Network network;
+    private String bearer;
 
     private static Path projectRoot() {
         // Failsafe runs with the module directory as the working directory.
@@ -96,6 +97,7 @@ class DockerClusterIT {
                     .withNetwork(network)
                     .withNetworkAliases(id)
                     .withEnv("AUTOMATELY_NODE_ID", id)
+                    .withEnv("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN)
                     .withEnv("AUTOMATELY_CLUSTERED", "true")
                     .withEnv("AUTOMATELY_CLUSTER_MEMBERS", "node1,node2,node3")
                     .withEnv("AUTOMATELY_CAPACITY", "2")
@@ -108,6 +110,7 @@ class DockerClusterIT {
             logs.put(id, output);
         }
         Startables.deepStart(nodes.values()).join();
+        bearer = mintTenantToken();
         awaitCondition(Duration.ofSeconds(60), "3 live nodes", () -> liveNodes(anyNode()).size() == 3);
     }
 
@@ -176,7 +179,7 @@ class DockerClusterIT {
         HttpResponse<String> created = http.send(request(anyNode(), "/v1/services/counter")
                 .PUT(HttpRequest.BodyPublishers.ofString(new JsonObject().put("script", ChaosTest.COUNTING_SERVICE).encode())).build(),
                 HttpResponse.BodyHandlers.ofString());
-        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        assertThat(created.statusCode()).as(created.body() + "\n" + diagnostics()).isEqualTo(201);
         String[] firstJob = new String[1];
         awaitCondition(Duration.ofSeconds(30), "service counting", () -> {
             JsonObject service = getJson(anyNode(), "/v1/services/counter");
@@ -255,7 +258,7 @@ class DockerClusterIT {
         HttpResponse<String> created = http.send(request(anyNode(), "/v1/services/web")
                 .PUT(HttpRequest.BodyPublishers.ofString(new JsonObject().put("script", HostApisTest.WEB).encode())).build(),
                 HttpResponse.BodyHandlers.ofString());
-        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        assertThat(created.statusCode()).as(created.body() + "\n" + diagnostics()).isEqualTo(201);
         String[] firstJob = new String[1];
         awaitCondition(Duration.ofSeconds(30), "web running", () -> {
             JsonObject service = getJson(anyNode(), "/v1/services/web");
@@ -284,7 +287,7 @@ class DockerClusterIT {
         HttpResponse<String> created = http.send(request(anyNode(), "/v1/services/counter")
                 .PUT(HttpRequest.BodyPublishers.ofString(new JsonObject().put("script", ChaosTest.COUNTING_SERVICE).encode())).build(),
                 HttpResponse.BodyHandlers.ofString());
-        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        assertThat(created.statusCode()).as(created.body() + "\n" + diagnostics()).isEqualTo(201);
         String[] firstRun = new String[1];
         awaitCondition(Duration.ofSeconds(30), "service counting", () -> {
             JsonObject service = getJson(anyNode(), "/v1/services/counter");
@@ -343,8 +346,23 @@ class DockerClusterIT {
 
     private String diagnostics() {
         return logs.entrySet().stream()
-                .map(e -> "--- " + e.getKey() + " (last 80 lines) ---\n" + tail(e.getValue().toUtf8String(), 80))
+                .map(e -> "--- " + e.getKey() + " (errors) ---\n" + errors(e.getValue().toUtf8String())
+                        + "\n--- " + e.getKey() + " (last 80 lines) ---\n" + tail(e.getValue().toUtf8String(), 80))
                 .collect(Collectors.joining("\n"));
+    }
+
+    /** Each ERROR line with the stack lines after it, so a failure's cause isn't lost off the end of the tail. */
+    private static String errors(String text) {
+        List<String> all = text.lines().toList();
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < all.size(); i++) {
+            if (all.get(i).contains(" ERROR ")) {
+                for (int j = i; j < Math.min(all.size(), i + 25); j++) {
+                    out.append(all.get(j)).append('\n');
+                }
+            }
+        }
+        return out.toString();
     }
 
     private static String tail(String text, int lines) {
@@ -357,8 +375,31 @@ class DockerClusterIT {
     private HttpRequest.Builder request(String node, String path) {
         GenericContainer<?> container = nodes.get(node);
         return HttpRequest.newBuilder(URI.create("http://" + container.getHost() + ":" + hostPort(node, 8080) + path))
-                .header("X-Automately-Tenant", TENANT)
+                .header("Authorization", bearer)
                 .timeout(Duration.ofSeconds(60));
+    }
+
+    /** Creates the test tenant and a token with every scope, as an operator would with the admin token (D-044). */
+    private String mintTenantToken() {
+        GenericContainer<?> container = nodes.get("node1");
+        String base = "http://" + container.getHost() + ":" + hostPort("node1", 8080);
+        awaitCondition(Duration.ofSeconds(60), "the API answers", () -> {
+            HttpResponse<String> created = http.send(HttpRequest.newBuilder(URI.create(base + "/v1/tenants"))
+                    .header("Authorization", TestAuth.ADMIN).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(new JsonObject().put("name", TENANT).encode())).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            return created.statusCode() == 201 || created.statusCode() == 409;
+        });
+        try {
+            HttpResponse<String> token = http.send(HttpRequest.newBuilder(URI.create(base + "/v1/tenants/" + TENANT + "/tokens"))
+                    .header("Authorization", TestAuth.ADMIN).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(new JsonObject().put("name", "it").put("scopes", new JsonArray().add("*")).encode()))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(token.statusCode()).as(token.body() + "\n" + diagnostics()).isEqualTo(201);
+            return "Bearer " + new JsonObject(token.body()).getString("token");
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private JsonObject getJson(String node, String path) {
@@ -373,7 +414,7 @@ class DockerClusterIT {
         JsonObject body = new JsonObject().put("script", script).put("onOrphan", onOrphan).put("input", input).put("timeoutMs", 60_000);
         HttpResponse<String> response = http.send(request(anyNode(), "/v1/jobs")
                 .POST(HttpRequest.BodyPublishers.ofString(body.encode())).build(), HttpResponse.BodyHandlers.ofString());
-        assertThat(response.statusCode()).as(response.body()).isEqualTo(202);
+        assertThat(response.statusCode()).as(response.body() + "\n" + diagnostics()).isEqualTo(202);
         return new JsonObject(response.body()).getString("id");
     }
 

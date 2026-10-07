@@ -34,6 +34,7 @@ class ClusterTest {
     @BeforeAll
     static void startCluster() throws Exception {
         nodeA = await(Automately.start(config("node-a")));
+        TestAuth.use(nodeA);
         nodeB = await(Automately.start(config("node-b")));
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
@@ -48,17 +49,18 @@ class ClusterTest {
     }
 
     private static ServerConfig config(String nodeId) {
-        return ServerConfig.fromEnv(Map.of(
-                "AUTOMATELY_NODE_ID", nodeId,
-                "AUTOMATELY_HTTP_PORT", "0",
-                    "AUTOMATELY_INGRESS_PORT", "0",
-                    "AUTOMATELY_INTERNAL_PORT", "0",
-                    "AUTOMATELY_ADVERTISE_HOST", "127.0.0.1",
-                "AUTOMATELY_CAPACITY", "1",
-                "AUTOMATELY_MAX_HEAP_MB", "64",
-                "AUTOMATELY_CLUSTERED", "true",
-                "AUTOMATELY_CLUSTER_PORT", "15701",
-                "AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"));
+        return ServerConfig.fromEnv(Map.ofEntries(
+                Map.entry("AUTOMATELY_NODE_ID", nodeId),
+                Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
+                Map.entry("AUTOMATELY_HTTP_PORT", "0"),
+                Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
+                Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
+                Map.entry("AUTOMATELY_ADVERTISE_HOST", "127.0.0.1"),
+                Map.entry("AUTOMATELY_CAPACITY", "1"),
+                Map.entry("AUTOMATELY_MAX_HEAP_MB", "64"),
+                Map.entry("AUTOMATELY_CLUSTERED", "true"),
+                Map.entry("AUTOMATELY_CLUSTER_PORT", "15701"),
+                Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1")));
     }
 
     @Test
@@ -101,7 +103,7 @@ class ClusterTest {
                 """, new JsonObject()).getString("id");
 
         String stream = await(client.get(nodeB.httpPort(), "localhost", "/v1/jobs/" + id + "/events")
-                .putHeader("X-Automately-Tenant", TENANT)
+                .putHeader("Authorization", TestAuth.bearer(TENANT))
                 .timeout(10_000)
                 .send()).bodyAsString();
 
@@ -114,7 +116,7 @@ class ClusterTest {
         awaitTerminal(nodeA, id);
 
         String stream = await(client.get(nodeB.httpPort(), "localhost", "/v1/jobs/" + id + "/events")
-                .putHeader("X-Automately-Tenant", TENANT)
+                .putHeader("Authorization", TestAuth.bearer(TENANT))
                 .timeout(10_000)
                 .send()).bodyAsString();
 
@@ -136,14 +138,14 @@ class ClusterTest {
         String id = submit(nodeA, "export default () => 1", new JsonObject()).getString("id");
 
         HttpResponse<Buffer> response = await(client.get(nodeA.httpPort(), "localhost", "/v1/jobs/" + id)
-                .putHeader("X-Automately-Tenant", "tenant-b")
+                .putHeader("Authorization", TestAuth.bearer("tenant-b"))
                 .send());
 
         assertThat(response.statusCode()).isEqualTo(404);
     }
 
     @Test
-    void rejectsRequestsWithoutATenant() throws Exception {
+    void rejectsRequestsWithoutAToken() throws Exception {
         HttpResponse<Buffer> response = await(client.get(nodeA.httpPort(), "localhost", "/v1/jobs").send());
 
         assertThat(response.statusCode()).isEqualTo(401);
@@ -158,7 +160,7 @@ class ClusterTest {
                 new JsonObject().put("script", "export default () => 1").put("input", "nope"),
                 new JsonObject().put("script", "export default () => 1").put("timeoutMs", 10_000_000))) {
             HttpResponse<Buffer> response = await(client.post(nodeA.httpPort(), "localhost", "/v1/jobs")
-                    .putHeader("X-Automately-Tenant", TENANT)
+                    .putHeader("Authorization", TestAuth.bearer(TENANT))
                     .sendJsonObject(body));
 
             assertThat(response.statusCode()).as(body.encode()).isEqualTo(400);
@@ -171,14 +173,14 @@ class ClusterTest {
 
     private static JsonObject submit(RunningNode node, String script, JsonObject input, long timeoutMs) throws Exception {
         HttpResponse<Buffer> response = await(client.post(node.httpPort(), "localhost", "/v1/jobs")
-                .putHeader("X-Automately-Tenant", TENANT)
+                .putHeader("Authorization", TestAuth.bearer(TENANT))
                 .sendJsonObject(new JsonObject().put("script", script).put("input", input).put("timeoutMs", timeoutMs)));
         assertThat(response.statusCode()).as(response.bodyAsString()).isEqualTo(202);
         return response.bodyAsJsonObject();
     }
 
     private static HttpResponse<Buffer> get(RunningNode node, String path) throws Exception {
-        return await(client.get(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+        return await(client.get(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
     }
 
     private static JsonObject awaitTerminal(RunningNode node, String id) throws Exception {

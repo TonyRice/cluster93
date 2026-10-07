@@ -52,6 +52,7 @@ class ChaosTest {
         for (String id : List.of("node-a", "node-b", "node-c")) {
             nodes.add(await(Automately.start(ServerConfig.fromEnv(Map.ofEntries(
                     Map.entry("AUTOMATELY_NODE_ID", id),
+                    Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                     Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                     Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -64,6 +65,7 @@ class ChaosTest {
                     Map.entry("AUTOMATELY_CLUSTER_PORT", "17701"),
                     Map.entry("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1"))))));
         }
+        TestAuth.use(nodes.getFirst());
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
         long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
@@ -87,7 +89,7 @@ class ChaosTest {
         RunningNode victim = killNodeRunning(id);
         RunningNode survivor = survivorOtherThan(victim);
         Future<HttpResponse<Buffer>> events = client.get(survivor.httpPort(), "localhost", "/v1/jobs/" + id + "/events")
-                .putHeader("X-Automately-Tenant", TENANT).timeout(30_000).send();
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).timeout(30_000).send();
 
         JsonObject done = awaitTerminal(survivor, id);
 
@@ -140,7 +142,7 @@ class ChaosTest {
     @Test
     void aServiceComesBackOnASurvivorWithItsCheckpoint() throws Exception {
         HttpResponse<Buffer> created = await(client.put(nodes.getFirst().httpPort(), "localhost", "/v1/services/counter")
-                .putHeader("X-Automately-Tenant", TENANT).sendJsonObject(new JsonObject().put("script", COUNTING_SERVICE)));
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("script", COUNTING_SERVICE)));
         assertThat(created.statusCode()).as(created.bodyAsString()).isEqualTo(201);
         JsonObject first = awaitService(nodes.getFirst(), s -> "RUNNING".equals(s.getString("status")));
         String firstJob = first.getString("currentJobId");
@@ -182,7 +184,7 @@ class ChaosTest {
 
     private String submitAndAwaitStep(String script, String onOrphan, String step) throws Exception {
         HttpResponse<Buffer> response = await(client.post(nodes.getFirst().httpPort(), "localhost", "/v1/jobs")
-                .putHeader("X-Automately-Tenant", TENANT)
+                .putHeader("Authorization", TestAuth.bearer(TENANT))
                 .sendJsonObject(new JsonObject().put("script", script).put("onOrphan", onOrphan).put("timeoutMs", 30_000)));
         assertThat(response.statusCode()).as(response.bodyAsString()).isEqualTo(202);
         String id = response.bodyAsJsonObject().getString("id");
@@ -236,7 +238,7 @@ class ChaosTest {
     }
 
     private HttpResponse<Buffer> get(RunningNode node, String path) throws Exception {
-        return await(client.get(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+        return await(client.get(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
     }
 
     private static <T> T await(Future<T> future) throws Exception {

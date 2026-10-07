@@ -39,14 +39,12 @@ import java.util.List;
  * The REST API. Every node serves it, and any node can answer for any job because jobs live in
  * cluster-wide shared data.
  *
- * <p>Tenancy comes from the {@code X-Automately-Tenant} header for now. This is a stand-in until
- * scoped API tokens replace it, and must not be exposed publicly as is.
+ * <p>Every {@code /v1} request carries a bearer token (D-045); {@link RouteScopes} says what each route needs.
  */
 public final class ApiVerticle extends VerticleBase {
 
     private static final Logger LOG = LoggerFactory.getLogger(ApiVerticle.class);
 
-    static final String TENANT_HEADER = "X-Automately-Tenant";
     static final int MAX_SCRIPT_BYTES = 256 * 1024;
 
     private final ServerConfig config;
@@ -60,12 +58,18 @@ public final class ApiVerticle extends VerticleBase {
     private final HostRouter hostRouter;
     private final automately.core.storage.TenantQuota quota;
     private final FileStore files;
+    private final automately.core.auth.Authenticator authenticator;
+    private final automately.core.auth.AuthStore authStore;
 
     private HttpServer server;
+    private Router router;
 
     public ApiVerticle(ServerConfig config, JobStore jobs, JobStateStore state, NodeRegistry nodes, JobScheduler scheduler,
                        ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter, FileStore files,
-                       automately.core.storage.TenantQuota quota) {
+                       automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
+                       automately.core.auth.AuthStore authStore) {
+        this.authenticator = authenticator;
+        this.authStore = authStore;
         this.files = files;
         this.quota = quota;
         this.services = services;
@@ -86,13 +90,11 @@ public final class ApiVerticle extends VerticleBase {
 
     @Override
     public Future<?> start() {
-        Router router = Router.router(vertx);
+        router = Router.router(vertx);
         router.get("/health").handler(this::health);
+        router.route("/v1/*").handler(this::authenticate);
         router.get("/v1/nodes").handler(this::listNodes);
-        router.route("/v1/jobs*").handler(this::requireTenant);
-        router.route("/v1/services*").handler(this::requireTenant);
-        router.route("/v1/bus*").handler(this::requireTenant);
-        router.route("/v1/files*").handler(this::requireTenant);
+        new AuthRoutes(authStore, authenticator, this::isEmpty).mount(router);
         new FilesRoutes(files, quota).mount(router);
         new BusRoutes(vertx).mount(router);
         router.post("/v1/jobs").handler(BodyHandler.create(false).setBodyLimit(MAX_SCRIPT_BYTES + 4_096)).handler(this::submitJob);
@@ -125,14 +127,78 @@ public final class ApiVerticle extends VerticleBase {
                 .onFailure(ctx::fail);
     }
 
-    private void requireTenant(RoutingContext ctx) {
-        String tenant = ctx.request().getHeader(TENANT_HEADER);
-        if (!Names.isValid(tenant)) {
-            error(ctx, 401, "unauthorized", "Set the " + TENANT_HEADER + " header to a tenant id: " + Names.RULE);
+    /** Every route this API serves, as "METHOD path" (regex routes as their pattern). For the route-table tests. */
+    public List<String> routes() {
+        List<String> all = new ArrayList<>();
+        for (io.vertx.ext.web.Route route : router.getRoutes()) {
+            if (route.methods() != null && route.getName() != null) {
+                route.methods().forEach(method -> all.add(method.name() + " " + route.getName()));
+            }
+        }
+        return all;
+    }
+
+    /**
+     * Resolves the bearer token and checks it against the route's rule (D-045). The lookup is asynchronous, so the
+     * request is paused meanwhile; routes that read the body get it still paused, the rest are resumed.
+     */
+    private void authenticate(RoutingContext ctx) {
+        io.vertx.core.http.HttpServerRequest request = ctx.request();
+        java.util.Optional<RouteScopes.Rule> rule = RouteScopes.find(request.method(), request.path());
+        if (rule.isEmpty()) {
+            error(ctx, 404, "not_found", "No such route");
             return;
         }
-        ctx.put("tenant", tenant);
-        ctx.next();
+        request.pause();
+        authenticator.authenticate(request.getHeader("Authorization")).onComplete(ar -> {
+            if (ar.failed()) {
+                if (ar.cause() instanceof automately.core.auth.AuthFailure failure) {
+                    if (failure.status() == 401) {
+                        ctx.response().putHeader("WWW-Authenticate", "Bearer realm=\"automately\"");
+                    }
+                    error(ctx, failure.status(), failure.code(), failure.getMessage());
+                } else {
+                    ctx.fail(ar.cause());
+                }
+                return;
+            }
+            automately.core.auth.Principal principal = ar.result();
+            String denied = denied(rule.get(), principal);
+            if (denied != null) {
+                error(ctx, 403, "forbidden", denied);
+                return;
+            }
+            ctx.put("principal", principal);
+            if (!principal.admin()) {
+                ctx.put("tenant", principal.tenant());
+            }
+            if (!rule.get().readsBody()) {
+                request.resume();
+            }
+            ctx.next();
+        });
+    }
+
+    private static String denied(RouteScopes.Rule rule, automately.core.auth.Principal principal) {
+        return switch (rule.who()) {
+            case ANY -> null;
+            case ADMIN -> principal.admin() ? null : "Only the admin token can do this";
+            case ADMIN_OR_TENANT -> principal.admin() || principal.allows(rule.scope()) ? null : lacks(rule.scope());
+            case TENANT -> principal.admin()
+                    ? "The admin token manages tenants and tokens only; use a tenant token for tenant data (D-044)"
+                    : principal.allows(rule.scope()) ? null : lacks(rule.scope());
+        };
+    }
+
+    private static String lacks(String scope) {
+        return "This token doesn't have the \"" + scope + "\" scope";
+    }
+
+    /** A tenant can be deleted once nothing of it is left: no services, no files, no kv. */
+    private Future<Boolean> isEmpty(String tenant) {
+        return services.list(tenant).compose(owned -> !owned.isEmpty()
+                ? Future.succeededFuture(false)
+                : quota.remaining(tenant).map(left -> left == quota.bytes()));
     }
 
     private void submitJob(RoutingContext ctx) {

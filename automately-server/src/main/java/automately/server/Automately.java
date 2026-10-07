@@ -17,6 +17,9 @@ import automately.core.files.FileStore;
 import automately.core.files.SharedDataFileStore;
 import automately.core.files.StorageCapacity;
 import automately.core.storage.TenantQuota;
+import automately.core.auth.AuthStore;
+import automately.core.auth.Authenticator;
+import automately.core.auth.SharedDataAuthStore;
 import automately.cluster.ignite.IgniteSettings;
 import automately.cluster.ignite.store.IgniteStores;
 import automately.core.service.ServiceStore;
@@ -42,10 +45,17 @@ import automately.server.ingress.IngressVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.security.SecureRandom;
+import java.util.List;
 import java.util.UUID;
 
 /** Wires one node together. This is the only place that chooses implementations. */
 public final class Automately {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Automately.class);
 
     static final java.time.Duration RETENTION_INTERVAL = java.time.Duration.ofMinutes(10);
     static final java.time.Duration FILE_GARBAGE_INTERVAL = java.time.Duration.ofMinutes(1);
@@ -78,7 +88,7 @@ public final class Automately {
                     IgniteStores durable = IgniteStores.open(vertx, cluster);
                     StorageCapacity capacity = IgniteCapacity.of(cluster, config.minFreeDiskBytes());
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
-                            durable.files(capacity), capacity);
+                            durable.files(capacity), capacity, durable.auth);
                     return wire(config, txt, vertx, stores, cluster);
                 })
                 .recover(err -> {
@@ -89,14 +99,14 @@ public final class Automately {
 
     /** Where durable data lives: Ignite when clustered, in-memory maps for a single development node. */
     record Stores(JobStore jobs, JobStateStore state, ServiceStore services, DomainStore domains, KvStore kv, FileStore files,
-                  StorageCapacity capacity) {
+                  StorageCapacity capacity, AuthStore auth) {
 
         static Stores inMemory(Vertx vertx, ServerConfig config) {
             // In-memory data lives on the JVM heap, so that's what admission control watches (D-038).
             StorageCapacity capacity = StorageCapacity.heap(0.8);
             return new Stores(new SharedDataJobStore(vertx), new SharedDataJobStateStore(vertx), new SharedDataServiceStore(vertx),
                     new SharedDataDomainStore(vertx), new SharedDataKvStore(vertx),
-                    new SharedDataFileStore(vertx, capacity), capacity);
+                    new SharedDataFileStore(vertx, capacity), capacity, new SharedDataAuthStore(vertx));
         }
     }
 
@@ -118,9 +128,14 @@ public final class Automately {
         HostServicesFactory hostServices = NodeHostServices.factory(vertx, stores.kv(),
                 new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving, stores.files(), stores.capacity(), quota);
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
-        ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(), quota);
+        Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken());
+        ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
+                quota, authenticator, stores.auth());
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
-        return clusterSecret(vertx).compose(secret -> {
+        return authenticator.ensureAdminToken(new SecureRandom()).onSuccess(generated -> generated.ifPresent(token -> LOG.warn(
+                        "\n\n  No AUTOMATELY_ADMIN_TOKEN was set, so this cluster generated its admin token (shown once, save it now):\n\n"
+                        + "    {}\n\n  It manages tenants and tokens only. Rotate it with POST /v1/admin/rotate (D-044).\n", token)))
+                .compose(v -> clusterSecret(vertx)).compose(secret -> {
             InternalHttpVerticle endpoint = new InternalHttpVerticle(config.internalPort(), secret, serving);
             IngressVerticle ingress = new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes, secret,
                     config.ingressIdleTimeout(), config.maxRequestBytes());
@@ -136,7 +151,7 @@ public final class Automately {
                     .compose(id -> vertx.deployVerticle(new FileGarbageVerticle(instanceId, stores.files(), nodes, FILE_GARBAGE_INTERVAL)))
                     .compose(id -> vertx.deployVerticle(api))
                     .compose(id -> vertx.deployVerticle(ingress))
-                    .map(id -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster));
+                    .map(id -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster, api.routes()));
         }).recover(err -> vertx.close().transform(v -> Future.failedFuture(err)));
     }
 
@@ -147,7 +162,9 @@ public final class Automately {
                 .compose(map -> map.putIfAbsent("internal-secret", candidate).map(existing -> existing == null ? candidate : existing));
     }
 
-    public record RunningNode(String nodeId, String instanceId, Vertx vertx, int httpPort, int ingressPort, IgniteCluster cluster) {
+    /** A started node. {@code apiRoutes} lists every REST route as "METHOD path", for checks that walk them all. */
+    public record RunningNode(String nodeId, String instanceId, Vertx vertx, int httpPort, int ingressPort, IgniteCluster cluster,
+                              List<String> apiRoutes) {
 
         /** Stops Vert.x (which stops the node's scripts, D-015), then this node's Ignite. */
         public Future<Void> stop() {

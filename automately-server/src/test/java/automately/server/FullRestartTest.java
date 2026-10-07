@@ -49,6 +49,7 @@ class FullRestartTest {
     private ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
+                Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -81,6 +82,7 @@ class FullRestartTest {
         for (CompletableFuture<RunningNode> node : starting) {
             nodes.add(node.get(120, TimeUnit.SECONDS));
         }
+        TestAuth.use(nodes.getFirst());
         awaitJson("/v1/nodes", json -> json.getJsonArray("nodes").size() == 3);
     }
 
@@ -110,7 +112,7 @@ class FullRestartTest {
         byte[] file = new byte[3 * 1024 * 1024 + 123];
         new java.util.Random(7).nextBytes(file);
         HttpResponse<Buffer> uploaded = await(client.put(nodes.getFirst().httpPort(), "localhost", "/v1/files/assets/blob.bin")
-                .putHeader("X-Automately-Tenant", TENANT).sendBuffer(Buffer.buffer(file)));
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendBuffer(Buffer.buffer(file)));
         assertThat(uploaded.statusCode()).as(uploaded.bodyAsString()).isEqualTo(201);
 
         stopNodes();
@@ -121,7 +123,7 @@ class FullRestartTest {
         assertThat(kvJob.getString("output")).isEqualTo("survives");
         assertThat(get("/v1/services/counter/domains").bodyAsJsonObject().getJsonArray("domains")).hasSize(1);
         HttpResponse<Buffer> downloaded = await(client.get(nodes.getLast().httpPort(), "localhost", "/v1/files/assets/blob.bin")
-                .putHeader("X-Automately-Tenant", TENANT).send());
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).send());
         assertThat(downloaded.statusCode()).isEqualTo(200);
         assertThat(downloaded.getHeader("ETag")).isEqualTo(uploaded.getHeader("ETag"));
         assertThat(downloaded.body().getBytes()).as("the file survived").isEqualTo(file);
@@ -142,15 +144,15 @@ class FullRestartTest {
     }
 
     private HttpResponse<Buffer> get(String path) throws Exception {
-        return await(client.get(nodes.getFirst().httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+        return await(client.get(nodes.getFirst().httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
     }
 
     private HttpResponse<Buffer> post(String path, JsonObject body) throws Exception {
-        return await(client.post(nodes.getFirst().httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).sendJsonObject(body));
+        return await(client.post(nodes.getFirst().httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(body));
     }
 
     private HttpResponse<Buffer> put(String path, JsonObject body) throws Exception {
-        return await(client.put(nodes.getFirst().httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).sendJsonObject(body));
+        return await(client.put(nodes.getFirst().httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(body));
     }
 
     private JsonObject awaitJson(String path, Predicate<JsonObject> condition) throws Exception {

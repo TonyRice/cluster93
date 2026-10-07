@@ -1,7 +1,8 @@
 # A three-node cluster. Each node serves the API (808x) and services' HTTP (800x); jobs run on whichever
 # node is least loaded.
+#   export AUTOMATELY_ADMIN_TOKEN=$(openssl rand -hex 32)   # or leave it unset: node1 then logs a generated one
 #   docker compose up --build
-#   curl -s localhost:8081/v1/nodes
+#   curl -s -H "Authorization: Bearer $AUTOMATELY_ADMIN_TOKEN" localhost:8081/v1/nodes
 #   curl -s -H 'Host: <service>--<tenant>.localhost' localhost:8001/
 x-node: &node
   build: .
@@ -12,6 +13,7 @@ x-node: &node
     AUTOMATELY_MAX_HEAP_MB: "128"
     AUTOMATELY_DATA_BACKUPS: "1"
     AUTOMATELY_CLUSTER_SIZE: "3"
+    AUTOMATELY_ADMIN_TOKEN: ${AUTOMATELY_ADMIN_TOKEN:-}
   healthcheck:
     test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
     interval: 5s

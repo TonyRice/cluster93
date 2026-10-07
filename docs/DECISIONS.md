@@ -365,8 +365,18 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Why:** agents that support remote MCP servers need nothing installed, and the rest still work through the CLI. One auth model covers both. The Java SDK's transports assume Servlet or Reactor, which this project doesn't use.
 
 ### D-048 — The CLI: Java and picocli, compiled to native binaries
-**Date:** 2026-10-06 · **Status:** Proposed; Tony to confirm before milestone 3
+**Date:** 2026-10-06 · **Status:** Accepted, with D-049 (Tony asked for native Windows, Linux and macOS builds)
 
 **Proposal:** a new `automately-cli` module using picocli, the JDK HTTP client and a small JSON library. It is compiled with GraalVM native-image into one binary per platform, so no JDK is needed on machines that talk to the cluster, and published as GitHub release assets. npm packages wrapping the binaries, as esbuild does, could follow.
 **Constraint:** native-image can't cross-compile. Linux x64 can be built here in a GraalVM container. macOS, Windows and arm64 need those machines, or GitHub Actions runners in a release-only workflow (not CI, so D-017 stands).
+
+### D-049 — The CLI installs with one line, on Windows, Linux and macOS
+**Date:** 2026-10-06 · **Status:** Accepted (Tony); release hosting open. Confirms D-048
+
+**Decision:**
+- One native binary per platform: Linux x64 (static, musl) and arm64, macOS arm64 and x64, Windows x64.
+- They're published with `SHA256SUMS` as release assets, and installed with `curl -fsSL …/install.sh | sh` or, on Windows, `irm …/install.ps1 | iex`. The scripts detect the platform, verify the checksum, install to a user directory and set up `PATH`.
+- `automately upgrade` reruns the installer.
+**Why:** Tony: "super easy to install the cli via curl", with Windows, Linux and macOS builds, and no JDK on the machines that talk to the cluster.
+**Open:** native-image can't cross-compile, so building for macOS and Windows needs GitHub Actions runners in a tag-only release workflow (not CI). Separately, a private repo's release assets can't be downloaded anonymously, so the one-liner needs either a public repo or a separate public releases repo. Both are Tony's call before milestone 3.
 

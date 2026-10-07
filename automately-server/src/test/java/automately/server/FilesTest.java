@@ -42,6 +42,7 @@ class FilesTest {
     @BeforeAll
     static void startCluster() throws Exception {
         nodeA = await(Automately.start(config("node-a")));
+        TestAuth.use(nodeA);
         nodeB = await(Automately.start(config("node-b")));
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
@@ -60,17 +61,18 @@ class FilesTest {
     void cleanUp() throws Exception {
         for (Object service : get(nodeA, "/v1/services").bodyAsJsonObject().getJsonArray("services")) {
             await(client.delete(nodeA.httpPort(), "localhost", "/v1/services/" + ((JsonObject) service).getString("name"))
-                    .putHeader("X-Automately-Tenant", TENANT).send());
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).send());
         }
         for (Object file : get(nodeA, "/v1/files?limit=1000").bodyAsJsonObject().getJsonArray("files")) {
             await(client.delete(nodeA.httpPort(), "localhost", "/v1/files/" + ((JsonObject) file).getString("path"))
-                    .putHeader("X-Automately-Tenant", TENANT).send());
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).send());
         }
     }
 
     private static ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
+                Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -101,7 +103,7 @@ class FilesTest {
     }
 
     private static HttpResponse<Buffer> upload(RunningNode node, String tenant, String path, byte[] data, String contentType) throws Exception {
-        return await(client.put(node.httpPort(), "localhost", "/v1/files/" + path).putHeader("X-Automately-Tenant", tenant)
+        return await(client.put(node.httpPort(), "localhost", "/v1/files/" + path).putHeader("Authorization", TestAuth.bearer(tenant))
                 .putHeader("Content-Type", contentType).sendBuffer(Buffer.buffer(data)));
     }
 
@@ -130,15 +132,15 @@ class FilesTest {
         String etag = upload(nodeA, "video.mp4", data, "video/mp4").bodyAsJsonObject().getString("etag");
 
         HttpResponse<Buffer> middle = await(client.get(nodeB.httpPort(), "localhost", "/v1/files/video.mp4")
-                .putHeader("X-Automately-Tenant", TENANT).putHeader("Range", "bytes=1048570-1048589").send());
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).putHeader("Range", "bytes=1048570-1048589").send());
         HttpResponse<Buffer> tail = await(client.get(nodeB.httpPort(), "localhost", "/v1/files/video.mp4")
-                .putHeader("X-Automately-Tenant", TENANT).putHeader("Range", "bytes=-10").send());
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).putHeader("Range", "bytes=-10").send());
         HttpResponse<Buffer> beyond = await(client.get(nodeB.httpPort(), "localhost", "/v1/files/video.mp4")
-                .putHeader("X-Automately-Tenant", TENANT).putHeader("Range", "bytes=99999999-").send());
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).putHeader("Range", "bytes=99999999-").send());
         HttpResponse<Buffer> cached = await(client.get(nodeB.httpPort(), "localhost", "/v1/files/video.mp4")
-                .putHeader("X-Automately-Tenant", TENANT).putHeader("If-None-Match", etag).send());
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).putHeader("If-None-Match", etag).send());
         HttpResponse<Buffer> head = await(client.head(nodeB.httpPort(), "localhost", "/v1/files/video.mp4")
-                .putHeader("X-Automately-Tenant", TENANT).send());
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).send());
 
         assertThat(middle.statusCode()).isEqualTo(206);
         assertThat(middle.getHeader("content-range")).isEqualTo("bytes 1048570-1048589/" + data.length);
@@ -161,11 +163,11 @@ class FilesTest {
         JsonObject listed = get(nodeB, "/v1/files?prefix=site/").bodyAsJsonObject();
         assertThat(listed.getJsonArray("files").stream().map(f -> ((JsonObject) f).getString("path"))).containsExactly("site/app.js", "site/index.html");
 
-        assertThat(await(client.delete(nodeB.httpPort(), "localhost", "/v1/files/other.txt").putHeader("X-Automately-Tenant", TENANT).send())
+        assertThat(await(client.delete(nodeB.httpPort(), "localhost", "/v1/files/other.txt").putHeader("Authorization", TestAuth.bearer(TENANT)).send())
                 .statusCode()).isEqualTo(204);
         assertThat(get(nodeA, "/v1/files/other.txt").statusCode()).isEqualTo(404);
         assertThat(upload(nodeA, "a/%2E%2E/escape.txt", "x".getBytes(), "text/plain").statusCode()).isEqualTo(400);
-        assertThat(await(client.get(nodeA.httpPort(), "localhost", "/v1/files/site/index.html").putHeader("X-Automately-Tenant", "globex").send())
+        assertThat(await(client.get(nodeA.httpPort(), "localhost", "/v1/files/site/index.html").putHeader("Authorization", TestAuth.bearer("globex")).send())
                 .statusCode()).as("another tenant can't see it").isEqualTo(404);
     }
 
@@ -292,7 +294,7 @@ class FilesTest {
 
     private static void serve(String name, String handler) throws Exception {
         HttpResponse<Buffer> created = await(client.put(nodeA.httpPort(), "localhost", "/v1/services/" + name)
-                .putHeader("X-Automately-Tenant", TENANT).sendJsonObject(new JsonObject().put("script", """
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("script", """
                         export default async (input, ctx) => { await ctx.serve(%s); return ctx.stopRequested; }
                         """.formatted(handler))));
         assertThat(created.statusCode()).as(created.bodyAsString()).isEqualTo(201);
@@ -311,14 +313,14 @@ class FilesTest {
     }
 
     private static JsonObject runJob(String tenant, String script) throws Exception {
-        HttpResponse<Buffer> submitted = await(client.post(nodeA.httpPort(), "localhost", "/v1/jobs").putHeader("X-Automately-Tenant", tenant)
+        HttpResponse<Buffer> submitted = await(client.post(nodeA.httpPort(), "localhost", "/v1/jobs").putHeader("Authorization", TestAuth.bearer(tenant))
                 .sendJsonObject(new JsonObject().put("script", script).put("timeoutMs", 20_000)));
         String id = submitted.bodyAsJsonObject().getString("id");
         return awaitJson(nodeA, tenant, "/v1/jobs/" + id, j -> !List.of("QUEUED", "RUNNING").contains(j.getString("status")));
     }
 
     private static HttpResponse<Buffer> get(RunningNode node, String path) throws Exception {
-        return await(client.get(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+        return await(client.get(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
     }
 
     private static JsonObject awaitJson(RunningNode node, String path, Predicate<JsonObject> condition) throws Exception {
@@ -329,7 +331,7 @@ class FilesTest {
         long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
         JsonObject last = null;
         while (System.nanoTime() < deadline) {
-            last = await(client.get(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", tenant).send()).bodyAsJsonObject();
+            last = await(client.get(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(tenant)).send()).bodyAsJsonObject();
             if (condition.test(last)) {
                 return last;
             }

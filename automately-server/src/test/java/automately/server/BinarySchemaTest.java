@@ -29,6 +29,7 @@ class BinarySchemaTest {
     @Test
     void noBinarySchemaIsFirstSeenAfterStartup() throws Exception {
         RunningNode nodeA = await(Automately.start(config("node-a")));
+        TestAuth.use(nodeA);
         RunningNode nodeB = await(Automately.start(config("node-b")));
         Vertx clientVertx = Vertx.vertx();
         WebClient client = WebClient.create(clientVertx);
@@ -37,7 +38,7 @@ class BinarySchemaTest {
             Map<String, Integer> atStart = nodeA.cluster().binarySchemas();
 
             // A bit of everything, on node B: jobs, kv with and without expiry, increments, bus, files, a service.
-            HttpResponse<Buffer> service = await(client.put(nodeB.httpPort(), "localhost", "/v1/services/echo").putHeader("X-Automately-Tenant", TENANT)
+            HttpResponse<Buffer> service = await(client.put(nodeB.httpPort(), "localhost", "/v1/services/echo").putHeader("Authorization", TestAuth.bearer(TENANT))
                     .sendJsonObject(new JsonObject().put("script", """
                             export default async (input, ctx) => {
                               await bus.handle('echo', async (m) => m);
@@ -47,7 +48,7 @@ class BinarySchemaTest {
                             """)));
             assertThat(service.statusCode()).as(service.bodyAsString()).isEqualTo(201);
             awaitJson(client, nodeB, "/v1/services/echo", s -> "RUNNING".equals(s.getString("status")));
-            String job = await(client.post(nodeB.httpPort(), "localhost", "/v1/jobs").putHeader("X-Automately-Tenant", TENANT)
+            String job = await(client.post(nodeB.httpPort(), "localhost", "/v1/jobs").putHeader("Authorization", TestAuth.bearer(TENANT))
                     .sendJsonObject(new JsonObject().put("script", """
                             export default async (input, ctx) => {
                               await kv.set('plain', { a: 1 });
@@ -63,7 +64,7 @@ class BinarySchemaTest {
                             """))).bodyAsJsonObject().getString("id");
             JsonObject done = awaitJson(client, nodeB, "/v1/jobs/" + job, j -> !"QUEUED".equals(j.getString("status")) && !"RUNNING".equals(j.getString("status")));
             assertThat(done.getString("status")).as(done.encode()).isEqualTo("SUCCEEDED");
-            await(client.post(nodeB.httpPort(), "localhost", "/v1/services/echo/stop").putHeader("X-Automately-Tenant", TENANT).send());
+            await(client.post(nodeB.httpPort(), "localhost", "/v1/services/echo/stop").putHeader("Authorization", TestAuth.bearer(TENANT)).send());
             awaitJson(client, nodeB, "/v1/services/echo", s -> "STOPPED".equals(s.getString("status")));
 
             await(nodeB.stop());
@@ -79,6 +80,7 @@ class BinarySchemaTest {
     private static ServerConfig config(String nodeId) {
         return ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", nodeId),
+                Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -95,7 +97,7 @@ class BinarySchemaTest {
         long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
         JsonObject last = null;
         while (System.nanoTime() < deadline) {
-            HttpResponse<Buffer> response = await(client.get(node.httpPort(), "localhost", path).putHeader("X-Automately-Tenant", TENANT).send());
+            HttpResponse<Buffer> response = await(client.get(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
             if (response.statusCode() == 200) {
                 last = response.bodyAsJsonObject();
                 if (condition.test(last)) {

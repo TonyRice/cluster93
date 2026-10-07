@@ -1,13 +1,13 @@
 # Plan: API, auth, CLI and MCP (phase 4)
 
-**Status:** Planned · **Date:** 2026-10-06
+**Status:** Milestone 1 ✅ done (2026-10-06); milestones 2–4 planned · **Date:** 2026-10-06
 **Why:** Weak spots #4 (routing by hand, no contract) and #7 (Basic auth with a long-lived key) from the [revival plan](revival-plan.md), plus the part of the positioning that makes Automately current: AI agents can deploy and run code on it through MCP. The `X-Automately-Tenant` header was always a stand-in. Anyone who can reach the API can act as any tenant, so it has to go before anything else is exposed.
 
 ## Decisions taken with Tony
 - **Bootstrap:** an admin token from `AUTOMATELY_ADMIN_TOKEN`, or generated once by the first node and printed in its log. It manages tenants and tokens only (D-044).
 - **Contract-first OpenAPI:** a hand-written spec is the source of truth. It's served by the API, requests are validated against it, and tests fail when a route and the spec disagree (D-046).
 - **MCP:** built into every node over Streamable HTTP at `/mcp`, using the same tokens, plus `automately mcp`, a stdio bridge in the CLI for clients that only launch local processes (D-047).
-- **CLI:** *proposed, Tony to confirm:* Java and picocli, compiled with GraalVM native-image into single binaries (no JDK needed), released on GitHub per platform, with npm wrapper packages possible later.
+- **CLI:** Java and picocli, compiled with GraalVM native-image into one binary per platform (Windows, Linux, macOS; no JDK needed), installed with a one-line `curl … | sh` or `irm … | iex` (D-048, D-049).
 
 ## Milestone 1: tenants and scoped tokens
 - **Tenants become explicit.** `POST /v1/tenants {name}`, `GET /v1/tenants`, `DELETE /v1/tenants/{name}` (refused while it still has services or files). They're admin only. Names follow the existing rule (they're part of hostnames).
@@ -28,12 +28,55 @@
 - **Contract tests:** a test fails if the router has a route the spec lacks, or the other way round. Integration tests validate real **responses** against the spec, so the docs can't drift.
 - **Rate limits per tenant:** a token bucket (`AUTOMATELY_RATE_LIMIT_PER_MINUTE`, default 600, burst 2× that), applied on each node with its share of the tenant's budget (budget ÷ live nodes), so no cluster round-trip per request. Over it, **429** with `Retry-After` and the IETF `RateLimit-Policy`/`RateLimit` headers. Admin calls aren't limited.
 
-## Milestone 3: the CLI (`automately`)
-- `automately login <url>` stores the endpoint and token in `~/.config/automately/config.json` (mode 600). `AUTOMATELY_URL` and `AUTOMATELY_TOKEN` override it, for CI.
+## Milestone 3: the CLI (`automately`), installable with one line
+**Tony's requirements:** "super easy to install the cli via curl", with builds for **Windows, Linux and macOS**, and a one-line install.
+
+### Installing
+```bash
+# Linux and macOS
+curl -fsSL https://<release host>/install.sh | sh
+```
+```powershell
+# Windows (PowerShell)
+irm https://<release host>/install.ps1 | iex
+```
+- **`install.sh`** (POSIX `sh`, so it runs anywhere):
+  - detects the OS (`uname -s`) and architecture (`uname -m`)
+  - downloads the matching binary and `SHA256SUMS` from the latest release, and **verifies the checksum** (stopping if it doesn't match)
+  - installs to `~/.local/bin`, or `/usr/local/bin` when run as root or with `AUTOMATELY_INSTALL_DIR`, and says how to add that to `PATH` if it isn't already
+  - `AUTOMATELY_VERSION=v2.1.0` pins a version
+  - is written so a cut-off download can't run half a script: everything is inside a function called on the last line
+- **`install.ps1`**: the same steps for Windows. It installs to `%LOCALAPPDATA%\Programs\automately` and adds that directory to the user's `PATH`.
+- **Afterwards:** `automately version` shows the CLI's version and, once logged in, the cluster's. `automately upgrade` reruns the installer for the latest version.
+- **Not in the first cut:** Homebrew, Scoop and winget packages, and npm wrappers. All of them can point at the same release assets later.
+
+### Builds: one native binary per platform (D-048)
+| Target | Built on | Asset |
+|---|---|---|
+| Linux x64 | `ubuntu-latest` (static against musl, so it runs on any distro, Alpine included) | `automately-linux-x64` |
+| Linux arm64 | `ubuntu-24.04-arm` | `automately-linux-arm64` |
+| macOS Apple silicon | `macos-14` | `automately-macos-arm64` |
+| macOS Intel | `macos-13` | `automately-macos-x64` |
+| Windows x64 | `windows-latest` | `automately-windows-x64.exe` |
+
+- **Why native.** Each binary is GraalVM native-image output, about 20–40 MB, starts in milliseconds, and needs no JDK.
+- **Why build on each platform.** native-image can't cross-compile, so each platform needs a machine of its own. Linux x64 can also be built here, in a GraalVM container, for local testing.
+- **The release workflow** runs on a version tag (`v*`) only: it builds the five binaries in parallel, smoke-tests each (`automately version`, then `automately run` against a real node on Linux), and publishes a GitHub release with the binaries, `SHA256SUMS`, `install.sh` and `install.ps1`.
+- **macOS and Windows warnings.** Binaries installed with `curl` or `irm` aren't marked as downloaded, so Gatekeeper and SmartScreen don't block them. Signing and notarization can come later, for downloads through a browser.
+
+### Open questions for Tony
+1. **The release workflow needs GitHub Actions** for the macOS and Windows runners. It would run only on version tags, not on every push, so it isn't CI and D-017 stands. Is that OK?
+2. **Where the one-liner downloads from.** Assets in a **private** repo need a GitHub token to download, so `curl … | sh` can't fetch them anonymously. The options:
+   - (a) make `automately-v2` public when releasing
+   - (b) publish releases to a separate public repo (for example `adamnlynn/automately-releases`), keeping the source private
+   - (c) serve `install.sh` from a short domain you own, pointing at (a) or (b)
+
+### Commands
+- `automately login <url>` stores the endpoint and token in `~/.config/automately/config.json` (`%APPDATA%\automately` on Windows), readable only by the user. `AUTOMATELY_URL` and `AUTOMATELY_TOKEN` override it, for scripts and CI.
 - `run script.js [--input json] [--follow]` submits a job and streams its logs until it ends; the exit code reflects the outcome.
-- `jobs ls|get|logs|steps|cancel`, `services deploy <name> <file>|ls|get|logs|start|stop|restart|rm`, `domains add|verify|ls|rm`, `files put|get|ls|rm|sync <dir> <prefix>` (deploys a static site: only changed files go up, compared by ETag), `tokens create|ls|revoke`, `tenants …` (admin).
+- `jobs ls|get|logs|steps|cancel`, `services deploy <name> <file>|ls|get|logs|start|stop|restart|rm`, `domains add|verify|ls|rm`, `files put|get|ls|rm|sync <dir> <prefix>` (deploys a static site: only changed files go up, compared by ETag), `tokens create|ls|revoke`, `tenants …` (admin), `version`, `upgrade`.
 - `mcp` is the stdio bridge (milestone 4).
-- Built per D-048 (pending), with the JDK HTTP client and a small JSON library so native-image works without fuss. It's tested against a real node in the build, and the native binary gets a smoke test in Docker.
+- **Built with** picocli, the JDK HTTP client and a small JSON library, so native-image needs no special configuration. It's tested against a real node in the normal build, and the Linux native binary gets a smoke test in Docker.
 
 ## Milestone 4: the MCP server
 - **Transport:** MCP Streamable HTTP at `/mcp` on the API port: JSON-RPC 2.0 over `POST`, with server-sent events for streamed results, and `Authorization: Bearer` with the same tokens and scopes. Implemented directly on Vert.x (the protocol surface is small) rather than pulling in the Reactor-based Java SDK, and checked against the official MCP inspector.
@@ -49,3 +92,11 @@
 
 ## Order and size
 Milestones 1, 2, 3, 4, in that order. Each ends green on the full `./mvnw verify` (twice) and is documented and pushed on its own. Milestone 1 changes every API call, so it goes first, and later milestones build on its scopes.
+
+## What changed during milestone 1
+- **Auth runs before the body is read.** The token lookup is asynchronous, and vertx-web doesn't pause requests for that. The auth handler pauses the request, and each route rule says whether that route reads its body. Body-reading routes get the request still paused, for their body handler or the streamed upload. The rest are resumed, so keep-alive connections never stall. `AuthTest` sends a 200 KB script and 90 mixed requests on pooled connections to check this.
+- **Route rules fail closed.** A `/v1` request that matches no rule gets 404 before any handler runs. `AuthTest` walks the live route table, and every route must answer 401 without a token.
+- **Deleting a tenant requires it to be empty** (no services, files or kv). Its finished jobs are kept until retention removes them.
+- **`/v1/nodes`** needs `nodes:read` or the admin token. It was open before.
+- **Tenant names are checked when a tenant is created**, by the admin, instead of on every request.
+
