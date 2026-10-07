@@ -54,7 +54,7 @@ class StorageCapacityTest {
         int stored = 0;
         for (int i = 0; i < 100 && refused == null; i++) {
             try {
-                FileWriter writer = await(files.create("acme", "fill/" + i, null, Long.MAX_VALUE));
+                FileWriter writer = await(files.create("acme", "fill/" + i, null, automately.core.files.Room.fixed(Long.MAX_VALUE)));
                 for (int mb = 0; mb < 4; mb++) {
                     await(writer.write(Buffer.buffer(megabyte)));
                 }
@@ -84,7 +84,7 @@ class StorageCapacityTest {
         // Pretend the disk is nearly full by demanding more free space than any disk has.
         FileStore files = IgniteStores.open(vertx, cluster).files(IgniteStores.open(vertx, cluster).chunks(IgniteCapacity.of(cluster, Long.MAX_VALUE / 2)));
 
-        assertThatThrownBy(() -> await(files.create("acme", "big.bin", null, Long.MAX_VALUE)))
+        assertThatThrownBy(() -> await(files.create("acme", "big.bin", null, automately.core.files.Room.fixed(Long.MAX_VALUE))))
                 .cause().isInstanceOf(HostException.class).hasMessageContaining("disk left");
     }
 

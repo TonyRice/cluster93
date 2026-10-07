@@ -63,6 +63,8 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.auth.AuthStore authStore;
 
     private final automately.core.auth.RateLimiter limiter;
+    private final automately.core.files.Room room;
+    private final StorageApi.Wiring storage;
     /** Marks the MCP tools' own calls to this API, which the tool call already counted (D-047). */
     private final String loopbackSecret = java.util.UUID.randomUUID() + "-" + java.util.UUID.randomUUID();
     private final java.util.Map<Long, BodyHandler> bodyHandlers = new java.util.concurrent.ConcurrentHashMap<>();
@@ -75,7 +77,9 @@ public final class ApiVerticle extends VerticleBase {
     public ApiVerticle(ServerConfig config, JobStore jobs, JobStateStore state, NodeRegistry nodes, JobScheduler scheduler,
                        ServiceStore services, DomainStore domains, TxtResolver txt, HostRouter hostRouter, FileStore files,
                        automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
-                       automately.core.auth.AuthStore authStore) {
+                       automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage) {
+        this.room = room;
+        this.storage = storage;
         this.limiter = new automately.core.auth.RateLimiter(config.rateLimitPerMinute());
         this.authenticator = authenticator;
         this.authStore = authStore;
@@ -129,8 +133,9 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/v1/openapi.json").handler(ctx -> ctx.json(contract.getRawContract()));
         router.get("/v1/nodes").handler(this::listNodes);
         new McpRoutes(vertx, authenticator, limiter, () -> server.actualPort(), loopbackSecret).mount(router);
-        new AuthRoutes(authStore, authenticator, this::isEmpty).mount(router);
-        new FilesRoutes(files, quota).mount(router);
+        new AuthRoutes(authStore, authenticator, this::isEmpty, tenant -> storage.config().forget(tenant)).mount(router);
+        new StorageApi(storage, files, authStore, quota).mount(router);
+        new FilesRoutes(files, quota, room).mount(router);
         new BusRoutes(vertx).mount(router);
         router.post("/v1/jobs").handler(this::submitJob);
         router.get("/v1/jobs").handler(this::listJobs);
@@ -299,11 +304,13 @@ public final class ApiVerticle extends VerticleBase {
         return "This token doesn't have the \"" + scope + "\" scope";
     }
 
-    /** A tenant can be deleted once nothing of it is left: no services, no files, no kv. */
+    /** A tenant can be deleted once nothing of it is left: no services, no files (wherever they are), no kv. */
     private Future<Boolean> isEmpty(String tenant) {
         return services.list(tenant).compose(owned -> !owned.isEmpty()
                 ? Future.succeededFuture(false)
-                : quota.remaining(tenant).map(left -> left == quota.bytes()));
+                : files.list(tenant, "", 1, null).compose(listed -> !listed.getJsonArray("files").isEmpty()
+                        ? Future.succeededFuture(false)
+                        : quota.remaining(tenant).map(left -> left == quota.bytes())));
     }
 
     private void submitJob(RoutingContext ctx) {

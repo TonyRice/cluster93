@@ -116,7 +116,7 @@ await files.delete('uploads/movie.mp4');                                    // t
   - Each tenant has `AUTOMATELY_TENANT_STORAGE_MB` (1 GiB by default) for files and `kv` together. Going over fails with `code: 'limit_exceeded'`.
   - If the cluster itself is running out of disk (or memory, without a data directory), writes fail with `code: 'insufficient_storage'`.
   - Either way, the node keeps running.
-- Files are replicated and survive node loss, like the rest of the cluster's data.
+- **Where bytes are stored:** in the cluster by default, replicated and surviving node loss like the rest of its data. Your tenant can route paths to its own S3 bucket or disk folder ([storage guide](../guides/storage.md)); scripts don't change, since `files` follows the routes.
 
 From outside the cluster:
 ```http

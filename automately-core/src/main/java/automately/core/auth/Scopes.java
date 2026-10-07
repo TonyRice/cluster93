@@ -19,10 +19,12 @@ public final class Scopes {
     public static final String BUS_REQUEST = "bus:request";
     public static final String TOKENS_WRITE = "tokens:write";
     public static final String NODES_READ = "nodes:read";
+    public static final String STORAGE_READ = "storage:read";
+    public static final String STORAGE_WRITE = "storage:write";
 
     /** Every scope a tenant token can hold, besides {@link #ALL}. */
     public static final List<String> KNOWN = List.of(JOBS_READ, JOBS_WRITE, SERVICES_READ, SERVICES_WRITE, FILES_READ, FILES_WRITE,
-            BUS_PUBLISH, BUS_REQUEST, TOKENS_WRITE, NODES_READ);
+            BUS_PUBLISH, BUS_REQUEST, TOKENS_WRITE, NODES_READ, STORAGE_READ, STORAGE_WRITE);
 
     private Scopes() {
     }

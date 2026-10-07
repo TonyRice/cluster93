@@ -17,7 +17,8 @@ public final class IgniteStores {
 
     private static final List<Table.Definition> TABLES = List.of(
             IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE, IgniteDomainStore.TABLE, IgniteKvStore.TABLE,
-            IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS);
+            IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
+            IgniteStorageConfigStore.POLICIES, IgniteStorageConfigStore.PROVIDERS, IgniteStorageConfigStore.ROUTES);
 
     public final JobStore jobs;
     public final JobStateStore state;
@@ -25,6 +26,7 @@ public final class IgniteStores {
     public final DomainStore domains;
     public final KvStore kv;
     public final automately.core.auth.AuthStore auth;
+    public final automately.core.storage.StorageConfigStore storage;
     private final Vertx vertx;
     private final IgniteCluster cluster;
 
@@ -35,13 +37,19 @@ public final class IgniteStores {
         this.domains = new IgniteDomainStore(vertx, cluster.ignite());
         this.kv = new IgniteKvStore(vertx, cluster.ignite());
         this.auth = new IgniteAuthStore(vertx, cluster.ignite());
+        this.storage = new IgniteStorageConfigStore(vertx, cluster.ignite());
         this.vertx = vertx;
         this.cluster = cluster;
     }
 
     /** File metadata in the cluster, bytes in {@code blobs} (D-056). The tenant quota is applied by callers (D-043). */
     public FileStore files(automately.core.files.BlobStore blobs) {
-        return new IgniteFileStore(vertx, cluster.ignite(), blobs);
+        return files(automately.core.files.BlobStores.single(blobs));
+    }
+
+    /** File metadata in the cluster, bytes routed per tenant (D-057). */
+    public FileStore files(automately.core.files.BlobStores stores) {
+        return new IgniteFileStore(vertx, cluster.ignite(), stores);
     }
 
     /** The default file backend: chunks in the cluster, with this node's storage admission control (D-038). */

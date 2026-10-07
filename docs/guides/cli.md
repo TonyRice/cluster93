@@ -57,8 +57,9 @@ The URL and token are saved in `~/.config/automately/config.json` (`%APPDATA%\au
 | `domains add · verify · ls · rm` | Your own domain for a service. `add` prints the TXT record to publish |
 | `files put · get · ls · rm` | Files, streamed both ways. `get NAME -` writes to stdout |
 | `files sync DIR PREFIX [--delete] [--dry-run]` | Mirror a folder, for example a static site. Only new and changed files go up, compared by SHA-256 ETag |
+| `storage` · `storage providers ls · get · set-s3 · set-disk · check · rm` · `storage routes [set]` | Your own S3 bucket or disk folder, and which paths go there ([storage guide](storage.md)) |
 | `tokens create NAME --scope jobs:read · ls · revoke` | Your tenant's tokens. The secret is printed once, to stdout |
-| `tenants create · ls · rm · token · tokens · revoke` | Admin only |
+| `tenants create · ls · rm · token · tokens · revoke · storage-policy` | Admin only |
 | `mcp` | The MCP stdio bridge for AI agents ([MCP guide](mcp.md)) |
 | `version · upgrade` | |
 

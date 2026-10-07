@@ -31,9 +31,12 @@ final class AuthRoutes {
     private final Authenticator authenticator;
     /** Whether a tenant has nothing left (no services, no files, no kv), so it can be deleted. */
     private final Function<String, Future<Boolean>> isEmpty;
+    /** Removes what else a deleted tenant had (its storage policy, providers and routes). */
+    private final Function<String, Future<Void>> forget;
     private final SecureRandom random = new SecureRandom();
 
-    AuthRoutes(AuthStore store, Authenticator authenticator, Function<String, Future<Boolean>> isEmpty) {
+    AuthRoutes(AuthStore store, Authenticator authenticator, Function<String, Future<Boolean>> isEmpty, Function<String, Future<Void>> forget) {
+        this.forget = forget;
         this.store = store;
         this.authenticator = authenticator;
         this.isEmpty = isEmpty;
@@ -91,7 +94,8 @@ final class AuthRoutes {
                 error(ctx, 409, "conflict", "Tenant " + tenant.name() + " still has services, files or kv data; remove them first");
                 return;
             }
-            store.deleteTenant(tenant.name()).onFailure(ctx::fail).onSuccess(v -> ctx.response().setStatusCode(204).end());
+            store.deleteTenant(tenant.name()).compose(v -> forget.apply(tenant.name()))
+                    .onFailure(ctx::fail).onSuccess(v -> ctx.response().setStatusCode(204).end());
         }));
     }
 

@@ -48,6 +48,7 @@ class CliTest {
                 Map.entry("AUTOMATELY_NODE_ID", "cli"),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", ADMIN),
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
+                Map.entry("AUTOMATELY_DISK_ROOT", Files.createTempDirectory("automately-cli-disk").toString()),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -240,6 +241,29 @@ class CliTest {
         assertThat(call.get("id").asInt()).isEqualTo(2);
         assertThat(call.at("/result/structuredContent/output").asInt()).isEqualTo(42);
         assertThat(bridged.err()).contains("bridging stdio");
+    }
+
+    @Test
+    void storageProvidersAndRoutesFromTheCommandLine() throws Exception {
+        loginAsNewTenant("stor");
+        assertThat(cli("--url", url, "--token", ADMIN, "tenants", "storage-policy", "stor", "--allow", "disk", "--disk-mb", "5").code()).isZero();
+        assertThat(cli("--url", url, "--token", ADMIN, "--json", "tenants", "storage-policy", "stor").json().get("diskAllotmentMb").asInt()).isEqualTo(5);
+
+        Result saved = cli("storage", "providers", "set-disk", "local");
+        assertThat(saved.code()).as(saved.err()).isZero();
+        assertThat(cli("storage", "providers", "ls").out()).contains("local").contains("disk");
+        assertThat(cli("storage", "providers", "check", "local").out()).contains("reachable");
+        assertThat(cli("storage", "routes", "set", "--prefix", "backups/=local").code()).isZero();
+        assertThat(cli("storage", "routes").out()).contains("backups/ -> local");
+
+        Path file = home.resolve("db.gz");
+        Files.write(file, new byte[1234]);
+        assertThat(cli("files", "put", file.toString(), "backups/db.gz").code()).isZero();
+        assertThat(cli("storage").out()).contains("disk 0.0 MB of 5.0 MB").contains("Allowed providers");
+
+        Result inUse = cli("storage", "providers", "rm", "local");
+        assertThat(inUse.code()).isEqualTo(1);
+        assertThat(inUse.err()).contains("delete them first");
     }
 
     @Test

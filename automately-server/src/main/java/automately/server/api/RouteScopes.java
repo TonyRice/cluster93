@@ -44,6 +44,17 @@ final class RouteScopes {
             json("POST", "/v1/tenants/" + SEG + "/tokens", "createTenantToken", Who.ADMIN, null, SMALL),
             rule("DELETE", "/v1/tenants/" + SEG + "/tokens/" + SEG, "revokeTenantToken", Who.ADMIN, null),
             rule("POST", "/v1/admin/rotate", "rotateAdminToken", Who.ADMIN, null),
+            rule("GET", "/v1/tenants/" + SEG + "/storage-policy", "getStoragePolicy", Who.ADMIN, null),
+            json("PUT", "/v1/tenants/" + SEG + "/storage-policy", "putStoragePolicy", Who.ADMIN, null, SMALL),
+
+            rule("GET", "/v1/storage", "getStorage", Who.TENANT, Scopes.STORAGE_READ),
+            rule("GET", "/v1/storage/providers", "listStorageProviders", Who.TENANT, Scopes.STORAGE_READ),
+            rule("GET", "/v1/storage/providers/" + SEG, "getStorageProvider", Who.TENANT, Scopes.STORAGE_READ),
+            json("PUT", "/v1/storage/providers/" + SEG, "putStorageProvider", Who.TENANT, Scopes.STORAGE_WRITE, SMALL),
+            rule("DELETE", "/v1/storage/providers/" + SEG, "deleteStorageProvider", Who.TENANT, Scopes.STORAGE_WRITE),
+            rule("POST", "/v1/storage/providers/" + SEG + "/check", "checkStorageProvider", Who.TENANT, Scopes.STORAGE_WRITE),
+            rule("GET", "/v1/storage/routes", "getStorageRoutes", Who.TENANT, Scopes.STORAGE_READ),
+            json("PUT", "/v1/storage/routes", "putStorageRoutes", Who.TENANT, Scopes.STORAGE_WRITE, SMALL),
 
             rule("GET", "/v1/nodes", "listNodes", Who.ADMIN_OR_TENANT, Scopes.NODES_READ),
 

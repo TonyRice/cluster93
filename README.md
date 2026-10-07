@@ -74,7 +74,7 @@ If the node running a job dies, the job's `onOrphan` policy decides what happens
 Every `/v1` call carries `Authorization: Bearer <token>`.
 
 - **Admin token.** It manages tenants and their tokens, and cannot read or change tenant data (D-044).
-- **Tenant tokens** (`atly_…`) belong to one tenant and carry **scopes**: `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`, `nodes:read`, or `*` for all of them.
+- **Tenant tokens** (`atly_…`) belong to one tenant and carry **scopes**: `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`, `nodes:read`, `storage:read`, `storage:write`, or `*` for all of them.
 - **Errors.** A missing or revoked token gets `401`, and a missing scope gets `403` naming it (D-045).
 - **Storage.** Only a SHA-256 of each token is stored. The `atly_` prefix and a checksum let secret scanners recognise a leaked token.
 
@@ -88,6 +88,10 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `POST` · `GET` | `/v1/tokens` | `tokens:write`: mint a token for your own tenant, with scopes your token also has · list |
 | `DELETE` | `/v1/tokens/{id}` | `tokens:write`: revoke one of your tenant's tokens, effective on the next request |
 | `GET` | `/v1/whoami` | Any token: who it is and what it may do |
+| `GET` · `PUT` | `/v1/tenants/{name}/storage-policy` | *Admin.* Which storage provider types a tenant may use, its disk allotment, private endpoints |
+| `GET` | `/v1/storage` | `storage:read`: your quota, disk use, routes |
+| `GET` · `PUT` · `DELETE` | `/v1/storage/providers/{name}` | Your own S3 bucket or disk folder (`storage:write`; secrets are never returned) · `POST …/check` |
+| `GET` · `PUT` | `/v1/storage/routes` | Which provider new files go to, by path prefix ([storage](docs/guides/storage.md)) |
 | `GET` | `/v1/openapi.json` | The OpenAPI 3.1 contract; no token needed |
 | `POST` | `/mcp` | MCP (Streamable HTTP) for AI agents, using the same tokens ([guide](docs/guides/mcp.md)) |
 | `POST` | `/v1/jobs` | `{script, input?, timeoutMs?, onOrphan?, maxAttempts?}` → `202` with the job |
@@ -186,6 +190,8 @@ The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each o
 | `AUTOMATELY_FILES_DIR` | | The folder for `disk` (shared by every node in a cluster) |
 | `AUTOMATELY_S3_BUCKET` · `_ENDPOINT` · `_REGION` · `_PREFIX` · `_PATH_STYLE` | | The bucket for `s3`; any S3-compatible endpoint (MinIO, R2, B2, Wasabi) |
 | `AUTOMATELY_S3_ACCESS_KEY_ID` · `_SECRET_ACCESS_KEY` | `AWS_*` | Credentials for `s3`; the standard `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` also work |
+| `AUTOMATELY_SECRETS_KEY` | | Encrypts tenants' storage credentials; required for tenant S3 providers (at least 32 characters, the same on every node) |
+| `AUTOMATELY_DISK_ROOT` | | Where tenant disk providers live; must be shared storage in a cluster ([storage](docs/guides/storage.md)) |
 | `AUTOMATELY_MIN_FREE_DISK_MB` | `1024` | Durable nodes refuse writes (507) below this much free disk |
 | `AUTOMATELY_BASELINE_ADJUST_MS` | `60000` | How long a missing data node is waited for before its data is rebalanced |
 | `AUTOMATELY_JOB_RETENTION_DAYS` | `7` | Finished jobs older than this are deleted |
@@ -209,7 +215,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
-| No tests | 370 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, files, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
+| No tests | 383 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, files, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
 | Synchronous host objects running in the host JVM (Nashorn, `--no-java`); HTTP client with no address checks | Promise-based, tenant-scoped `kv`/`bus`/`fetch`/`log`; SSRF-safe egress; verified domains | `NodeHostServicesTest`, `HostApisTest` |
 | Service jobs: one per name, autostarted at boot, no restart on crash | Supervised services: restart with backoff, revision rolls, graceful stop, checkpoints across runs | Supervisor, chaos and Docker tests |
 | A crashed node's jobs were simply lost or restarted blindly | Attempts with fencing, `onOrphan` policy, resumable steps | Chaos test (kills the node mid-step) |
@@ -237,6 +243,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus`, `fetch`, `log`, `files`, and serving HTTP
 - [docs/guides/cli.md](docs/guides/cli.md): installing and using the CLI
 - [docs/guides/mcp.md](docs/guides/mcp.md): connecting AI agents over MCP
+- [docs/guides/storage.md](docs/guides/storage.md): file storage, from the cluster's default to tenants' own buckets and folders
 
 ## Author
 

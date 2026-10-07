@@ -13,14 +13,15 @@ import java.time.Duration;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
-import java.util.function.Consumer;
 
 /**
- * Files with their metadata in the cluster's database and their bytes in a {@link BlobStore} (D-040, D-056).
+ * Files with their metadata in the cluster's database and their bytes in a {@link BlobStore}: the cluster's own, or a
+ * tenant's provider when its routes say so (D-040, D-056, D-057).
  *
  * <p>Each write is a new blob. Once it's complete, one metadata write publishes it, so readers see the old version or
- * the new one, never a mix. The previous version goes to the garbage table, which deletes its blob after a grace period
- * long enough for downloads already in progress to finish. Subclasses only provide the metadata and garbage storage.
+ * the new one, never a mix. The previous version goes to the garbage table, with the backend that holds it, and its
+ * blob is deleted after a grace period long enough for downloads already in progress to finish. Subclasses only
+ * provide the metadata and garbage storage.
  */
 public abstract class ClusterFileStore implements FileStore {
 
@@ -29,16 +30,18 @@ public abstract class ClusterFileStore implements FileStore {
     /** An upload that never finished (its writer died) is cleaned up after this. */
     public static final Duration ABANDONED_UPLOAD = Duration.ofHours(6);
 
-    protected final Vertx vertx;
-    private final BlobStore blobs;
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ClusterFileStore.class);
 
-    protected ClusterFileStore(Vertx vertx, BlobStore blobs) {
+    protected final Vertx vertx;
+    private final BlobStores stores;
+
+    protected ClusterFileStore(Vertx vertx, BlobStores stores) {
         this.vertx = vertx;
-        this.blobs = blobs;
+        this.stores = stores;
     }
 
-    public BlobStore blobs() {
-        return blobs;
+    public BlobStores stores() {
+        return stores;
     }
 
     // --- storage primitives ---
@@ -54,13 +57,20 @@ public abstract class ClusterFileStore implements FileStore {
     /** Metadata in path order. */
     protected abstract Future<List<JsonObject>> listMeta(String tenant, String prefix, int limit, String cursor);
 
-    protected abstract Future<Long> sumSizes(String tenant);
+    /** Bytes a tenant has in backends that aren't tenant providers (their names don't start "provider:"). */
+    protected abstract Future<Long> sumOwnBytes(String tenant);
 
-    protected abstract Future<Void> putGarbage(String fileId, long deleteAfter);
+    protected abstract Future<Long> sumBytesIn(String tenant, List<String> backends);
+
+    protected abstract Future<Long> countFilesIn(String backend);
+
+    /** A blob to delete after {@code deleteAfter}, and where it is. */
+    protected abstract Future<Void> putGarbage(String fileId, String backend, String tenant, long deleteAfter);
 
     protected abstract Future<Void> removeGarbage(String fileId);
 
-    protected abstract Future<List<String>> dueGarbage(long now, int limit);
+    /** Due garbage rows: {@code {"fileId", "backend", "tenant"}}. */
+    protected abstract Future<List<JsonObject>> dueGarbage(long now, int limit);
 
     // --- FileStore ---
 
@@ -71,40 +81,59 @@ public abstract class ClusterFileStore implements FileStore {
 
     @Override
     public Future<Long> usage(String tenant) {
-        return sumSizes(tenant);
+        return sumOwnBytes(tenant);
     }
 
     @Override
-    public Future<FileWriter> create(String tenant, String path, String contentType, long maxBytes) {
-        if (maxBytes <= 0) {
-            return Future.failedFuture(quota());
-        }
-        String fileId = UUID.randomUUID().toString();
-        String type = contentType == null ? "application/octet-stream" : contentType;
-        // Recorded first, so a writer that dies mid-upload leaves nothing behind for long.
-        return putGarbage(fileId, System.currentTimeMillis() + ABANDONED_UPLOAD.toMillis())
-                .compose(v -> blobs.create(fileId, type))
-                .map(blob -> new Writer(tenant, path, type, fileId, maxBytes, blob));
+    public Future<Long> usageIn(String tenant, List<String> backends) {
+        return backends.isEmpty() ? Future.succeededFuture(0L) : sumBytesIn(tenant, backends);
     }
 
-    private static HostException quota() {
+    @Override
+    public Future<Long> countIn(String backend) {
+        return countFilesIn(backend);
+    }
+
+    @Override
+    public Future<Void> ensureRoom(String tenant, String path, Room room, long bytes) {
+        return stores.forWrite(tenant, path).compose(target -> room.bytes(tenant, target)
+                .compose(left -> bytes > left ? Future.failedFuture(room.tooBig(tenant, target)) : Future.succeededFuture()));
+    }
+
+    @Override
+    public Future<FileWriter> create(String tenant, String path, String contentType, Room room) {
+        String fileId = UUID.randomUUID().toString();
+        String type = contentType == null ? "application/octet-stream" : contentType;
+        return stores.forWrite(tenant, path).compose(target -> room.bytes(tenant, target).compose(maxBytes -> {
+            if (maxBytes <= 0) {
+                return Future.failedFuture(quota());
+            }
+            // Recorded first, so a writer that dies mid-upload leaves nothing behind for long.
+            return putGarbage(fileId, target.name(), tenant, System.currentTimeMillis() + ABANDONED_UPLOAD.toMillis())
+                    .compose(v -> target.create(fileId, type))
+                    .map(blob -> new Writer(tenant, path, type, fileId, maxBytes, target, blob));
+        }));
+    }
+
+    static HostException quota() {
         return HostException.limit("Storage quota reached: the tenant has no room left for this upload (files and kv together)");
     }
 
     @Override
     public BodyStream open(FileInfo file, long start, long endInclusive) {
-        if (!blobs.name().equals(file.backend())) {
-            return failed(new HostException("Error", "storage_unavailable", "This file is stored in the " + file.backend()
-                    + " backend, but the cluster now uses " + blobs.name() + " (AUTOMATELY_FILES_BACKEND); move it back to read it"));
+        if (file.backend().equals(stores.primary().name())) {
+            return stores.primary().open(file.fileId(), file.size(), start, endInclusive);
         }
-        return blobs.open(file.fileId(), file.size(), start, endInclusive);
+        return BodyStreams.deferred(stores.forRead(file.tenant(), file.backend())
+                .map(store -> store.open(file.fileId(), file.size(), start, endInclusive)));
     }
 
     @Override
     public Future<Boolean> delete(String tenant, String path) {
         return removeMeta(tenant, path).compose(previous -> previous == null
                 ? Future.succeededFuture(false)
-                : putGarbage(previous.getString("fileId"), System.currentTimeMillis() + READER_GRACE.toMillis()).map(true));
+                : putGarbage(previous.getString("fileId"), FileInfo.fromJson(previous).backend(), tenant,
+                        System.currentTimeMillis() + READER_GRACE.toMillis()).map(true));
     }
 
     @Override
@@ -120,46 +149,28 @@ public abstract class ClusterFileStore implements FileStore {
 
     @Override
     public Future<Integer> collectGarbage(long now) {
-        return dueGarbage(now, 100).compose(ids -> {
+        return dueGarbage(now, 100).compose(rows -> {
             Future<Void> chain = Future.succeededFuture();
-            for (String id : ids) {
-                chain = chain.compose(v -> blobs.delete(id)).compose(v -> removeGarbage(id));
+            for (JsonObject row : rows) {
+                String id = row.getString("fileId");
+                String backend = row.getString("backend", stores.primary().name());
+                chain = chain.compose(v -> stores.forRead(row.getString("tenant"), backend)
+                        .compose(store -> store.delete(id))
+                        .recover(err -> {
+                            // A provider that's gone, or a backend no longer configured: the bytes are out of reach, so
+                            // the row goes rather than being retried forever.
+                            LOG.warn("Can't delete blob {} in {}: {}", id, backend, err.getMessage());
+                            return Future.succeededFuture();
+                        }))
+                        .compose(v -> removeGarbage(id));
             }
-            return chain.map(ids.size());
+            return chain.map(rows.size());
         });
-    }
-
-    private static BodyStream failed(Throwable cause) {
-        return new BodyStream() {
-            private Consumer<Throwable> error;
-
-            @Override
-            public void handler(Consumer<Buffer> chunk, Runnable end, Consumer<Throwable> error) {
-                this.error = error;
-            }
-
-            @Override
-            public void pause() {
-            }
-
-            @Override
-            public void resume() {
-                if (error != null) {
-                    Consumer<Throwable> once = error;
-                    error = null;
-                    once.accept(cause);
-                }
-            }
-
-            @Override
-            public void cancel() {
-            }
-        };
     }
 
     // --- writing ---
 
-    /** Hashes and counts what passes through, enforces the quota, and publishes the version when the blob is complete. */
+    /** Hashes and counts what passes through, enforces the room it was given, and publishes the version when complete. */
     private final class Writer implements FileWriter {
 
         private final String tenant;
@@ -167,17 +178,19 @@ public abstract class ClusterFileStore implements FileStore {
         private final String contentType;
         private final String fileId;
         private final long allowance;
+        private final BlobStore target;
         private final BlobWriter blob;
         private final MessageDigest sha256;
         private long size;
         private boolean done;
 
-        Writer(String tenant, String path, String contentType, String fileId, long allowance, BlobWriter blob) {
+        Writer(String tenant, String path, String contentType, String fileId, long allowance, BlobStore target, BlobWriter blob) {
             this.tenant = tenant;
             this.path = path;
             this.contentType = contentType;
             this.fileId = fileId;
             this.allowance = allowance;
+            this.target = target;
             this.blob = blob;
             try {
                 this.sha256 = MessageDigest.getInstance("SHA-256");
@@ -212,7 +225,7 @@ public abstract class ClusterFileStore implements FileStore {
             }
             done = true;
             FileInfo info = new FileInfo(tenant, path, fileId, size, contentType, "\"" + HexFormat.of().formatHex(sha256.digest()) + "\"",
-                    blobs.name(), System.currentTimeMillis());
+                    target.name(), System.currentTimeMillis());
             // Only a blob that never completed is discarded here. Once the metadata names it, it's live; if publishing
             // fails before that, its abandoned-upload row in the garbage table still cleans it up.
             return blob.finish()
@@ -220,7 +233,8 @@ public abstract class ClusterFileStore implements FileStore {
                     .compose(v -> putMeta(tenant, path, info.toJson()))
                     .compose(previous -> removeGarbage(fileId).compose(v -> previous == null || previous.getString("fileId").equals(fileId)
                             ? Future.succeededFuture()
-                            : putGarbage(previous.getString("fileId"), System.currentTimeMillis() + READER_GRACE.toMillis())))
+                            : putGarbage(previous.getString("fileId"), FileInfo.fromJson(previous).backend(), tenant,
+                                    System.currentTimeMillis() + READER_GRACE.toMillis())))
                     .map(info);
         }
 
@@ -235,7 +249,8 @@ public abstract class ClusterFileStore implements FileStore {
 
         /** The blob goes, and its garbage row is made due now, in case deleting it failed. */
         private Future<Void> discard() {
-            return blob.abort().recover(err -> Future.succeededFuture()).compose(v -> putGarbage(fileId, 0));
+            return blob.abort().recover(err -> Future.succeededFuture())
+                    .compose(v -> putGarbage(fileId, target.name(), tenant, 0));
         }
     }
 }

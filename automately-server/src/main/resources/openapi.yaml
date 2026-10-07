@@ -35,6 +35,7 @@ tags:
   - name: admin
   - name: cluster
   - name: mcp
+  - name: storage
 
 paths:
   /health:
@@ -270,6 +271,192 @@ paths:
                 required: [token]
                 properties:
                   token: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tenants/{tenant}/storage-policy:
+    parameters:
+      - $ref: '#/components/parameters/tenant'
+    get:
+      operationId: getStoragePolicy
+      tags: [admin, storage]
+      summary: What a tenant may do with its own storage (admin)
+      security:
+        - bearer: [admin]
+      responses:
+        '200': { $ref: '#/components/responses/StoragePolicy' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putStoragePolicy
+      tags: [admin, storage]
+      summary: Enable provider types for a tenant, give it a disk allotment, allow private endpoints (admin)
+      security:
+        - bearer: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                allow:
+                  type: array
+                  items: { type: string, enum: [s3, disk] }
+                diskAllotmentMb: { type: integer, minimum: 0 }
+                allowPrivateEndpoints: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/StoragePolicy' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/storage:
+    get:
+      operationId: getStorage
+      tags: [storage]
+      summary: 'Your storage at a glance: policy, routes, quota and disk use'
+      security:
+        - bearer: ['storage:read']
+      responses:
+        '200':
+          description: An overview.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [defaultBackend, policy, routes, quota, disk]
+                properties:
+                  defaultBackend: { type: string }
+                  policy: { $ref: '#/components/schemas/StoragePolicy' }
+                  routes: { $ref: '#/components/schemas/StorageRoutes' }
+                  providers: { type: integer }
+                  quota:
+                    type: object
+                    properties:
+                      bytes: { type: integer }
+                      usedBytes: { type: integer }
+                  disk:
+                    type: object
+                    properties:
+                      allotmentBytes: { type: integer }
+                      usedBytes: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/storage/providers:
+    get:
+      operationId: listStorageProviders
+      tags: [storage]
+      summary: Your storage providers (never their secrets)
+      security:
+        - bearer: ['storage:read']
+      responses:
+        '200':
+          description: Providers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providers]
+                properties:
+                  providers:
+                    type: array
+                    items: { $ref: '#/components/schemas/StorageProvider' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/storage/providers/{name}:
+    parameters:
+      - $ref: '#/components/parameters/providerName'
+    get:
+      operationId: getStorageProvider
+      tags: [storage]
+      summary: One provider
+      security:
+        - bearer: ['storage:read']
+      responses:
+        '200': { $ref: '#/components/responses/StorageProvider' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putStorageProvider
+      tags: [storage]
+      summary: Create or update a provider; it's checked against the backend before it's saved
+      description: |
+        `s3`: `endpoint`, `bucket`, `accessKeyId`, and `secretAccessKey` (required when creating; omit it to keep the
+        current one), optionally `region`, `prefix`, `pathStyle`. The secret is encrypted at rest and never returned.
+        `disk`: no settings; the folder is chosen by the server under the admin's disk root.
+      security:
+        - bearer: ['storage:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [s3, disk] }
+                endpoint: { type: string }
+                region: { type: string }
+                bucket: { type: string }
+                prefix: { type: string }
+                pathStyle: { type: boolean }
+                accessKeyId: { type: string }
+                secretAccessKey: { type: string, writeOnly: true }
+      responses:
+        '200': { $ref: '#/components/responses/StorageProvider' }
+        '201': { $ref: '#/components/responses/StorageProvider' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteStorageProvider
+      tags: [storage]
+      summary: Delete a provider that holds no files and no route points at
+      security:
+        - bearer: ['storage:write']
+      responses:
+        '204': { description: 'Deleted.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/storage/providers/{name}/check:
+    parameters:
+      - $ref: '#/components/parameters/providerName'
+    post:
+      operationId: checkStorageProvider
+      tags: [storage]
+      summary: Check a provider can be reached with its credentials
+      security:
+        - bearer: ['storage:write']
+      responses:
+        '200':
+          description: The result.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+                  error: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/storage/routes:
+    get:
+      operationId: getStorageRoutes
+      tags: [storage]
+      summary: Which provider new files go to
+      security:
+        - bearer: ['storage:read']
+      responses:
+        '200': { $ref: '#/components/responses/StorageRoutes' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putStorageRoutes
+      tags: [storage]
+      summary: Set the default provider and path-prefix routes (the longest prefix wins; "default" is the cluster's own)
+      security:
+        - bearer: ['storage:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StorageRoutes' }
+      responses:
+        '200': { $ref: '#/components/responses/StorageRoutes' }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/tokens:
@@ -762,7 +949,7 @@ components:
       description: |
         `atly_…` tenant tokens, or the admin token. Scopes: `jobs:read`, `jobs:write`, `services:read`,
         `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`,
-        `nodes:read`, or `*`. Operations marked `admin` need the admin token.
+        `nodes:read`, `storage:read`, `storage:write`, or `*`. Operations marked `admin` need the admin token.
 
   parameters:
     tenant:
@@ -801,6 +988,11 @@ components:
       required: true
       description: A relative path; it may contain `/`, e.g. `site/index.html`.
       schema: { type: string, minLength: 1 }
+    providerName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 63 }
     limit:
       name: limit
       in: query
@@ -826,7 +1018,7 @@ components:
                 items:
                   type: string
                   enum: ['*', 'jobs:read', 'jobs:write', 'services:read', 'services:write', 'files:read', 'files:write',
-                         'bus:publish', 'bus:request', 'tokens:write', 'nodes:read']
+                         'bus:publish', 'bus:request', 'tokens:write', 'nodes:read', 'storage:read', 'storage:write']
               expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
 
   responses:
@@ -857,6 +1049,21 @@ components:
                 required: [token]
                 properties:
                   token: { type: string, pattern: '^atly_[0-9A-Za-z]{49}$' }
+    StoragePolicy:
+      description: A tenant's storage policy.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/StoragePolicy' }
+    StorageProvider:
+      description: A storage provider.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/StorageProvider' }
+    StorageRoutes:
+      description: Storage routes.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/StorageRoutes' }
     Service:
       description: A service.
       content:
@@ -902,6 +1109,35 @@ components:
         scopes:
           type: array
           items: { type: string }
+    StoragePolicy:
+      type: object
+      required: [allow, diskAllotmentMb, allowPrivateEndpoints]
+      properties:
+        tenant: { type: string }
+        allow:
+          type: array
+          items: { type: string }
+        diskAllotmentMb: { type: integer }
+        allowPrivateEndpoints: { type: boolean }
+    StorageProvider:
+      type: object
+      required: [id, name, type, settings, hasSecret]
+      properties:
+        id: { type: string }
+        tenant: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [s3, disk] }
+        settings: { type: object }
+        hasSecret: { type: boolean }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+    StorageRoutes:
+      type: object
+      properties:
+        default: { type: string, description: 'A provider name, or "default" for the cluster''s own storage.' }
+        prefixes:
+          type: object
+          additionalProperties: { type: string }
     Tenant:
       type: object
       required: [name, createdAt]

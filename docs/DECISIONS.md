@@ -460,3 +460,34 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
   - a two-node cluster serves a 20 MB file from the bucket, including ranges through a service
 **Not chosen:** MinIO for tests, whose community images are no longer on Docker Hub; SeaweedFS and s3mock, which accept unsigned requests by default and so wouldn't catch signing bugs.
 
+### D-057 — Tenants bring their own storage providers, under the admin's policy
+**Date:** 2026-10-07 · **Status:** Accepted (Tony)
+
+**Tony's decisions:**
+- Tenants can configure S3-compatible providers with their own credentials, and disk providers in a configured folder with an allotted amount of space.
+- The admin enables or disables provider types per tenant.
+- Only bytes on the cluster's own storage count against the tenant quota.
+- Each tenant has a default provider plus path-prefix routes.
+- Endpoints must be public unless the admin allows private ones.
+
+**How:**
+- **Providers are named resources of a tenant** (`/v1/storage/providers`, scopes `storage:read` and `storage:write`). Files record `provider:<id>` as their backend, so keys can rotate, and routes can change, without breaking reads.
+- **Secrets are write-only.** They're sealed with AES-256-GCM using a key derived from `AUTOMATELY_SECRETS_KEY`, with the tenant and provider id as associated data, so a sealed secret can't be moved to another provider. The API reports only `hasSecret`.
+- **A provider is checked against its backend before it's saved.** A wrong key, a missing bucket or a private address is refused with the reason.
+- **Routes** (`/v1/storage/routes`): the longest matching prefix wins, then the tenant's default; `default` means the cluster's own storage.
+- **The admin's policy** (`/v1/tenants/{name}/storage-policy`): which types are allowed, the disk allotment, and whether endpoints may be private. Nothing is allowed by default. Turning a type off refuses new writes there (403 `storage_disabled`) and keeps reads working.
+- **The room an upload gets depends on where it goes:**
+  - on the cluster's own storage, the tenant quota (D-043)
+  - in the tenant's bucket, unlimited
+  - on a disk provider, the allotment, counted across all the tenant's disk providers
+  - a declared size that won't fit is refused up front, naming the limit
+- **Disk providers live at `<AUTOMATELY_DISK_ROOT>/<tenant>/<name>/`**, a path chosen by the server, never by the tenant. Every node writes a marker into the root and checks the other live nodes' markers. Disk providers only work while all of them are visible. Redundancy across nodes is the shared storage's job (NFS, Ceph); local disks on several nodes can't provide it, and the check turns disk providers off rather than serving files only one node can see.
+- **Endpoint checks:** tenant S3 endpoints are resolved and checked like `fetch` (D-026), and the connection is pinned to the checked address.
+- **Cleanup:** a provider holding files, or one that routes point to, can't be deleted. Deleting a tenant forgets its policy, providers and routes.
+- **Not for agents:** storage isn't exposed as MCP tools, so credentials don't pass through an agent.
+
+**Tests:**
+- `StorageProvidersTest`, against the S3 gateway and a disk root: the policy gates, the private-endpoint refusal, a wrong key caught before saving, routing, quota exclusion, allotment enforcement, key rotation, a disabled type blocking writes but not reads, the in-use delete guard, and tenant isolation
+- `SharedDiskRootTest`, on two nodes: different folders turn disk providers off; a shared folder serves files from either node
+- the contract on both stores, `StorageModelTest` (routing and sealing), `ContractTest` (52 operations) and `CliTest`
+

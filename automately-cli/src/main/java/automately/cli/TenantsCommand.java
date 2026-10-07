@@ -10,7 +10,7 @@ import java.util.List;
 
 @Command(name = "tenants", description = "Manage tenants and their tokens (admin token only).",
         subcommands = {TenantsCommand.Create.class, TenantsCommand.Ls.class, TenantsCommand.Rm.class, TenantsCommand.Token.class,
-                TenantsCommand.Tokens.class, TenantsCommand.Revoke.class})
+                TenantsCommand.Tokens.class, TenantsCommand.Revoke.class, TenantsCommand.StoragePolicy.class})
 final class TenantsCommand extends Base {
 
     @Override
@@ -91,6 +91,45 @@ final class TenantsCommand extends Base {
         @Override
         int execute() {
             TokensCommand.list(this, api().get("/v1/tenants/" + Api.segment(tenant) + "/tokens"));
+            return 0;
+        }
+    }
+
+    @Command(name = "storage-policy", description = "Show a tenant's storage policy, or set it with any option.")
+    static final class StoragePolicy extends Base {
+        @Parameters(paramLabel = "TENANT")
+        String tenant;
+
+        @Option(names = "--allow", paramLabel = "TYPE", description = "Repeatable: s3, disk. Replaces what's allowed.")
+        List<String> allow;
+
+        @Option(names = "--none", description = "Allow no provider types.")
+        boolean none;
+
+        @Option(names = "--disk-mb", paramLabel = "MB", description = "Disk allotment across the tenant's disk providers.")
+        Long diskMb;
+
+        @Option(names = "--allow-private-endpoints", negatable = true, description = "Let its S3 endpoints be private addresses.")
+        Boolean allowPrivate;
+
+        @Override
+        int execute() {
+            String path = "/v1/tenants/" + Api.segment(tenant) + "/storage-policy";
+            JsonNode current = api().get(path);
+            if (allow == null && !none && diskMb == null && allowPrivate == null) {
+                Output.json(out(), current);
+                return 0;
+            }
+            com.fasterxml.jackson.databind.node.ArrayNode types = Json.array();
+            if (!none) {
+                (allow != null ? allow : java.util.stream.StreamSupport.stream(current.path("allow").spliterator(), false).map(JsonNode::asText).toList())
+                        .forEach(types::add);
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode body = Json.object()
+                    .put("diskAllotmentMb", diskMb != null ? diskMb : current.path("diskAllotmentMb").asLong())
+                    .put("allowPrivateEndpoints", allowPrivate != null ? allowPrivate : current.path("allowPrivateEndpoints").asBoolean());
+            body.set("allow", types);
+            Output.json(out(), api().put(path, body));
             return 0;
         }
     }

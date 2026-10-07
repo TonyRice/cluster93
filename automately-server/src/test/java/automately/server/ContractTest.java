@@ -47,6 +47,8 @@ class ContractTest {
                 Map.entry("AUTOMATELY_NODE_ID", "contract"),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
                 Map.entry("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "0"),
+                Map.entry("AUTOMATELY_SECRETS_KEY", "contract-secrets-key-0123456789abcdef"),
+                Map.entry("AUTOMATELY_DISK_ROOT", diskRoot().toString()),
                 Map.entry("AUTOMATELY_HTTP_PORT", "0"),
                 Map.entry("AUTOMATELY_INGRESS_PORT", "0"),
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
@@ -58,6 +60,14 @@ class ContractTest {
         client = WebClient.create(clientVertx);
         contract = await(Contract.load(clientVertx));
         responses = ResponseValidator.create(clientVertx, contract);
+    }
+
+    private static java.nio.file.Path diskRoot() {
+        try {
+            return java.nio.file.Files.createTempDirectory("automately-contract-disk");
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @AfterAll
@@ -141,6 +151,20 @@ class ContractTest {
         calls.check("mcp", "POST", "/mcp", tenant, new JsonObject().put("jsonrpc", "2.0").put("id", 1).put("method", "ping"));
         calls.check("mcpStream", "GET", "/mcp", null, null);
         calls.check("mcpEndSession", "DELETE", "/mcp", null, null);
+
+        calls.check("putStoragePolicy", "PUT", "/v1/tenants/contract/storage-policy", admin,
+                new JsonObject().put("allow", new JsonArray().add("disk")).put("diskAllotmentMb", 10));
+        calls.check("getStoragePolicy", "GET", "/v1/tenants/contract/storage-policy", admin, null);
+        calls.check("putStorageProvider", "PUT", "/v1/storage/providers/local", tenant, new JsonObject().put("type", "disk"));
+        calls.check("getStorageProvider", "GET", "/v1/storage/providers/local", tenant, null);
+        calls.check("listStorageProviders", "GET", "/v1/storage/providers", tenant, null);
+        calls.check("checkStorageProvider", "POST", "/v1/storage/providers/local/check", tenant, null);
+        calls.check("putStorageRoutes", "PUT", "/v1/storage/routes", tenant,
+                new JsonObject().put("default", "default").put("prefixes", new JsonObject().put("local/", "local")));
+        calls.check("getStorageRoutes", "GET", "/v1/storage/routes", tenant, null);
+        calls.check("getStorage", "GET", "/v1/storage", tenant, null);
+        calls.call("PUT", "/v1/storage/routes", tenant, new JsonObject().put("default", "default"));
+        calls.check("deleteStorageProvider", "DELETE", "/v1/storage/providers/local", tenant, null);
 
         calls.check("deleteTenant", "DELETE", "/v1/tenants/contract", admin, null);
 

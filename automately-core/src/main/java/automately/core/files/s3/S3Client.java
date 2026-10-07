@@ -40,8 +40,23 @@ public final class S3Client {
     private final String connectHost;
     private final int port;
     private final String authority;
+    private final Vertx vertx;
+    private final automately.core.host.EgressPolicy egress;
+    private volatile java.net.InetAddress pinned;
+    private volatile long pinnedAt;
 
     public S3Client(Vertx vertx, S3Settings settings) {
+        this(vertx, settings, null);
+    }
+
+    /**
+     * With {@code egress}, the endpoint is resolved here and refused if the policy forbids its address, and every
+     * connection goes to the address that was checked, so DNS can't swap in an internal one later (D-026, D-057).
+     * Tenants' own buckets use this; the operator's configured bucket doesn't need it.
+     */
+    public S3Client(Vertx vertx, S3Settings settings, automately.core.host.EgressPolicy egress) {
+        this.vertx = vertx;
+        this.egress = egress;
         this.settings = settings;
         this.ssl = "https".equalsIgnoreCase(settings.endpoint().getScheme());
         this.port = settings.endpoint().getPort() > 0 ? settings.endpoint().getPort() : ssl ? 443 : 80;
@@ -132,7 +147,7 @@ public final class S3Client {
     /** Bytes {@code start}..{@code endInclusive} as a paused response to stream; 404 fails with an S3Exception. */
     public Future<HttpClientResponse> getRange(String key, long start, long endInclusive) {
         RequestOptions options = request(HttpMethod.GET, key, new TreeMap<>(), Map.of("range", "bytes=" + start + "-" + endInclusive), null);
-        return http.request(options).compose(request -> request.send()).compose(response -> {
+        return pin(options).compose(pinnedOptions -> http.request(pinnedOptions)).compose(request -> request.send()).compose(response -> {
             if (response.statusCode() == 200 || response.statusCode() == 206) {
                 // Paused here, in the callback that delivers it, so no chunk arrives before the reader's handlers.
                 response.pause();
@@ -177,12 +192,36 @@ public final class S3Client {
     }
 
     private Future<Answer> send(HttpMethod method, String key, SortedMap<String, String> query, Map<String, String> extra, Buffer body) {
-        RequestOptions options = request(method, key, query, extra, body);
-        return http.request(options)
+        return pin(request(method, key, query, extra, body)).compose(options -> http.request(options))
                 .compose(request -> body == null ? request.send() : request.send(body))
                 .compose(response -> response.body().compose(data -> response.statusCode() >= 300
                         ? Future.failedFuture(error(response.statusCode(), data))
                         : Future.succeededFuture(new Answer(response.headers(), data))));
+    }
+
+    /** Resolved at most once a minute; the checked address is the one connected to. */
+    private Future<RequestOptions> pin(RequestOptions options) {
+        if (egress == null) {
+            return Future.succeededFuture(options);
+        }
+        java.net.InetAddress cached = pinned;
+        if (cached != null && System.currentTimeMillis() - pinnedAt < 60_000) {
+            return Future.succeededFuture(options.setServer(io.vertx.core.net.SocketAddress.inetSocketAddress(port, cached.getHostAddress())));
+        }
+        return vertx.<java.net.InetAddress>executeBlocking(() -> {
+            java.net.InetAddress[] all;
+            try {
+                all = java.net.InetAddress.getAllByName(connectHost);
+            } catch (java.net.UnknownHostException e) {
+                throw new S3Exception(0, "dns_failed", "Could not resolve " + connectHost);
+            }
+            return java.util.Arrays.stream(all).filter(egress::allows).findFirst().orElseThrow(() -> new S3Exception(0, "egress_denied",
+                    connectHost + " resolves to a private or reserved address, which this tenant's storage policy doesn't allow"));
+        }, false).map(address -> {
+            pinned = address;
+            pinnedAt = System.currentTimeMillis();
+            return options.setServer(io.vertx.core.net.SocketAddress.inetSocketAddress(port, address.getHostAddress()));
+        });
     }
 
     /** A signed request. Bucket operations have a null key. */

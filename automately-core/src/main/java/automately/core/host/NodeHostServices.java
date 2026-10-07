@@ -47,19 +47,23 @@ public final class NodeHostServices implements HostServices {
     private final FileStore files;
     private final StorageCapacity capacity;
     private final automately.core.storage.TenantQuota quota;
+    private final automately.core.files.Room room;
     private final List<automately.core.files.FileWriter> openWriters = new CopyOnWriteArrayList<>();
     private final List<Registration> registrations = new CopyOnWriteArrayList<>();
     private final AtomicInteger fetchesInFlight = new AtomicInteger();
 
     public NodeHostServices(Vertx vertx, String tenant, String jobId, boolean service, KvStore kv, FetchClient fetch, ServeRegistry serve) {
-        this(vertx, tenant, jobId, service, kv, fetch, serve, null, StorageCapacity.UNLIMITED, automately.core.storage.TenantQuota.unlimited());
+        this(vertx, tenant, jobId, service, kv, fetch, serve, null, StorageCapacity.UNLIMITED, automately.core.storage.TenantQuota.unlimited(),
+                automately.core.files.Room.fixed(Long.MAX_VALUE));
     }
 
     public NodeHostServices(Vertx vertx, String tenant, String jobId, boolean service, KvStore kv, FetchClient fetch, ServeRegistry serve,
-                            FileStore files, StorageCapacity capacity, automately.core.storage.TenantQuota quota) {
+                            FileStore files, StorageCapacity capacity, automately.core.storage.TenantQuota quota,
+                            automately.core.files.Room room) {
         this.files = files;
         this.capacity = capacity;
         this.quota = quota;
+        this.room = room;
         this.vertx = vertx;
         this.tenant = tenant;
         this.jobId = jobId;
@@ -71,8 +75,9 @@ public final class NodeHostServices implements HostServices {
 
     /** A factory sharing one store, client and registry across a node's executions. */
     public static HostServicesFactory factory(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files,
-                                              StorageCapacity capacity, automately.core.storage.TenantQuota quota) {
-        return (tenant, jobId, service) -> new NodeHostServices(vertx, tenant, jobId, service, kv, fetch, serve, files, capacity, quota);
+                                              StorageCapacity capacity, automately.core.storage.TenantQuota quota,
+                                              automately.core.files.Room room) {
+        return (tenant, jobId, service) -> new NodeHostServices(vertx, tenant, jobId, service, kv, fetch, serve, files, capacity, quota, room);
     }
 
     @Override
@@ -128,8 +133,7 @@ public final class NodeHostServices implements HostServices {
             String path = path(args);
             FileStore store = filesOrFail();
             return capacity.ensureRoom()
-                    .compose(room -> quota.remaining(tenant))
-                    .compose(left -> store.create(tenant, path, args.getString("contentType"), left))
+                    .compose(ok -> store.create(tenant, path, args.getString("contentType"), room))
                     .map(this::counted)
                     .map(writer -> {
                         openWriters.add(writer);
@@ -182,7 +186,11 @@ public final class NodeHostServices implements HostServices {
 
             @Override
             public Future<automately.core.files.FileInfo> finish() {
-                return writer.finish().onSuccess(info -> quota.added(tenant, info.size()));
+                return writer.finish().onSuccess(info -> {
+                    if (automately.core.storage.StorageRoom.countsAgainstQuota(info.backend())) {
+                        quota.added(tenant, info.size());
+                    }
+                });
             }
 
             @Override

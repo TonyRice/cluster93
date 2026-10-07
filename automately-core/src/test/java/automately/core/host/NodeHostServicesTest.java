@@ -107,7 +107,8 @@ class NodeHostServicesTest {
 
     private NodeHostServices quotaHost(automately.core.files.FileStore files, automately.core.storage.TenantQuota quota) {
         return new NodeHostServices(vertx, "acme", "job-q", false, kv, new FetchClient(vertx, EgressPolicy.PUBLIC_ONLY), serve, files,
-                automately.core.files.StorageCapacity.UNLIMITED, quota);
+                automately.core.files.StorageCapacity.UNLIMITED, quota,
+                (t, target) -> quota.remaining(t));
     }
 
     private static JsonObject entry(String key, Object value) {

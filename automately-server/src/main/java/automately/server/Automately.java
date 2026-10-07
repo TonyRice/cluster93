@@ -21,6 +21,13 @@ import automately.core.files.BlobStore;
 import automately.core.files.DiskBlobStore;
 import automately.core.files.SharedDataChunks;
 import automately.core.files.s3.S3BlobStore;
+import automately.core.storage.SecretBox;
+import automately.core.storage.SharedDataStorageConfigStore;
+import automately.core.storage.SharedFolderCheck;
+import automately.core.storage.StorageConfigStore;
+import automately.core.storage.StorageRoom;
+import automately.core.storage.TenantBlobStores;
+import automately.server.api.StorageApi;
 import automately.core.auth.AuthStore;
 import automately.core.auth.Authenticator;
 import automately.core.auth.SharedDataAuthStore;
@@ -92,14 +99,24 @@ public final class Automately {
                     IgniteStores durable = IgniteStores.open(vertx, cluster);
                     StorageCapacity capacity = IgniteCapacity.of(cluster, config.minFreeDiskBytes());
                     BlobStore blobs = fileBackend(vertx, config, () -> durable.chunks(capacity));
+                    java.util.concurrent.atomic.AtomicBoolean diskRootShared = new java.util.concurrent.atomic.AtomicBoolean();
+                    TenantBlobStores routed = tenantStores(vertx, config, blobs, durable.storage, diskRootShared);
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
-                            durable.files(blobs), blobs, capacity, durable.auth);
+                            durable.files(routed), blobs, capacity, durable.auth, durable.storage, routed, diskRootShared);
                     return wire(config, txt, vertx, stores, cluster);
                 })
                 .recover(err -> {
                     cluster.stop();
                     return Future.failedFuture(err);
                 });
+    }
+
+    /** Tenants' own providers on top of the cluster's default (D-057). */
+    static TenantBlobStores tenantStores(Vertx vertx, ServerConfig config, BlobStore primary, StorageConfigStore storage,
+                                         java.util.concurrent.atomic.AtomicBoolean diskRootShared) {
+        SecretBox secrets = config.secretsKey() == null ? null : new SecretBox(config.secretsKey());
+        return new TenantBlobStores(vertx, primary, storage, secrets, config.diskRoot(), config.minFreeDiskBytes(), diskRootShared::get,
+                config.egressAllowPrivate());
     }
 
     /** Where file bytes go (D-056): the cluster by default, or a folder, or an S3-compatible bucket. */
@@ -113,15 +130,19 @@ public final class Automately {
 
     /** Where durable data lives: Ignite when clustered, in-memory maps for a single development node. */
     record Stores(JobStore jobs, JobStateStore state, ServiceStore services, DomainStore domains, KvStore kv, FileStore files,
-                  BlobStore blobs, StorageCapacity capacity, AuthStore auth) {
+                  BlobStore blobs, StorageCapacity capacity, AuthStore auth, StorageConfigStore storage, TenantBlobStores routed,
+                  java.util.concurrent.atomic.AtomicBoolean diskRootShared) {
 
         static Stores inMemory(Vertx vertx, ServerConfig config) {
             // In-memory data lives on the JVM heap, so that's what admission control watches (D-038).
             StorageCapacity capacity = StorageCapacity.heap(0.8);
             BlobStore blobs = fileBackend(vertx, config, () -> new SharedDataChunks(vertx, capacity));
+            StorageConfigStore storage = new SharedDataStorageConfigStore(vertx);
+            java.util.concurrent.atomic.AtomicBoolean diskRootShared = new java.util.concurrent.atomic.AtomicBoolean();
+            TenantBlobStores routed = tenantStores(vertx, config, blobs, storage, diskRootShared);
             return new Stores(new SharedDataJobStore(vertx), new SharedDataJobStateStore(vertx), new SharedDataServiceStore(vertx),
                     new SharedDataDomainStore(vertx), new SharedDataKvStore(vertx),
-                    new SharedDataFileStore(vertx, blobs), blobs, capacity, new SharedDataAuthStore(vertx));
+                    new SharedDataFileStore(vertx, routed), blobs, capacity, new SharedDataAuthStore(vertx), storage, routed, diskRootShared);
         }
     }
 
@@ -140,15 +161,24 @@ public final class Automately {
         // One quota for everything a tenant stores: files and kv together (D-043).
         TenantQuota quota = new TenantQuota(config.tenantStorageBytes(),
                 tenant -> stores.files().usage(tenant).compose(files -> stores.kv().usage(tenant).map(kv -> files + kv)));
+        StorageRoom room = new StorageRoom(quota, stores.storage(), stores.files());
         HostServicesFactory hostServices = NodeHostServices.factory(vertx, stores.kv(),
-                new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving, stores.files(), stores.capacity(), quota);
+                new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate())), serving, stores.files(), stores.capacity(), quota, room);
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken());
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
-                quota, authenticator, stores.auth());
+                quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
+                        config.secretsKey() == null ? null : new SecretBox(config.secretsKey()), config.diskRoot(), stores.blobs().name()));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         // A node whose file backend can't be used refuses to start, saying why, rather than failing uploads later.
-        return stores.blobs().check()
+        // Tenant disk providers need a disk root every node sees (D-057); a single node always does.
+        Future<Void> diskRoot = config.diskRoot() == null ? Future.succeededFuture()
+                : new SharedFolderCheck(vertx, config.diskRoot(), instanceId, nodes, stores.diskRootShared()).start()
+                        .recover(err -> {
+                            LOG.warn("AUTOMATELY_DISK_ROOT {} isn't usable, so tenant disk providers are off: {}", config.diskRoot(), err.getMessage());
+                            return Future.succeededFuture();
+                        });
+        return diskRoot.compose(d -> stores.blobs().check())
                 .onSuccess(v -> LOG.info("Files are stored in the {} backend{}", stores.blobs().name(), config.filesBackend().equals(S3BlobStore.NAME)
                         ? ": " + config.s3().describe() : config.filesBackend().equals(DiskBlobStore.NAME) ? ": " + config.filesDirectory() : ""))
                 .compose(v -> authenticator.ensureAdminToken(new SecureRandom())).onSuccess(generated -> generated.ifPresent(token -> LOG.warn(

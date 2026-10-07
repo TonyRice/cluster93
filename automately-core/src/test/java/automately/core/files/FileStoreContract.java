@@ -37,7 +37,7 @@ public abstract class FileStoreContract {
     }
 
     protected static FileInfo write(FileStore store, String tenant, String path, byte[] data, int piece, long maxBytes) throws Exception {
-        FileWriter writer = await(store.create(tenant, path, "application/test", maxBytes));
+        FileWriter writer = await(store.create(tenant, path, "application/test", Room.fixed(maxBytes)));
         for (int i = 0; i < data.length; i += piece) {
             await(writer.write(Buffer.buffer(data).getBuffer(i, Math.min(data.length, i + piece))));
         }
@@ -147,7 +147,7 @@ public abstract class FileStoreContract {
 
     @Test
     public void abortedUploadsLeaveNothing() throws Exception {
-        FileWriter writer = await(store.create("acme", "half.bin", null, Long.MAX_VALUE));
+        FileWriter writer = await(store.create("acme", "half.bin", null, Room.fixed(Long.MAX_VALUE)));
         await(writer.write(Buffer.buffer(bytes(CHUNK + 10, 5))));
 
         await(writer.abort());
@@ -187,7 +187,7 @@ public abstract class FileStoreContract {
 
         assertThatThrownBy(() -> write(store, "quota", "over.bin", bytes(200, 7), 50, 100))
                 .isInstanceOf(ExecutionException.class).cause().isInstanceOf(HostException.class).hasMessageContaining("quota");
-        assertThatThrownBy(() -> await(store.create("quota", "none.bin", null, 0)))
+        assertThatThrownBy(() -> await(store.create("quota", "none.bin", null, Room.fixed(0))))
                 .isInstanceOf(ExecutionException.class).cause().isInstanceOf(HostException.class).hasMessageContaining("quota");
         assertThat(await(store.stat("quota", "over.bin"))).isNull();
         assertThat(await(store.usage("quota"))).isEqualTo(CHUNK + 100);

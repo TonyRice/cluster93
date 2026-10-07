@@ -22,12 +22,19 @@ public final class DiskBlobStore implements BlobStore {
     /** Free space is checked before the write and then every this many bytes. */
     static final long CHECK_EVERY = 16L * 1024 * 1024;
 
+    private final String name;
     private final Vertx vertx;
     private final FileSystem fs;
     private final Path dir;
     private final long minFreeBytes;
 
     public DiskBlobStore(Vertx vertx, Path dir, long minFreeBytes) {
+        this(NAME, vertx, dir, minFreeBytes);
+    }
+
+    /** {@code name} identifies this folder in file metadata (tenants' disk providers have their own, D-057). */
+    public DiskBlobStore(String name, Vertx vertx, Path dir, long minFreeBytes) {
+        this.name = name;
         this.vertx = vertx;
         this.fs = vertx.fileSystem();
         this.dir = dir.toAbsolutePath().normalize();
@@ -36,7 +43,7 @@ public final class DiskBlobStore implements BlobStore {
 
     @Override
     public String name() {
-        return NAME;
+        return name;
     }
 
     /** Blobs are spread over 256 subfolders by their id's first two characters, so no folder gets huge. */

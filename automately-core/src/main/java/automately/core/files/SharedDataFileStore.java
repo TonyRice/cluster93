@@ -14,7 +14,7 @@ public final class SharedDataFileStore extends ClusterFileStore {
     private static final char SEPARATOR = '\u001f';
 
     private final Future<AsyncMap<String, JsonObject>> meta;
-    private final Future<AsyncMap<String, Long>> garbage;
+    private final Future<AsyncMap<String, JsonObject>> garbage;
 
     /** Bytes in the same shared maps, with the heap as the capacity that's watched (D-038). */
     public SharedDataFileStore(Vertx vertx) {
@@ -26,7 +26,11 @@ public final class SharedDataFileStore extends ClusterFileStore {
     }
 
     public SharedDataFileStore(Vertx vertx, BlobStore blobs) {
-        super(vertx, blobs);
+        this(vertx, BlobStores.single(blobs));
+    }
+
+    public SharedDataFileStore(Vertx vertx, BlobStores stores) {
+        super(vertx, stores);
         this.meta = vertx.sharedData().getAsyncMap("automately.files");
         this.garbage = vertx.sharedData().getAsyncMap("automately.file-garbage");
     }
@@ -61,14 +65,28 @@ public final class SharedDataFileStore extends ClusterFileStore {
     }
 
     @Override
-    protected Future<Long> sumSizes(String tenant) {
+    protected Future<Long> sumOwnBytes(String tenant) {
         return meta.compose(AsyncMap::values).map(values -> values.stream()
-                .filter(v -> v.getString("tenant").equals(tenant)).mapToLong(v -> v.getLong("size")).sum());
+                .filter(v -> v.getString("tenant").equals(tenant) && !FileInfo.fromJson(v).backend().startsWith("provider:"))
+                .mapToLong(v -> v.getLong("size")).sum());
     }
 
     @Override
-    protected Future<Void> putGarbage(String fileId, long deleteAfter) {
-        return garbage.compose(m -> m.put(fileId, deleteAfter));
+    protected Future<Long> sumBytesIn(String tenant, List<String> backends) {
+        return meta.compose(AsyncMap::values).map(values -> values.stream()
+                .filter(v -> v.getString("tenant").equals(tenant) && backends.contains(FileInfo.fromJson(v).backend()))
+                .mapToLong(v -> v.getLong("size")).sum());
+    }
+
+    @Override
+    protected Future<Long> countFilesIn(String backend) {
+        return meta.compose(AsyncMap::values).map(values -> values.stream().filter(v -> FileInfo.fromJson(v).backend().equals(backend)).count());
+    }
+
+    @Override
+    protected Future<Void> putGarbage(String fileId, String backend, String tenant, long deleteAfter) {
+        return garbage.compose(m -> m.put(fileId, new JsonObject().put("fileId", fileId).put("backend", backend).put("tenant", tenant)
+                .put("deleteAfter", deleteAfter)));
     }
 
     @Override
@@ -77,8 +95,8 @@ public final class SharedDataFileStore extends ClusterFileStore {
     }
 
     @Override
-    protected Future<List<String>> dueGarbage(long now, int limit) {
-        return garbage.compose(AsyncMap::entries).map(entries -> entries.entrySet().stream()
-                .filter(e -> e.getValue() <= now).map(java.util.Map.Entry::getKey).limit(limit).toList());
+    protected Future<List<JsonObject>> dueGarbage(long now, int limit) {
+        return garbage.compose(AsyncMap::values).map(rows -> rows.stream()
+                .filter(r -> r.getLong("deleteAfter") <= now).limit(limit).toList());
     }
 }

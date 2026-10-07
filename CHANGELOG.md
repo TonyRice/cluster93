@@ -26,6 +26,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## File storage backends, step 2: tenants' own providers (2026-10-07)
+
+### Added
+- **Tenant storage providers** (D-057): an S3-compatible bucket with the tenant's own keys, or a disk folder under the admin's `AUTOMATELY_DISK_ROOT`. Path-prefix routes and a default choose which provider new files go to. Each file records where its bytes are, so reads always find them. **Why:** Tony wants tenants to configure their own providers, with a global default from the environment.
+- **The admin's storage policy per tenant:** allowed types, disk allotment, private endpoints. Nothing is allowed by default, and turning a type off blocks new writes but not reads.
+- **Secrets encrypted at rest** (AES-256-GCM, `AUTOMATELY_SECRETS_KEY`) and write-only in the API. Providers are checked against their backend before they're saved.
+- **Quota:** only the cluster's own storage counts against `AUTOMATELY_TENANT_STORAGE_MB`. Disk providers count against the allotment, and tenants' buckets aren't counted. A declared upload size that won't fit is refused up front, naming the limit.
+- **A shared disk root check** across nodes: disk providers only work while every node sees the same folder.
+- **Tenant endpoints** are resolved and checked like `fetch`, and connections are pinned to the checked address.
+- **API:** `/v1/storage`, `/v1/storage/providers[/{name}[/check]]`, `/v1/storage/routes`, `/v1/tenants/{name}/storage-policy`; scopes `storage:read` and `storage:write`. All are in the OpenAPI contract (52 operations).
+- **CLI:** `automately storage` (overview), `storage providers ls|get|set-s3|set-disk|check|rm`, `storage routes [set]`, `tenants storage-policy`.
+- **Tests:** `StorageProvidersTest`, `SharedDiskRootTest`, a storage-config contract on both stores, `StorageModelTest`, and the CLI.
+- [`docs/guides/storage.md`](docs/guides/storage.md).
+
+### Changed
+- `FileStore.create` takes a `Room` (how much fits, by destination) instead of a byte count, and `ensureRoom` replaces the separate quota check. Garbage rows record each blob's backend and tenant, and `FILES` has a `backend` column.
+- Deleting a tenant also forgets its storage policy, providers and routes, and a tenant with files on its own providers isn't considered empty.
+
 ## File storage backends, step 1: the global default (2026-10-07)
 
 ### Added

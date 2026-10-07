@@ -41,10 +41,13 @@ public interface FileStore {
     Future<FileInfo> stat(String tenant, String path);
 
     /**
-     * Starts an upload that may store at most {@code maxBytes} (what the tenant's quota has left, D-043). Fails with
-     * a quota error if that's nothing; a write that goes past it fails and discards the upload.
+     * Starts an upload to the store this path routes to (D-057), which may hold at most what {@code room} allows there
+     * (D-043). Fails if there's no room at all; a write that goes past it fails and discards the upload.
      */
-    Future<FileWriter> create(String tenant, String path, String contentType, long maxBytes);
+    Future<FileWriter> create(String tenant, String path, String contentType, Room room);
+
+    /** Fails, saying which limit, if a file of {@code bytes} at this path wouldn't fit where it would go (checked up front). */
+    Future<Void> ensureRoom(String tenant, String path, Room room, long bytes);
 
     /** Bytes {@code start} to {@code endInclusive} of a version, as a paused stream. */
     BodyStream open(FileInfo file, long start, long endInclusive);
@@ -52,12 +55,18 @@ public interface FileStore {
     /** {@code {"files": [view…], "cursor": next-or-null}}, in path order. */
     Future<JsonObject> list(String tenant, String prefix, int limit, String cursor);
 
-    /** Completes with whether a file was removed. Its chunks are deleted after the grace period. */
+    /** Completes with whether a file was removed. Its bytes are deleted after the grace period. */
     Future<Boolean> delete(String tenant, String path);
 
-    /** Bytes stored by a tenant. */
+    /** Bytes a tenant stores on the cluster's own backend; its own providers don't count (D-057). */
     Future<Long> usage(String tenant);
 
-    /** Deletes chunks of versions that were replaced, deleted or abandoned and are past their grace period. */
+    /** Bytes a tenant stores in these backends (a disk allotment's providers). */
+    Future<Long> usageIn(String tenant, java.util.List<String> backends);
+
+    /** How many files (current versions) are in a backend: a provider holding any can't be deleted. */
+    Future<Long> countIn(String backend);
+
+    /** Deletes the bytes of versions that were replaced, deleted or abandoned and are past their grace period. */
     Future<Integer> collectGarbage(long now);
 }

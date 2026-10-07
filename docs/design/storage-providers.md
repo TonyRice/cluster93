@@ -1,6 +1,6 @@
 # Design and plan: file storage providers
 
-**Status:** Step 1 ✅ done (2026-10-07); step 2 next · **Date:** 2026-10-07
+**Status:** ✅ Done: steps 1 and 2 (2026-10-07) · **Date:** 2026-10-07
 **Why:** The original Automately Core had a pluggable `VirtualFileStore`: local disk by default, `aws` for S3, Azure Blob, or any class, chosen in config. The rewrite stored files only inside the cluster (D-040). Tony asked for providers back, configurable **per tenant with the tenant's own credentials**, plus a global default from the environment.
 
 ## Decisions taken with Tony (2026-10-07)
@@ -45,3 +45,11 @@
 - **Endpoint checks:** a tenant's S3 endpoint must resolve to public addresses (the same policy as `fetch`, D-026) unless its storage policy allows private ones. The connection goes to the address that was checked, so DNS rebinding can't get around it.
 - **Deleting a provider that still holds files** is refused, listing how many.
 - **Everywhere:** the OpenAPI contract, CLI (`automately storage providers …`, `automately storage routes …`), MCP tools, and docs.
+
+## What changed while building it
+- **Test server:** MinIO's community images are gone from Docker Hub, so tests use Versity's S3 gateway, which checks SigV4 signatures. SeaweedFS and s3mock accept unsigned requests by default.
+- **Room:** an upload's room depends on where it's routed, so `FileStore.create` takes a `Room`, and the up-front `Content-Length` check (`ensureRoom`) names the limit that applies.
+- **Garbage rows** carry each blob's backend and tenant, so old versions are deleted from the right place. A row whose backend is gone is dropped with a warning, since the bytes are in the tenant's own storage.
+- **Status codes:** cluster setup problems (no secrets key, no shared disk root) are 409 `storage_unavailable`. A provider that fails its check is 400 `provider_check_failed`.
+- **MCP tools don't manage providers**, so keys never go through an agent.
+

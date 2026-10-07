@@ -27,10 +27,12 @@ final class FilesRoutes {
 
     private final FileStore files;
     private final TenantQuota quota;
+    private final automately.core.files.Room room;
 
-    FilesRoutes(FileStore files, TenantQuota quota) {
+    FilesRoutes(FileStore files, TenantQuota quota, automately.core.files.Room room) {
         this.files = files;
         this.quota = quota;
+        this.room = room;
     }
 
     void mount(Router router) {
@@ -70,10 +72,8 @@ final class FilesRoutes {
         }
         // A known size is checked against the quota (files and kv, D-043) before a byte is read.
         String tenant = ctx.get("tenant");
-        quota.remaining(tenant)
-                .compose(left -> declared > left
-                        ? Future.<FileWriter>failedFuture(TenantQuota.exceeded(quota.bytes()))
-                        : files.create(tenant, path, request.getHeader("Content-Type"), left))
+        files.ensureRoom(tenant, path, room, declared)
+                .compose(fits -> files.create(tenant, path, request.getHeader("Content-Type"), room))
                 .onFailure(err -> fail(ctx, err)).onSuccess(writer -> {
             boolean[] failed = {false};
             request.handler(chunk -> {
@@ -93,7 +93,11 @@ final class FilesRoutes {
                     return;
                 }
                 writer.finish()
-                        .onSuccess(info -> quota.added(tenant, info.size()))
+                        .onSuccess(info -> {
+                            if (automately.core.storage.StorageRoom.countsAgainstQuota(info.backend())) {
+                                quota.added(tenant, info.size());
+                            }
+                        })
                         .onSuccess(info -> ctx.response().setStatusCode(201).putHeader("Content-Type", "application/json")
                                 .putHeader("ETag", info.etag()).end(info.toViewJson().encode()))
                         .onFailure(err -> fail(ctx, err));
@@ -154,6 +158,7 @@ final class FilesRoutes {
             switch (host.code()) {
                 case "insufficient_storage" -> error(ctx, 507, host.code(), host.getMessage());
                 case "storage_unavailable" -> error(ctx, 503, host.code(), host.getMessage());
+                case "storage_disabled" -> error(ctx, 403, host.code(), host.getMessage());
                 case "limit_exceeded" -> error(ctx, 413, host.code(), host.getMessage());
                 default -> error(ctx, 400, host.code(), host.getMessage());
             }

@@ -69,13 +69,18 @@ public record ServerConfig(
         long rateLimitPerMinute,
         String filesBackend,
         Path filesDirectory,
-        automately.core.files.s3.S3Settings s3) {
+        automately.core.files.s3.S3Settings s3,
+        String secretsKey,
+        Path diskRoot) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
 
     public ServerConfig {
         if (!FILES_BACKENDS.contains(filesBackend)) {
             throw new IllegalArgumentException("AUTOMATELY_FILES_BACKEND must be one of " + FILES_BACKENDS + " (it was " + filesBackend + ")");
+        }
+        if (secretsKey != null && secretsKey.length() < automately.core.storage.SecretBox.MIN_KEY_LENGTH) {
+            throw new IllegalArgumentException("AUTOMATELY_SECRETS_KEY must be at least " + automately.core.storage.SecretBox.MIN_KEY_LENGTH + " characters");
         }
         if (filesBackend.equals("disk") && filesDirectory == null) {
             throw new IllegalArgumentException("AUTOMATELY_FILES_DIR is required with AUTOMATELY_FILES_BACKEND=disk");
@@ -125,7 +130,9 @@ public record ServerConfig(
                 Long.parseLong(env.getOrDefault("AUTOMATELY_RATE_LIMIT_PER_MINUTE", "1200")),
                 env.getOrDefault("AUTOMATELY_FILES_BACKEND", "cluster").trim().toLowerCase(java.util.Locale.ROOT),
                 blankToNull(env.get("AUTOMATELY_FILES_DIR")) == null ? null : Path.of(env.get("AUTOMATELY_FILES_DIR").trim()),
-                "s3".equalsIgnoreCase(env.getOrDefault("AUTOMATELY_FILES_BACKEND", "").trim()) ? automately.core.files.s3.S3Settings.fromEnv(env) : null);
+                "s3".equalsIgnoreCase(env.getOrDefault("AUTOMATELY_FILES_BACKEND", "").trim()) ? automately.core.files.s3.S3Settings.fromEnv(env) : null,
+                blankToNull(env.get("AUTOMATELY_SECRETS_KEY")),
+                blankToNull(env.get("AUTOMATELY_DISK_ROOT")) == null ? null : Path.of(env.get("AUTOMATELY_DISK_ROOT").trim()));
     }
 
     private static String blankToNull(String value) {

@@ -1,6 +1,7 @@
 package automately.cluster.ignite.store;
 
-import automately.core.files.BlobStore;
+import automately.core.files.BlobStores;
+import automately.core.files.FileInfo;
 import automately.core.files.ClusterFileStore;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -19,7 +20,8 @@ import java.util.Map;
 public final class IgniteFileStore extends ClusterFileStore {
 
     static final Table.Definition FILES = new Table.Definition("FILES",
-            Table.columns("tenant", String.class, "path", String.class, "size", Long.class), List.of(Table.index("tenant", "path")));
+            Table.columns("tenant", String.class, "path", String.class, "size", Long.class, "backend", String.class),
+            List.of(Table.index("tenant", "path"), Table.index("backend")));
     static final Table.Definition GARBAGE = new Table.Definition("FILE_GARBAGE",
             Table.columns("deleteAfter", Long.class), List.of(Table.index("deleteAfter")));
     private static final char SEPARATOR = '\u001f';
@@ -27,10 +29,10 @@ public final class IgniteFileStore extends ClusterFileStore {
     private final Table files;
     private final Table garbage;
 
-    public IgniteFileStore(Vertx vertx, Ignite ignite, BlobStore blobs) {
-        super(vertx, blobs);
+    public IgniteFileStore(Vertx vertx, Ignite ignite, BlobStores stores) {
+        super(vertx, stores);
         this.files = new Table(vertx, ignite, FILES, json -> Map.of("tenant", json.getString("tenant"), "path", json.getString("path"),
-                "size", json.getLong("size")));
+                "size", json.getLong("size"), "backend", FileInfo.fromJson(json).backend()));
         this.garbage = new Table(vertx, ignite, GARBAGE, json -> Map.of("deleteAfter", json.getLong("deleteAfter")));
     }
 
@@ -72,14 +74,31 @@ public final class IgniteFileStore extends ClusterFileStore {
     }
 
     @Override
-    protected Future<Long> sumSizes(String tenant) {
-        return files.query("SELECT SUM(size) FROM FILES WHERE tenant = ?", tenant)
-                .map(rows -> rows.isEmpty() || rows.getFirst().getFirst() == null ? 0L : ((Number) rows.getFirst().getFirst()).longValue());
+    protected Future<Long> sumOwnBytes(String tenant) {
+        // Rows from before backends were recorded have no backend: they're in the cluster.
+        return sum("SELECT SUM(size) FROM FILES WHERE tenant = ? AND (backend IS NULL OR backend NOT LIKE 'provider:%')", tenant);
     }
 
     @Override
-    protected Future<Void> putGarbage(String fileId, long deleteAfter) {
-        return garbage.put(fileId, new JsonObject().put("fileId", fileId).put("deleteAfter", deleteAfter));
+    protected Future<Long> sumBytesIn(String tenant, List<String> backends) {
+        String marks = String.join(", ", java.util.Collections.nCopies(backends.size(), "?"));
+        List<Object> args = new ArrayList<>(List.of(tenant));
+        args.addAll(backends);
+        return sum("SELECT SUM(size) FROM FILES WHERE tenant = ? AND backend IN (" + marks + ")", args.toArray());
+    }
+
+    @Override
+    protected Future<Long> countFilesIn(String backend) {
+        return sum("SELECT COUNT(*) FROM FILES WHERE backend = ?", backend);
+    }
+
+    private Future<Long> sum(String sql, Object... args) {
+        return files.query(sql, args).map(rows -> rows.isEmpty() || rows.getFirst().getFirst() == null ? 0L : ((Number) rows.getFirst().getFirst()).longValue());
+    }
+
+    @Override
+    protected Future<Void> putGarbage(String fileId, String backend, String tenant, long deleteAfter) {
+        return garbage.put(fileId, new JsonObject().put("fileId", fileId).put("backend", backend).put("tenant", tenant).put("deleteAfter", deleteAfter));
     }
 
     @Override
@@ -88,8 +107,7 @@ public final class IgniteFileStore extends ClusterFileStore {
     }
 
     @Override
-    protected Future<List<String>> dueGarbage(long now, int limit) {
-        return garbage.queryJson("SELECT json FROM FILE_GARBAGE WHERE deleteAfter <= ? LIMIT ?", now, limit)
-                .map(rows -> rows.stream().map(r -> r.getString("fileId")).toList());
+    protected Future<List<JsonObject>> dueGarbage(long now, int limit) {
+        return garbage.queryJson("SELECT json FROM FILE_GARBAGE WHERE deleteAfter <= ? LIMIT ?", now, limit);
     }
 }
