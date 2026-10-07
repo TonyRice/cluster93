@@ -1,0 +1,82 @@
+# Builds the native `automately` CLI for every platform and publishes a GitHub release (D-049).
+#
+# Runs ONLY when a version tag is pushed (git tag v2.1.0 && git push origin v2.1.0); it is not CI, so D-017
+# stands. native-image can't cross-compile, which is why each platform builds on its own runner.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  native:
+    name: ${{ matrix.asset }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Static against musl: runs on any Linux distro, Alpine included.
+          - { os: ubuntu-latest, asset: automately-linux-x64, musl: 'true', extra: '--static --libc=musl' }
+          # GraalVM's musl support is x64 only; arm64 links glibc, built for broad CPU compatibility.
+          - { os: ubuntu-24.04-arm, asset: automately-linux-arm64, musl: 'false', extra: '-march=compatibility' }
+          - { os: macos-14, asset: automately-macos-arm64, musl: 'false', extra: '-march=compatibility' }
+          - { os: macos-15-intel, asset: automately-macos-x64, musl: 'false', extra: '-march=compatibility' }
+          - { os: windows-latest, asset: automately-windows-x64.exe, musl: 'false', extra: '-march=compatibility' }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '21'
+          distribution: graalvm-community
+          native-image-musl: ${{ matrix.musl }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the native binary
+        run: ./mvnw -B -ntp -Pnative -pl automately-cli -am package -Dmaven.test.skip=true "-Dnative.extra.args=${{ matrix.extra }}"
+      - name: Name it for the release
+        run: |
+          if [ -f automately-cli/target/automately.exe ]; then src=automately-cli/target/automately.exe; else src=automately-cli/target/automately; fi
+          mkdir -p dist && cp "$src" "dist/${{ matrix.asset }}"
+      - name: Smoke test
+        run: ./dist/${{ matrix.asset }} --version
+      - name: Smoke test against a real node (Linux x64)
+        if: matrix.asset == 'automately-linux-x64'
+        run: |
+          ./mvnw -B -ntp -pl automately-server -am package -DskipTests -DskipITs
+          export AUTOMATELY_ADMIN_TOKEN=release-smoke-admin-token-0123456789abcdef
+          java $(./mvnw -q help:evaluate -Dexpression=ignite.jvm.args -DforceStdout) -jar automately-server/target/automately.jar &
+          for i in $(seq 60); do curl -sf localhost:8080/health && break; sleep 1; done
+          cli=./dist/automately-linux-x64
+          $cli --url http://localhost:8080 --token "$AUTOMATELY_ADMIN_TOKEN" tenants create smoke
+          token=$($cli --url http://localhost:8080 --token "$AUTOMATELY_ADMIN_TOKEN" tenants token smoke ci --scope '*')
+          echo "export default (input) => ({ hello: input.name })" > hello.js
+          AUTOMATELY_URL=http://localhost:8080 AUTOMATELY_TOKEN="$token" $cli run hello.js --input '{"name":"release"}' | grep release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    needs: native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and installers
+        run: |
+          cp install/install.sh install/install.ps1 dist/
+          cd dist && sha256sum automately-* > SHA256SUMS && cat SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes

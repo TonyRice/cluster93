@@ -407,3 +407,29 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Evidence:** `StreamingTest` sometimes saw "Connection was closed" instead of the 413 for a 65 MB upload. The server answered and closed straight away while bytes were still arriving, the kernel reset the connection, and the client lost the answer it had been sent.
 **Decision:** When the body is too big to drain (over 64 MB, declared or counted), the server sends `Connection: close` and keeps reading and discarding. It closes once the body ends or after 5 s, whichever is first, and only after the answer is out. This is what nginx calls a lingering close. Small bodies are drained and the connection is kept, as before.
 
+### D-053 — How the CLI is built
+**Date:** 2026-10-06 · **Status:** Accepted. Implements D-048 and D-049
+
+**Decision:**
+- **Libraries.** picocli, Jackson's tree model (nothing is bound to classes by reflection) and the JDK HTTP client. That is all native-image needs; picocli's annotation processor writes the reflection config. The static Linux x64 binary is 50 MB, starts in about 10 ms, and runs on Alpine.
+- **Scriptable by default.**
+  - `run` sends logs to stderr and the output to stdout, and exits 0 only when the job succeeded.
+  - Token secrets go to stdout and notes to stderr.
+  - `--json` on any command prints the API's JSON.
+  - Usage errors exit 2, other failures exit 1.
+- **Credentials.** The login is saved with owner-only permissions. `AUTOMATELY_URL` and `AUTOMATELY_TOKEN` override it, for CI.
+- **`files sync`** compares local SHA-256 hashes with the server's ETags (D-040), so only changed files go up.
+- **Testing.** Every command runs in-process against a real node in the build (`CliTest`). The installer is tested for real against a local release host, including a tampered checksum (`InstallScriptTest`), and `install.ps1` is checked to parse.
+- **Release workflow.** `.github/workflows/release.yml` builds the five binaries on a version tag only, smoke-tests them (Linux x64 against a real node), and publishes them with `SHA256SUMS` and both installers. Nothing runs until a tag is pushed.
+
+### D-054 — How the MCP server is built
+**Date:** 2026-10-06 · **Status:** Accepted. Implements D-047
+
+**Decision:**
+- **Stateless Streamable HTTP.** One JSON-RPC message per `POST`, answered as JSON. No sessions and no server-initiated stream (`GET` and `DELETE` are 405), and batches are refused. Protocol versions `2025-11-25`, `2025-06-18` and `2025-03-26` are accepted, with the newest offered otherwise.
+- **Tools go through the REST API.** Each tool calls this node's own REST API over loopback with the caller's token. Scopes, validation, quotas and rate limits therefore apply exactly as for any client, and each operation has one implementation. Loopback calls carry a per-node secret so they don't count against the rate limit twice.
+- **Resources.** The scripting guides are bundled into the server jar from `docs/scripting/` at build time and served as resources.
+- **Admin token.** It gets 403: tools act on a tenant.
+**Why not the MCP Java SDK?** Its server transports assume Servlet or Reactor, and the protocol surface used here is small. `McpTest` and the CLI bridge test exercise it end to end, including an agent deploying a service and calling it through the ingress.
+**Note:** Origin checks matter for MCP servers on localhost without auth (DNS rebinding). Here every request needs a bearer token, which a rebinding page can't supply.
+

@@ -36,6 +36,7 @@
         <module>automately-runtime-javet</module>
         <module>automately-cluster-ignite</module>
         <module>automately-server</module>
+        <module>automately-cli</module>
     </modules>
 
     <properties>

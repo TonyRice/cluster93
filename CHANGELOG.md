@@ -25,6 +25,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase 4, milestone 4 — The MCP server (2026-10-06)
+
+### Added
+- **MCP at `/mcp` on every node** (D-047, D-054): Streamable HTTP, stateless, using the same tokens, scopes and rate limits as the API.
+  - **Tools:** `run_job`, `get_job`, `job_logs`, `list_jobs`, `cancel_job`, `deploy_service`, `list_services`, `service_status`, `service_logs`, `start_service`, `stop_service`, `restart_service`, `delete_service`, `write_file`, `read_file`, `list_files`, `delete_file`, `publish`, `request`. Each is annotated read-only or destructive, and each acts through the REST API with the caller's token.
+  - **Resources:** the three scripting guides (`automately://docs/…`), bundled from `docs/scripting/`. An `instructions` text on `initialize` explains the script shape.
+  - **Why:** the positioning since the revival plan is that AI agents can deploy and run code on Automately.
+- `/mcp` is in the OpenAPI contract, so `ContractTest` covers it.
+- **Tests:** `McpTest` covers the handshake, version negotiation, notifications, errors, batches, 401/403, resources, `run_job` with logs, scopes, and an agent deploying a service, calling it through the ingress, then reading its logs, files and bus. `CliTest` drives the stdio bridge.
+- [`docs/guides/mcp.md`](docs/guides/mcp.md): how to connect remote and stdio clients, and the tools.
+
+## Phase 4, milestone 3 — The CLI, with a one-line install (2026-10-06)
+
+### Added
+- **`automately`, the CLI** (D-048, D-053):
+  - `login`/`logout`/`whoami`
+  - `run`, which follows a job, sends logs to stderr and the output to stdout, and exits with the outcome
+  - `jobs`, `services` (`deploy`, `logs`, …), `domains`, `files` (`put`/`get`/`ls`/`rm`, and `sync` of a folder by ETag)
+  - `tokens`, `tenants` (admin), `mcp` (the stdio bridge), `version`, `upgrade`
+  - `--json` on any command
+  - **Why:** Tony asked for a CLI that's easy to install, with no JDK needed on client machines.
+- **Native binaries.** A `native` Maven profile (GraalVM). A static musl build of the Linux x64 binary was made and tested here: 50 MB, starts in 10 ms, and runs on Alpine, logs in, runs a script, and bridges MCP against a real node.
+- **One-line install** (D-049): `install/install.sh` (`curl … | sh`) and `install/install.ps1` (`irm … | iex`). They detect the platform, **verify SHA-256**, install to a user directory and set up `PATH`.
+- **`.github/workflows/release.yml`**, run only on a version tag. It builds Linux x64 (static) and arm64, macOS arm64 and Intel, and Windows x64, smoke-tests them, and publishes them with `SHA256SUMS` and both installers. It does nothing until a tag is pushed, and D-017 stands.
+- **Tests:** `CliTest` runs every command in-process against a real node, and `InstallScriptTest` runs the real installer against a local release host, including a tampered checksum, and checks the PowerShell script parses.
+- [`docs/guides/cli.md`](docs/guides/cli.md).
+
+### Open
+- The release workflow uses GitHub Actions runners (macOS and Windows can't be built here), and anonymous downloads need public release assets. Both are Tony's call (D-049).
+
 ## Phase 4, milestone 2 — The OpenAPI contract, validation and rate limits (2026-10-06)
 
 ### Added

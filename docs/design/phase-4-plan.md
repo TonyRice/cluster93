@@ -1,6 +1,6 @@
 # Plan: API, auth, CLI and MCP (phase 4)
 
-**Status:** Milestones 1 and 2 ✅ done (2026-10-06); milestones 3 and 4 in progress · **Date:** 2026-10-06
+**Status:** ✅ Done: milestones 1 to 4 (2026-10-06). Release hosting for the CLI is waiting on Tony (D-049) · **Date:** 2026-10-06
 **Why:** Weak spots #4 (routing by hand, no contract) and #7 (Basic auth with a long-lived key) from the [revival plan](revival-plan.md), plus the part of the positioning that makes Automately current: AI agents can deploy and run code on it through MCP. The `X-Automately-Tenant` header was always a stand-in. Anyone who can reach the API can act as any tenant, so it has to go before anything else is exposed.
 
 ## Decisions taken with Tony
@@ -106,4 +106,11 @@ Milestones 1, 2, 3, 4, in that order. Each ends green on the full `./mvnw verify
 - **Binary bodies have no schema**, and server-sent events are registered as text, because `vertx-openapi` can't run a JSON schema over raw bytes.
 - **Rate limits use each node's share** of the tenant's budget (D-051). The default is 1 200 a minute rather than the planned 600, since a CLI following a job polls.
 - **Early answers close with a lingering close** (D-052), found when a 413 for an oversized upload sometimes arrived as a reset.
+
+## What changed during milestones 3 and 4
+- **The CLI as built:** picocli with Jackson's tree model and the JDK HTTP client (D-053). The static Linux x64 binary is 50 MB rather than the estimated 20–40 MB, and starts in about 10 ms.
+- **Recent log lines on connect.** `services logs` and the MCP `service_logs` tool needed a running service's recent output. Event streams of running jobs now begin with their recent lines, fetched from the node running them and numbered so live events aren't repeated. This shipped in milestone 2's commit.
+- **MCP tools act through the REST API** with the caller's token over loopback (D-054), instead of duplicating each operation. Loopback calls are exempt from the rate limit, so a tool call costs one request.
+- **MCP is stateless:** no sessions and no server-initiated stream. That fits tools that answer within one request.
+- **The release workflow exists but is inert** until a version tag is pushed. Where public downloads come from is still Tony's call (D-049).
 

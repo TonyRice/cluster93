@@ -4,7 +4,23 @@ A self-hostable, clustered runtime for sandboxed JavaScript functions, built on 
 
 You submit a script to any node. The cluster runs it on the least-loaded node in a fresh V8 isolate, streams its console output live, and stores the result where every node can read it.
 
-> **Status: phase 4 in progress.** The cluster is the database (embedded Apache Ignite: durable, replicated, survives full restarts). Services stream HTTP (large uploads and downloads, server-sent events) and store and serve files, with ranges for video. Writes are refused with 507 before memory or disk runs out, rather than crashing the node. Every API call now needs a scoped, revocable token. The OpenAPI contract, the CLI and the MCP server are next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
+> **Status: phase 4 done.**
+>
+> - **Database.** The cluster is the database: embedded Apache Ignite, durable, replicated, and it survives full restarts.
+> - **Streaming and files.** Services stream HTTP and serve files, with ranges for video. Writes are refused before memory or disk runs out.
+> - **API.** The API has an OpenAPI contract that validates every request, scoped tokens and rate limits.
+> - **Tools.** A native CLI installs with one line, and every node serves an **MCP server**, so AI agents can deploy and run code.
+>
+> Phase 5 (observability and polish) is next. This is a ground-up rewrite of Automately Core (2015–2017), which ran on a Vert.x 2 fork called jsync.io, Nashorn and raw Hazelcast. See [What changed since 2017](#what-changed-since-2017).
+
+## Install the CLI
+
+```bash
+curl -fsSL https://github.com/adamnlynn/automately-v2/releases/latest/download/install.sh | sh     # Linux, macOS
+irm https://github.com/adamnlynn/automately-v2/releases/latest/download/install.ps1 | iex           # Windows
+```
+
+These are native binaries that need no Java, and the installer checks each one's checksum. See the [CLI guide](docs/guides/cli.md). To let an AI agent use the cluster, see [MCP](docs/guides/mcp.md).
 
 ## Try it
 
@@ -28,6 +44,13 @@ curl -N localhost:8083/v1/jobs/<id>/events -H "$AUTH"
 ```
 
 Without `AUTOMATELY_ADMIN_TOKEN`, the first node generates an admin token and prints it once in its log.
+
+The same with the CLI:
+```bash
+automately --url http://localhost:8081 --token "$AUTOMATELY_ADMIN_TOKEN" tenants token demo laptop --scope '*' | automately login http://localhost:8081
+echo 'export default async (input) => ({ greeting: `hello ${input.name}` })' > hello.js
+automately run hello.js --input '{"name": "tony"}'
+```
 
 A script is an ES module. Its default export receives the job input and a job context, and returns (or resolves to) any JSON value:
 
@@ -66,6 +89,7 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `DELETE` | `/v1/tokens/{id}` | `tokens:write`: revoke one of your tenant's tokens, effective on the next request |
 | `GET` | `/v1/whoami` | Any token: who it is and what it may do |
 | `GET` | `/v1/openapi.json` | The OpenAPI 3.1 contract; no token needed |
+| `POST` | `/mcp` | MCP (Streamable HTTP) for AI agents, using the same tokens ([guide](docs/guides/mcp.md)) |
 | `POST` | `/v1/jobs` | `{script, input?, timeoutMs?, onOrphan?, maxAttempts?}` → `202` with the job |
 | `GET` | `/v1/jobs` | Jobs for the tenant, newest first |
 | `GET` | `/v1/jobs/{id}` | One job, including `attempt` and the `attempts` history |
@@ -181,7 +205,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
-| No tests | 291 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, files, auth, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
+| No tests | 315 unit tests (hostile scripts, orphan scenarios, services, host APIs, egress, files, auth, the API contract, MCP, the CLI and its installer, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
 | Synchronous host objects running in the host JVM (Nashorn, `--no-java`); HTTP client with no address checks | Promise-based, tenant-scoped `kv`/`bus`/`fetch`/`log`; SSRF-safe egress; verified domains | `NodeHostServicesTest`, `HostApisTest` |
 | Service jobs: one per name, autostarted at boot, no restart on crash | Supervised services: restart with backoff, revision rolls, graceful stop, checkpoints across runs | Supervisor, chaos and Docker tests |
 | A crashed node's jobs were simply lost or restarted blindly | Attempts with fencing, `onOrphan` policy, resumable steps | Chaos test (kills the node mid-step) |
@@ -193,7 +217,7 @@ Javet's native library is included for linux-x86_64 only for now.
 2b. ~~**Long-running services**~~ ✅ Supervised services, timers and an event loop per isolate, job cancellation ([design](docs/design/services.md), [guide](docs/scripting/services.md))
 3. ~~**Host APIs**~~ ✅ `kv`, `bus`, `fetch`, `log`, HTTP hosting with automatic and verified domains; isolate pooling measured and declined ([design](docs/design/host-apis.md), [reference](docs/scripting/host-apis.md))
 3b. ~~**The cluster is the database, streaming, files**~~ ✅ Embedded Ignite (durable, replicated), streamed HTTP, a `files` API with ranges, storage admission control ([design](docs/design/durability-and-streaming.md))
-4. **API, auth, CLI and MCP** *(in progress)*: scoped tokens, the OpenAPI contract and rate limits, a native CLI, and an MCP server for AI agents ([plan](docs/design/phase-4-plan.md))
+4. ~~**API, auth, CLI and MCP**~~ ✅ Scoped tokens, an OpenAPI contract that validates every request, rate limits, a native CLI with a one-line install, and an MCP server for AI agents ([plan](docs/design/phase-4-plan.md), [CLI](docs/guides/cli.md), [MCP](docs/guides/mcp.md))
 5. **Observability and polish.** Metrics, tracing, Grafana, benchmarks, `SECURITY.md`
 
 Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES.md](NOTES.md).
@@ -207,6 +231,8 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/scripting/job-context.md](docs/scripting/job-context.md): the job context API for scripts (attempts, steps, checkpoints)
 - [docs/scripting/services.md](docs/scripting/services.md): services, timers and cancellation
 - [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus`, `fetch`, `log`, `files`, and serving HTTP
+- [docs/guides/cli.md](docs/guides/cli.md): installing and using the CLI
+- [docs/guides/mcp.md](docs/guides/mcp.md): connecting AI agents over MCP
 
 ## Author
 
