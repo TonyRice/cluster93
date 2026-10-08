@@ -49,7 +49,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     /** The prelude's files (src/main/resources/automately/runtime/javet/js), in order; each sees what the earlier ones define. */
     static final List<String> PRELUDE_FILES = List.of("prelude.js", "console.js", "timers.js", "listeners.js", "kv.js", "bus.js", "jobs.js", "secrets.js",
-            "encoding.js", "streams.js", "crypto.js", "fetch.js", "files.js", "fs.js", "serve.js", "context.js", "entry.js");
+            "encoding.js", "streams.js", "crypto.js", "zlib.js", "fetch.js", "files.js", "fs.js", "serve.js", "context.js", "entry.js");
 
     /**
      * Runs before the job's module: the prelude's files in one closure. It captures the host object, removes it from the
@@ -84,6 +84,13 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("stream", "node:stream"), java.util.Map.entry("node:stream", "node:stream"),
             java.util.Map.entry("stream/promises", "node:stream/promises"), java.util.Map.entry("node:stream/promises", "node:stream/promises"),
             java.util.Map.entry("string_decoder", "node:string_decoder"), java.util.Map.entry("node:string_decoder", "node:string_decoder"),
+            java.util.Map.entry("zlib", "node:zlib"), java.util.Map.entry("node:zlib", "node:zlib"),
+            java.util.Map.entry("assert", "node:assert"), java.util.Map.entry("node:assert", "node:assert"),
+            java.util.Map.entry("assert/strict", "node:assert/strict"), java.util.Map.entry("node:assert/strict", "node:assert/strict"),
+            java.util.Map.entry("querystring", "node:querystring"), java.util.Map.entry("node:querystring", "node:querystring"),
+            java.util.Map.entry("timers", "node:timers"), java.util.Map.entry("node:timers", "node:timers"),
+            java.util.Map.entry("timers/promises", "node:timers/promises"), java.util.Map.entry("node:timers/promises", "node:timers/promises"),
+            java.util.Map.entry("os", "node:os"), java.util.Map.entry("node:os", "node:os"),
             // The host APIs as modules (D-091), so packages can import them rather than rely on globals.
             java.util.Map.entry("automately:kv", "automately:kv"), java.util.Map.entry("automately:bus", "automately:bus"),
             java.util.Map.entry("automately:jobs", "automately:jobs"), java.util.Map.entry("automately:files", "automately:files"),
@@ -106,6 +113,14 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:stream", resource("node/stream.js")),
             java.util.Map.entry("node:stream/promises", resource("node/stream_promises.js")),
             java.util.Map.entry("node:string_decoder", resource("node/string_decoder.js")),
+            // Step 4 of D-095 (D-103).
+            java.util.Map.entry("node:zlib", resource("node/zlib.js")),
+            java.util.Map.entry("node:assert", resource("node/assert.js")),
+            java.util.Map.entry("node:assert/strict", resource("node/assert_strict.js")),
+            java.util.Map.entry("node:querystring", resource("node/querystring.js")),
+            java.util.Map.entry("node:timers", resource("node/timers.js")),
+            java.util.Map.entry("node:timers/promises", resource("node/timers_promises.js")),
+            java.util.Map.entry("node:os", resource("node/os.js")),
             java.util.Map.entry("automately:kv", hostModule("kv")),
             java.util.Map.entry("automately:bus", hostModule("bus")),
             java.util.Map.entry("automately:jobs", hostModule("jobs")),
@@ -114,9 +129,18 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("automately:fetch", hostModule("fetch")),
             java.util.Map.entry("automately:log", hostModule("log")));
 
-    /** The built-ins with this job's {@code process.env} in the process stand-in (D-095): plain JSON, so nothing runs. */
-    static java.util.Map<String, String> withEnv(java.util.Map<String, String> env) {
+    /**
+     * The built-ins with this job's values in them: {@code process.env} in the process stand-in (D-095), as plain JSON
+     * so nothing runs, and the isolate's heap limit as {@code os.totalmem()} (D-103).
+     */
+    static java.util.Map<String, String> forJob(java.util.Map<String, String> env, long heapBytes) {
         java.util.Map<String, String> sources = new java.util.HashMap<>(BUILT_IN_SOURCES);
+        String heapMarker = "/* automately:heap */ 0";
+        String os = sources.get("node:os");
+        if (!os.contains(heapMarker)) {
+            throw new IllegalStateException("os.js has lost its heap marker");
+        }
+        sources.put("node:os", os.replace(heapMarker, Long.toString(heapBytes)));
         String marker = "/* automately:env */ { NODE_ENV: 'production' }";
         String process = sources.get("node:process");
         if (!process.contains(marker)) {
@@ -162,6 +186,8 @@ public final class JavetScriptRuntime implements ScriptRuntime {
     private static final long HEAP_HEADROOM_BYTES = 32L * 1024 * 1024;
 
     private final Vertx vertx;
+    /** The heap limit each isolate gets, as os.totalmem() reports it. */
+    private final long heapBytes;
     private final WorkerExecutor isolates;
 
     /**
@@ -171,6 +197,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
      */
     public JavetScriptRuntime(Vertx vertx, int maxHeapMb, int isolateThreads) {
         this.vertx = vertx;
+        this.heapBytes = maxHeapMb * 1024L * 1024L;
         configureHeapLimit(maxHeapMb);
         // A service's isolate holds its thread for as long as it runs, so no execute-time warnings.
         this.isolates = vertx.createSharedWorkerExecutor("automately-isolates", isolateThreads, 365, TimeUnit.DAYS);
@@ -337,6 +364,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 bindApi(v8, hostObject, "secrets", new SecretsBinding(bridge, host.secrets()), callbacks);
                 bindApi(v8, hostObject, "fs", new FsBinding(bridge, host.fs()), callbacks);
                 bindApi(v8, hostObject, "crypto", new CryptoBinding(bridge, host.crypto()), callbacks);
+                bindApi(v8, hostObject, "zlib", new ZlibBinding(bridge, host.zlib()), callbacks);
                 v8.getGlobalObject().set("__automately", hostObject);
             }
             try {
@@ -360,7 +388,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     private ExecutionResult invokeModule(V8Runtime v8, Execution execution, Control control) throws JavetException {
         // Built-ins (D-079) and the job's packages (D-089), all already in memory.
-        ModuleResolver resolver = new ModuleResolver(execution.packages(), BUILT_IN_MODULES, withEnv(execution.env()));
+        ModuleResolver resolver = new ModuleResolver(execution.packages(), BUILT_IN_MODULES, forJob(execution.env(), heapBytes));
         v8.setV8ModuleResolver(resolver);
         try (V8ValueObject prelude = v8.getExecutor(PRELUDE).setResourceName("automately:prelude").execute();
              ScriptEntryPoints js = new ScriptEntryPoints(v8, prelude);

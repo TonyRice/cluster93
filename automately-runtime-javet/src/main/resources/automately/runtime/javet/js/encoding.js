@@ -10,20 +10,54 @@ const utf8Encode = (text) => {
   }
   return new Uint8Array(out);
 };
-const utf8Decode = (bytes) => {
-  let s = '';
-  for (let i = 0; i < bytes.length;) {
+// UTF-8 as the WHATWG Encoding standard decodes it (as Node and browsers do): a sequence that's broken or overlong
+// becomes one U+FFFD and the byte that broke it is read again, so nothing after it is swallowed (D-103).
+const utf8Decode = (input) => {
+  const bytes = input instanceof Uint8Array ? input
+    : ArrayBuffer.isView(input) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength) : new Uint8Array(input);
+  let out = '';
+  const units = [];
+  const push = (c) => {
+    if (c > 0xffff) {
+      c -= 0x10000;
+      units.push(0xd800 + (c >> 10), 0xdc00 + (c & 0x3ff));
+    } else {
+      units.push(c);
+    }
+    if (units.length >= 8192) {
+      out += String.fromCharCode.apply(null, units);
+      units.length = 0;
+    }
+  };
+  let needed = 0, seen = 0, cp = 0, lower = 0x80, upper = 0xbf;
+  for (let i = 0; i < bytes.length; i++) {
     const b = bytes[i];
-    let c, n;
-    if (b < 0x80) { c = b; n = 1; }
-    else if (b >= 0xf0) { c = ((b & 7) << 18) | ((bytes[i + 1] & 63) << 12) | ((bytes[i + 2] & 63) << 6) | (bytes[i + 3] & 63); n = 4; }
-    else if (b >= 0xe0) { c = ((b & 15) << 12) | ((bytes[i + 1] & 63) << 6) | (bytes[i + 2] & 63); n = 3; }
-    else if (b >= 0xc0) { c = ((b & 31) << 6) | (bytes[i + 1] & 63); n = 2; }
-    else { c = 0xfffd; n = 1; }
-    s += String.fromCodePoint(c);
-    i += n;
+    if (needed === 0) {
+      if (b <= 0x7f) push(b);
+      else if (b >= 0xc2 && b <= 0xdf) { needed = 1; cp = b & 0x1f; }
+      else if (b >= 0xe0 && b <= 0xef) { if (b === 0xe0) lower = 0xa0; if (b === 0xed) upper = 0x9f; needed = 2; cp = b & 0x0f; }
+      else if (b >= 0xf0 && b <= 0xf4) { if (b === 0xf0) lower = 0x90; if (b === 0xf4) upper = 0x8f; needed = 3; cp = b & 0x07; }
+      else push(0xfffd);
+      continue;
+    }
+    if (b < lower || b > upper) {
+      needed = seen = cp = 0;
+      lower = 0x80;
+      upper = 0xbf;
+      push(0xfffd);
+      i--;
+      continue;
+    }
+    lower = 0x80;
+    upper = 0xbf;
+    cp = (cp << 6) | (b & 0x3f);
+    if (++seen === needed) {
+      push(cp);
+      needed = seen = cp = 0;
+    }
   }
-  return s;
+  if (needed) push(0xfffd);
+  return out + String.fromCharCode.apply(null, units);
 };
 define('TextEncoder', class TextEncoder { get encoding() { return 'utf-8'; } encode(text = '') { return utf8Encode(text); } });
 define('TextDecoder', class TextDecoder { get encoding() { return 'utf-8'; } decode(bytes) { return bytes ? utf8Decode(bytes) : ''; } });

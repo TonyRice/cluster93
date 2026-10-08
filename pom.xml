@@ -53,6 +53,7 @@
         <testcontainers.version>2.0.5</testcontainers.version>
         <ignite.version>2.18.0</ignite.version>
         <micrometer.version>1.17.1</micrometer.version>
+        <brotli.version>0.1.2</brotli.version>
         <logback.version>1.5.20</logback.version>
         <bouncycastle.version>1.86</bouncycastle.version>
         <!-- JVM flags Apache Ignite 2.x needs on JDK 17+ (also set in the Dockerfile). -->
@@ -79,6 +80,12 @@
                 <groupId>io.micrometer</groupId>
                 <artifactId>micrometer-core</artifactId>
                 <version>${micrometer.version}</version>
+            </dependency>
+            <!-- Brotli decoding for the isolate's zlib (D-103): Google's pure-Java decoder, MIT. -->
+            <dependency>
+                <groupId>org.brotli</groupId>
+                <artifactId>dec</artifactId>
+                <version>${brotli.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.micrometer</groupId>

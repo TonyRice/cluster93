@@ -79,7 +79,7 @@ Each is new reach, so each gets its threat model: SSRF, egress rules, connection
 1. ~~**Randomness and the `crypto` global:**~~ ✅ with `node:crypto`'s hashing, HMAC and `timingSafeEqual` from step 2 (D-097). the smallest host API, and it unblocks uuid and nanoid.
 2. ~~**`node:crypto`:**~~ ✅ KDFs, ciphers, keys and signatures (D-101); RSA encryption, ECDH and `subtle` beyond digest still to come. hashing, HMAC, `timingSafeEqual`, then KDFs, then ciphers, then keys and signatures. That unblocks jsonwebtoken (HS256 first, then RS256 and ES256).
 3. ~~**`stream`, `string_decoder`, `stream/promises`:**~~ ✅ vendored `readable-stream` 4.8.0 (D-100). papaparse, csv-parse and jsonwebtoken (HS256) now run. unblocks papaparse in Node mode and csv-parse.
-4. **`zlib`, `assert`, `querystring`, `timers/promises`, `os`.**
+4. ~~**`zlib`, `assert`, `querystring`, `timers/promises`, `os`.**~~ ✅ (D-103; Brotli decompression only). The isolate reports no Node version (D-102).
 5. **Globals** (`URL` and the rest), after a cold-start benchmark.
 
 **Each step comes with:**

@@ -28,6 +28,11 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
         </dependency>
+        <!-- Brotli decompression for the isolate's zlib (D-103); there's no encoder in pure Java. -->
+        <dependency>
+            <groupId>org.brotli</groupId>
+            <artifactId>dec</artifactId>
+        </dependency>
         <!-- MinIO in Docker, for the S3 backend's tests (skipped without Docker). -->
         <dependency>
             <groupId>org.testcontainers</groupId>

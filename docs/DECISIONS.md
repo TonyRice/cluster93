@@ -1602,3 +1602,47 @@ Everything is on the JVM's providers.
 - **jsonwebtoken's PS256** stays off in the isolate. jsonwebtoken enables it only when semver accepts `process.version`, which D-093 deliberately leaves empty so that libraries don't take their Node-only paths. RSA-PSS itself works through `sign`/`verify`. Claiming a Node version is a separate decision, for Tony.
 - **Not yet:** RSA encryption, ECDH and Diffie-Hellman, encrypted private keys, rsa-pss, x25519 and ed448 keys, and Web Crypto's `subtle` beyond `digest`.
 - **Also fixed: a stopping queue consumer took back what it had just released.** When a script ends, its consumer releases the message it was handling, then used to claim again before it had seen its own stop. Nothing was lost (a claim after stop hands the message straight back), but for a moment no other consumer could have it, and a test caught that. A release now doesn't claim more, since releasing only happens when the consumer is stopping.
+
+### D-102 — The isolate never reports a Node version
+**Date:** 2026-10-08 · **Status:** Accepted (Tony: "the isolate should not report a node version"). Confirms D-093
+
+**Decision:** `process.version` stays `''`, `process.versions.node` stays undefined, and `os.release()`/`os.version()` are `''`.
+- **Why:** libraries read these to decide whether they're in Node, and then take paths that need what the isolate doesn't have (raw sockets, native addons, the host's files). An isolate that claimed a version would run code that fails later and less clearly.
+- **The cost, accepted:** a library that gates a feature on a version check turns that feature off. jsonwebtoken disables PS256 that way (D-101), though RSA-PSS itself works through `crypto.sign`/`verify`.
+- **What runs Node code:** the Node runtime (D-084), which will report its real version.
+
+### D-103 — `zlib`, `assert`, `querystring`, `timers` and `os` in the isolate; two older bugs they exposed
+**Date:** 2026-10-08 · **Status:** Accepted. Step 4 of D-095
+
+**Decision:**
+- **`zlib`:**
+  - **Codecs:** deflate, zlib, gzip and raw deflate both ways, `unzip`, and Brotli decompression, as sync calls, callbacks and `stream` Transforms. Also `crc32` and Node's constants and error codes (with `errno`).
+  - **Implementation:** the JVM's `Deflater`/`Inflater` are zlib itself. Gzip's header and trailer are written and read here, as zlib writes them, so a stream can be fed in any pieces and concatenated members are read.
+  - **Brotli:** decompression only, through Google's pure-Java decoder `org.brotli:dec` (MIT), which reads whole inputs, so a Brotli stream collects its input (capped) and decodes at the end. There's no pure-Java encoder, so Brotli compression throws `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.
+  - **The cap against zip bombs:** each call outputs at most 32 MB (`ERR_BUFFER_TOO_LARGE`), or less if `maxOutputLength` says so. Streams are per-execution state, at most 1,000.
+  - **Compressed bytes may differ from Node's:** Node uses Chromium's zlib fork, which can compress differently. Both are valid, and either side reads the other's.
+- **`assert` and `assert/strict`:** pure JavaScript.
+  - Node's comparison rules: strict means `Object.is`, prototypes and own symbols; loose means `==`. Maps and Sets compare unordered, typed arrays by bytes, and cycles are handled.
+  - `throws`/`rejects` accept a class, a RegExp, a validation function or an object.
+  - Node's messages for simple values, shorter ones for structures.
+- **`querystring`:** pure JavaScript, with Node's rules, including how it decodes malformed escapes.
+- **`timers` and `timers/promises`:** on the isolate's own timers, with abort signals. `setImmediate` is a zero-delay timer.
+- **`os`:** describes the job, never the machine.
+  - **The job's values:** `tmpdir()`/`homedir()` are `/tmp`, there's one CPU, and `totalmem()`/`freemem()` are the isolate's heap limit, which the runtime writes in like `process.env`.
+  - **Fixed values:** `hostname()` is `localhost`, `networkInterfaces()` is empty, and `release()`/`version()` are empty (D-102).
+- **Checked against real Node:** a real-npm fixture's output equals real Node's. It covers:
+  - round trips of every codec
+  - Node-made gzip, deflate (with a dictionary) and Brotli data read here
+  - the error codes and messages for bad headers, truncation and bad CRCs
+  - streams fed one byte at a time
+  - 25 deep-equality cases, plus throws/rejects/match
+  - querystring edge cases
+  - the async timers
+
+**Two older bugs these tests found, both fixed:**
+- **Bytes from JavaScript could be wrong.** `HostBridge.bytes` used Javet's `toBytes()`, which copies a typed array's whole underlying buffer, not the view: from the buffer's start and for the buffer's length.
+  - **Effect:** any host call given a `Buffer` slice, or a `Buffer` whose buffer was allocated larger than it (base64 decoding does that), received the wrong bytes. That covers `fs`, `files`, `fetch` bodies, `crypto` and `kv` values, for example writing a base64-decoded `Buffer` to a file.
+  - **Fix:** it now reads the view's own bytes from its offset, for its length.
+- **The UTF-8 decoder didn't check continuation bytes.** It's behind `TextDecoder`, `Buffer#toString`, `fetch`'s `text()` and `fs` reads.
+  - **Effect:** a broken sequence swallowed the next character; for example, `E0 A4 25` became "थ" instead of "�%".
+  - **Fix:** it's now the WHATWG decoder that Node and browsers use, checked against Node's on edge cases and 200 KB of random bytes. It also builds strings in chunks, not one character at a time.

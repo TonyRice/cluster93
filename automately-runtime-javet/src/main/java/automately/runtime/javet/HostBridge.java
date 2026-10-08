@@ -322,10 +322,20 @@ public final class HostBridge {
         return writers.remove(id);
     }
 
-    /** Bytes from a typed array, or a string as UTF-8. */
+    /**
+     * Bytes from a typed array, or a string as UTF-8. Javet's {@code toBytes()} copies the array's whole buffer, not the
+     * view: a {@code Buffer} slice, or one whose buffer was allocated bigger than it, came out with the wrong bytes. So
+     * the view's own bytes are read, from its offset for its length (D-103).
+     */
     static byte[] bytes(V8Value data) throws JavetException {
         if (data instanceof V8ValueTypedArray array) {
-            return array.toBytes();
+            int offset = array.getByteOffset();
+            int length = array.getByteLength();
+            try (com.caoccao.javet.values.reference.V8ValueArrayBuffer buffer = array.getBuffer()) {
+                byte[] bytes = new byte[length];
+                buffer.getByteBuffer().get(offset, bytes, 0, length);
+                return bytes;
+            }
         }
         if (data instanceof V8ValueString string) {
             return string.getValue().getBytes(StandardCharsets.UTF_8);

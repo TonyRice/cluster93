@@ -42,6 +42,11 @@ public interface HostApis {
         return new automately.core.host.JvmCrypto();
     }
 
+    /** Compression (D-103): computation only, every output capped. A new one per execution. */
+    default ZlibApi zlib() {
+        return new automately.core.host.JvmZlib();
+    }
+
     /** Stops every listener this execution registered and discards unfinished uploads. Called once the script has ended. */
     Future<Void> close();
 

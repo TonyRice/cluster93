@@ -26,6 +26,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## `zlib`, `assert`, `querystring`, `timers`, `os`; wrong bytes from JavaScript fixed (2026-10-08)
+
+### Added
+- **`zlib` (D-103):**
+  - **Codecs:** gzip, deflate and raw deflate both ways, `unzip`, and Brotli decompression, as sync calls, callbacks and streams, with `crc32` and Node's constants and error codes.
+  - **The zip-bomb cap:** every call outputs at most 32 MB.
+  - **Brotli compression** isn't available, since there's no pure-Java encoder.
+  - **New dependency:** `org.brotli:dec` (MIT).
+- **`assert` and `assert/strict`, `querystring`, `timers` and `timers/promises`** (D-103), pure JavaScript, compared with real Node.
+- **`os` (D-103),** describing the job rather than the machine: `/tmp`, one CPU, the heap limit as memory, no host name, network or users.
+- **The isolate never reports a Node version (D-102),** Tony's call. Libraries that check it take their non-Node paths.
+
+### Fixed
+- **Host calls could receive the wrong bytes (D-103).** A `Buffer` slice, or a `Buffer` whose memory was allocated larger than it (base64 decoding does that), reached the host as the whole underlying buffer. That affected `fs` and `files` writes, `fetch` bodies, `crypto` and `kv`. The host now reads the view's own bytes.
+- **UTF-8 decoding swallowed characters after a broken sequence (D-103).** It's now the WHATWG decoder Node uses: one replacement character, and nothing lost after it. That covers `TextDecoder`, `Buffer#toString`, `fetch` and `fs`.
+
 ## `crypto`: key derivation, ciphers, keys and signatures (2026-10-08)
 
 ### Added

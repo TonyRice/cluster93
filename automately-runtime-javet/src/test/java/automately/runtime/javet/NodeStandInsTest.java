@@ -165,6 +165,27 @@ class NodeStandInsTest {
     }
 
     @Test
+    void aViewIntoABiggerBufferReachesTheHostAsItself() throws Exception {
+        // Straight to the host call, past the modules' own copying: the bytes must be the view's, not its buffer's.
+        assertThat(output("export default () => { const internals = globalThis.crypto[Symbol.for('automately.crypto')];"
+                + " const whole = new Uint8Array([9, 9, 97, 98, 99, 9]); const view = new Uint8Array(whole.buffer, 2, 3);"
+                + " const atStart = new Uint8Array(new Uint8Array([97, 98, 99, 9, 9]).buffer, 0, 3);"
+                + " const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');"
+                + " return [hex(internals.digest('md5', view)), hex(internals.digest('md5', atStart)), hex(internals.digest('md5', new Uint8Array([97, 98, 99])))]; };"))
+                .as("a view later in its buffer, one at its start but shorter, and a whole array")
+                .containsExactly("900150983cd24fb0d6963f7d28e17f72", "900150983cd24fb0d6963f7d28e17f72", "900150983cd24fb0d6963f7d28e17f72");
+    }
+
+    @Test
+    void osDescribesTheJobNotTheMachine() throws Exception {
+        assertThat(output("import os from 'node:os'; import { tmpdir, totalmem } from 'os'; import process from 'node:process';"
+                + " export default () => [tmpdir(), os.hostname(), os.cpus().length, totalmem() > 0, totalmem() === os.freemem(),"
+                + "   Object.keys(os.networkInterfaces()).length, os.userInfo().username, os.release(), process.version, process.versions.node ?? 'none'];"))
+                .as("never the host's name, network, users or kernel; and no Node version (D-102)")
+                .containsExactly("/tmp", "localhost", 1, true, true, 0, "automately", "", "", "none");
+    }
+
+    @Test
     void whatCryptoCantDoYetSaysSo() throws Exception {
         assertThat(output("import { publicEncrypt, generateKeyPairSync } from 'crypto'; import { Buffer } from 'buffer';"
                 + " export default () => { const codes = [];"

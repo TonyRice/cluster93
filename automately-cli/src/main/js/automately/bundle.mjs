@@ -24,7 +24,9 @@ try {
 // The isolate provides these itself (D-079, and stand-ins for Node's, D-090), so they stay imports.
 const PROVIDED = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises', 'path', 'node:path', 'path/posix', 'node:path/posix',
   'events', 'node:events', 'buffer', 'node:buffer', 'url', 'node:url', 'util', 'node:util', 'process', 'node:process', 'crypto', 'node:crypto',
-  'stream', 'node:stream', 'stream/promises', 'node:stream/promises', 'string_decoder', 'node:string_decoder']);
+  'stream', 'node:stream', 'stream/promises', 'node:stream/promises', 'string_decoder', 'node:string_decoder',
+  'zlib', 'node:zlib', 'assert', 'node:assert', 'assert/strict', 'node:assert/strict', 'querystring', 'node:querystring',
+  'timers', 'node:timers', 'timers/promises', 'node:timers/promises', 'os', 'node:os']);
 // Native extras some packages use only if they're there (ws uses the first two); left out, with a warning.
 const OPTIONAL = new Set(['bufferutil', 'utf-8-validate', 'fsevents']);
 // What gives a package away as needing a native build.
