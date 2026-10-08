@@ -1186,3 +1186,47 @@ The existing file tests all pass through the wrapper.
 - **Native code:** it's detected when publishing and pointed at the Node runtime, which is designed separately. `automately.json` has a `runtime` field from day one.
 
 **Open:** whether inline scripts may import packages, and how. Tony is undecided, and it can be added later.
+
+### D-084 — The Node runtime: plain Node in gVisor containers, built where the developer is
+**Date:** 2026-10-08 · **Status:** Accepted (Tony). Design: `docs/design/node-runtime.md`. Not built yet; it comes after packages (D-083)
+
+**Context:** an isolate can't load native addons or use Node's process and network APIs. Packages detect that and send it here.
+
+**Decision:**
+- **Three runtimes,** enforced by placement:
+  - `isolate` (today)
+  - `node`: a container on nodes that offer it
+  - `node` unsandboxed: only on a link the tenant owns, opted in, for that tenant's code only
+- **The engine** (Tony): official Node with our own runner package, not Javet's Node mode.
+  - **Why:** npm's prebuilt native binaries work, any LTS works the day it ships, and containers are small and start fast.
+  - **The cost:** a second implementation of the globals, kept identical by a conformance suite shared with the isolate.
+- **Builds** (Tony): `npm ci` runs on the developer's machine.
+  - **When Docker is involved:** only when native addons need it, in our builder image matching the cluster's Linux, CPU, C library and Node.
+  - **Uploading:** files go into the package store, content-addressed, so redeploys upload what changed.
+  - **Nothing runs npm on the cluster.** A cluster build worker, in gVisor with network access to npm only, comes later.
+  - **Building and running are separate:** the developer's container only builds matching binaries; cluster nodes run them.
+- **The execution layer, built once for containers and links:**
+  - **Capabilities and placement:** nodes advertise capabilities, owner and tier, and placement filters on them.
+  - **One runner protocol** (JSON-RPC over a WebSocket) carries host-API calls, logs, state and HTTP.
+  - **The tenant comes from the job record,** so scopes, quotas and egress rules are identical everywhere.
+  - **Unchanged:** jobs, orphans and the ingress.
+- **Containers** (Tony: rootless Podman):
+  - **Lockdown:** a read-only root and app, a tmpfs `/tmp`, no capabilities, a user namespace, cgroup limits.
+  - **Network:** outbound traffic goes through the node's egress proxy, which applies D-026.
+  - **Artifacts:** materialized once per version and mounted read-only.
+- **Isolation** (Tony): gVisor by default for tenant code; runc only for tenants the operator marks trusted.
+- **In scripts:**
+  - **Globals:** the same as the isolate.
+  - **`fs`** is the container's own filesystem (Tony). The tenant's files are reached through `files` and `automately:fs`, and FUSE at `/files` comes later.
+  - **HTTP:** `app.listen(PORT)` works.
+  - **Secrets in the environment:** resolved at start and audited.
+- **Jobs and services both run in Node** (Tony). The container start time is documented, and a warm pool comes later if needed.
+
+**Order:**
+1. The execution layer, proven with a local-process runner against the isolate's conformance scripts.
+2. The runner and images.
+3. Containers.
+4. Deploy.
+5. Links.
+
+Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and artifact sizes first.

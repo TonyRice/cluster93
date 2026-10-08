@@ -26,6 +26,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Design: the Node runtime (2026-10-08)
+
+### Docs
+- **`docs/design/node-runtime.md` (D-084):** how code that can't run in an isolate (native addons, Node's APIs, real servers) will run. Not built yet; it comes after packages.
+  - **The engine:** official Node with our runner, in rootless Podman containers, under gVisor by default.
+  - **Builds:** on the developer's machine, using our builder image only when native addons need it, with nothing running npm on the cluster.
+  - **The execution layer** is shared with links.
+  - **Unsandboxed Node** only on a tenant's own device.
+  - **The same `(input, ctx)` contract and globals** as the isolate.
+
 ## Design: packages (2026-10-08)
 
 ### Docs
