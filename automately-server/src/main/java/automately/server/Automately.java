@@ -314,12 +314,15 @@ public final class Automately {
         // Folder moves, copies and deletes, journaled so another node can finish one (D-077).
         automately.core.files.FileTree fileTree = new automately.core.files.FileTree(vertx, stores.files(),
                 stores.records().open(automately.core.files.FileTree.OPS), instanceId);
+        // Everyone else sees a folder operation's finished result while it runs (D-082); FileTree works on the real paths.
+        automately.core.files.FileStore visibleFiles = new automately.core.files.MoveAwareFileStore(stores.files(),
+                stores.records().open(automately.core.files.FileTree.OPS));
         fileTree.start();
-        HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(), fetch, serving, stores.files(), stores.capacity(),
+        HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(), fetch, serving, visibleFiles, stores.capacity(),
                 quota, room, queues, new automately.core.host.JobsWiring(jobs, scheduler, config.defaultTimeout(), config.maxTimeout(), limiter),
                 tenantSecrets, fileTree, tmpSettings(config), new automately.core.files.FileLocks(stores.records().open(automately.core.files.FileLocks.KIND))));
         // Public links to files, signed and self-checking, so any node serves them (D-080).
-        automately.core.files.FileLinks fileLinks = new automately.core.files.FileLinks(stores.kv(), config.secretsKey(), stores.files());
+        automately.core.files.FileLinks fileLinks = new automately.core.files.FileLinks(stores.kv(), config.secretsKey(), visibleFiles);
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         // Personal tokens act as their user, with what the user's roles give them now (D-070).
         automately.core.identity.Identity identity = new automately.core.identity.Identity(stores.records(), stores.auth());
@@ -343,7 +346,7 @@ public final class Automately {
                     .compose(audit::prune)
                     .onFailure(err -> LOG.warn("Pruning the audit log failed: {}", err.getMessage()));
         });
-        ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
+        ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, visibleFiles,
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
                 queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, limiter,

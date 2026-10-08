@@ -26,6 +26,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Folder operations look atomic (2026-10-08)
+
+### Changed
+- **While a folder is being moved, copied or deleted, everyone sees the result straight away (D-082).**
+  - **move:** the whole folder is at its new name and gone from the old.
+  - **copy:** the copy is complete.
+  - **delete:** the folder is gone.
+  - **Writes** touching either folder get `busy` until it's done.
+  - **Why:** before, a reader could briefly see some files under the old name and some under the new.
+- **The prefix listing** (`GET /v1/files?prefix=`) answers `busy` while a folder it covers is changing.
+
 ## Fixed: S3 downloads cut off near the end (2026-10-08)
 
 ### Fixed

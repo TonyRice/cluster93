@@ -65,12 +65,13 @@ public final class FileTree {
                 return Future.failedFuture(new HostException("Error", "not_found", "No such file or folder: " + from));
             }
             if (!"dir".equals(source.getString("kind"))) {
-                // A single file needs no journal: the store's own move and copy are safe on their own.
-                return switch (op) {
+                // A single file needs no journal: the store's own move and copy are safe on their own. It mustn't
+                // touch a folder that's being moved, copied or deleted, though (D-082).
+                return clear(tenant, from, to).compose(v -> switch (op) {
                     case "move" -> files.move(tenant, from, to, overwrite).map(f -> result(op, from, to, 1, 0));
                     case "copy" -> files.copy(tenant, from, to, overwrite).map(f -> result(op, from, to, 1, 0));
                     default -> files.delete(tenant, from).map(f -> result(op, from, null, 1, 0));
-                };
+                });
             }
             if (from.isEmpty()) {
                 return Future.failedFuture(HostException.invalid("The top level can't be moved, copied or deleted as a whole"));
@@ -85,6 +86,24 @@ public final class FileTree {
                     : overwrite ? Future.succeededFuture()
                     : Future.failedFuture(new HostException("Error", "already_exists", to + " already exists; overwrite to merge into it")));
             return free.compose(ok -> journal(tenant, op, from, to, overwrite));
+        });
+    }
+
+    /** Fails {@code busy} if a folder operation in progress covers either path. */
+    private Future<Void> clear(String tenant, String from, String to) {
+        return ops.get(tenant).compose(running -> {
+            if (running == null) {
+                return Future.succeededFuture();
+            }
+            String busyFrom = running.getString("from");
+            String busyTo = running.getString("to");
+            for (String path : new String[]{from, to}) {
+                if (path != null && (MoveAwareFileStore.within(path, busyFrom) || (busyTo != null && MoveAwareFileStore.within(path, busyTo)))) {
+                    return Future.failedFuture(new HostException("Error", "busy", "A folder operation on " + busyFrom
+                            + " is running; try again when it finishes"));
+                }
+            }
+            return Future.succeededFuture();
         });
     }
 

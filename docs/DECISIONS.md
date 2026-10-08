@@ -1140,3 +1140,29 @@ Also the CLI flow.
 - **Streaming stays as it is.** Forwarding chunk by chunk, with backpressure, is what keeps a node from holding whole files in memory.
 
 **Tests:** `S3BlobStoreTest.aReaderThatPausesEveryChunkGetsTheWholeFile` reads 120 6 MB downloads that way, pausing on every chunk and resuming from another thread, and checks every byte. Before the fix it failed about 2% of reads. A throwaway node-level probe went from 4 to 6 failures in 360 to none.
+
+### D-082 — While a folder operation runs, readers see its finished result
+**Date:** 2026-10-08 · **Status:** Accepted (Tony chose this over folders by id, or blocking). Supersedes D-077's "readers may briefly see part of a moving folder under each name"
+
+**Decision:**
+- **One wrapper over the store,** `MoveAwareFileStore`. The REST API, scripts' `files` and `fs`, agents and public links all use it. Only `FileTree` works on the store beneath, with the real paths.
+- **Reads consult the tenant's folder-operation journal** (D-077), one key lookup, and answer as things will be once the operation ends:
+  - **move:** the source is gone at once. The target shows every file, moved yet or not. A file still at the source is read from there under its new path, since reads go by blob.
+  - **copy:** the target shows the whole copy at once.
+  - **delete:** the folder is gone at once.
+- **Writes wait.** Anything that touches either folder gets 409 `busy` (`EBUSY` in scripts) until the operation ends: uploads, deletes, `mkdir`, `rmdir`, moves and copies. That includes a single file moved by `FileTree`.
+- **The old prefix listing** (`GET /v1/files?prefix=`) also gets `busy` while a folder it covers is changing, since it can't be shown "as it will be" page by page. The one-level listing, `/v1/dirs`, can.
+- **Why not folders by id** (inode-style, where moving a folder is one row change): it would be truly instant, but every path lookup would walk the folders, listings would change, and existing data would need migrating. That's a bigger change than this problem needs, so it stays an option for later.
+
+**Cost:**
+- **Reads** need one extra key lookup per file call.
+- **Merged listings:** while a move runs, a target folder's listing merges two folders.
+- **Overwrite merges:** during a copy with overwrite, a target file that exists already shows its old version until the copy reaches it.
+
+**Tests:** `MoveAwareFileStoreTest` freezes a move halfway and checks:
+- the source is gone, the target is complete, unmoved files are readable at their new paths
+- writes touching either folder are refused, and others aren't
+- the prefix listing waits
+- a copy shows whole and a delete shows gone
+
+The existing file tests all pass through the wrapper.

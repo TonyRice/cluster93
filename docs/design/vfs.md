@@ -74,7 +74,7 @@ One tree per tenant, rooted at `/`:
 - **Moving or copying a directory** is many row operations, made safe as a **tree operation**:
   - **One at a time:** it takes a per-tenant lease on the directory (the compare-and-set lease pattern of D-073), so two tree operations on overlapping paths don't interleave.
   - **Crash-safe:** it writes a journal record (`{op, from, to, done-so-far}`) first. If the node dies, another finishes it from the journal when the lease expires.
-  - **Readers** may briefly see part of a moving directory under each name: a directory move isn't instantaneous, and the design says so. Each file is always whole at one of its two paths.
+  - **Readers see the finished result at once** (D-082). While the operation runs, everyone but the tree operation reads through a view that answers from its journal. A moved folder is complete at its new name and gone from the old. A copy shows whole, and a deleted folder shows gone. Writes touching either folder wait (`busy`).
   - **Limit:** 100 000 entries per tree operation, refused with a clear error if larger (configurable).
 - **Exceptions:** `/tmp` and, later, link mounts can't share blobs with cluster storage, so moves or copies into or out of them copy the bytes and then delete. Moving within `/packages` is refused, since it's read-only.
 
