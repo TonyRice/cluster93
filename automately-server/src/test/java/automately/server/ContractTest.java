@@ -184,6 +184,43 @@ class ContractTest {
         calls.call("PUT", "/v1/storage/routes", tenant, new JsonObject().put("default", "default"));
         calls.check("deleteStorageProvider", "DELETE", "/v1/storage/providers/local", tenant, null);
 
+        // Identity (D-070) and the audit log (D-071).
+        JsonObject ownerInvite = calls.check("createTenantInvite", "POST", "/v1/tenants/contract/invites", admin,
+                new JsonObject().put("roles", new JsonArray().add("owner")).put("user", "casey")).bodyAsJsonObject();
+        JsonObject redeemed = calls.check("redeemInvite", "POST", "/v1/invites/redeem", null,
+                new JsonObject().put("code", ownerInvite.getString("code"))).bodyAsJsonObject();
+        String person = "Bearer " + redeemed.getJsonObject("token").getString("token");
+        calls.check("listTenantMembers", "GET", "/v1/tenants/contract/members", admin, null);
+        calls.check("getMe", "GET", "/v1/me", person, null);
+        calls.check("updateMe", "PATCH", "/v1/me", person, new JsonObject().put("displayName", "Casey"));
+        JsonObject laptop = calls.check("createMyToken", "POST", "/v1/me/tokens", person, new JsonObject().put("name", "laptop")).bodyAsJsonObject();
+        calls.check("listMyTokens", "GET", "/v1/me/tokens", person, null);
+        calls.check("revokeMyToken", "DELETE", "/v1/me/tokens/" + laptop.getString("id"), person, null);
+        calls.check("putRole", "PUT", "/v1/roles/reader", person,
+                new JsonObject().put("scopes", new JsonArray().add("jobs:read")).put("description", "Reads jobs"));
+        calls.check("listRoles", "GET", "/v1/roles", person, null);
+        calls.check("putGroup", "PUT", "/v1/groups/readers", person, new JsonObject().put("roles", new JsonArray().add("reader")));
+        calls.check("listGroups", "GET", "/v1/groups", person, null);
+        JsonObject invite = calls.check("createInvite", "POST", "/v1/invites", person,
+                new JsonObject().put("groups", new JsonArray().add("readers"))).bodyAsJsonObject();
+        calls.check("listInvites", "GET", "/v1/invites", person, null);
+        calls.call("POST", "/v1/invites/redeem", null, new JsonObject().put("code", invite.getString("code")).put("name", "sam"));
+        calls.check("listMembers", "GET", "/v1/members", person, null);
+        calls.check("getMember", "GET", "/v1/members/sam", person, null);
+        calls.check("putMember", "PUT", "/v1/members/sam", person, new JsonObject().put("roles", new JsonArray().add("viewer")));
+        calls.check("removeMember", "DELETE", "/v1/members/sam", person, null);
+        calls.check("deleteGroup", "DELETE", "/v1/groups/readers", person, null);
+        calls.check("deleteRole", "DELETE", "/v1/roles/reader", person, null);
+        JsonObject spareInvite = calls.call("POST", "/v1/invites", person, new JsonObject().put("roles", new JsonArray().add("viewer"))).bodyAsJsonObject();
+        calls.check("deleteInvite", "DELETE", "/v1/invites/" + spareInvite.getString("id"), person, null);
+        calls.check("listAudit", "GET", "/v1/audit?limit=5", person, null);
+        calls.check("createOperatorInvite", "POST", "/v1/admin/invites", admin, new JsonObject().put("note", "a second operator"));
+        calls.check("listOperatorAudit", "GET", "/v1/admin/audit?limit=5", admin, null);
+        calls.check("listUsers", "GET", "/v1/users", admin, null);
+        calls.check("getUser", "GET", "/v1/users/sam", admin, null);
+        calls.check("updateUser", "PATCH", "/v1/users/sam", admin, new JsonObject().put("disabled", true));
+        calls.check("deleteUser", "DELETE", "/v1/users/sam", admin, null);
+
         calls.check("deleteTenant", "DELETE", "/v1/tenants/contract", admin, null);
 
         Set<String> all = contract.operations().stream().map(Operation::getOperationId).collect(Collectors.toCollection(TreeSet::new));

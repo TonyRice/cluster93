@@ -147,6 +147,28 @@ class ClusterTest {
     }
 
     @Test
+    void aPersonalTokenFromOneNodeFollowsItsUserOnTheOther() throws Exception {
+        TestAuth.bearer("people");
+        HttpResponse<Buffer> invited = await(client.post(nodeA.httpPort(), "localhost", "/v1/tenants/people/invites")
+                .putHeader("Authorization", TestAuth.ADMIN)
+                .sendJsonObject(new JsonObject().put("roles", new JsonArray().add("developer")).put("user", "dana")));
+        assertThat(invited.statusCode()).as(invited.bodyAsString()).isEqualTo(201);
+        HttpResponse<Buffer> redeemed = await(client.post(nodeB.httpPort(), "localhost", "/v1/invites/redeem")
+                .sendJsonObject(new JsonObject().put("code", invited.bodyAsJsonObject().getString("code"))));
+        assertThat(redeemed.statusCode()).as(redeemed.bodyAsString()).isEqualTo(201);
+        String dana = "Bearer " + redeemed.bodyAsJsonObject().getJsonObject("token").getString("token");
+
+        assertThat(await(client.post(nodeA.httpPort(), "localhost", "/v1/jobs").putHeader("Authorization", dana)
+                .sendJsonObject(new JsonObject().put("script", "export default () => 1"))).statusCode()).isEqualTo(202);
+
+        // Disabled through node B; refused on node A at once.
+        assertThat(await(client.patch(nodeB.httpPort(), "localhost", "/v1/users/dana").putHeader("Authorization", TestAuth.ADMIN)
+                .sendJsonObject(new JsonObject().put("disabled", true))).statusCode()).isEqualTo(200);
+        assertThat(await(client.get(nodeA.httpPort(), "localhost", "/v1/whoami").putHeader("Authorization", dana).send()).statusCode())
+                .isEqualTo(401);
+    }
+
+    @Test
     void rejectsRequestsWithoutAToken() throws Exception {
         HttpResponse<Buffer> response = await(client.get(nodeA.httpPort(), "localhost", "/v1/jobs").send());
 

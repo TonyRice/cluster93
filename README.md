@@ -109,8 +109,12 @@ If the node running a job dies, the job's `onOrphan` policy decides what happens
 
 Every `/v1` call carries `Authorization: Bearer <token>`.
 
-- **Admin token.** It manages tenants and their tokens, and cannot read or change tenant data (D-044).
-- **Tenant tokens** (`atly_…`) belong to one tenant and carry **scopes**: `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`, `nodes:read`, `storage:read`, `storage:write`, `secrets:read`, `secrets:write`, `secrets:use`, or `*` for all of them.
+- **Admin token.** It manages tenants and their tokens, and cannot read or change tenant data (D-044). Operators do the same as named users.
+- **Tenant tokens** (`atly_…`) belong to one tenant and carry **scopes**: `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`, `nodes:read`, `storage:read`, `storage:write`, `secrets:read`, `secrets:write`, `secrets:use`, `members:read`, `members:write`, `audit:read`, or `*` for all of them.
+- **Users** (D-070).
+  - **Joining:** people join tenants by invite and get roles: `owner`, `admin`, `developer`, `viewer`, or the tenant's own roles, given directly or through groups.
+  - **Personal tokens:** a user's personal token may do what their roles give them **now**. Removing or demoting someone takes effect on their next request.
+  - **The audit log** records every change (D-071). See [users](docs/guides/users.md).
 - **Errors.** A missing or revoked token gets `401`, and a missing scope gets `403` naming it (D-045).
 - **Storage.** Only a SHA-256 of each token is stored. The `atly_` prefix and a checksum let secret scanners recognise a leaked token.
 
@@ -124,6 +128,14 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `POST` · `GET` | `/v1/tokens` | `tokens:write`: mint a token for your own tenant, with scopes your token also has · list |
 | `DELETE` | `/v1/tokens/{id}` | `tokens:write`: revoke one of your tenant's tokens, effective on the next request |
 | `GET` | `/v1/whoami` | Any token: who it is and what it may do |
+| `POST` | `/v1/invites/redeem` | No token needed: redeem an invite `{code, name?}` for a personal token (as a new user, or with your token as you) |
+| `GET` · `PATCH` | `/v1/me` | Your user and your tenants · `/v1/me/tokens` your personal tokens (`POST {name, tenant?}` for another of your tenants) |
+| `GET` · `PUT` · `DELETE` | `/v1/members/{user}` | `members:read` / `members:write`: set `{roles, groups}`; you grant only what you hold. `GET /v1/members` lists them |
+| `GET` · `PUT` · `DELETE` | `/v1/roles/{name}` · `/v1/groups/{name}` | Custom roles `{scopes}` and groups `{roles}` |
+| `GET` · `POST` · `DELETE` | `/v1/invites` | Invite `{roles, groups, user?, expiresInDays?}` (the code is returned once) · list · withdraw |
+| `GET` | `/v1/audit` | `audit:read`: who changed what, newest first (`?limit&before`) |
+| `GET` · `PATCH` · `DELETE` | `/v1/users/{name}` | *Admin.* Users: disable, make or unmake operators · `POST /v1/admin/invites` invites an operator · `GET /v1/admin/audit` |
+| `POST` · `GET` | `/v1/tenants/{name}/invites` · `…/members` | *Admin.* Invite a tenant's first owner · its members |
 | `GET` · `PUT` | `/v1/tenants/{name}/storage-policy` | *Admin.* Which storage provider types a tenant may use, its disk allotment, private endpoints |
 | `GET` | `/v1/storage` | `storage:read`: your quota, disk use, routes |
 | `GET` · `PUT` · `DELETE` | `/v1/storage/providers/{name}` | Your own S3 bucket or disk folder (`storage:write`; secrets are never returned) · `POST …/check` |
@@ -256,6 +268,7 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_MIN_FREE_DISK_MB` | `1024` | Durable nodes refuse writes (507) below this much free disk |
 | `AUTOMATELY_BASELINE_ADJUST_MS` | `60000` | How long a missing data node is waited for before its data is rebalanced |
 | `AUTOMATELY_JOB_RETENTION_DAYS` | `7` | Finished jobs older than this are deleted |
+| `AUTOMATELY_AUDIT_RETENTION_DAYS` | `90` | Audit entries older than this are deleted (D-071) |
 
 ## Build
 
@@ -314,6 +327,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/guides/cluster.md](docs/guides/cluster.md): node certificates: creating a cluster, adding, removing and renewing nodes
 - [docs/guides/storage.md](docs/guides/storage.md): file storage, from the cluster's default to tenants' own buckets and folders
 - [docs/guides/secrets.md](docs/guides/secrets.md): secrets: setting them, and which scripts may read them
+- [docs/guides/users.md](docs/guides/users.md): users, invites, roles and groups, operators, and the audit log
 - [docs/guides/releasing.md](docs/guides/releasing.md): for maintainers: signing and publishing a release
 
 ## Author

@@ -46,6 +46,10 @@ public final class Api {
         return json(send("PUT", path, HttpRequest.BodyPublishers.ofString(Json.write(body)), "application/json"));
     }
 
+    public JsonNode patch(String path, JsonNode body) {
+        return json(send("PATCH", path, HttpRequest.BodyPublishers.ofString(Json.write(body)), "application/json"));
+    }
+
     public JsonNode delete(String path) {
         return json(send("DELETE", path, HttpRequest.BodyPublishers.noBody(), null));
     }

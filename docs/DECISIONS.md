@@ -787,3 +787,71 @@ Docker didn't publish them to the host, but every container on the network could
   - it accepts what `openssl` itself signs, as the maintainer's script does
   - it asks for `--to` on a JVM
 - **Checked by hand:** the static native binary refuses a release signed by any key but the built-in one, and with a test key it replaced itself.
+
+### D-070 — Users, memberships, roles and groups; invites instead of passwords
+**Date:** 2026-10-07 · **Status:** Accepted (Tony chose global users, invites, built-in plus custom roles, and the audit log now)
+
+**Context:** Security groundwork, step 0, part 4. Tokens belonged to tenants and nothing knew who a person was. The rules coming next need people: who may deploy to a link, approvals, which secrets leave the cluster. And taking access away from someone meant finding every token they'd made. Design: `docs/design/identity.md`.
+
+**Decision:**
+- **Users are global:**
+  - **What a user is:** one account per person, named by a handle that never changes (no renaming yet).
+  - **Joining tenants:** through **memberships**, which hold the roles granted directly and the groups the member is in.
+  - **Operators:** a user can be an **operator**. An operator's own token acts as the admin token does, as a named person, and still can't read tenant data (D-044 holds).
+- **Roles:**
+  - **Built in:** `owner` (`*` plus owner powers), `admin` (`*`), `developer` and `viewer`.
+  - **Custom:** a tenant can define its own roles. Every role is a set of the existing scopes, so `RouteScopes` still enforces everything.
+  - **Groups** carry roles for their members.
+  - **New scopes:** `members:read`, `members:write` and `audit:read`.
+- **Personal tokens act as their user:**
+  - **What they may do** is computed on every request: the token's scopes (`*` meaning all of the user's) intersected with what the user's direct and group roles give in that tenant now.
+  - **Taking access away** takes effect on the next request, with every token the person made. This covers demoting, removing from a group, removing from the tenant, disabling the user and taking away operator. Removing a member also deletes their personal tokens for that tenant.
+  - **Cost:** four reads by key per request (token, user, membership, the tenant's access document). No SQL runs, and nothing is cached, so nothing goes stale.
+- **Service tokens** (today's kind) are unchanged: fixed scopes, owned by the tenant. They now record `createdBy`.
+- **No escalation:**
+  - A caller grants only what their own scopes cover, both before and after the change. This covers members, groups, custom roles and invites.
+  - Only owners and operators grant or remove `owner`.
+  - `owner` is direct-only.
+  - The last owner can't be removed, and a role in use can't be deleted.
+- **Getting in: invites, not passwords.**
+  - **Creating:** `members:write` holders create invites. Operators do too, including a tenant's first owner (`POST /v1/tenants/{t}/invites`) and other operators (`POST /v1/admin/invites`).
+  - **The code:** an `atly_…` secret, shown once and stored only as its hash. It expires in 7 days by default (at most 30), works once, and can name the user it's for.
+  - **Redeeming:** on the public `POST /v1/invites/redeem`. Without a token it creates a new user; with your personal token it adds the tenant to you. Either way you get a personal token.
+  - **More tenants:** a member mints a token for another of their tenants with `POST /v1/me/tokens`.
+- **Storage:** one implementation of the identity logic (`Identity`), written against a small `Records` interface (get, put, compare-and-set, lookups by indexed field). It has in-memory and Ignite versions sharing one contract test. The tables are `USERS`, `MEMBERS`, `TENANT_ACCESS` and `INVITES`.
+- **Not for agents:** there are no MCP tools for identity.
+
+**Why invites and not passwords:** there's no password database to protect, and an invite code is as strong as a token. Passkeys and OIDC need a browser, so they come with the console, as ways to get the same personal tokens.
+
+**Known gaps:**
+- **Two owners removing each other** at the same moment could leave none. An operator can invite a new owner.
+- **Service tokens outlive their makers.** Only `tokens:write` holders (admins and owners by default) can make them.
+
+**Tests:** `IdentityTest`:
+- invites (once, withdrawn)
+- access following the person
+- every escalation path
+- groups
+- one user in several tenants
+- operators gained and lost
+- deleting a tenant
+
+Also `RecordsContract` (in memory and on Ignite, including a field named `user`), `ContractTest` (28 more operations, 93 in all), and the CLI flow.
+
+### D-071 — An audit log of every change
+**Date:** 2026-10-07 · **Status:** Accepted (Tony)
+
+**Decision:**
+- **What's recorded:** every authenticated `/v1` request that isn't a read, whether allowed or refused, once its answer is sent. Redeeming an invite records who it became.
+  - **Each entry:** time, tenant, the actor (user, token, operator or admin), the operation, the path without its query, the status, the client address and `X-Forwarded-For` as received.
+  - **Ids:** time-ordered, so they double as the paging cursor.
+- **Not recorded:** `publish`, `request` and `pushQueueMessage`. They're data traffic, can run thousands a second, and are bounded by rate limits instead.
+- **Who reads it:**
+  - **Tenants** read their own entries with `audit:read` (`GET /v1/audit`).
+  - **Operators** read entries with no tenant, plus everything done by an operator or with the admin token, including inside tenants (`GET /v1/admin/audit`).
+- **Retention:** 90 days (`AUTOMATELY_AUDIT_RETENTION_DAYS`). Every node prunes hourly, and the deletes are idempotent. Deleting a tenant deletes its entries.
+- **Never in the way:** a failed write is logged, never turned into a failed request.
+
+**Not yet:** export to S3 or a SIEM, and tamper evidence (hash-chaining entries).
+
+**Tests:** `AuditLogContract` (in memory and on Ignite: paging, the operator view, pruning, forgetting) and `IdentityTest` (what is and isn't recorded, actors, paging, who sees what).

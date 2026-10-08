@@ -50,6 +50,8 @@ final class TestIgnite {
                 IgniteQueueStore.TABLE)) {
             cluster.ignite().cache(table.name()).clear();
         }
+        cluster.ignite().cache(IgniteAuditLog.TABLE.name()).clear();
+        automately.core.identity.Identity.KINDS.forEach(kind -> cluster.ignite().cache(kind.name()).clear());
         cluster.ignite().cache(IgniteChunks.CACHE).clear();
         return stores;
     }

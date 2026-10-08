@@ -52,8 +52,10 @@ class AuthTest {
 
     @Test
     void everyRouteNeedsAToken() throws Exception {
-        // The contract itself is public (D-046); everything else under /v1 needs a token.
-        List<String> routes = node.apiRoutes().stream().filter(route -> route.contains(" /v1/") && !route.endsWith("/v1/openapi.json")).toList();
+        // The contract itself is public (D-046), and so is redeeming an invite, whose code is the credential (D-070);
+        // everything else under /v1 needs a token.
+        List<String> routes = node.apiRoutes().stream().filter(route -> route.contains(" /v1/") && !route.endsWith("/v1/openapi.json")
+                && !route.endsWith("/v1/invites/redeem")).toList();
         assertThat(routes).hasSizeGreaterThan(25);
 
         for (String route : routes) {

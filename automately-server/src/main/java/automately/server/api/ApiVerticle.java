@@ -68,6 +68,9 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.queue.QueueService queues;
     private final automately.core.callback.CallbackSecrets callbackSecrets;
     private final automately.core.secrets.TenantSecrets secrets;
+    private final automately.core.identity.Identity identity;
+    private final automately.core.audit.AuditLog audit;
+    private final java.security.SecureRandom auditIds = new java.security.SecureRandom();
     /** Revokes a node's certificate (D-066); null when the cluster doesn't use node certificates. */
     private final java.util.function.Function<String, Future<JsonObject>> revokeNode;
     /** Why this node shouldn't take traffic yet; empty when it should. */
@@ -86,14 +89,16 @@ public final class ApiVerticle extends VerticleBase {
                        automately.core.storage.TenantQuota quota, automately.core.auth.Authenticator authenticator,
                        automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage,
                        automately.core.queue.QueueService queues, automately.core.callback.CallbackSecrets callbackSecrets,
-                       automately.core.secrets.TenantSecrets secrets,
-                       automately.core.auth.RateLimiter limiter, java.util.function.Function<String, Future<JsonObject>> revokeNode,
+                       automately.core.secrets.TenantSecrets secrets, automately.core.identity.Identity identity,
+                       automately.core.audit.AuditLog audit, automately.core.auth.RateLimiter limiter, java.util.function.Function<String, Future<JsonObject>> revokeNode,
                        java.util.function.Supplier<Future<List<String>>> notReady) {
         this.revokeNode = revokeNode;
         this.notReady = notReady;
         this.queues = queues;
         this.callbackSecrets = callbackSecrets;
         this.secrets = secrets;
+        this.identity = identity;
+        this.audit = audit;
         this.room = room;
         this.storage = storage;
         // Shared with the scripts' jobs API, so jobs started from scripts count toward the same limit (D-063).
@@ -155,7 +160,9 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/v1/openapi.json").handler(ctx -> ctx.json(contract.getRawContract()));
         router.get("/v1/nodes").handler(this::listNodes);
         new McpRoutes(vertx, authenticator, limiter, () -> server.actualPort(), loopbackSecret).mount(router);
-        new AuthRoutes(authStore, authenticator, this::isEmpty, tenant -> storage.config().forget(tenant).compose(v -> secrets.forget(tenant))).mount(router);
+        new AuthRoutes(authStore, authenticator, identity, this::isEmpty, tenant -> storage.config().forget(tenant).compose(v -> secrets.forget(tenant))
+                .compose(v -> identity.forgetTenant(tenant)).compose(v -> audit.forget(tenant))).mount(router);
+        new IdentityRoutes(identity, audit, authStore, authenticator, auditIds).mount(router);
         new StorageApi(storage, files, authStore, quota).mount(router);
         new FilesRoutes(files, quota, room).mount(router);
         new BusRoutes(vertx).mount(router);
@@ -247,6 +254,7 @@ public final class ApiVerticle extends VerticleBase {
                 return;
             }
             automately.core.auth.Principal principal = ar.result();
+            audited(ctx, rule.get(), principal);
             String denied = denied(rule.get(), principal);
             if (denied != null) {
                 error(ctx, 403, "forbidden", denied);
@@ -333,12 +341,45 @@ public final class ApiVerticle extends VerticleBase {
     private static String denied(RouteScopes.Rule rule, automately.core.auth.Principal principal) {
         return switch (rule.who()) {
             case PUBLIC, ANY -> null;
-            case ADMIN -> principal.admin() ? null : "Only the admin token can do this";
+            case ADMIN -> principal.admin() ? null : "Only operators, or the admin token, can do this";
             case ADMIN_OR_TENANT -> principal.admin() || principal.allows(rule.scope()) ? null : lacks(rule.scope());
             case TENANT -> principal.admin()
-                    ? "The admin token manages tenants and tokens only; use a tenant token for tenant data (D-044)"
+                    ? "Operators and the admin token manage tenants, users and tokens only; use a tenant token for tenant data (D-044)"
                     : principal.allows(rule.scope()) ? null : lacks(rule.scope());
+            case USER -> principal.user() != null ? null : "Only a user's own personal token can do this (D-070)";
         };
+    }
+
+    /** Operations that are data traffic rather than changes, too frequent to audit; rate limits bound them instead. */
+    private static final java.util.Set<String> UNAUDITED = java.util.Set.of("publish", "request", "pushQueueMessage");
+    private static final java.util.regex.Pattern TENANT_PATH = java.util.regex.Pattern.compile("^/v1/tenants/([^/]+)");
+
+    /**
+     * Records a change in the audit log once its answer is sent (D-071): every authenticated request that isn't a read,
+     * allowed or refused. Recording never holds up or fails the request.
+     */
+    private void audited(RoutingContext ctx, RouteScopes.Rule rule, automately.core.auth.Principal principal) {
+        io.vertx.core.http.HttpMethod method = ctx.request().method();
+        if (method.equals(io.vertx.core.http.HttpMethod.GET) || method.equals(io.vertx.core.http.HttpMethod.HEAD)
+                || UNAUDITED.contains(rule.operationId())) {
+            return;
+        }
+        String path = ctx.request().path();
+        String tenant = principal.tenant();
+        if (tenant == null) {
+            java.util.regex.Matcher inPath = TENANT_PATH.matcher(path);
+            tenant = inPath.find() ? inPath.group(1) : null;
+        }
+        String auditedTenant = tenant;
+        String ip = ctx.request().remoteAddress() == null ? null : ctx.request().remoteAddress().hostAddress();
+        String forwarded = ctx.request().getHeader("X-Forwarded-For");
+        ctx.addEndHandler(ended -> {
+            long now = System.currentTimeMillis();
+            audit.record(new automately.core.audit.AuditEntry(automately.core.audit.AuditEntry.newId(now, auditIds), now, auditedTenant,
+                            principal.user(), principal.tokenId(), principal.admin(), rule.operationId(), method.name(), path,
+                            ctx.response().getStatusCode(), ip, forwarded))
+                    .onFailure(err -> LOG.warn("Couldn't record {} {} in the audit log: {}", method, path, err.getMessage()));
+        });
     }
 
     private static String lacks(String scope) {

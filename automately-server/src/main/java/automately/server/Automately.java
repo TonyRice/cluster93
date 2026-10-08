@@ -126,7 +126,8 @@ public final class Automately {
                     java.util.concurrent.atomic.AtomicBoolean diskRootShared = new java.util.concurrent.atomic.AtomicBoolean();
                     TenantBlobStores routed = tenantStores(vertx, config, blobs, durable.storage, diskRootShared);
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
-                            durable.files(routed), blobs, capacity, durable.auth, durable.storage, routed, diskRootShared, durable.queues);
+                            durable.files(routed), blobs, capacity, durable.auth, durable.storage, routed, diskRootShared, durable.queues,
+                            durable.records, durable.audit);
                     return wire(config, txt, vertx, stores, cluster, security);
                 })
                 .recover(err -> {
@@ -247,7 +248,8 @@ public final class Automately {
     /** Where durable data lives: Ignite when clustered, in-memory maps for a single development node. */
     record Stores(JobStore jobs, JobStateStore state, ServiceStore services, DomainStore domains, KvStore kv, FileStore files,
                   BlobStore blobs, StorageCapacity capacity, AuthStore auth, StorageConfigStore storage, TenantBlobStores routed,
-                  java.util.concurrent.atomic.AtomicBoolean diskRootShared, automately.core.queue.QueueStore queues) {
+                  java.util.concurrent.atomic.AtomicBoolean diskRootShared, automately.core.queue.QueueStore queues,
+                  automately.core.identity.Records.Factory records, automately.core.audit.AuditLog audit) {
 
         static Stores inMemory(Vertx vertx, ServerConfig config) {
             // In-memory data lives on the JVM heap, so that's what admission control watches (D-038).
@@ -259,7 +261,8 @@ public final class Automately {
             return new Stores(new SharedDataJobStore(vertx), new SharedDataJobStateStore(vertx), new SharedDataServiceStore(vertx),
                     new SharedDataDomainStore(vertx), new SharedDataKvStore(vertx),
                     new SharedDataFileStore(vertx, routed), blobs, capacity, new SharedDataAuthStore(vertx), storage, routed, diskRootShared,
-                    new automately.core.queue.SharedDataQueueStore(vertx));
+                    new automately.core.queue.SharedDataQueueStore(vertx), automately.core.identity.SharedDataRecords.factory(vertx),
+                    new automately.core.audit.MemoryAuditLog());
         }
     }
 
@@ -291,11 +294,16 @@ public final class Automately {
                 quota, room, queues, new automately.core.host.JobsWiring(jobs, scheduler, config.defaultTimeout(), config.maxTimeout(), limiter),
                 tenantSecrets));
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
-        Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken());
+        // Personal tokens act as their user, with what the user's roles give them now (D-070).
+        automately.core.identity.Identity identity = new automately.core.identity.Identity(stores.records(), stores.auth());
+        Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken(), identity::resolve);
+        // Each node prunes the audit log hourly; the deletes are idempotent, so overlapping is harmless (D-071).
+        vertx.setPeriodic(java.time.Duration.ofHours(1).toMillis(), id -> stores.audit().prune(System.currentTimeMillis() - config.auditRetention().toMillis())
+                .onFailure(err -> LOG.warn("Pruning the audit log failed: {}", err.getMessage())));
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, tenantSecrets, limiter,
+                queues, callbackSecrets, tenantSecrets, identity, stores.audit(), limiter,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
                 () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.

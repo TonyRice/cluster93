@@ -13,6 +13,7 @@ import java.util.Properties;
         description = "Run sandboxed JavaScript jobs and services on an Automately cluster.",
         subcommands = {LoginCommand.class, LogoutCommand.class, WhoamiCommand.class, RunCommand.class, JobsCommand.class,
                 ServicesCommand.class, DomainsCommand.class, FilesCommand.class, QueuesCommand.class, CallbacksCommand.class, SecretsCommand.class, StorageCommand.class, ClusterCommand.class, NodeCommand.class, TokensCommand.class, TenantsCommand.class,
+                MembersCommand.class, RolesCommand.class, GroupsCommand.class, InvitesCommand.class, UsersCommand.class, AuditCommand.class,
                 McpCommand.class, VersionCommand.class, UpgradeCommand.class, CommandLine.HelpCommand.class})
 public final class Main implements Runnable {
 

@@ -28,6 +28,17 @@ Automately runs other people's code. This page describes who is trusted, what ea
 - A custom domain routes only after its owner publishes a TXT record (D-028).
 - A tenant's storage provider only ever serves that tenant's files, and its sealed secret can't be moved to another provider (D-057).
 
+**People** (D-070, D-071):
+- **Users and roles:**
+  - **Getting in:** users join tenants by single-use, expiring invites. No passwords are stored.
+  - **What they may do:** built-in or custom roles, given directly or through groups.
+  - **Personal tokens:** what a personal token may do is worked out on every request from its user's current roles. Removing, demoting or disabling someone takes effect on their next request, with every token they made.
+- **No escalation:**
+  - Nobody grants more than their own scopes cover, before and after the change.
+  - Only owners grant `owner`, and a tenant keeps its last owner.
+- **Operators** are named users with the admin token's powers, and no more: they still can't read tenant data. Use them instead of sharing the admin token.
+- **The audit log:** every change and every refused attempt is recorded with who, when and from where. Tenants see their own; operators see the cluster's and everything operators did. It's kept 90 days, and isn't tamper-evident yet.
+
 **API access** (D-044 to D-046, D-050, D-051):
 - **Tokens.** Every `/v1` call needs a bearer token. Tokens are 256-bit random with a checksum and a scanner-friendly `atly_` prefix. Only their SHA-256 is stored, and revocation takes effect on the next request.
 - **Scopes and the admin.** Scopes limit each token. The admin token manages tenants and tokens but can't read tenant data.
@@ -80,4 +91,5 @@ Automately runs other people's code. This page describes who is trusted, what ea
 - [ ] `AUTOMATELY_SECRETS_KEY` is set (at least 32 random characters) if tenants will use secrets or bring their own storage, and backed up.
 - [ ] `AUTOMATELY_EGRESS_ALLOW_PRIVATE` is left off in production.
 - [ ] Tenant tokens are scoped to what each client needs, with expiry for CI tokens.
+- [ ] People use their own users (invites), and operators their own operator users; the admin token is kept for emergencies.
 - [ ] `AUTOMATELY_DATA_DIR` is on durable storage and backed up (the cluster replicates, but a backup protects against operator error).

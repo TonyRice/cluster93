@@ -7,7 +7,6 @@ import automately.core.auth.Authenticator;
 import automately.core.auth.Principal;
 import automately.core.auth.Scopes;
 import automately.core.auth.Tenant;
-import automately.core.auth.TokenFormat;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -15,8 +14,6 @@ import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 
 import java.security.SecureRandom;
-import java.time.Duration;
-import java.util.HexFormat;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -29,13 +26,16 @@ final class AuthRoutes {
 
     private final AuthStore store;
     private final Authenticator authenticator;
+    private final automately.core.identity.Identity identity;
     /** Whether a tenant has nothing left (no services, no files, no kv), so it can be deleted. */
     private final Function<String, Future<Boolean>> isEmpty;
     /** Removes what else a deleted tenant had (its storage policy, providers and routes). */
     private final Function<String, Future<Void>> forget;
     private final SecureRandom random = new SecureRandom();
 
-    AuthRoutes(AuthStore store, Authenticator authenticator, Function<String, Future<Boolean>> isEmpty, Function<String, Future<Void>> forget) {
+    AuthRoutes(AuthStore store, Authenticator authenticator, automately.core.identity.Identity identity, Function<String, Future<Boolean>> isEmpty,
+               Function<String, Future<Void>> forget) {
+        this.identity = identity;
         this.forget = forget;
         this.store = store;
         this.authenticator = authenticator;
@@ -62,8 +62,9 @@ final class AuthRoutes {
     private void whoami(RoutingContext ctx) {
         Principal principal = ctx.get("principal");
         ctx.json(principal.admin()
-                ? new JsonObject().put("admin", true)
+                ? new JsonObject().put("admin", true).put("user", principal.user()).put("token", principal.tokenId())
                 : new JsonObject().put("admin", false).put("tenant", principal.tenant()).put("token", principal.tokenId())
+                        .put("user", principal.user()).put("owner", principal.owner())
                         .put("scopes", new JsonArray(principal.scopes().stream().sorted().toList())));
     }
 
@@ -145,16 +146,13 @@ final class AuthRoutes {
             error(ctx, 400, "invalid_request", "\"expiresInDays\" must be between 1 and " + MAX_TOKEN_DAYS);
             return;
         }
-        long now = System.currentTimeMillis();
-        String secret = TokenFormat.generate(random);
-        byte[] id = new byte[8];
-        random.nextBytes(id);
-        ApiToken token = new ApiToken("tok_" + HexFormat.of().formatHex(id), tenant, name, scopes, TokenFormat.hash(secret), now,
-                days == null ? null : now + Duration.ofDays(((Number) days).longValue()).toMillis(), null);
-        store.saveToken(token).onFailure(ctx::fail).onSuccess(v -> {
+        // A service token: no user, fixed scopes, owned by the tenant; it records who made it (D-070).
+        automately.core.identity.Identity.Minted minted = identity.mint(tenant, name, scopes, days == null ? null : ((Number) days).longValue(),
+                null, ctx.<Principal>get("principal").actor());
+        store.saveToken(minted.token()).onFailure(ctx::fail).onSuccess(v -> {
             ctx.response().setStatusCode(201).putHeader("Cache-Control", "no-store");
             // The secret is shown once, here, and never again.
-            ctx.json(token.toViewJson().put("token", secret));
+            ctx.json(minted.toJson());
         });
     }
 

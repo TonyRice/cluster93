@@ -12,6 +12,11 @@ info:
     (`atly_…`) belong to one tenant and carry scopes; each operation lists the scope it needs. A missing or
     unknown token gets `401`, a missing scope `403`.
 
+    **Users** (D-070). A personal token belongs to a user, who joins tenants through invites. What it may do is
+    worked out on every request from the user's roles in that tenant, so removing someone takes effect at once.
+    An operator's personal token acts as the admin token does, as a named person. Changes are recorded in an
+    audit log (D-071).
+
     **Rate limits.** Tenant requests are limited per tenant (`AUTOMATELY_RATE_LIMIT_PER_MINUTE`). Responses
     carry `RateLimit-Policy` and `RateLimit`; over the limit is `429` with `Retry-After`.
 
@@ -38,6 +43,8 @@ tags:
   - name: mcp
   - name: storage
   - name: secrets
+  - name: identity
+  - name: audit
 
 paths:
   /health:
@@ -1220,6 +1227,484 @@ paths:
         '204': { description: 'Deleted.' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/invites/redeem:
+    post:
+      operationId: redeemInvite
+      tags: [identity]
+      summary: Redeem an invite for a personal token
+      description: |
+        Public: the code is the credential. Without a token, a new user is created, named by the invite or by
+        `name`. With your own personal token, the invite is added to you. Either way the answer carries a new
+        personal token for the tenant (or, for an operator invite, an operator token), shown once.
+      security:
+        - {}
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, maxLength: 100 }
+                name: { $ref: '#/components/schemas/UserName' }
+                displayName: { type: string, maxLength: 100 }
+                email: { type: string, maxLength: 254 }
+                tokenName: { type: string, minLength: 1, maxLength: 100 }
+      responses:
+        '201':
+          description: You, the tenant, and your new token.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, operator, token]
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  tenant: { type: [string, 'null'] }
+                  operator: { type: boolean }
+                  roles: { type: array, items: { type: string } }
+                  groups: { type: array, items: { type: string } }
+                  token:
+                    allOf:
+                      - $ref: '#/components/schemas/Token'
+                      - type: object
+                        required: [token]
+                        properties:
+                          token: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/me:
+    get:
+      operationId: getMe
+      tags: [identity]
+      summary: You, and each tenant you belong to with what you may do there
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: You.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/User'
+                  - type: object
+                    required: [memberships]
+                    properties:
+                      memberships: { type: array, items: { $ref: '#/components/schemas/Member' } }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: updateMe
+      tags: [identity]
+      summary: Change your display name or email
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName: { type: [string, 'null'], maxLength: 100 }
+                email: { type: [string, 'null'], maxLength: 254 }
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/me/tokens:
+    get:
+      operationId: listMyTokens
+      tags: [identity]
+      summary: Your personal tokens, in every tenant
+      security:
+        - bearer: []
+      responses:
+        '200': { $ref: '#/components/responses/TokenList' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createMyToken
+      tags: [identity]
+      summary: A personal token for one of your tenants
+      description: |
+        `tenant` defaults to this token's. `scopes` defaults to `["*"]`, meaning whatever your roles give you, now and
+        later; narrower scopes must be within your roles. `operator: true` makes an operator token, for operators.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                tenant: { type: string, maxLength: 63 }
+                operator: { type: boolean }
+                scopes: { type: array, minItems: 1, items: { type: string } }
+                expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
+      responses:
+        '201': { $ref: '#/components/responses/TokenCreated' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/me/tokens/{id}:
+    parameters:
+      - $ref: '#/components/parameters/tokenId'
+    delete:
+      operationId: revokeMyToken
+      tags: [identity]
+      summary: Revoke one of your personal tokens
+      security:
+        - bearer: []
+      responses:
+        '204': { description: 'Revoked.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/members:
+    get:
+      operationId: listMembers
+      tags: [identity]
+      summary: Your tenant's members, with what each may do
+      security:
+        - bearer: ['members:read']
+      responses:
+        '200': { $ref: '#/components/responses/MemberList' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/members/{user}:
+    parameters:
+      - $ref: '#/components/parameters/userName'
+    get:
+      operationId: getMember
+      tags: [identity]
+      summary: One member
+      security:
+        - bearer: ['members:read']
+      responses:
+        '200': { $ref: '#/components/responses/Member' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putMember
+      tags: [identity]
+      summary: Set a member's roles and groups
+      description: |
+        You can only grant what you hold yourself, and you must hold everything the member has now. Only owners grant
+        or remove `owner`, and the last owner can't lose it. New members come in through invites.
+      security:
+        - bearer: ['members:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                roles: { $ref: '#/components/schemas/StringList' }
+                groups: { $ref: '#/components/schemas/StringList' }
+      responses:
+        '200': { $ref: '#/components/responses/Member' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: removeMember
+      tags: [identity]
+      summary: Remove a member; their personal tokens for this tenant are deleted
+      security:
+        - bearer: ['members:write']
+      responses:
+        '204': { description: 'Removed.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/roles:
+    get:
+      operationId: listRoles
+      tags: [identity]
+      summary: Built-in roles, then your tenant's own
+      security:
+        - bearer: ['members:read']
+      responses:
+        '200':
+          description: Roles.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [roles]
+                properties:
+                  roles: { type: array, items: { $ref: '#/components/schemas/Role' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/roles/{name}:
+    parameters:
+      - $ref: '#/components/parameters/roleName'
+    put:
+      operationId: putRole
+      tags: [identity]
+      summary: Create or change a custom role
+      security:
+        - bearer: ['members:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scopes]
+              properties:
+                scopes: { type: array, minItems: 1, items: { type: string } }
+                description: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: The role.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Role' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteRole
+      tags: [identity]
+      summary: Delete a custom role nobody holds
+      security:
+        - bearer: ['members:write']
+      responses:
+        '204': { description: 'Deleted.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/groups:
+    get:
+      operationId: listGroups
+      tags: [identity]
+      summary: Your tenant's groups, with their roles and members
+      security:
+        - bearer: ['members:read']
+      responses:
+        '200':
+          description: Groups.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups]
+                properties:
+                  groups: { type: array, items: { $ref: '#/components/schemas/Group' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/groups/{name}:
+    parameters:
+      - $ref: '#/components/parameters/roleName'
+    put:
+      operationId: putGroup
+      tags: [identity]
+      summary: Create or change a group's roles (members join through their membership's groups)
+      security:
+        - bearer: ['members:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roles]
+              properties:
+                roles: { $ref: '#/components/schemas/StringList' }
+                description: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: The group.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Group' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteGroup
+      tags: [identity]
+      summary: Delete a group; its members leave it
+      security:
+        - bearer: ['members:write']
+      responses:
+        '204': { description: 'Deleted.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/invites:
+    get:
+      operationId: listInvites
+      tags: [identity]
+      summary: Open invites
+      security:
+        - bearer: ['members:read']
+      responses:
+        '200':
+          description: Invites, without their codes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [invites]
+                properties:
+                  invites: { type: array, items: { $ref: '#/components/schemas/Invite' } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createInvite
+      tags: [identity]
+      summary: Invite someone, with roles and groups you hold yourself
+      security:
+        - bearer: ['members:write']
+      requestBody: { $ref: '#/components/requestBodies/InviteRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/InviteCreated' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/invites/{id}:
+    parameters:
+      - $ref: '#/components/parameters/inviteId'
+    delete:
+      operationId: deleteInvite
+      tags: [identity]
+      summary: Withdraw an invite
+      security:
+        - bearer: ['members:write']
+      responses:
+        '204': { description: 'Withdrawn.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/audit:
+    get:
+      operationId: listAudit
+      tags: [audit]
+      summary: Your tenant's audit log, newest first
+      security:
+        - bearer: ['audit:read']
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/before'
+      responses:
+        '200': { $ref: '#/components/responses/AuditPage' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/users:
+    get:
+      operationId: listUsers
+      tags: [admin]
+      summary: Every user
+      security:
+        - bearer: [admin]
+      responses:
+        '200':
+          description: Users.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users: { type: array, items: { $ref: '#/components/schemas/User' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/users/{name}:
+    parameters:
+      - $ref: '#/components/parameters/adminUserName'
+    get:
+      operationId: getUser
+      tags: [admin]
+      summary: One user
+      security:
+        - bearer: [admin]
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: updateUser
+      tags: [admin]
+      summary: Disable or enable a user, or make or unmake an operator
+      security:
+        - bearer: [admin]
+      description: Disabling stops every token the user has on its next use; so does taking away operator, for operator tokens.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                disabled: { type: boolean }
+                operator: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteUser
+      tags: [admin]
+      summary: Delete a user, their memberships and their tokens (not while they're a tenant's last owner)
+      security:
+        - bearer: [admin]
+      responses:
+        '204': { description: 'Deleted.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/admin/invites:
+    post:
+      operationId: createOperatorInvite
+      tags: [admin]
+      summary: Invite an operator
+      security:
+        - bearer: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user: { $ref: '#/components/schemas/UserName' }
+                expiresInDays: { type: integer, minimum: 1, maximum: 30 }
+                note: { type: string, maxLength: 200 }
+      responses:
+        '201': { $ref: '#/components/responses/InviteCreated' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/admin/audit:
+    get:
+      operationId: listOperatorAudit
+      tags: [admin, audit]
+      summary: The cluster's audit log, and everything operators did
+      security:
+        - bearer: [admin]
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/before'
+      responses:
+        '200': { $ref: '#/components/responses/AuditPage' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tenants/{tenant}/members:
+    parameters:
+      - $ref: '#/components/parameters/tenant'
+    get:
+      operationId: listTenantMembers
+      tags: [admin]
+      summary: A tenant's members
+      security:
+        - bearer: [admin]
+      responses:
+        '200': { $ref: '#/components/responses/MemberList' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tenants/{tenant}/invites:
+    parameters:
+      - $ref: '#/components/parameters/tenant'
+    post:
+      operationId: createTenantInvite
+      tags: [admin]
+      summary: Invite someone to a tenant, for example its first owner
+      security:
+        - bearer: [admin]
+      requestBody: { $ref: '#/components/requestBodies/InviteRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/InviteCreated' }
+        default: { $ref: '#/components/responses/Error' }
+
 components:
   securitySchemes:
     bearer:
@@ -1228,7 +1713,9 @@ components:
       description: |
         `atly_…` tenant tokens, or the admin token. Scopes: `jobs:read`, `jobs:write`, `services:read`,
         `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`,
-        `nodes:read`, `storage:read`, `storage:write`, or `*`. Operations marked `admin` need the admin token.
+        `nodes:read`, `storage:read`, `storage:write`, `secrets:read`, `secrets:write`, `secrets:use`,
+        `members:read`, `members:write`, `audit:read`, or `*`. Operations marked `admin` need an operator's
+        token or the admin token; `me` operations need a user's own personal token.
 
   parameters:
     tenant:
@@ -1291,12 +1778,49 @@ components:
       name: limit
       in: query
       schema: { type: integer, minimum: 1, maximum: 1000 }
+    before:
+      name: before
+      in: query
+      description: An audit entry id; the page starts just before it.
+      schema: { type: string, maxLength: 100 }
+    userName:
+      name: user
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/UserName' }
+    adminUserName:
+      name: name
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/UserName' }
+    roleName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,62}$' }
+    inviteId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 100 }
     cursor:
       name: cursor
       in: query
       schema: { type: string }
 
   requestBodies:
+    InviteRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              roles: { $ref: '#/components/schemas/StringList' }
+              groups: { $ref: '#/components/schemas/StringList' }
+              user: { $ref: '#/components/schemas/UserName' }
+              expiresInDays: { type: integer, minimum: 1, maximum: 30 }
+              note: { type: string, maxLength: 200 }
     TokenRequest:
       required: true
       content:
@@ -1313,7 +1837,8 @@ components:
                   type: string
                   enum: ['*', 'jobs:read', 'jobs:write', 'services:read', 'services:write', 'files:read', 'files:write',
                          'bus:publish', 'bus:request', 'queues:read', 'queues:write', 'tokens:write', 'nodes:read',
-                         'storage:read', 'storage:write', 'secrets:read', 'secrets:write', 'secrets:use']
+                         'storage:read', 'storage:write', 'secrets:read', 'secrets:write', 'secrets:use',
+                         'members:read', 'members:write', 'audit:read']
               expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
 
   responses:
@@ -1344,6 +1869,35 @@ components:
                 required: [token]
                 properties:
                   token: { type: string, pattern: '^atly_[0-9A-Za-z]{49}$' }
+    InviteCreated:
+      description: The invite, with its code; shown once.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Invite' }
+    Member:
+      description: A member and what they may do now.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Member' }
+    MemberList:
+      description: Members.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [members]
+            properties:
+              members: { type: array, items: { $ref: '#/components/schemas/Member' } }
+    User:
+      description: A user.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/User' }
+    AuditPage:
+      description: Audit entries, newest first.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuditPage' }
     Readiness:
       description: Whether the node takes traffic, and why not.
       content:
@@ -1420,6 +1974,14 @@ components:
         enqueuedAt: { type: integer }
         availableAt: { type: integer }
         lastError: { type: [string, 'null'] }
+    UserName:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9_-]{0,38}$'
+      description: Lowercase letters, digits, `_` and `-`, up to 39; starts with a letter or digit.
+    StringList:
+      type: array
+      maxItems: 50
+      items: { type: string, maxLength: 63 }
     Name:
       type: string
       pattern: '^(?!.*--)[a-z0-9][a-z0-9_-]{0,62}$'
@@ -1440,7 +2002,9 @@ components:
       properties:
         admin: { type: boolean }
         tenant: { type: string }
-        token: { type: string }
+        token: { type: [string, 'null'] }
+        user: { type: [string, 'null'], description: 'The user, for a personal token (D-070).' }
+        owner: { type: boolean }
         scopes:
           type: array
           items: { type: string }
@@ -1492,6 +2056,85 @@ components:
         createdAt: { type: integer }
         expiresAt: { type: [integer, 'null'] }
         lastUsedAt: { type: [integer, 'null'] }
+        user: { type: [string, 'null'], description: 'Set for a personal token: it acts as this user (D-070).' }
+        createdBy: { type: [string, 'null'], description: 'The user (or token) that made it.' }
+    User:
+      type: object
+      required: [name, operator, disabled, createdAt]
+      properties:
+        name: { type: string }
+        displayName: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+        operator: { type: boolean }
+        disabled: { type: boolean }
+        createdAt: { type: integer }
+    Member:
+      type: object
+      required: [tenant, user, roles, groups, scopes, owner, joinedAt]
+      properties:
+        tenant: { type: string }
+        user: { type: string }
+        roles: { type: array, items: { type: string } }
+        groups: { type: array, items: { type: string } }
+        scopes: { type: array, items: { type: string }, description: 'What the member may do now, from their roles and groups.' }
+        owner: { type: boolean }
+        joinedAt: { type: integer }
+        invitedBy: { type: [string, 'null'] }
+    Role:
+      type: object
+      required: [name, scopes, builtIn]
+      properties:
+        name: { type: string }
+        scopes: { type: array, items: { type: string } }
+        description: { type: [string, 'null'] }
+        builtIn: { type: boolean }
+    Group:
+      type: object
+      required: [name, roles]
+      properties:
+        name: { type: string }
+        roles: { type: array, items: { type: string } }
+        description: { type: [string, 'null'] }
+        members: { type: array, items: { type: string } }
+    Invite:
+      type: object
+      required: [id, tenant, roles, groups, createdAt, expiresAt]
+      properties:
+        id: { type: string }
+        tenant: { type: string }
+        roles: { type: array, items: { type: string } }
+        groups: { type: array, items: { type: string } }
+        user: { type: [string, 'null'], description: 'Who may redeem it: an existing user, or the name a new one takes.' }
+        note: { type: [string, 'null'] }
+        createdBy: { type: [string, 'null'] }
+        createdAt: { type: integer }
+        expiresAt: { type: integer }
+        code: { type: string, description: 'Only when it is created: the code to redeem, shown once.' }
+    AuditEntry:
+      type: object
+      required: [id, at, actor, action, method, path, status]
+      properties:
+        id: { type: string, description: 'Sorts by time; pass it as `before` for the next page.' }
+        at: { type: integer }
+        tenant: { type: [string, 'null'] }
+        actor:
+          type: object
+          properties:
+            user: { type: [string, 'null'] }
+            token: { type: [string, 'null'] }
+            operator: { type: boolean, description: 'Acting as an operator, or with the admin token.' }
+        action: { type: string, description: 'The API operation.' }
+        method: { type: string }
+        path: { type: string }
+        status: { type: integer }
+        ip: { type: [string, 'null'] }
+        forwardedFor: { type: [string, 'null'], description: 'The X-Forwarded-For header as received; not verified.' }
+    AuditPage:
+      type: object
+      required: [entries]
+      properties:
+        entries: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
+        next: { type: [string, 'null'] }
     Node:
       type: object
       required: [id, capacity, running, lastSeen]

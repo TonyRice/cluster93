@@ -19,6 +19,15 @@ public final class Json {
         return MAPPER.createObjectNode();
     }
 
+    /** The strings as a JSON array; empty if null. */
+    public static ArrayNode strings(java.util.List<String> values) {
+        ArrayNode array = array();
+        if (values != null) {
+            values.forEach(array::add);
+        }
+        return array;
+    }
+
     public static ArrayNode array() {
         return MAPPER.createArrayNode();
     }

@@ -15,11 +15,12 @@ import java.util.List;
 /** Automately's durable tables on Ignite (D-030). */
 public final class IgniteStores {
 
-    private static final List<Table.Definition> TABLES = List.of(
+    private static final List<Table.Definition> TABLES = java.util.stream.Stream.concat(java.util.stream.Stream.of(
             IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE, IgniteDomainStore.TABLE, IgniteKvStore.TABLE,
             IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
             IgniteStorageConfigStore.POLICIES, IgniteStorageConfigStore.PROVIDERS, IgniteStorageConfigStore.ROUTES,
-            IgniteQueueStore.TABLE);
+            IgniteQueueStore.TABLE, IgniteAuditLog.TABLE),
+            automately.core.identity.Identity.KINDS.stream().map(IgniteRecords::definition)).toList();
 
     public final JobStore jobs;
     public final JobStateStore state;
@@ -29,6 +30,9 @@ public final class IgniteStores {
     public final automately.core.auth.AuthStore auth;
     public final automately.core.storage.StorageConfigStore storage;
     public final automately.core.queue.QueueStore queues;
+    /** Users, memberships, roles and groups, and invites (D-070). */
+    public final automately.core.identity.Records.Factory records;
+    public final automately.core.audit.AuditLog audit;
     private final Vertx vertx;
     private final IgniteCluster cluster;
 
@@ -41,6 +45,8 @@ public final class IgniteStores {
         this.auth = new IgniteAuthStore(vertx, cluster.ignite());
         this.storage = new IgniteStorageConfigStore(vertx, cluster.ignite());
         this.queues = new IgniteQueueStore(vertx, cluster.ignite());
+        this.records = kind -> new IgniteRecords(vertx, cluster.ignite(), kind);
+        this.audit = new IgniteAuditLog(vertx, cluster.ignite());
         this.vertx = vertx;
         this.cluster = cluster;
     }

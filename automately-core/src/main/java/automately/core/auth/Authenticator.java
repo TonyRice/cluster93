@@ -21,12 +21,19 @@ public final class Authenticator {
 
     private final AuthStore store;
     private final String configuredAdminHash;
+    private final java.util.function.Function<ApiToken, Future<Principal>> personal;
     private final Map<String, Long> touched = new ConcurrentHashMap<>();
 
     /** {@code configuredAdminToken} is {@code AUTOMATELY_ADMIN_TOKEN}, or null to use the generated one. */
     public Authenticator(AuthStore store, String configuredAdminToken) {
+        this(store, configuredAdminToken, token -> Future.failedFuture(AuthFailure.unauthenticated("Personal tokens aren't enabled")));
+    }
+
+    /** {@code personal} works out who a personal token (one with a user) acts as now (D-070). */
+    public Authenticator(AuthStore store, String configuredAdminToken, java.util.function.Function<ApiToken, Future<Principal>> personal) {
         this.store = store;
         this.configuredAdminHash = configuredAdminToken == null ? null : TokenFormat.hash(configuredAdminToken);
+        this.personal = personal;
     }
 
     public boolean adminTokenConfigured() {
@@ -47,7 +54,9 @@ public final class Authenticator {
                     return Future.failedFuture(AuthFailure.unauthenticated("This token expired"));
                 }
                 touch(apiToken, now);
-                return Future.succeededFuture(new Principal(false, apiToken.tenant(), apiToken.scopes(), apiToken.id()));
+                return apiToken.user() != null
+                        ? personal.apply(apiToken)
+                        : Future.succeededFuture(new Principal(false, apiToken.tenant(), apiToken.scopes(), apiToken.id()));
             }
             return adminHash().compose(admin -> TokenFormat.sameHash(admin, hash)
                     ? Future.succeededFuture(Principal.ADMIN)

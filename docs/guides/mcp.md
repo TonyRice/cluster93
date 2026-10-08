@@ -13,6 +13,8 @@ automately tokens create claude --scope jobs:read --scope jobs:write --scope ser
 ```
 Leave out `secrets:use` unless the agent's scripts need your [secrets](secrets.md): without it they can run, but `secrets.get` fails with `forbidden`.
 
+There are no MCP tools for users, members or roles: agents don't manage people. Give an agent a service token (`automately tokens create`) with only the scopes it needs, rather than a person's own token. Leave `members:write` out of it, so the agent can't invite anyone.
+
 **Clients that support remote MCP servers**, for example Claude Code:
 
 ```bash

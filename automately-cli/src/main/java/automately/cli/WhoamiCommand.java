@@ -20,11 +20,13 @@ final class WhoamiCommand extends Base {
     }
 
     static String describe(JsonNode who) {
+        String user = Json.text(who, "user");
         if (who.path("admin").asBoolean()) {
-            return "the admin";
+            return user.isEmpty() ? "the admin" : user + ", an operator";
         }
         List<String> scopes = new ArrayList<>();
         who.path("scopes").forEach(scope -> scopes.add(scope.asText()));
-        return "tenant " + who.path("tenant").asText() + " (" + String.join(", ", scopes) + ")";
+        return (user.isEmpty() ? "" : user + " in ") + "tenant " + who.path("tenant").asText()
+                + (who.path("owner").asBoolean() ? ", an owner" : "") + " (" + String.join(", ", scopes) + ")";
     }
 }

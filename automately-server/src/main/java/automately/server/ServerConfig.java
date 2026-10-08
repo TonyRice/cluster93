@@ -77,7 +77,8 @@ public record ServerConfig(
         boolean clusterTls,
         Path tlsDirectory,
         String join,
-        Duration clusterJoinTimeout) {
+        Duration clusterJoinTimeout,
+        Duration auditRetention) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
 
@@ -90,6 +91,9 @@ public record ServerConfig(
         }
         if (filesBackend.equals("disk") && filesDirectory == null) {
             throw new IllegalArgumentException("AUTOMATELY_FILES_DIR is required with AUTOMATELY_FILES_BACKEND=disk");
+        }
+        if (auditRetention.isNegative() || auditRetention.isZero()) {
+            throw new IllegalArgumentException("AUTOMATELY_AUDIT_RETENTION_DAYS must be at least 1");
         }
         if (adminToken != null && adminToken.length() < automately.core.auth.Authenticator.MIN_ADMIN_TOKEN_LENGTH) {
             throw new IllegalArgumentException("AUTOMATELY_ADMIN_TOKEN must be at least "
@@ -146,7 +150,9 @@ public record ServerConfig(
                 clusterTlsRequired(env.getOrDefault("AUTOMATELY_CLUSTER_TLS", "required")),
                 tlsDirectory(env),
                 blankToNull(env.get("AUTOMATELY_JOIN")),
-                Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS", "60000"))));
+                Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS", "60000"))),
+                // How long audit entries are kept (D-071).
+                Duration.ofDays(Long.parseLong(env.getOrDefault("AUTOMATELY_AUDIT_RETENTION_DAYS", "90").trim())));
     }
 
     private static boolean clusterTlsRequired(String value) {

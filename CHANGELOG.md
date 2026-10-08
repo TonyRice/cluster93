@@ -26,6 +26,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Security groundwork, part 4 — Users, roles and the audit log (2026-10-07)
+
+### Added
+- **Users (D-070).** People get their own users and join tenants by invite.
+  - **Global users:** one account can belong to several tenants, and be an **operator**.
+  - **Roles:** built in (`owner`, `admin`, `developer`, `viewer`) or the tenant's own, given directly or through **groups**.
+  - **New scopes:** `members:read`, `members:write`, `audit:read`.
+  - **Why:** nothing knew who a person was. Taking access away meant hunting down tokens, and the coming rules for links and approvals need people.
+- **Personal tokens act as their user, with what the user's roles give them now.** Demoting, removing or disabling someone takes effect on their next request, with every token they made.
+- **Invites instead of passwords.** A single-use code, expiring in 7 days by default, is redeemed for a personal token: `automately login URL --invite CODE`. Operators invite a tenant's first owner and other operators. **Why:** no password store to protect. Passkeys and OIDC come with the console.
+- **No escalation:** nobody grants more than they hold, only owners grant `owner`, and a tenant keeps its last owner.
+- **Operators** are named users with the admin token's powers, which still exclude tenant data. They replace sharing the admin token.
+- **The audit log (D-071):** every change, and every refused attempt, with who, when and from where.
+  - `GET /v1/audit` (`audit:read`) for a tenant; `GET /v1/admin/audit` for operators.
+  - Kept 90 days (`AUTOMATELY_AUDIT_RETENTION_DAYS`).
+  - Reads, bus messages and queue pushes aren't recorded.
+- **API:** `/v1/invites/redeem`, `/v1/me`, `/v1/me/tokens`, `/v1/members`, `/v1/roles`, `/v1/groups`, `/v1/invites`, `/v1/audit`, `/v1/users`, `/v1/admin/invites`, `/v1/admin/audit`, and `/v1/tenants/{t}/members` and `/invites`. That's 28 operations in the contract.
+- **CLI:** `login --invite`, `login --tenant`, `invites`, `members`, `roles`, `groups`, `audit`, `users`.
+- **`docs/design/identity.md`** and **`docs/guides/users.md`**.
+- **Tests:**
+  - `IdentityTest` (9)
+  - `RecordsContract` and `AuditLogContract`, in memory and on Ignite
+  - `ContractTest` (93 operations)
+  - a CLI test of the whole flow
+
+### Changed
+- **Tokens show `user` and `createdBy`.** Service tokens record who made them.
+- **`whoami` shows the user** and whether they're an owner.
+- **The admin-only routes** also accept operators' tokens.
+
 ## Security groundwork, part 3 — Signed releases (2026-10-07)
 
 ### Added

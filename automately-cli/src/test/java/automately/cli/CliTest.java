@@ -371,6 +371,46 @@ class CliTest {
         assertThat(usage.code()).isEqualTo(2);
     }
 
+    @Test
+    void peopleJoinWithInvitesAndTheirAccessFollowsThem() throws Exception {
+        assertThat(cli("--url", url, "--token", ADMIN, "tenants", "create", "people").code()).isZero();
+        Result ownerInvite = cli("--url", url, "--token", ADMIN, "invites", "create", "--tenant", "people", "--role", "owner", "--user", "pat");
+        assertThat(ownerInvite.code()).as(ownerInvite.err()).isZero();
+        assertThat(ownerInvite.err()).contains("--invite");
+
+        Result login = cli("login", url, "--invite", ownerInvite.out().strip());
+        assertThat(login.code()).as(login.err()).isZero();
+        assertThat(login.err()).contains("pat joined people");
+        assertThat(cli("whoami").out()).contains("pat in tenant people, an owner");
+
+        assertThat(cli("roles", "set", "reader", "--scope", "jobs:read", "--description", "Reads jobs").code()).isZero();
+        assertThat(cli("groups", "set", "readers", "--role", "reader").code()).isZero();
+        Result invite = cli("invites", "create", "--role", "viewer", "--group", "readers");
+        assertThat(invite.code()).as(invite.err()).isZero();
+        assertThat(cli("invites", "ls").out()).contains("viewer");
+
+        // Someone else redeems it, logging in with their own config.
+        Path pat = config;
+        config = home.resolve("quinn");
+        Result quinn = cli("login", url, "--invite", invite.out().strip(), "--name", "quinn");
+        assertThat(quinn.code()).as(quinn.err()).isZero();
+        assertThat(cli("whoami").out()).contains("quinn in tenant people");
+        config = pat;
+
+        assertThat(cli("members").out()).contains("pat").contains("quinn").contains("readers");
+        assertThat(cli("members", "set", "quinn", "--role", "developer").code()).isZero();
+        assertThat(cli("groups").out()).contains("readers").doesNotContain("quinn");
+        assertThat(cli("members", "rm", "quinn").code()).isZero();
+        config = home.resolve("quinn");
+        assertThat(cli("whoami").err()).as("removing a member deletes their tokens").contains("Unknown or revoked token");
+        config = pat;
+
+        assertThat(cli("audit").out()).contains("removeMember").contains("redeemInvite").contains("pat");
+        assertThat(cli("--url", url, "--token", ADMIN, "users").out()).contains("pat").contains("quinn");
+        assertThat(cli("--url", url, "--token", ADMIN, "users", "disable", "quinn").code()).isZero();
+        assertThat(cli("--url", url, "--token", ADMIN, "audit", "--operators").out()).contains("createTenantInvite");
+    }
+
     private static <T> T await(Future<T> future) throws Exception {
         return future.toCompletionStage().toCompletableFuture().get(60, TimeUnit.SECONDS);
     }

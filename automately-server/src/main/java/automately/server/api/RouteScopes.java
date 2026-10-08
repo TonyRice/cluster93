@@ -14,8 +14,11 @@ import java.util.regex.Pattern;
  */
 final class RouteScopes {
 
-    /** Who may call: anyone, the admin only, any valid token, a tenant scope, or the admin or a tenant scope. */
-    enum Who { PUBLIC, ADMIN, ANY, TENANT, ADMIN_OR_TENANT }
+    /**
+     * Who may call: anyone; the admin (the admin token or an operator, D-070); any valid token; a tenant scope; the admin
+     * or a tenant scope; or a user, through their own personal token.
+     */
+    enum Who { PUBLIC, ADMIN, ANY, TENANT, ADMIN_OR_TENANT, USER }
 
     /** No body; a JSON body read in full (up to {@link Rule#bodyLimit}); or a body the handler streams itself. */
     enum Body { NONE, JSON, STREAM }
@@ -37,6 +40,36 @@ final class RouteScopes {
     static final List<Rule> RULES = List.of(
             rule("GET", "/v1/openapi.json", "getOpenApi", Who.PUBLIC, null),
             rule("GET", "/v1/whoami", "getWhoami", Who.ANY, null),
+
+            // Identity (D-070) and the audit log (D-071).
+            json("POST", "/v1/invites/redeem", "redeemInvite", Who.PUBLIC, null, SMALL),
+            rule("GET", "/v1/me", "getMe", Who.USER, null),
+            json("PATCH", "/v1/me", "updateMe", Who.USER, null, SMALL),
+            rule("GET", "/v1/me/tokens", "listMyTokens", Who.USER, null),
+            json("POST", "/v1/me/tokens", "createMyToken", Who.USER, null, SMALL),
+            rule("DELETE", "/v1/me/tokens/" + SEG, "revokeMyToken", Who.USER, null),
+            rule("GET", "/v1/members", "listMembers", Who.TENANT, Scopes.MEMBERS_READ),
+            rule("GET", "/v1/members/" + SEG, "getMember", Who.TENANT, Scopes.MEMBERS_READ),
+            json("PUT", "/v1/members/" + SEG, "putMember", Who.TENANT, Scopes.MEMBERS_WRITE, SMALL),
+            rule("DELETE", "/v1/members/" + SEG, "removeMember", Who.TENANT, Scopes.MEMBERS_WRITE),
+            rule("GET", "/v1/roles", "listRoles", Who.TENANT, Scopes.MEMBERS_READ),
+            json("PUT", "/v1/roles/" + SEG, "putRole", Who.TENANT, Scopes.MEMBERS_WRITE, SMALL),
+            rule("DELETE", "/v1/roles/" + SEG, "deleteRole", Who.TENANT, Scopes.MEMBERS_WRITE),
+            rule("GET", "/v1/groups", "listGroups", Who.TENANT, Scopes.MEMBERS_READ),
+            json("PUT", "/v1/groups/" + SEG, "putGroup", Who.TENANT, Scopes.MEMBERS_WRITE, SMALL),
+            rule("DELETE", "/v1/groups/" + SEG, "deleteGroup", Who.TENANT, Scopes.MEMBERS_WRITE),
+            rule("GET", "/v1/invites", "listInvites", Who.TENANT, Scopes.MEMBERS_READ),
+            json("POST", "/v1/invites", "createInvite", Who.TENANT, Scopes.MEMBERS_WRITE, SMALL),
+            rule("DELETE", "/v1/invites/" + SEG, "deleteInvite", Who.TENANT, Scopes.MEMBERS_WRITE),
+            rule("GET", "/v1/audit", "listAudit", Who.TENANT, Scopes.AUDIT_READ),
+            rule("GET", "/v1/users", "listUsers", Who.ADMIN, null),
+            rule("GET", "/v1/users/" + SEG, "getUser", Who.ADMIN, null),
+            json("PATCH", "/v1/users/" + SEG, "updateUser", Who.ADMIN, null, SMALL),
+            rule("DELETE", "/v1/users/" + SEG, "deleteUser", Who.ADMIN, null),
+            json("POST", "/v1/admin/invites", "createOperatorInvite", Who.ADMIN, null, SMALL),
+            rule("GET", "/v1/admin/audit", "listOperatorAudit", Who.ADMIN, null),
+            rule("GET", "/v1/tenants/" + SEG + "/members", "listTenantMembers", Who.ADMIN, null),
+            json("POST", "/v1/tenants/" + SEG + "/invites", "createTenantInvite", Who.ADMIN, null, SMALL),
 
             rule("GET", "/v1/tenants", "listTenants", Who.ADMIN, null),
             json("POST", "/v1/tenants", "createTenant", Who.ADMIN, null, SMALL),
