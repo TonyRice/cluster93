@@ -44,7 +44,7 @@ What the invitee runs depends on who they are:
 |---|---|
 | `owner` | Everything (`*`), and owner powers: only owners grant or remove `owner`, and a tenant always keeps one |
 | `admin` | Everything (`*`) |
-| `developer` | Jobs, services, files, bus, queues and secrets (set them, and scripts may use them); read nodes, storage and members |
+| `developer` | Jobs, services, files, bus, queues, secrets (set them, and scripts may use them) and packages (publish them); read nodes, storage and members |
 | `viewer` | Read everything except the audit log |
 
 Make your own from scopes, and put people in groups:

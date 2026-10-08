@@ -72,6 +72,7 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.audit.AuditLog audit;
     private final automately.core.files.FileTree fileTree;
     private final automately.core.files.FileLinks fileLinks;
+    private final automately.core.packages.PackageStore packages;
     private final java.security.SecureRandom auditIds = new java.security.SecureRandom();
     /** Revokes a node's certificate (D-066); null when the cluster doesn't use node certificates. */
     private final java.util.function.Function<String, Future<JsonObject>> revokeNode;
@@ -93,6 +94,7 @@ public final class ApiVerticle extends VerticleBase {
                        automately.core.queue.QueueService queues, automately.core.callback.CallbackSecrets callbackSecrets,
                        automately.core.secrets.TenantSecrets secrets, automately.core.identity.Identity identity,
                        automately.core.audit.AuditLog audit, automately.core.files.FileTree fileTree, automately.core.files.FileLinks fileLinks,
+                       automately.core.packages.PackageStore packages,
                        automately.core.auth.RateLimiter limiter, java.util.function.Function<String, Future<JsonObject>> revokeNode,
                        java.util.function.Supplier<Future<List<String>>> notReady) {
         this.revokeNode = revokeNode;
@@ -104,6 +106,7 @@ public final class ApiVerticle extends VerticleBase {
         this.audit = audit;
         this.fileTree = fileTree;
         this.fileLinks = fileLinks;
+        this.packages = packages;
         this.room = room;
         this.storage = storage;
         // Shared with the scripts' jobs API, so jobs started from scripts count toward the same limit (D-063).
@@ -166,13 +169,14 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/v1/nodes").handler(this::listNodes);
         new McpRoutes(vertx, authenticator, limiter, () -> server.actualPort(), loopbackSecret).mount(router);
         new AuthRoutes(authStore, authenticator, identity, this::isEmpty, tenant -> storage.config().forget(tenant).compose(v -> secrets.forget(tenant))
-                .compose(v -> identity.forgetTenant(tenant))).mount(router);
+                .compose(v -> identity.forgetTenant(tenant)).compose(v -> packages.forget(tenant))).mount(router);
         new IdentityRoutes(identity, audit, authStore, authenticator, auditIds, config.secretsKey()).mount(router);
         new StorageApi(storage, files, authStore, quota).mount(router);
         new FilesRoutes(files, quota, room, fileTree, fileLinks).mount(router);
         new BusRoutes(vertx).mount(router);
         new QueueRoutes(queues).mount(router);
         new SecretsRoutes(secrets).mount(router);
+        new PackagesRoutes(packages, quota).mount(router);
         router.post("/v1/cluster/nodes/:id/revoke").handler(ctx -> {
             if (revokeNode == null) {
                 error(ctx, 409, "not_available", "This cluster doesn't use node certificates (AUTOMATELY_CLUSTER_TLS=off, or a single node)");
@@ -356,7 +360,8 @@ public final class ApiVerticle extends VerticleBase {
     }
 
     /** Operations that are data traffic rather than changes, too frequent to audit; rate limits bound them instead. */
-    private static final java.util.Set<String> UNAUDITED = java.util.Set.of("publish", "request", "pushQueueMessage");
+    private static final java.util.Set<String> UNAUDITED = java.util.Set.of("publish", "request", "pushQueueMessage",
+            "findMissingPackageFiles", "putPackageFile");
     private static final java.util.regex.Pattern TENANT_PATH = java.util.regex.Pattern.compile("^/v1/tenants/([^/]+)");
 
     /**
@@ -390,13 +395,16 @@ public final class ApiVerticle extends VerticleBase {
         return "This token doesn't have the \"" + scope + "\" scope";
     }
 
-    /** A tenant can be deleted once nothing of it is left: no services, no files (wherever they are), no kv. */
+    /**
+     * A tenant can be deleted once nothing of it is left: no services, no files (wherever they are), no kv. Its
+     * packages don't count: deleting the tenant deletes them.
+     */
     private Future<Boolean> isEmpty(String tenant) {
         return services.list(tenant).compose(owned -> !owned.isEmpty()
                 ? Future.succeededFuture(false)
                 : files.list(tenant, "", 1, null).compose(listed -> !listed.getJsonArray("files").isEmpty()
                         ? Future.succeededFuture(false)
-                        : quota.remaining(tenant).map(left -> left == quota.bytes())));
+                        : quota.remaining(tenant).compose(left -> packages.usage(tenant).map(published -> left + published == quota.bytes()))));
     }
 
     private void submitJob(RoutingContext ctx) {

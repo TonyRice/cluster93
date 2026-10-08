@@ -291,10 +291,15 @@ public final class Automately {
                                             Stores stores, IgniteCluster cluster, Security security) {
         // A fresh id per process start: a restarted node must not be mistaken for its previous life (D-009).
         String instanceId = UUID.randomUUID().toString();
-        // One quota for everything a tenant stores: files, kv and queued messages together (D-043, D-061).
+        // Packages, in the cluster's own storage rather than any tenant's (D-083).
+        automately.core.packages.PackageStore packages = new automately.core.packages.PackageStore(
+                stores.records().open(automately.core.packages.PackageStore.VERSIONS),
+                stores.records().open(automately.core.packages.PackageStore.BLOBS), stores.blobs());
+        // One quota for everything a tenant stores: files, kv, queued messages and package files together (D-043, D-061, D-085).
         TenantQuota quota = new TenantQuota(config.tenantStorageBytes(),
                 tenant -> stores.files().usage(tenant).compose(files -> stores.kv().usage(tenant).map(kv -> files + kv))
-                        .compose(sum -> stores.queues().usage(tenant).map(queued -> sum + queued)));
+                        .compose(sum -> stores.queues().usage(tenant).map(queued -> sum + queued))
+                        .compose(sum -> packages.usage(tenant).map(published -> sum + published)));
         QueueService queues = new QueueService(vertx, stores.queues(), quota, stores.capacity());
         // Every way a job ends goes through this store, which queues the job's completion callback (D-062).
         JobStore jobs = new CallbackJobStore(stores.jobs(), queues);
@@ -349,7 +354,7 @@ public final class Automately {
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, visibleFiles,
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, limiter,
+                queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, packages, limiter,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
                 () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.

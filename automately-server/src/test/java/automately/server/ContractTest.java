@@ -172,6 +172,18 @@ class ContractTest {
         calls.check("getSecret", "GET", "/v1/secrets/db-url", tenant, null);
         calls.check("listSecrets", "GET", "/v1/secrets", tenant, null);
         calls.check("deleteSecret", "DELETE", "/v1/secrets/db-url", tenant, null);
+        String packaged = "export const hi = () => 'hi';";
+        String packagedHash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(packaged.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        calls.check("findMissingPackageFiles", "POST", "/v1/packages/blobs/missing", tenant,
+                new JsonObject().put("sha256", new JsonArray().add(packagedHash)));
+        calls.validate("putPackageFile", await(client.put(node.httpPort(), "localhost", "/v1/packages/blobs/" + packagedHash)
+                .putHeader("Authorization", tenant).putHeader("Content-Type", "application/octet-stream").sendBuffer(Buffer.buffer(packaged))));
+        calls.check("publishPackage", "POST", "/v1/packages", tenant, new JsonObject().put("name", "hello").put("version", "1.0.0")
+                .put("files", new JsonObject().put("index.js", "sha256:" + packagedHash)));
+        calls.check("listPackages", "GET", "/v1/packages", tenant, null);
+        calls.check("getPackage", "GET", "/v1/packages/hello", tenant, null);
+        calls.check("getPackageVersion", "GET", "/v1/packages/hello/versions/1.0.0", tenant, null);
         calls.check("pushQueueMessage", "POST", "/v1/queues/emails", tenant,
                 new JsonObject().put("message", new JsonObject().put("to", "a@example.com")).put("key", "welcome-1").put("maxAttempts", 3));
         calls.check("getQueue", "GET", "/v1/queues/emails", tenant, null);

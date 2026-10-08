@@ -1,6 +1,6 @@
 # Packages: versioned JavaScript code, published to the cluster
 
-**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day, twice (§12, D-085; §13, D-086). Not built yet. Decisions: D-083, D-087 (inline scripts, §10). This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
+**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day, twice (§12, D-085; §13, D-086). Step 1 (the store and publishing) is built (D-088, [guide](../guides/packages.md)); steps 2 to 4 aren't yet. Decisions: D-083, D-087 (inline scripts, §10), D-088. This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
 
 ## 1. What a package is
 A **package** is an immutable, versioned set of JavaScript files (ES modules) with a manifest:
@@ -49,7 +49,7 @@ automately packages publish       # reads automately.json, or package.json
    - **Optional native extras** (`bufferutil`, `utf-8-validate`, `fsevents`, which packages like `ws` use if present) are stubbed out with a warning. They don't block a package that works without them.
    - **WebAssembly is fine:** `.wasm` files are package files like any other. It's often how a library avoids native code.
 2. **Uploading only what's new:** the CLI hashes every file and asks which hashes the cluster lacks (`POST /v1/packages/blobs/missing`), then uploads only those (`PUT /v1/packages/blobs/{sha256}`). The server re-hashes what arrives and refuses a mismatch.
-3. **Committing the version** (`POST /v1/packages/{name}/versions`): it's refused if that version exists or a file is missing.
+3. **Committing the version** (`POST /v1/packages`, D-088): it's refused if that version exists, a file is missing, or a dependency has no published version that matches.
    - **Who and when:** it records who published (the user, D-070) and when.
    - **Audited:** the publish is in the audit log (D-071).
 
@@ -115,7 +115,7 @@ An isolate has no libuv and can't load `.node` addons, so `sharp`, `bcrypt`, `ch
 - **Python packages** sharing this store, with `.py` files and an import hook resolving from the same lock: proposed yes, decided with Python.
 
 ## 11. Building it
-1. **Store and publish:** `PACKAGES` and `PACKAGE_BLOBS` (contract tests on both stores), the publish API, and the CLI's `publish` and `ls`, with esbuild and native detection.
+1. ~~**Store and publish:**~~ ✅ `PACKAGE_VERSIONS` and `PACKAGE_BLOBS` (a contract test on both stores), the publish API, and the CLI's `publish`, `ls` and `info`, with esbuild and native detection (D-088).
 2. **Resolve and load:** a short spike first (import cycles, and how a failed import surfaces in Javet). Then the lock on jobs, prefetch and the node cache, and the resolver. Tests cover imports, refused names, an integrity failure, and the lock surviving a retry.
 3. **Services from packages:** a version is a revision; `automately:*` built-ins; `/packages` in `fs`; MCP tools; docs.
 4. **Lifecycle:** yank, block and purge, garbage collection, metrics (cache hits, prefetch time).

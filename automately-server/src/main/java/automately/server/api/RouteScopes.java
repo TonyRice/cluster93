@@ -35,6 +35,8 @@ final class RouteScopes {
     static final long MESSAGE = BusRoutes.MAX_MESSAGE_BYTES;
     /** A secret's value, JSON-escaped at worst six bytes per byte, plus the object around it. */
     static final long SECRET_BODY = automately.core.secrets.TenantSecrets.MAX_VALUE_BYTES * 6L + 1024;
+    /** A package manifest: a thousand files' paths and hashes, with room to spare. */
+    static final long MANIFEST = 512 * 1024;
     private static final String SEG = "[^/]+";
 
     static final List<Rule> RULES = List.of(
@@ -144,6 +146,15 @@ final class RouteScopes {
             rule("HEAD", "/v1/files/.+", "headFile", Who.TENANT, Scopes.FILES_READ),
             new Rule(HttpMethod.PUT, Pattern.compile("/v1/files/.+"), "putFile", Who.TENANT, Scopes.FILES_WRITE, Body.STREAM, 0),
             rule("DELETE", "/v1/files/.+", "deleteFile", Who.TENANT, Scopes.FILES_WRITE),
+
+            // Packages (D-083). Operators publish the cluster's, under @cluster/; a cluster package's slash is encoded (%2F).
+            rule("GET", "/v1/packages", "listPackages", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_READ),
+            json("POST", "/v1/packages", "publishPackage", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_WRITE, MANIFEST),
+            json("POST", "/v1/packages/blobs/missing", "findMissingPackageFiles", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_WRITE, MANIFEST),
+            new Rule(HttpMethod.PUT, Pattern.compile("/v1/packages/blobs/" + SEG), "putPackageFile", Who.ADMIN_OR_TENANT,
+                    Scopes.PACKAGES_WRITE, Body.STREAM, 0),
+            rule("GET", "/v1/packages/" + SEG, "getPackage", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_READ),
+            rule("GET", "/v1/packages/" + SEG + "/versions/" + SEG, "getPackageVersion", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_READ),
 
             json("POST", "/v1/bus/" + SEG + "/request", "request", Who.TENANT, Scopes.BUS_REQUEST, MESSAGE),
             json("POST", "/v1/bus/" + SEG, "publish", Who.TENANT, Scopes.BUS_PUBLISH, MESSAGE),

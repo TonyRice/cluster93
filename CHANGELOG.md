@@ -26,6 +26,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Packages, step 1: the store and publishing (2026-10-08)
+
+### Added
+- **Publishing packages (D-083, D-088).** `automately packages publish` bundles a project with its own esbuild, uploads only the files the cluster doesn't have (checked against their SHA-256), and commits the version. Also `packages ls` and `packages info`, and the API under `/v1/packages`. **Why:** the first step towards scripts importing shared, versioned code; loading them in jobs is step 2.
+  - **Checked when published:** a version never changes, so every file, the limits (1,000 files, 10 MB) and every dependency range are checked up front.
+  - **Refused with the reason:** native code, naming what pulled it in; optional native extras are left out with a warning.
+  - **Cluster-wide packages** under `@cluster/`, published by operators and visible to every tenant.
+  - **Scopes** `packages:read` and `packages:write`, given to the built-in roles. Package files count against the tenant's quota, and deleting a tenant deletes its packages.
+- `docs/guides/packages.md`.
+
 ## Design: inline scripts can import packages (2026-10-08)
 
 ### Docs

@@ -55,6 +55,8 @@ final class TestIgnite {
         cluster.ignite().cache(automately.core.audit.AuditExporter.STATE.name()).clear();
         cluster.ignite().cache(automately.core.files.FileTree.OPS.name()).clear();
         cluster.ignite().cache(automately.core.files.FileLocks.KIND.name()).clear();
+        cluster.ignite().cache(automately.core.packages.PackageStore.VERSIONS.name()).clear();
+        cluster.ignite().cache(automately.core.packages.PackageStore.BLOBS.name()).clear();
         cluster.ignite().cache(IgniteChunks.CACHE).clear();
         return stores;
     }

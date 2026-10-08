@@ -65,6 +65,11 @@ public final class Api {
         return json(send("PUT", path, body, contentType));
     }
 
+    /** Sends bytes already in memory. */
+    public JsonNode putBytes(String path, byte[] bytes, String contentType) {
+        return json(send("PUT", path, HttpRequest.BodyPublishers.ofByteArray(bytes), contentType));
+    }
+
     /** A response body as a stream; the caller closes it. Fails on an error status. */
     public InputStream download(String path) {
         HttpResponse<InputStream> response = request("GET", path, HttpRequest.BodyPublishers.noBody(), null);

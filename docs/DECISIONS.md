@@ -1296,3 +1296,16 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 - **Off switch:** a job with `"packages": false` can't import packages at all.
 - **Not planned:** declaring version ranges on an inline job; it can be added if needed.
 - **Why:** quick scripts and agents should just work without declaring anything, and the node must know every package before the script starts.
+
+### D-088 — Packages step 1: the store and publishing, as built
+**Date:** 2026-10-08 · **Status:** Accepted. Builds step 1 of D-083; details in `docs/design/packages.md` and `docs/guides/packages.md`
+
+- **Storage:** versions and unique files are two `Records` collections (`PACKAGE_VERSIONS`, `PACKAGE_BLOBS`), so one contract test covers the in-memory and Ignite stores. The bytes go to the cluster's own blob store (chunks, disk or S3), never a tenant's provider. Cluster packages are owned by `@cluster`, which can't be a tenant id.
+- **The API:** `POST /v1/packages` publishes a manifest (the design's `/v1/packages/{name}/versions` became this, since the name is in the manifest). A cluster package's name is percent-encoded in paths (`%40cluster%2Fdates`), so every route keeps one segment per name.
+- **Checked at publish, not later:** every file uploaded; at most 1,000 files and 10 MB per version, and 100 dependencies; and every dependency range met by a published, non-yanked version. A cluster package may depend only on cluster packages, since every tenant must be able to load it. **Why:** a version never changes, so a mistake caught after publishing can't be fixed in place.
+- **Ranges:** exact, `^`, `~` and `x` ranges, as npm reads them; a pre-release matches only a range naming it exactly. Others (`>=`, `||`, hyphen ranges) are refused with the reason.
+- **Scopes:** `packages:read` (every built-in role) and `packages:write` (owner, admin, developer). Operators read and publish cluster packages only.
+- **Audit:** publishing is audited; file uploads and the missing-files query aren't, since the publish names every file and they'd flood the log.
+- **Quota and deletion:** a tenant's package files count against its quota, once per unique file. Packages don't stop a tenant from being deleted; deleting it deletes them and their bytes.
+- **Bundling:** the CLI runs a small script with the project's own Node and esbuild (`--platform=node`, ESM, splitting, linked source maps, `.wasm` as files). It refuses required native code (a `.node` import, or a package with a native build), naming what pulled it in; stubs `bufferutil`, `utf-8-validate` and `fsevents` with a warning; and keeps `fs`, `automately:*` and declared Automately packages as imports.
+- **Not yet:** Node built-ins other than `fs` stop a publish until step 2 brings stand-ins for `path`, `events`, `buffer`, `url` and `util`. An upload cut off by a node crash can leave unreferenced bytes behind; collecting them is step 4's garbage collection. `--no-bundle` publishes a folder as it is, for code that's already ES modules.

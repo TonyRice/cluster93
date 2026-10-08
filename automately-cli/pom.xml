@@ -51,6 +51,11 @@
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
             </resource>
+            <!-- The bundler `packages publish` runs in the project's own Node (D-083); not filtered, since it's JavaScript. -->
+            <resource>
+                <directory>src/main/js</directory>
+                <filtering>false</filtering>
+            </resource>
             <!-- The release key `upgrade` checks signatures with (D-069): the same file the installers embed. -->
             <resource>
                 <directory>../install</directory>

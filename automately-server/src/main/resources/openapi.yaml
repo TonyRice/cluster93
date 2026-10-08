@@ -45,6 +45,7 @@ tags:
   - name: secrets
   - name: identity
   - name: audit
+  - name: packages
 
 paths:
   /health:
@@ -1959,6 +1960,162 @@ paths:
         '201': { $ref: '#/components/responses/InviteCreated' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/packages:
+    get:
+      operationId: listPackages
+      tags: [packages]
+      summary: Packages you can import, yours and the cluster's (D-083)
+      description: A tenant sees its own packages and the cluster-wide `@cluster/` ones; operators see the cluster's.
+      security:
+        - bearer: ['packages:read']
+      responses:
+        '200':
+          description: Packages by name, each with its latest version.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [packages]
+                properties:
+                  packages: { type: array, items: { $ref: '#/components/schemas/PackageSummary' } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: publishPackage
+      tags: [packages]
+      summary: Publish a version from its manifest, once every file is uploaded
+      description: >-
+        A version never changes once published: `409 already_exists` if it's there. `409 missing_files` names files
+        not uploaded yet, `409 unmet_dependency` a dependency no published version matches. Names under `@cluster/`
+        are for operators only, and operators publish only those (`403 forbidden`).
+      security:
+        - bearer: ['packages:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, version, files]
+              properties:
+                name: { type: string, description: 'Lowercase letters, digits, ".", "_" and "-"; or "@cluster/<name>".' }
+                version: { type: string, description: 'A semantic version, e.g. 1.4.0 or 2.0.0-beta.1.' }
+                files:
+                  type: object
+                  description: 'Each file''s path in the package, mapped to "sha256:<64 lowercase hex>".'
+                  additionalProperties: { type: string }
+                exports:
+                  description: 'The entry file, or "." and "./<subpath>" mapped to files. Defaults to index.js when there is one.'
+                  type: [object, string]
+                dependencies:
+                  type: object
+                  description: 'Package names mapped to version ranges: exact, ^, ~ or x ranges.'
+                  additionalProperties: { type: string }
+      responses:
+        '201':
+          description: Published.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackageVersion' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/packages/blobs/missing:
+    post:
+      operationId: findMissingPackageFiles
+      tags: [packages]
+      summary: Which of these files (by SHA-256) you haven't uploaded yet
+      security:
+        - bearer: ['packages:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sha256]
+              properties:
+                sha256: { type: array, maxItems: 1000, items: { type: string, pattern: '^[0-9a-f]{64}$' } }
+      responses:
+        '200':
+          description: The hashes the cluster lacks.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [missing]
+                properties:
+                  missing: { type: array, items: { type: string } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/packages/blobs/{hash}:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        description: The file's SHA-256, lowercase hex.
+        schema: { type: string, pattern: '^[0-9a-f]{64}$' }
+    put:
+      operationId: putPackageFile
+      tags: [packages]
+      summary: Upload one package file; 201 if stored, 200 if you already had it
+      description: >-
+        The body is hashed as it arrives; a body that doesn't match the hash is refused (`400`). At most 10 MB, and
+        it counts against the tenant's storage quota (`413`).
+      security:
+        - bearer: ['packages:write']
+      requestBody:
+        required: false
+        content:
+          application/octet-stream: {}
+      responses:
+        '200': { $ref: '#/components/responses/PackageFile' }
+        '201': { $ref: '#/components/responses/PackageFile' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/packages/{name}:
+    parameters:
+      - $ref: '#/components/parameters/packageName'
+    get:
+      operationId: getPackage
+      tags: [packages]
+      summary: A package's versions, newest first
+      security:
+        - bearer: ['packages:read']
+      responses:
+        '200':
+          description: The package.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, versions]
+                properties:
+                  name: { type: string }
+                  latest: { type: string }
+                  cluster: { type: boolean }
+                  versions: { type: array, items: { $ref: '#/components/schemas/PackageVersion' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/packages/{name}/versions/{version}:
+    parameters:
+      - $ref: '#/components/parameters/packageName'
+      - name: version
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 64 }
+    get:
+      operationId: getPackageVersion
+      tags: [packages]
+      summary: One version, with its files and their hashes
+      security:
+        - bearer: ['packages:read']
+      responses:
+        '200':
+          description: The version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackageVersion' }
+        default: { $ref: '#/components/responses/Error' }
+
 components:
   securitySchemes:
     bearer:
@@ -1968,7 +2125,7 @@ components:
         `atly_…` tenant tokens, or the admin token. Scopes: `jobs:read`, `jobs:write`, `services:read`,
         `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`,
         `nodes:read`, `storage:read`, `storage:write`, `secrets:read`, `secrets:write`, `secrets:use`,
-        `members:read`, `members:write`, `audit:read`, or `*`. Operations marked `admin` need an operator's
+        `members:read`, `members:write`, `audit:read`, `packages:read`, `packages:write`, or `*`. Operations marked `admin` need an operator's
         token or the admin token; `me` operations need a user's own personal token.
 
   parameters:
@@ -2017,6 +2174,12 @@ components:
       in: path
       required: true
       schema: { type: string, minLength: 1, maxLength: 200 }
+    packageName:
+      name: name
+      in: path
+      required: true
+      description: 'The package''s name; a cluster-wide one''s slash is percent-encoded: `%40cluster%2Fstrings`.'
+      schema: { type: string, minLength: 1, maxLength: 80 }
     filePath:
       name: path
       in: path
@@ -2103,7 +2266,7 @@ components:
                   enum: ['*', 'jobs:read', 'jobs:write', 'services:read', 'services:write', 'files:read', 'files:write',
                          'bus:publish', 'bus:request', 'queues:read', 'queues:write', 'tokens:write', 'nodes:read',
                          'storage:read', 'storage:write', 'secrets:read', 'secrets:write', 'secrets:use',
-                         'members:read', 'members:write', 'audit:read']
+                         'members:read', 'members:write', 'audit:read', 'packages:read', 'packages:write']
               expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
 
   responses:
@@ -2146,6 +2309,17 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+    PackageFile:
+      description: The file, stored once.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [sha256, size]
+            properties:
+              sha256: { type: string }
+              size: { type: integer }
+              created: { type: boolean }
     TokenList:
       description: Tokens, without their secrets.
       content:
@@ -2285,6 +2459,30 @@ components:
       type: string
       pattern: '^(?!.*--)[a-z0-9][a-z0-9_-]{0,62}$'
       description: Lowercase letters, digits, `_` and `-`; starts with a letter or digit; no `--`.
+    PackageSummary:
+      type: object
+      required: [name, versions]
+      properties:
+        name: { type: string }
+        latest: { type: [string, 'null'], description: 'The highest release that isn''t yanked.' }
+        versions: { type: integer }
+        updatedAt: { type: integer }
+        cluster: { type: boolean, description: 'Whether it''s a cluster-wide @cluster/ package.' }
+    PackageVersion:
+      type: object
+      required: [name, version]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        files: { type: object, additionalProperties: { type: string } }
+        exports: { type: object, additionalProperties: { type: string } }
+        dependencies: { type: object, additionalProperties: { type: string } }
+        size: { type: integer }
+        fileCount: { type: integer }
+        publishedAt: { type: integer }
+        publishedBy: { type: string }
+        publishedByName: { type: string }
+        yanked: { type: boolean }
     Error:
       type: object
       required: [error]

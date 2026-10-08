@@ -453,6 +453,90 @@ class CliTest {
         assertThat(verified.out()).contains("OK: nothing was changed or removed");
     }
 
+    @Test
+    void packagesArePublishedFromAFolderAndListed() throws Exception {
+        loginAsNewTenant("pkg-cli");
+        Path lib = Files.createDirectories(home.resolve("strings"));
+        Files.writeString(lib.resolve("package.json"), "{\"name\": \"strings\", \"version\": \"1.0.0\", \"main\": \"index.js\"}");
+        Files.writeString(lib.resolve("index.js"), "export { trim } from './lib/trim.js';\nexport const slug = s => s.toLowerCase();\n");
+        Files.createDirectories(lib.resolve("lib"));
+        Files.writeString(lib.resolve("lib/trim.js"), "export const trim = s => s.trim();\n");
+        Files.createDirectories(lib.resolve("node_modules/left-out"));
+        Files.writeString(lib.resolve("node_modules/left-out/index.js"), "never published");
+
+        Result dry = cli("packages", "publish", lib.toString(), "--no-bundle", "--dry-run");
+        assertThat(dry.code()).as(dry.err()).isZero();
+        assertThat(dry.out()).contains("Would publish strings@1.0.0: 2 files").contains("lib/trim.js").doesNotContain("node_modules").doesNotContain("package.json");
+        assertThat(cli("packages", "ls").out()).doesNotContain("strings");
+
+        Result first = cli("packages", "publish", lib.toString(), "--no-bundle");
+        assertThat(first.code()).as(first.err()).isZero();
+        assertThat(first.out()).contains("Published strings@1.0.0: 2 files").contains("2 uploaded");
+
+        Files.writeString(lib.resolve("package.json"), "{\"name\": \"strings\", \"version\": \"1.1.0\", \"main\": \"index.js\"}");
+        Files.writeString(lib.resolve("index.js"), "export { trim } from './lib/trim.js';\nexport const slug = s => s.toLowerCase().trim();\n");
+        Result second = cli("packages", "publish", lib.toString(), "--no-bundle");
+        assertThat(second.code()).as(second.err()).isZero();
+        assertThat(second.out()).as("only the changed file travels").contains("1.1.0").contains("1 uploaded");
+        Result again = cli("packages", "publish", lib.toString(), "--no-bundle");
+        assertThat(again.code()).isEqualTo(1);
+        assertThat(again.err()).contains("already published");
+
+        assertThat(cli("packages", "ls").out()).contains("strings").contains("1.1.0");
+        assertThat(cli("packages", "info", "strings").out()).contains("1.1.0").contains("1.0.0").contains("tok_");
+        assertThat(cli("packages", "info", "strings", "1.0.0").out()).contains("lib/trim.js").contains("export . → index.js");
+
+        Path app = Files.createDirectories(home.resolve("app"));
+        Files.writeString(app.resolve("automately.json"), "{\"name\": \"app\", \"version\": \"0.1.0\", \"entry\": \"main.js\","
+                + " \"dependencies\": {\"strings\": \"^1.0.0\", \"dates\": \"^1.0.0\"}}");
+        Files.writeString(app.resolve("main.js"), "import { slug } from 'strings';\nexport default async () => slug('Hi');\n");
+        Result unmet = cli("packages", "publish", app.toString(), "--no-bundle");
+        assertThat(unmet.code()).isEqualTo(1);
+        assertThat(unmet.err()).contains("dates").contains("publish it first");
+    }
+
+    /**
+     * Bundling with a real esbuild. It runs when {@code AUTOMATELY_TEST_NODE_MODULES} names a node_modules folder
+     * holding esbuild (and Node is on the PATH); the build doesn't download it.
+     */
+    @Test
+    void publishingBundlesAndRefusesNativeCode() throws Exception {
+        String modules = System.getenv("AUTOMATELY_TEST_NODE_MODULES");
+        org.junit.jupiter.api.Assumptions.assumeTrue(modules != null && Files.exists(Path.of(modules, "esbuild")), "no esbuild to bundle with");
+        loginAsNewTenant("pkg-bundle");
+        Path project = Files.createDirectories(home.resolve("bundled"));
+        Files.createDirectories(project.resolve("node_modules"));
+        for (String linked : new String[] {"esbuild", "@esbuild"}) {
+            Files.createSymbolicLink(project.resolve("node_modules").resolve(linked), Path.of(modules, linked));
+        }
+        Path leftPad = Files.createDirectories(project.resolve("node_modules/left-pad"));
+        Files.writeString(leftPad.resolve("package.json"), "{\"name\": \"left-pad\", \"version\": \"1.0.0\", \"main\": \"index.js\"}");
+        Files.writeString(leftPad.resolve("index.js"), "module.exports = (s, n) => String(s).padStart(n);");
+        Files.writeString(project.resolve("package.json"), "{\"name\": \"padder\", \"version\": \"2.0.0\", \"main\": \"src/index.js\"}");
+        Files.createDirectories(project.resolve("src"));
+        Files.writeString(project.resolve("src/index.js"), "import pad from 'left-pad';\nimport { readFileSync } from 'node:fs';\n"
+                + "export const padded = s => pad(s, 8);\nexport const read = readFileSync;\n");
+
+        Result published = cli("packages", "publish", project.toString());
+        assertThat(published.code()).as(published.err()).isZero();
+        assertThat(published.out()).contains("Published padder@2.0.0");
+        Result version = cli("packages", "info", "padder", "2.0.0");
+        assertThat(version.out()).contains("index.js").contains("index.js.map").contains("export . → index.js");
+
+        Path sharp = Files.createDirectories(project.resolve("node_modules/fake-sharp"));
+        Files.writeString(sharp.resolve("package.json"), "{\"name\": \"fake-sharp\", \"version\": \"1.0.0\", \"main\": \"index.js\", \"gypfile\": true}");
+        Files.writeString(sharp.resolve("index.js"), "module.exports = {};");
+        Files.writeString(project.resolve("src/index.js"), "import sharp from 'fake-sharp';\nimport path from 'node:path';\nexport default [sharp, path];\n");
+        Result refused = cli("packages", "publish", project.toString(), "--dry-run");
+        assertThat(refused.code()).isEqualTo(1);
+        assertThat(refused.err()).contains("fake-sharp needs native code (pulled in by your code)").contains("\"runtime\": \"node\"");
+
+        Files.writeString(project.resolve("src/index.js"), "import path from 'node:path';\nimport bufferutil from 'bufferutil';\nexport default [path, bufferutil];\n");
+        Result builtins = cli("packages", "publish", project.toString(), "--dry-run");
+        assertThat(builtins.code()).isEqualTo(1);
+        assertThat(builtins.err()).contains("bufferutil").contains("left out").contains("path (imported by src/index.js)");
+    }
+
     private static <T> T await(Future<T> future) throws Exception {
         return future.toCompletionStage().toCompletableFuture().get(60, TimeUnit.SECONDS);
     }
