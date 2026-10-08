@@ -29,9 +29,12 @@ final class FilesRoutes {
     private final TenantQuota quota;
     private final automately.core.files.Room room;
     private final automately.core.files.FileTree tree;
+    private final automately.core.files.FileLinks links;
 
-    FilesRoutes(FileStore files, TenantQuota quota, automately.core.files.Room room, automately.core.files.FileTree tree) {
+    FilesRoutes(FileStore files, TenantQuota quota, automately.core.files.Room room, automately.core.files.FileTree tree,
+                automately.core.files.FileLinks links) {
         this.tree = tree;
+        this.links = links;
         this.files = files;
         this.quota = quota;
         this.room = room;
@@ -60,6 +63,11 @@ final class FilesRoutes {
                 }
             }).onFailure(err -> fail(ctx, err));
         }));
+        router.post("/v1/fs/share").handler(this::share);
+        router.post("/v1/fs/share/rotate").handler(ctx -> links.rotate(ctx.get("tenant"))
+                .onSuccess(v -> ctx.response().setStatusCode(204).end()).onFailure(err -> fail(ctx, err)));
+        router.getWithRegex("/v1/shared/.+").handler(this::shared);
+        router.headWithRegex("/v1/shared/.+").handler(this::shared);
         router.post("/v1/fs/move").handler(ctx -> transfer(ctx, true));
         router.post("/v1/fs/copy").handler(ctx -> transfer(ctx, false));
         router.get("/v1/files").handler(this::list);
@@ -117,6 +125,50 @@ final class FilesRoutes {
         boolean overwrite = body.getBoolean("overwrite", false);
         String tenant = ctx.get("tenant");
         (move ? tree.move(tenant, from, to, overwrite) : tree.copy(tenant, from, to, overwrite)).onSuccess(ctx::json).onFailure(err -> fail(ctx, err));
+    }
+
+    /** {@code {path, expiresInSeconds}}: a public link to the file's current version (D-080). */
+    private void share(RoutingContext ctx) {
+        JsonObject body;
+        try {
+            body = ctx.body().asJsonObject();
+        } catch (RuntimeException e) {
+            body = null;
+        }
+        String path = body == null ? null : automately.core.files.Paths.directory(body.getString("path"));
+        String invalid = path == null || path.isEmpty() ? "\"path\" is required" : FileStore.invalidPath(path);
+        if (invalid != null) {
+            error(ctx, 400, "invalid_path", invalid);
+            return;
+        }
+        long seconds = body.getLong("expiresInSeconds", automately.core.files.FileLinks.DEFAULT_TTL.toSeconds());
+        String absolute = ctx.request().absoluteURI();
+        String base = absolute.substring(0, absolute.indexOf("/v1/"));
+        links.create(ctx.get("tenant"), path, java.time.Duration.ofSeconds(seconds))
+                .onSuccess(link -> {
+                    ctx.response().putHeader("Cache-Control", "no-store");
+                    ctx.json(link.put("url", base + "/v1/shared/" + link.getString("token")));
+                })
+                .onFailure(err -> fail(ctx, err));
+    }
+
+    /** Public: a shared file, with Range and ETag like any download, while its link is valid. */
+    private void shared(RoutingContext ctx) {
+        String token = ctx.request().path().substring("/v1/shared/".length());
+        links.resolve(token).onFailure(err -> fail(ctx, err)).onSuccess(file -> {
+            if (file == null) {
+                error(ctx, 404, "not_found", "This link doesn't exist, has expired, or the file has changed since");
+                return;
+            }
+            ServerExchange exchange = new ServerExchange(ctx.request(), ctx.vertx().getOrCreateContext());
+            JsonObject request = exchange.request();
+            FileResponder.respond(files, file.tenant(), file.path(), request.getString("method"), request.getJsonObject("headers"),
+                    new JsonObject().put("cache-control", "private, no-store"), exchange).onFailure(err -> {
+                if (!ctx.response().headWritten()) {
+                    fail(ctx, err);
+                }
+            });
+        });
     }
 
     /** One level of a directory, by name, paged with {@code limit} and {@code cursor}. */
@@ -245,7 +297,7 @@ final class FilesRoutes {
             switch (host.code()) {
                 case "not_found" -> error(ctx, 404, host.code(), host.getMessage());
                 case "read_only", "reserved" -> error(ctx, 403, host.code(), host.getMessage());
-                case "already_exists", "not_empty", "is_a_directory", "not_a_directory", "busy" -> error(ctx, 409, host.code(), host.getMessage());
+                case "already_exists", "not_empty", "is_a_directory", "not_a_directory", "busy", "unavailable" -> error(ctx, 409, host.code(), host.getMessage());
                 case "insufficient_storage" -> error(ctx, 507, host.code(), host.getMessage());
                 case "storage_unavailable" -> error(ctx, 503, host.code(), host.getMessage());
                 case "storage_disabled" -> error(ctx, 403, host.code(), host.getMessage());

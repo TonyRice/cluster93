@@ -25,7 +25,7 @@ import java.util.stream.Stream;
 
 @Command(name = "files", description = "Your files: upload, download, list, delete, and sync a folder (a static site).",
         subcommands = {FilesCommand.Put.class, FilesCommand.Get.class, FilesCommand.Ls.class, FilesCommand.Mkdir.class, FilesCommand.Rmdir.class,
-                FilesCommand.Mv.class, FilesCommand.Cp.class, FilesCommand.Rm.class, FilesCommand.Sync.class})
+                FilesCommand.Mv.class, FilesCommand.Cp.class, FilesCommand.Rm.class, FilesCommand.Share.class, FilesCommand.Sync.class})
 final class FilesCommand extends Base {
 
     private static final Map<String, String> TYPES = Map.ofEntries(
@@ -245,6 +245,50 @@ final class FilesCommand extends Base {
         @Override
         int execute() {
             return transfer(this, "copy", from, to, force);
+        }
+    }
+
+    @Command(name = "share", description = "A public link to a file, until it expires or the file changes. --revoke-all cancels every link.")
+    static final class Share extends Base {
+        @Parameters(paramLabel = "PATH", arity = "0..1")
+        String path;
+
+        @Option(names = "--expires", defaultValue = "1h", paramLabel = "DURATION", description = "e.g. 30m, 1h, 7d (at most 30d).")
+        String expires;
+
+        @Option(names = "--revoke-all", description = "Revoke every public link you've made.")
+        boolean revokeAll;
+
+        @Override
+        int execute() {
+            if (revokeAll) {
+                api().post("/v1/fs/share/rotate", null);
+                out().println("Every earlier link is revoked.");
+                return 0;
+            }
+            if (path == null) {
+                throw new CliException("Which file? automately files share PATH", 2);
+            }
+            JsonNode link = api().post("/v1/fs/share", Json.object().put("path", path).put("expiresInSeconds", seconds(expires)));
+            if (!printedJson(link)) {
+                out().println(Json.text(link, "url"));
+                err().println("Valid until " + Output.time(link, "expiresAt") + ", or until " + path + " changes.");
+            }
+            return 0;
+        }
+
+        static long seconds(String text) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)([smhd])").matcher(text.trim());
+            if (!m.matches()) {
+                throw new CliException("--expires is a number and a unit: 30m, 1h, 7d", 2);
+            }
+            long n = Long.parseLong(m.group(1));
+            return switch (m.group(2)) {
+                case "s" -> n;
+                case "m" -> n * 60;
+                case "h" -> n * 3600;
+                default -> n * 86400;
+            };
         }
     }
 

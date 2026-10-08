@@ -72,6 +72,21 @@ final class Unavailable {
         public Future<Void> appendFile(String path, io.vertx.core.buffer.Buffer data) {
             return fail("The file system");
         }
+
+        @Override
+        public Future<io.vertx.core.json.JsonObject> lock(String path, long ttlMs) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<io.vertx.core.json.JsonObject> renewLock(String path, String token, long ttlMs) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<Boolean> unlock(String path, String token) {
+            return fail("The file system");
+        }
     };
 
     static final KvApi KV = new KvApi() {

@@ -26,6 +26,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## The file system, part 5 — Handles, locks and public links (2026-10-07)
+
+### Added
+- **File handles (D-080):**
+  - **Calls:** `fs.promises.open`, and `fs.openSync` with `readSync`, `writeSync` and `closeSync`.
+  - **Behaviour:** positional reads and writes, appending, truncating. Edits are published as one new version when the handle closes.
+- **Advisory locks:** `await fs.lock(path, { ttlMs })`, with `renew()` and `release()`. They're cluster-wide, expire on their own, and go when the job ends.
+- **Public links:** a signed URL anyone can fetch until it expires, pinned to the file's current version. Revoke them all at once.
+  - **API:** `POST /v1/fs/share`, `GET /v1/shared/{token}`, `POST /v1/fs/share/rotate`.
+  - **CLI:** `automately files share PATH --expires 1h`, `files share --revoke-all`.
+- **This completes the file system (D-075 to D-080).**
+
 ## The file system, part 4 — `fs` and `/tmp` (2026-10-07)
 
 ### Added

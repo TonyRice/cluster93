@@ -1081,3 +1081,37 @@ Also the CLI flow.
   - the file seen through the REST API
   - Node error codes, including a reserved name
   - `/tmp` private per job and gone afterwards, and never in the store
+
+
+### D-080 — File handles, advisory locks and public links
+**Date:** 2026-10-07 · **Status:** Accepted. Part 5 of D-075, which completes it
+
+**Decision:**
+- **File handles:**
+  - **What they give:** `fs.promises.open` returns a handle, and `fs.openSync` with `readSync`, `writeSync`, `fstatSync`, `ftruncateSync` and `closeSync` returns a descriptor number. The callback forms `fs.open`, `read`, `write` and `close` work too. All of these allow positional reads and writes, appending and truncating.
+  - **How:** a handle holds the file's bytes in the script, at most 32 MB. Closing it publishes one new version through the store's atomic write, so readers never see a half-made edit. A handle opened read-only refuses writes with `EBADF`.
+  - **Why not edit in Java:** the bytes would cross the bridge on every small write, and publishing on close is what gives atomicity anyway.
+- **Advisory locks** (2017's per-file locks):
+  - **How to take one:** `fs.lock(path, {ttlMs})` returns `{expiresAt, renew(), release()}`. It's a cluster-wide lease on `Records` compare-and-set, keyed by tenant and path.
+  - **Contention:** another holder gets `EBUSY` until the lease is released or expires, and an expired lease can be taken over.
+  - **Limits:** at most an hour per lease, renewable; 10 000 per tenant.
+  - **Cleanup:** a job's locks are released when it ends.
+  - **Advisory:** writes don't check locks, since each write is atomic already. Locks coordinate multi-step work.
+- **Public links** (2017's public file tokens):
+  - **Making one:** `POST /v1/fs/share` with `{path, expiresInSeconds}` (default an hour, at most 30 days) returns `{url, token, expiresAt}`. The CLI is `automately files share PATH --expires 1h`.
+  - **Fetching:** anyone can `GET` or `HEAD /v1/shared/{token}`, with no token, getting Range, ETag and `Cache-Control: private, no-store`.
+  - **The token carries everything:** tenant, path, file version and expiry, signed with an HMAC under a key derived from `AUTOMATELY_SECRETS_KEY` and a per-tenant secret. Nothing is stored per link, and any node checks it. Without a secrets key, links are unavailable (409).
+  - **Pinned to the version it was made for** (Tony): replacing the file stops the link.
+  - **Revoking:** `POST /v1/fs/share/rotate` (`files share --revoke-all`) changes the tenant's secret, which revokes every link at once (Tony).
+  - **Who can make one:** it needs `files:write`, since publishing a file is a change, and it's audited.
+  - **Not for agents:** there's no MCP tool, so agents don't publish files.
+
+**Tests:**
+- `FsTest`:
+  - positional edits published only on close
+  - append handles
+  - read-only handles
+  - locks: `EBUSY`, released, and gone with the job
+  - links: fetched without a token, tampered, stopped by a new version, revoked by rotation
+- `FileLocksTest`: expiry, takeover, renewal, per-tenant names, the TTL limit.
+- `ContractTest` (four operations) and the CLI.

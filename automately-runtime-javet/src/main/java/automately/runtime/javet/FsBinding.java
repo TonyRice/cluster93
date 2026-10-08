@@ -89,6 +89,29 @@ public final class FsBinding {
         return bridge.promise(() -> fs.appendFile(js.string(path), Buffer.buffer(bytes)));
     }
 
+    // --- advisory locks (D-080) ---
+
+    @V8Function(name = "lock")
+    public V8ValuePromise lock(V8Value path, V8Value ttlMs) throws JavetException {
+        long ttl = millis(ttlMs);
+        return bridge.promise(() -> fs.lock(js.string(path), ttl));
+    }
+
+    @V8Function(name = "renewLock")
+    public V8ValuePromise renewLock(V8Value path, V8Value token, V8Value ttlMs) throws JavetException {
+        long ttl = millis(ttlMs);
+        return bridge.promise(() -> fs.renewLock(js.string(path), js.string(token), ttl));
+    }
+
+    @V8Function(name = "unlock")
+    public V8ValuePromise unlock(V8Value path, V8Value token) throws JavetException {
+        return bridge.promise(() -> fs.unlock(js.string(path), js.string(token)));
+    }
+
+    private long millis(V8Value value) throws JavetException {
+        return js.toJava(value) instanceof Number number ? number.longValue() : 30_000L;
+    }
+
     // --- synchronous ---
 
     @V8Function(name = "statSync")

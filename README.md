@@ -166,6 +166,7 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `DELETE` | `/v1/files/{path}` | Delete a file |
 | `GET` · `PUT` · `DELETE` | `/v1/dirs/{path}` | One level of a folder (`GET /v1/dirs` for the top) · make one, and any missing above it · remove an empty one, or everything in it with `?recursive=true` ([file system](docs/design/vfs.md)) |
 | `POST` | `/v1/fs/move` · `/v1/fs/copy` | `{from, to, overwrite}`: a file or a whole folder; no bytes move, and copies share theirs |
+| `POST` · `GET` | `/v1/fs/share` · `/v1/shared/{token}` | `files:write`: a public link to a file `{path, expiresInSeconds}` · anyone can download it until it expires or the file changes; `POST /v1/fs/share/rotate` revokes them all |
 | `GET` · `PUT` · `DELETE` | `/v1/mounts` · `/v1/mounts/{path}` | `storage:write`: bind a folder to one of your providers `{provider, readOnly}` ([storage](docs/guides/storage.md)) |
 | `GET` | `/v1/nodes` | Live nodes with capacity and load (`nodes:read`, or the admin) |
 | `GET` | `/health` | Liveness |

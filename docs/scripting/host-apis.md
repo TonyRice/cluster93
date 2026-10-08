@@ -232,6 +232,11 @@ fs.writeFileSync('/tmp/scratch.bin', bytes);                        // this job 
   - `readFile` reads at most 32 MB into memory; stream bigger files with `files.stream`.
   - `appendFile` edits files up to 64 MB. Each append is a new version, published at once, so readers never see half of one.
 - **Paths:** they may start with `/`, and follow the `files` rules. `tmp/`, `packages/` and `.packages/` are reserved, and `mnt/` holds mounts ([storage](../guides/storage.md)).
+- **File handles** (`fs.promises.open`, `fs.openSync` / `readSync` / `writeSync` / `closeSync`) do positional reads and writes on files up to 32 MB. Changes are published as one new version when you close the handle; until then, readers see the old one.
+- **Locks:** `const lock = await fs.lock('/index/rebuild', { ttlMs: 60000 })`, then `lock.renew()` and `lock.release()`.
+  - **Contention:** another holder gets `EBUSY`.
+  - **Release:** a lock expires on its own, and is released when your job ends.
+  - **Advisory:** only code that takes the lock is held back; writes don't check it.
 
 ## Serving HTTP from a service
 

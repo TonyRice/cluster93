@@ -291,6 +291,10 @@ class CliTest {
         assertThat(cli("files", "cp", "www", "www-backup").out()).contains("Copied www to www-backup");
         assertThat(cli("files", "mv", "www-backup/index.html", "www-backup/home.html").code()).isZero();
         assertThat(cli("files", "get", "www-backup/home.html", "-").out()).isEqualTo("<h1>v2</h1>");
+        Result shared = cli("files", "share", "www-backup/home.html", "--expires", "10m");
+        assertThat(shared.code()).as(shared.err()).isZero();
+        assertThat(shared.out().strip()).contains("/v1/shared/");
+        assertThat(cli("files", "share", "--revoke-all").out()).contains("revoked");
         assertThat(cli("files", "rm", "-r", "www-backup").code()).isZero();
         assertThat(cli("files", "ls").out()).doesNotContain("www-backup");
         assertThat(cli("files", "get", "www/index.html", "-").out()).isEqualTo("<h1>v2</h1>");

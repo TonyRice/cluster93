@@ -34,12 +34,19 @@ public final class NodeHostApis implements HostApis {
     /** The node's shared stores and clients; one per node. */
     public record Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
                        TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs, TenantSecrets secrets,
-                       automately.core.files.FileTree tree, automately.core.files.TmpSettings tmp) {
+                       automately.core.files.FileTree tree, automately.core.files.TmpSettings tmp, automately.core.files.FileLocks locks) {
+
+        /** Without locks. */
+        public Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
+                    TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs, TenantSecrets secrets,
+                    automately.core.files.FileTree tree, automately.core.files.TmpSettings tmp) {
+            this(vertx, kv, fetch, serve, files, capacity, quota, room, queues, jobs, secrets, tree, tmp, null);
+        }
 
         /** Without the file system's folder operations, and with an in-memory /tmp. */
         public Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
                     TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs, TenantSecrets secrets) {
-            this(vertx, kv, fetch, serve, files, capacity, quota, room, queues, jobs, secrets, null, automately.core.files.TmpSettings.memoryOnly());
+            this(vertx, kv, fetch, serve, files, capacity, quota, room, queues, jobs, secrets, null, automately.core.files.TmpSettings.memoryOnly(), null);
         }
 
         /** Without secrets. */
@@ -65,7 +72,7 @@ public final class NodeHostApis implements HostApis {
         this.http = new NodeHttpApi(scope, node.serve());
         this.secrets = new NodeSecretsApi(scope, node.secrets(), node.jobs());
         this.fs = new NodeFsApi(scope, node.files(), node.tree(), node.capacity(), node.quota(), node.room(),
-                node.tmp() == null ? automately.core.files.TmpSettings.memoryOnly() : node.tmp());
+                node.tmp() == null ? automately.core.files.TmpSettings.memoryOnly() : node.tmp(), node.locks());
     }
 
     @Override

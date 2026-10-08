@@ -38,7 +38,8 @@ class FsTest {
                 Map.entry("AUTOMATELY_INTERNAL_PORT", "0"),
                 Map.entry("AUTOMATELY_ADVERTISE_HOST", "127.0.0.1"),
                 Map.entry("AUTOMATELY_CAPACITY", "4"),
-                Map.entry("AUTOMATELY_MAX_HEAP_MB", "64")))));
+                Map.entry("AUTOMATELY_MAX_HEAP_MB", "64"),
+                Map.entry("AUTOMATELY_SECRETS_KEY", "fs-test-secrets-key-0123456789abcdef-0123")))));
         TestAuth.use(node);
         clientVertx = Vertx.vertx();
         client = WebClient.create(clientVertx);
@@ -127,6 +128,84 @@ class FsTest {
         assertThat(second.getString("kept")).isEqualTo("mine");
         HttpResponse<Buffer> listed = await(client.get(node.httpPort(), "localhost", "/v1/dirs").putHeader("Authorization", TestAuth.bearer(TENANT)).send());
         assertThat(listed.bodyAsString()).as("/tmp never reaches the store").doesNotContain("\"tmp\"");
+    }
+
+    @Test
+    void handlesEditInPlaceAndPublishOnClose() throws Exception {
+        JsonObject output = run("""
+                export default async () => {
+                  fs.writeFileSync('/data.bin', 'hello world');
+                  const fd = fs.openSync('/data.bin', 'r+');
+                  fs.writeSync(fd, 'HELLO', 0);
+                  const buf = new Uint8Array(5);
+                  fs.readSync(fd, buf, 0, 5, 6);
+                  const before = fs.readFileSync('/data.bin', 'utf8');   // not published until closed
+                  fs.closeSync(fd);
+                  const h = await fs.promises.open('/log.txt', 'a');
+                  await h.write('one\\n');
+                  await h.write('two\\n');
+                  await h.close();
+                  let readOnly;
+                  const r = fs.openSync('/data.bin', 'r');
+                  try { fs.writeSync(r, 'x'); } catch (e) { readOnly = e.code; }
+                  fs.closeSync(r);
+                  return { read: new TextDecoder().decode(buf), before, after: fs.readFileSync('/data.bin', 'utf8'),
+                           log: fs.readFileSync('/log.txt', 'utf8'), readOnly };
+                };
+                """);
+        assertThat(output.getString("read")).isEqualTo("world");
+        assertThat(output.getString("before")).isEqualTo("hello world");
+        assertThat(output.getString("after")).isEqualTo("HELLO world");
+        assertThat(output.getString("log")).isEqualTo("one\ntwo\n");
+        assertThat(output.getString("readOnly")).isEqualTo("EBADF");
+    }
+
+    @Test
+    void locksKeepOthersOutUntilReleasedOrTheJobEnds() throws Exception {
+        JsonObject output = run("""
+                export default async () => {
+                  const mine = await fs.lock('/index/rebuild', { ttlMs: 60000 });
+                  let busy;
+                  try { await fs.lock('/index/rebuild'); } catch (e) { busy = e.code; }
+                  await mine.release();
+                  const again = await fs.lock('/index/rebuild', { ttlMs: 60000 });
+                  return { busy, again: again.expiresAt > Date.now() };
+                };
+                """);
+        assertThat(output.getString("busy")).isEqualTo("EBUSY");
+        assertThat(output.getBoolean("again")).isTrue();
+        // The job above ended holding the lock: it went with the job.
+        assertThat(run("export default async () => { await fs.lock('/index/rebuild'); return 'got it'; }").getString("value")).isEqualTo("got it");
+    }
+
+    @Test
+    void aPublicLinkServesOneVersionUntilItExpiresOrIsRevoked() throws Exception {
+        String bearer = TestAuth.bearer(TENANT);
+        await(client.put(node.httpPort(), "localhost", "/v1/files/share/report.txt").putHeader("Authorization", bearer).sendBuffer(Buffer.buffer("v1")));
+        HttpResponse<Buffer> made = await(client.post(node.httpPort(), "localhost", "/v1/fs/share").putHeader("Authorization", bearer)
+                .sendJsonObject(new JsonObject().put("path", "share/report.txt").put("expiresInSeconds", 600)));
+        assertThat(made.statusCode()).as(made.bodyAsString()).isEqualTo(200);
+        String url = made.bodyAsJsonObject().getString("url");
+        assertThat(url).startsWith("http://localhost:" + node.httpPort() + "/v1/shared/");
+        String path = url.substring(url.indexOf("/v1/shared/"));
+
+        HttpResponse<Buffer> fetched = await(client.get(node.httpPort(), "localhost", path).send());
+        assertThat(fetched.statusCode()).isEqualTo(200);
+        assertThat(fetched.bodyAsString()).as("no token needed").isEqualTo("v1");
+        assertThat(await(client.get(node.httpPort(), "localhost", path + "x").send()).statusCode()).as("tampered").isEqualTo(404);
+
+        // Replacing the file stops the link: it shares the version it was made for.
+        await(client.put(node.httpPort(), "localhost", "/v1/files/share/report.txt").putHeader("Authorization", bearer).sendBuffer(Buffer.buffer("v2")));
+        assertThat(await(client.get(node.httpPort(), "localhost", path).send()).statusCode()).isEqualTo(404);
+
+        // Rotating revokes every link.
+        String fresh = await(client.post(node.httpPort(), "localhost", "/v1/fs/share").putHeader("Authorization", bearer)
+                .sendJsonObject(new JsonObject().put("path", "share/report.txt"))).bodyAsJsonObject().getString("url");
+        String freshPath = fresh.substring(fresh.indexOf("/v1/shared/"));
+        assertThat(await(client.get(node.httpPort(), "localhost", freshPath).send()).bodyAsString()).isEqualTo("v2");
+        assertThat(await(client.post(node.httpPort(), "localhost", "/v1/fs/share/rotate").putHeader("Authorization", bearer).send()).statusCode())
+                .isEqualTo(204);
+        assertThat(await(client.get(node.httpPort(), "localhost", freshPath).send()).statusCode()).isEqualTo(404);
     }
 
     /** Runs a script for the tenant; its output, wrapped as {@code {value}} when it isn't an object. */

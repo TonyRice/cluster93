@@ -317,7 +317,9 @@ public final class Automately {
         fileTree.start();
         HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(), fetch, serving, stores.files(), stores.capacity(),
                 quota, room, queues, new automately.core.host.JobsWiring(jobs, scheduler, config.defaultTimeout(), config.maxTimeout(), limiter),
-                tenantSecrets, fileTree, tmpSettings(config)));
+                tenantSecrets, fileTree, tmpSettings(config), new automately.core.files.FileLocks(stores.records().open(automately.core.files.FileLocks.KIND))));
+        // Public links to files, signed and self-checking, so any node serves them (D-080).
+        automately.core.files.FileLinks fileLinks = new automately.core.files.FileLinks(stores.kv(), config.secretsKey(), stores.files());
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         // Personal tokens act as their user, with what the user's roles give them now (D-070).
         automately.core.identity.Identity identity = new automately.core.identity.Identity(stores.records(), stores.auth());
@@ -344,7 +346,7 @@ public final class Automately {
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, limiter,
+                queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, limiter,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
                 () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.

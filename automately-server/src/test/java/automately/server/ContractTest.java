@@ -80,7 +80,7 @@ class ContractTest {
     @Test
     void everyRouteIsInTheContractAndEveryOperationHasARoute() {
         Set<String> routes = node.apiRoutes().stream()
-                .map(route -> route.replaceAll(":([a-z]+)", "{$1}").replace("/v1/files/.+", "/v1/files/{path}").replace("/v1/dirs/.+", "/v1/dirs/{path}").replace("/v1/mounts/.+", "/v1/mounts/{path}"))
+                .map(route -> route.replaceAll(":([a-z]+)", "{$1}").replace("/v1/files/.+", "/v1/files/{path}").replace("/v1/dirs/.+", "/v1/dirs/{path}").replace("/v1/mounts/.+", "/v1/mounts/{path}").replace("/v1/shared/.+", "/v1/shared/{token}"))
                 .collect(Collectors.toCollection(TreeSet::new));
         Set<String> operations = contract.operations().stream()
                 .map(operation -> operation.getHttpMethod().name() + " " + operation.getOpenAPIPath())
@@ -148,6 +148,11 @@ class ContractTest {
         calls.check("makeDir", "PUT", "/v1/dirs/site/assets", tenant, null);
         calls.check("listRootDir", "GET", "/v1/dirs?limit=10", tenant, null);
         calls.check("listDir", "GET", "/v1/dirs/site", tenant, null);
+        JsonObject link = calls.check("shareFile", "POST", "/v1/fs/share", tenant, new JsonObject().put("path", "site/index.html")
+                .put("expiresInSeconds", 60)).bodyAsJsonObject();
+        calls.check("getSharedFile", "GET", "/v1/shared/" + link.getString("token"), null, null);
+        calls.check("headSharedFile", "HEAD", "/v1/shared/" + link.getString("token"), null, null);
+        calls.check("rotateFileLinks", "POST", "/v1/fs/share/rotate", tenant, null);
         calls.check("copyFiles", "POST", "/v1/fs/copy", tenant, new JsonObject().put("from", "site").put("to", "site-copy"));
         calls.check("moveFiles", "POST", "/v1/fs/move", tenant, new JsonObject().put("from", "site-copy/index.html").put("to", "moved.html"));
         calls.check("removeDir", "DELETE", "/v1/dirs/site-copy?recursive=true", tenant, null);
@@ -286,7 +291,7 @@ class ContractTest {
             Map<String, String> headers = new HashMap<>();
             response.headers().forEach(h -> headers.put(h.getKey(), h.getValue()));
             String contentType = response.getHeader("Content-Type");
-            if (operationId.equals("getFile") && response.statusCode() < 300) {
+            if ((operationId.equals("getFile") || operationId.equals("getSharedFile")) && response.statusCode() < 300) {
                 // A file comes back with its own type; the contract can only describe it as bytes.
                 contentType = "application/octet-stream";
             }

@@ -36,9 +36,15 @@ final class NodeFsApi implements FsApi {
     private final TenantQuota quota;
     private final Room room;
     private final TmpSettings tmpSettings;
+    private final automately.core.files.FileLocks locks;
+    /** Locks this job holds (path → token), released when it ends. */
+    private final java.util.Map<String, String> held = new java.util.concurrent.ConcurrentHashMap<>();
     private TmpStore tmp;
 
-    NodeFsApi(HostScope scope, FileStore files, FileTree tree, StorageCapacity capacity, TenantQuota quota, Room room, TmpSettings tmpSettings) {
+    NodeFsApi(HostScope scope, FileStore files, FileTree tree, StorageCapacity capacity, TenantQuota quota, Room room, TmpSettings tmpSettings,
+              automately.core.files.FileLocks locks) {
+        this.locks = locks;
+        scope.onClose(() -> held.forEach((path, token) -> locks.release(scope.tenant(), path, token)));
         this.scope = scope;
         this.files = files;
         this.tree = tree;
@@ -262,6 +268,41 @@ final class NodeFsApi implements FsApi {
             }
             return readFile(path).compose(old -> writeFile(path, old.appendBuffer(data), existing.getString("contentType")));
         });
+    }
+
+    @Override
+    public Future<JsonObject> lock(String path, long ttlMs) {
+        return Names.guarded(() -> {
+            String p = lockPath(path);
+            return requireLocks().acquire(scope.tenant(), p, java.time.Duration.ofMillis(ttlMs)).onSuccess(lease -> held.put(p, lease.getString("token")));
+        });
+    }
+
+    @Override
+    public Future<JsonObject> renewLock(String path, String token, long ttlMs) {
+        return Names.guarded(() -> requireLocks().renew(scope.tenant(), lockPath(path), token, java.time.Duration.ofMillis(ttlMs)));
+    }
+
+    @Override
+    public Future<Boolean> unlock(String path, String token) {
+        return Names.guarded(() -> {
+            String p = lockPath(path);
+            held.remove(p, token);
+            return requireLocks().release(scope.tenant(), p, token);
+        });
+    }
+
+    /** Any path can be locked, whether or not a file is there: it names the work, not the bytes. */
+    private static String lockPath(String path) {
+        Where at = where(path);
+        return at.tmp() ? "tmp/" + at.rel() : at.rel();
+    }
+
+    private automately.core.files.FileLocks requireLocks() {
+        if (locks == null) {
+            throw new HostException("Error", "unavailable", "Locks aren't available here");
+        }
+        return locks;
     }
 
     private static Future<FileInfo> write(FileWriter writer, Buffer data) {

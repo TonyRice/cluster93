@@ -941,6 +941,77 @@ paths:
         '204': { description: 'Unmounted.' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/fs/share:
+    post:
+      operationId: shareFile
+      tags: [files]
+      summary: A public link to a file's current version, until it expires (D-080)
+      description: |
+        Anyone with the URL can download the file (with Range and ETag) until it expires. Replacing the file stops the
+        link. Needs AUTOMATELY_SECRETS_KEY (409 unavailable without one).
+      security:
+        - bearer: ['files:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string, minLength: 1, maxLength: 1024 }
+                expiresInSeconds: { type: integer, minimum: 1, maximum: 2592000 }
+      responses:
+        '200':
+          description: The link.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, token, path, expiresAt]
+                properties:
+                  url: { type: string }
+                  token: { type: string }
+                  path: { type: string }
+                  expiresAt: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/fs/share/rotate:
+    post:
+      operationId: rotateFileLinks
+      tags: [files]
+      summary: Revoke every public link your tenant has made
+      security:
+        - bearer: ['files:write']
+      responses:
+        '204': { description: 'Every earlier link stops working.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/shared/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 4096 }
+    get:
+      operationId: getSharedFile
+      tags: [files]
+      summary: A shared file; no token needed while the link is valid
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/FileBytes' }
+        '206': { $ref: '#/components/responses/FileBytes' }
+        '304': { description: 'Not modified.' }
+        default: { $ref: '#/components/responses/Error' }
+    head:
+      operationId: headSharedFile
+      tags: [files]
+      summary: A shared file's headers
+      security: []
+      responses:
+        '200': { description: 'The headers a GET would send.' }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/fs/move:
     post:
       operationId: moveFiles

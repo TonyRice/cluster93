@@ -90,9 +90,134 @@ sync.rmSync = (path, options) => {
   return sync.unlinkSync(path);
 };
 
+// File handles (D-080): the file's bytes are held here and edited, then published as one new version on close, so
+// readers never see a half-made edit. Positional reads and writes, appending, truncating. Files up to 32 MB.
+const MAX_HANDLE_BYTES = 32 * 1024 * 1024;
+class Handle {
+  constructor(path, flags, data, dirty) {
+    this.path = path; this.flags = flags; this.data = data; this.length = data.length;
+    this.pos = flags[0] === 'a' ? data.length : 0; this.dirty = dirty; this.closed = false;
+  }
+  check(syscall) { if (this.closed) throw fsError({ code: 'EBADF', message: 'file handle is closed' }, syscall, this.path); }
+  writable(syscall) {
+    this.check(syscall);
+    if (this.flags[0] === 'r' && !this.flags.includes('+')) throw fsError({ code: 'EBADF', message: 'file is open for reading only' }, syscall, this.path);
+  }
+  room(size) {
+    if (size > MAX_HANDLE_BYTES) throw fsError({ code: 'limit_exceeded', message: `files edited in place are limited to ${MAX_HANDLE_BYTES / 1048576} MB` }, 'write', this.path);
+    if (size > this.data.length) {
+      const grown = new Uint8Array(Math.min(MAX_HANDLE_BYTES, Math.max(size, this.data.length * 2, 1024)));
+      grown.set(this.data.subarray(0, this.length));
+      this.data = grown;
+    }
+  }
+  read(buffer, offset = 0, length = buffer.length - offset, position = null) {
+    this.check('read');
+    const at = position ?? this.pos;
+    const n = Math.max(0, Math.min(length, this.length - at));
+    if (n > 0) buffer.set(this.data.subarray(at, at + n), offset);
+    if (position === null || position === undefined) this.pos += n;
+    return n;
+  }
+  write(bytes, position = null) {
+    this.writable('write');
+    const at = this.flags[0] === 'a' ? this.length : (position ?? this.pos);
+    this.room(at + bytes.length);
+    this.data.set(bytes, at);
+    this.length = Math.max(this.length, at + bytes.length);
+    if (this.flags[0] === 'a' || position === null || position === undefined) this.pos = at + bytes.length;
+    this.dirty = true;
+    return bytes.length;
+  }
+  truncate(length = 0) {
+    this.writable('ftruncate');
+    this.room(length);
+    if (length > this.length) this.data.fill(0, this.length, length);
+    this.length = length;
+    this.dirty = true;
+  }
+  bytes() { return this.data.slice(0, this.length); }
+  stats() { return stats({ kind: 'file', size: this.length, modifiedAt: Date.now() }); }
+}
+const writeArgs = (data, a, b, c) => {
+  if (typeof data === 'string') return [utf8Encode(data), a ?? null];
+  const bytes = toBytes(data);
+  const offset = a ?? 0;
+  return [bytes.subarray(offset, offset + (b ?? bytes.length - offset)), c ?? null];
+};
+const opened = async (path, flags, exists, read) => {
+  path = String(path); flags = flags ?? 'r';
+  const there = await exists(path);
+  if (flags.includes('x') && there) throw fsError({ code: 'already_exists', message: 'file already exists' }, 'open', path);
+  if (flags[0] === 'r' && !there) throw notFound(path, 'open');
+  const keep = there && flags[0] !== 'w';
+  return new Handle(path, flags, keep ? await read(path) : new Uint8Array(0), !keep);
+};
+const handleApi = (h, publish) => Object.freeze({
+  fd: h,
+  read: async (buffer, offset, length, position) => {
+    if (buffer && !(buffer instanceof Uint8Array)) ({ buffer, offset, length, position } = buffer);
+    buffer = buffer ?? new Uint8Array(16384);
+    return { bytesRead: h.read(buffer, offset ?? 0, length ?? buffer.length - (offset ?? 0), position ?? null), buffer };
+  },
+  write: async (data, a, b, c) => { const [bytes, position] = writeArgs(data, a, b, c); return { bytesWritten: h.write(bytes, position), buffer: data }; },
+  readFile: async (options) => decoded(h.bytes(), options),
+  writeFile: async (data) => { h.truncate(0); h.write(bytesOf(data), 0); },
+  appendFile: async (data) => { h.write(bytesOf(data), h.length); },
+  truncate: async (length) => h.truncate(length ?? 0),
+  stat: async () => h.stats(),
+  close: async () => { if (!h.closed) { h.closed = true; if (h.dirty) await publish(h.path, h.bytes()); } },
+});
+promises.open = async (path, flags) => handleApi(
+    await opened(path, flags, async (p) => (await host.fs.stat(p)) !== null, (p) => promises.readFile(p)),
+    (p, bytes) => promises.writeFile(p, bytes));
+// Numbers for the sync and callback forms, as Node's file descriptors.
+const fds = new Map();
+let nextFd = 3;
+const fd = (n, syscall) => {
+  const h = fds.get(n);
+  if (!h) throw fsError({ code: 'EBADF', message: 'bad file descriptor' }, syscall, String(n));
+  return h;
+};
+sync.openSync = (path, flags) => {
+  path = String(path); flags = flags ?? 'r';
+  const there = sync.existsSync(path);
+  if (flags.includes('x') && there) throw fsError({ code: 'already_exists', message: 'file already exists' }, 'open', path);
+  if (flags[0] === 'r' && !there) throw notFound(path, 'open');
+  const keep = there && flags[0] !== 'w';
+  const n = nextFd++;
+  fds.set(n, new Handle(path, flags, keep ? sync.readFileSync(path) : new Uint8Array(0), !keep));
+  return n;
+};
+sync.readSync = (n, buffer, offset, length, position) => {
+  if (offset && typeof offset === 'object') ({ offset, length, position } = offset);
+  return fd(n, 'read').read(buffer, offset ?? 0, length ?? buffer.length - (offset ?? 0), position ?? null);
+};
+sync.writeSync = (n, data, a, b, c) => { const [bytes, position] = writeArgs(data, a, b, c); return fd(n, 'write').write(bytes, position); };
+sync.fstatSync = (n) => fd(n, 'fstat').stats();
+sync.ftruncateSync = (n, length) => fd(n, 'ftruncate').truncate(length ?? 0);
+sync.closeSync = (n) => {
+  const h = fd(n, 'close');
+  fds.delete(n);
+  h.closed = true;
+  if (h.dirty) sync.writeFileSync(h.path, h.bytes());
+};
+
+// Advisory locks (D-080): only cooperating code checks them. They expire on their own, and go when the job ends.
+const lock = async (path, options) => {
+  path = String(path);
+  let lease;
+  try { lease = await host.fs.lock(path, options?.ttlMs ?? 30000); } catch (e) { throw fsError(e, 'lock', path); }
+  return Object.freeze({
+    path, expiresAt: lease.expiresAt,
+    renew: async (ttlMs) => (await host.fs.renewLock(path, lease.token, ttlMs ?? options?.ttlMs ?? 30000)).expiresAt,
+    release: () => host.fs.unlock(path, lease.token),
+  });
+};
+
 // Callback style, fs.readFile(path, [options], (err, data) => …), from the promises.
 const callbacks = {};
-for (const name of Object.keys(promises)) {
+for (const name of Object.keys(promises).filter((n) => n !== 'open')) {
   callbacks[name] = (...args) => {
     const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
     const done = promises[name](...args);
@@ -101,4 +226,11 @@ for (const name of Object.keys(promises)) {
   };
 }
 
-define('fs', Object.freeze({ ...callbacks, ...sync, promises: Object.freeze(promises), constants: Object.freeze({ COPYFILE_EXCL: 1 }) }));
+// fs.open and friends with callbacks work on descriptor numbers, as Node's do.
+const later = (cb, work) => Promise.resolve().then(work).then((v) => cb(null, v), (e) => cb(e));
+callbacks.open = (path, flags, cb) => { if (typeof flags === 'function') { cb = flags; flags = 'r'; } later(cb, () => sync.openSync(path, flags)); };
+callbacks.read = (n, buffer, offset, length, position, cb) => later(cb, () => sync.readSync(n, buffer, offset, length, position));
+callbacks.write = (n, data, ...rest) => { const cb = rest.pop(); later(cb, () => sync.writeSync(n, data, ...rest)); };
+callbacks.close = (n, cb) => later(cb ?? (() => {}), () => sync.closeSync(n));
+
+define('fs', Object.freeze({ ...callbacks, ...sync, lock, promises: Object.freeze(promises), constants: Object.freeze({ COPYFILE_EXCL: 1 }) }));

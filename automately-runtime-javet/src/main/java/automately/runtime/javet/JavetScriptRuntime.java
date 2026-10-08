@@ -61,8 +61,9 @@ public final class JavetScriptRuntime implements ScriptRuntime {
     /** What {@code fs} exports by name, for {@code import { readFile } from 'fs'}. */
     private static final String FS_NAMES = "readFile, writeFile, appendFile, mkdir, readdir, stat, lstat, access, rename, copyFile, rm, rmdir, unlink, "
             + "readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, statSync, lstatSync, accessSync, existsSync, renameSync, "
-            + "copyFileSync, rmSync, rmdirSync, unlinkSync, promises, constants";
-    private static final String FS_PROMISES_NAMES = "readFile, writeFile, appendFile, mkdir, readdir, stat, lstat, access, rename, copyFile, rm, rmdir, unlink";
+            + "copyFileSync, rmSync, rmdirSync, unlinkSync, open, read, write, close, openSync, readSync, writeSync, fstatSync, ftruncateSync, "
+            + "closeSync, lock, promises, constants";
+    private static final String FS_PROMISES_NAMES = "readFile, writeFile, appendFile, mkdir, readdir, stat, lstat, access, rename, copyFile, rm, rmdir, unlink, open";
 
     /** Modules a script can import (D-079); everything else is refused until packages exist. */
     static final java.util.Map<String, String> BUILT_IN_MODULES = java.util.Map.of(

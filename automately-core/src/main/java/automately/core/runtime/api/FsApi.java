@@ -41,4 +41,12 @@ public interface FsApi {
     Future<Void> writeFile(String path, Buffer data, String contentType);
 
     Future<Void> appendFile(String path, Buffer data);
+
+    /** An advisory lock (D-080): {@code {path, token, expiresAt}}; fails {@code busy} while another holder has it. */
+    Future<JsonObject> lock(String path, long ttlMs);
+
+    Future<JsonObject> renewLock(String path, String token, long ttlMs);
+
+    /** Completes with whether the lock was held (and is now released). */
+    Future<Boolean> unlock(String path, String token);
 }

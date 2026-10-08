@@ -54,6 +54,7 @@ final class TestIgnite {
         automately.core.identity.Identity.KINDS.forEach(kind -> cluster.ignite().cache(kind.name()).clear());
         cluster.ignite().cache(automately.core.audit.AuditExporter.STATE.name()).clear();
         cluster.ignite().cache(automately.core.files.FileTree.OPS.name()).clear();
+        cluster.ignite().cache(automately.core.files.FileLocks.KIND.name()).clear();
         cluster.ignite().cache(IgniteChunks.CACHE).clear();
         return stores;
     }
