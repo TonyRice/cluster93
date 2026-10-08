@@ -50,6 +50,10 @@ public final class PackageStore {
     public static final long MAX_BYTES = 10L * 1024 * 1024;
     public static final int MAX_DEPENDENCIES = 100;
     public static final int MAX_HASHES_PER_QUERY = MAX_FILES;
+    /** Packages in one job's lock, to keep job records small (D-083 §4). */
+    public static final int MAX_LOCKED = 500;
+    /** Rounds of re-picking versions before resolution gives up on settling. */
+    private static final int MAX_ROUNDS = 25;
 
     private static final Pattern NAME = Pattern.compile("[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
@@ -368,6 +372,179 @@ public final class PackageStore {
         s.remove("tenant");
         s.remove("package");
         return s;
+    }
+
+    // --- locks: what a job imports, as exact versions (D-089) ---
+
+    /**
+     * Resolves what a script imports to exact versions: each package it names, newest release first, and every
+     * dependency of those, one version per package that meets every range on it. {@code wanted} maps each package
+     * the script imports to the exports it asks for ({@code "."}, {@code "./report"}). Answers {@code {name: version}},
+     * sorted by name; fails with {@code unresolved_import} saying what couldn't be met.
+     */
+    public Future<JsonObject> lock(String tenant, Map<String, Set<String>> wanted) {
+        if (wanted.isEmpty()) {
+            return Future.succeededFuture(new JsonObject());
+        }
+        Map<String, Semver.Range> roots = new LinkedHashMap<>();
+        wanted.keySet().forEach(name -> roots.put(name, Semver.Range.parse("*")));
+        return settle(tenant, roots, Map.of(), new java.util.HashMap<>(), 0).compose(chosen -> {
+            for (Map.Entry<String, Set<String>> want : wanted.entrySet()) {
+                JsonObject version = chosen.get(want.getKey());
+                for (String subpath : want.getValue()) {
+                    if (!version.getJsonObject("exports", new JsonObject()).containsKey(subpath)) {
+                        return Future.failedFuture(unresolved(want.getKey() + "@" + version.getString("version") + " doesn't export "
+                                + (subpath.equals(".") ? "a main module (add \"exports\" or an index.js)" : "\"" + subpath + "\"")));
+                    }
+                }
+            }
+            JsonObject lock = new JsonObject();
+            new java.util.TreeMap<>(chosen).forEach((name, version) -> lock.put(name, version.getString("version")));
+            return Future.succeededFuture(lock);
+        });
+    }
+
+    /**
+     * The lock for a script sent as source (D-087): its imports found by reading it, each resolved to the newest release.
+     * Refuses an {@code import()} whose name isn't a literal, a name that can't be a package, and, when {@code allowed}
+     * is false (a job's {@code "packages": false}), any package at all. Answers an empty lock if it imports none.
+     */
+    public Future<JsonObject> lockScript(String tenant, String script, boolean allowed) {
+        Map<String, Set<String>> wanted;
+        try {
+            wanted = imported(script);
+        } catch (HostException e) {
+            return Future.failedFuture(e);
+        }
+        if (!wanted.isEmpty() && !allowed) {
+            return Future.failedFuture(unresolved("This job has \"packages\": false, so it can't import " + String.join(", ", wanted.keySet())));
+        }
+        return lock(tenant, wanted);
+    }
+
+    /**
+     * The lock for a job started by another job's script ({@code jobs.run}): it can import exactly what its parent
+     * could (D-083 §4), so it gets the parent's lock, or none if it imports nothing.
+     */
+    public static JsonObject inherit(String script, JsonObject parentLock) {
+        Map<String, Set<String>> wanted = imported(script);
+        if (wanted.isEmpty()) {
+            return null;
+        }
+        List<String> outside = wanted.keySet().stream().filter(name -> parentLock == null || !parentLock.containsKey(name)).toList();
+        if (!outside.isEmpty()) {
+            throw unresolved("A job started by a script can import only the packages its parent could, and "
+                    + String.join(", ", outside) + (outside.size() == 1 ? " isn't" : " aren't") + " among them");
+        }
+        return parentLock.copy();
+    }
+
+    /** The packages a script imports, and the exports of each; refusing what can't be found before it runs. */
+    private static Map<String, Set<String>> imported(String script) {
+        Imports.Scan scan = Imports.scan(script);
+        if (!scan.computed().isEmpty()) {
+            int at = scan.computed().getFirst();
+            int line = 1 + (int) script.substring(0, at).chars().filter(c -> c == '\n').count();
+            throw unresolved("import() on line " + line + " doesn't name a package with a string literal. Everything a job imports "
+                    + "is fetched before it starts, so write import('name') or a static import");
+        }
+        try {
+            return Imports.packages(scan);
+        } catch (IllegalArgumentException e) {
+            throw unresolved(e.getMessage());
+        }
+    }
+
+    /** One round: every range from the roots and from the versions picked last round, then the newest version meeting each. */
+    private Future<Map<String, JsonObject>> settle(String tenant, Map<String, Semver.Range> roots, Map<String, JsonObject> chosen,
+                                                   Map<String, List<JsonObject>> published, int round) {
+        if (round >= MAX_ROUNDS) {
+            return Future.failedFuture(unresolved("The packages' versions didn't settle after " + MAX_ROUNDS + " rounds; their ranges conflict"));
+        }
+        // name -> each range on it, with who asked for it
+        Map<String, List<Map.Entry<String, Semver.Range>>> ranges = new LinkedHashMap<>();
+        roots.forEach((name, range) -> ranges.computeIfAbsent(name, n -> new ArrayList<>()).add(Map.entry("your script", range)));
+        chosen.forEach((name, version) -> version.getJsonObject("dependencies", new JsonObject()).forEach(dep ->
+                ranges.computeIfAbsent(dep.getKey(), n -> new ArrayList<>())
+                        .add(Map.entry(name + "@" + version.getString("version"), Semver.Range.parse(String.valueOf(dep.getValue()))))));
+        if (ranges.size() > MAX_LOCKED) {
+            return Future.failedFuture(HostException.limit("A job can use at most " + MAX_LOCKED + " packages; this one needs " + ranges.size()));
+        }
+        List<String> unseen = ranges.keySet().stream().filter(name -> !published.containsKey(name)).toList();
+        List<Future<List<JsonObject>>> fetched = unseen.stream()
+                .map(name -> versions.where("package", ownerOf(name, tenant) + "/" + name)).toList();
+        return Future.all(fetched).compose(all -> {
+            for (int i = 0; i < unseen.size(); i++) {
+                published.put(unseen.get(i), fetched.get(i).result());
+            }
+            Map<String, JsonObject> picked = new LinkedHashMap<>();
+            for (Map.Entry<String, List<Map.Entry<String, Semver.Range>>> entry : ranges.entrySet()) {
+                String name = entry.getKey();
+                List<JsonObject> candidates = published.get(name);
+                if (candidates.isEmpty()) {
+                    return Future.failedFuture(unresolved("No package named \"" + name + "\"" + (name.startsWith(CLUSTER_PREFIX) ? ""
+                            : " (a tenant's packages are its own; cluster-wide ones are named @cluster/<name>)")
+                            + asked(entry.getValue())));
+                }
+                JsonObject best = candidates.stream()
+                        .filter(v -> !v.getBoolean("yanked", false))
+                        .filter(v -> entry.getValue().stream().allMatch(r -> r.getValue().matches(Semver.Version.parse(v.getString("version")))))
+                        .max(Comparator.comparing(v -> Semver.Version.parse(v.getString("version"))))
+                        .orElse(null);
+                if (best == null) {
+                    return Future.failedFuture(unresolved("No version of " + name + " meets " + entry.getValue().stream()
+                            .map(r -> describe(r.getValue()) + " (from " + r.getKey() + ")").collect(java.util.stream.Collectors.joining(" and "))));
+                }
+                picked.put(name, best);
+            }
+            boolean same = picked.size() == chosen.size() && picked.entrySet().stream().allMatch(e -> chosen.containsKey(e.getKey())
+                    && chosen.get(e.getKey()).getString("version").equals(e.getValue().getString("version")));
+            return same ? Future.succeededFuture(picked) : settle(tenant, roots, picked, published, round + 1);
+        });
+    }
+
+    private static String asked(List<Map.Entry<String, Semver.Range>> ranges) {
+        List<String> by = ranges.stream().map(Map.Entry::getKey).filter(who -> !who.equals("your script")).toList();
+        return by.isEmpty() ? "" : "; needed by " + String.join(", ", by);
+    }
+
+    private static String describe(Semver.Range range) {
+        if (range.exact() != null) {
+            return range.exact().toString();
+        }
+        if (range.min() == null && range.max() == null) {
+            return "any release";
+        }
+        return (range.min() == null ? "" : ">=" + range.min()) + (range.min() != null && range.max() != null ? " " : "")
+                + (range.max() == null ? "" : "<" + range.max());
+    }
+
+    private static HostException unresolved(String message) {
+        return new HostException("Error", "unresolved_import", message);
+    }
+
+    /** A version named by a lock, with its files, exports and dependencies; null if it's gone. */
+    public Future<JsonObject> locked(String tenant, String name, String version) {
+        return versions.get(versionKey(ownerOf(name, tenant), name, version));
+    }
+
+    /** The bytes of one of {@code owner}'s package files, as stored; null if there's no such file. The caller checks the hash. */
+    public Future<Buffer> read(String owner, String sha256) {
+        return blobs.get(blobKey(owner, sha256)).compose(blob -> {
+            if (blob == null) {
+                return Future.succeededFuture();
+            }
+            long size = blob.getLong("size", 0L);
+            if (size == 0) {
+                return Future.succeededFuture(Buffer.buffer());
+            }
+            io.vertx.core.Promise<Buffer> read = io.vertx.core.Promise.promise();
+            Buffer bytes = Buffer.buffer((int) size);
+            automately.core.runtime.BodyStream stream = store.open(blob.getString("blobId"), size, 0, size - 1);
+            stream.handler(bytes::appendBuffer, () -> read.tryComplete(bytes), read::tryFail);
+            stream.resume();
+            return read.future();
+        });
     }
 
     // --- accounting ---

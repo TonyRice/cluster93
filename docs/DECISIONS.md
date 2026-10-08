@@ -1309,3 +1309,41 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 - **Quota and deletion:** a tenant's package files count against its quota, once per unique file. Packages don't stop a tenant from being deleted; deleting it deletes them and their bytes.
 - **Bundling:** the CLI runs a small script with the project's own Node and esbuild (`--platform=node`, ESM, splitting, linked source maps, `.wasm` as files). It refuses required native code (a `.node` import, or a package with a native build), naming what pulled it in; stubs `bufferutil`, `utf-8-validate` and `fsevents` with a warning; and keeps `fs`, `automately:*` and declared Automately packages as imports.
 - **Not yet:** Node built-ins other than `fs` stop a publish until step 2 brings stand-ins for `path`, `events`, `buffer`, `url` and `util`. An upload cut off by a node crash can leave unreferenced bytes behind; collecting them is step 4's garbage collection. `--no-bundle` publishes a folder as it is, for code that's already ES modules.
+
+### D-089 — Packages step 2: jobs import packages, locked at submission and loaded before they run
+**Date:** 2026-10-08 · **Status:** Accepted. Builds most of step 2 of D-083 and D-087; details in `docs/design/packages.md` §4–5 and `docs/guides/packages.md`
+
+- **The spike** (Javet 6.0.2), and what it changed:
+  - **Cycles work** once the resolver returns the same module for the same file. Javet's own module cache doesn't do that for modules a resolver returns, so the resolver keeps its own, keyed by a canonical name: `file:///packages/<name>/<version>/<path>`.
+  - **A refused import surfaces the resolver's exception message.** Javet only calls the resolver when it gets a name for the import, so a refused import is given a name no module has; given none, Javet answers its own "Cannot find package".
+  - **A module that throws while it loads rejects the promise its evaluation returns.** The runtime used to ignore that promise, so a top-level `throw` showed up as a confusing "Cannot access … before initialization". It now waits for it (top-level `await` included) and fails the job with the error and its stack, which names the module and line.
+  - **Neither `import()` nor `import.meta` is supported:** `import()` rejects with "Not supported", and `import.meta.url` is `undefined`. So each module's source is rewritten before it's compiled. `import('x')` with a literal name becomes `Promise.resolve(ns)`, where `ns` comes from a static `import * as` added at the end, and `import.meta` becomes the module's own `{url}`. Every line keeps its number. **The cost:** a module imported with `import()` is evaluated up front with the others, not when the call runs. **Why that's acceptable:** D-083 already requires every import to be known and fetched before the script starts. A computed `import(x)` still rejects when called.
+- **Finding the imports:** a tokenizer (`Imports`), not a parser. It skips strings, comments, templates and regular expressions, and recognises every `import` and `export … from` form. Whether a `/` starts a regular expression is guessed from the token before it, as JavaScript tools commonly do. **Why not V8 itself:** an isolate per submission costs far more than reading the text. Whatever the scan misses still can't load anything outside the lock.
+- **The lock:** `{name: version}` on the job (`packages`, shown in the API) and on a service's revision.
+  - **One version per package:** the newest release that meets every range on it, from the script (any release) and from each chosen version's dependencies. It's re-picked until nothing changes. A conflict names each range and who asked for it.
+  - **Limits:** at most 500 packages; a subpath the version doesn't export is refused at submission.
+  - **Not lockfile-style backtracking.** It isn't needed while every package's ranges come from its own manifest; revisit if real conflicts show up.
+- **Who gets which lock:**
+  - **Jobs from the API:** locked at submission. `"packages": false` refuses any package import (D-087).
+  - **Jobs started by a script** (`jobs.run`) inherit the parent's whole lock if they import anything, and are refused if they import a package the parent's lock doesn't have.
+  - **Services** are locked when defined. A redeploy resolves again, and new versions mean a new revision. Services built from a package version are still step 3.
+- **Refused at submission (400 `unresolved_import`), each with the reason:**
+  - an `import()` without a literal name, giving its line
+  - Node's own modules (`path`, `node:crypto`)
+  - paths and URLs
+  - names that can't be packages
+  - unknown packages
+  - unmet or conflicting ranges
+- **Loading:** before an isolate is made, the node fetches every file in the lock, at most 1,000 files and 10 MB per job.
+  - **Integrity:** each file is checked against its SHA-256; one that doesn't match is fetched again once, then fails the attempt ("doesn't match its SHA-256 … so the job didn't run").
+  - **The cache:** checked files are cached per node by owner and hash, `AUTOMATELY_PACKAGE_CACHE_MB` (64 by default), least recently used out first. It's keyed by owner too, so whether a file is cached never tells one tenant about another's files.
+  - **A failed load** fails the attempt before any script runs. The `automately.packages.load` timer records how long loading took and whether it worked.
+- **Resolving in the isolate:**
+  - **Bare names** come from the lock through the package's `exports`. A package may import only its declared dependencies (and itself).
+  - **`./` and `../`** stay inside the package. The job's script has no files beside it.
+  - **Only `.js`, `.mjs` and `.cjs` files** are modules. Other files (`.json`, `.wasm`) are read through `/packages` in `fs`, which is step 3.
+- **Not yet:**
+  - stand-ins for Node's `path`, `events`, `buffer`, `url` and `util`, so bundled npm code that uses them can be published (next)
+  - a disk tier for the cache (the design's "then from the data directory")
+  - services from a package version, `/packages` in `fs` and the MCP tools (step 3)
+  - yank, block and purge (step 4)

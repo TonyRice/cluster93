@@ -26,6 +26,7 @@ import java.util.UUID;
  * @param ingressIdleTimeout how long a proxied request may go without a byte before it's closed
  * @param maxRequestBytes largest request body the ingress accepts
  * @param tenantStorageBytes files one tenant may store
+ * @param packageCacheBytes  package files a node keeps in memory once fetched and checked (D-089)
  * @param minFreeDiskBytes writes are refused when the data directory's disk has less free space than this (D-038)
  * @param dataDirectory durable storage for this node (Ignite persistence); null keeps data in memory only
  * @param dataBackups   extra copies of every piece of data on other nodes
@@ -55,6 +56,7 @@ public record ServerConfig(
         Duration ingressIdleTimeout,
         long maxRequestBytes,
         long tenantStorageBytes,
+        long packageCacheBytes,
         long minFreeDiskBytes,
         Path dataDirectory,
         int dataBackups,
@@ -127,6 +129,7 @@ public record ServerConfig(
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS", "60000"))),
                 Long.parseLong(env.getOrDefault("AUTOMATELY_MAX_REQUEST_BYTES", String.valueOf(1024L * 1024 * 1024))),
                 Long.parseLong(env.getOrDefault("AUTOMATELY_TENANT_STORAGE_MB", "1024")) * 1024 * 1024,
+                Long.parseLong(env.getOrDefault("AUTOMATELY_PACKAGE_CACHE_MB", "64")) * 1024 * 1024,
                 Long.parseLong(env.getOrDefault("AUTOMATELY_MIN_FREE_DISK_MB", "1024")) * 1024 * 1024,
                 Optional.ofNullable(env.get("AUTOMATELY_DATA_DIR")).filter(dir -> !dir.isBlank()).map(Path::of).orElse(null),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_DATA_BACKUPS", "1")),

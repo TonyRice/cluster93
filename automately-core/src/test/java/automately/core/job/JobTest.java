@@ -68,6 +68,17 @@ class JobTest {
     }
 
     @Test
+    void aRetryRunsTheSamePackageVersions() {
+        JsonObject lock = new JsonObject().put("strings", "1.4.0");
+        Job job = queued(OrphanPolicy.RETRY, 3).withPackages(lock).started(1, "node-a", "inst-a", 200).orElseThrow();
+        Job retried = job.orphaned(1, "inst-a", 500).orElseThrow().started(2, "node-b", "inst-b", 600).orElseThrow();
+        assertThat(retried.attempt()).isEqualTo(2);
+        assertThat(Job.fromJson(retried.toJson()).packages()).isEqualTo(lock);
+        assertThat(retried.toSummaryJson().getJsonObject("packages")).as("shown, so what ran is always known").isEqualTo(lock);
+        assertThat(queued(OrphanPolicy.FAIL, 1).withPackages(new JsonObject()).packages()).as("no imports, no lock").isNull();
+    }
+
+    @Test
     void aStaleOrphanDecisionIsRejected() {
         Job job = running(OrphanPolicy.RETRY, 3);
 

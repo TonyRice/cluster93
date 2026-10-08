@@ -64,6 +64,12 @@ public final class Metrics implements Shareable {
                 .publishPercentileHistogram().register(registry).record(took);
     }
 
+    /** Fetching and checking a job's packages before its isolate is made (D-089). */
+    public void packagesLoaded(boolean ok, Duration took) {
+        Timer.builder("automately.packages.load").description("Fetching and checking a job's packages before it runs")
+                .tag("outcome", ok ? "ok" : "failed").publishPercentileHistogram().register(registry).record(took);
+    }
+
     public void serviceRunStarted(boolean restart) {
         Counter.builder("automately.services.runs").description("Service runs started; restarts after a crash or node loss are tagged")
                 .tag("restart", String.valueOf(restart)).register(registry).increment();

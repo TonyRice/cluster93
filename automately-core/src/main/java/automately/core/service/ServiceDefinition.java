@@ -22,6 +22,8 @@ import java.util.Optional;
  * @param lastExit           how the previous run ended: {@code jobId, status, error, startedAt, endedAt}
  * @param secrets            whether its runs may read the tenant's secrets: whether the token that last defined it had
  *                           {@code secrets:use} (D-068)
+ * @param packages           the exact versions its script imports, resolved when it was defined, so every run of a
+ *                           revision runs the same code (D-089); null if it imports none
  */
 public record ServiceDefinition(
         String tenant,
@@ -41,7 +43,8 @@ public record ServiceDefinition(
         JsonObject lastExit,
         long createdAt,
         long updatedAt,
-        boolean secrets) {
+        boolean secrets,
+        JsonObject packages) {
 
     public ServiceDefinition {
         Objects.requireNonNull(tenant, "tenant");
@@ -49,6 +52,7 @@ public record ServiceDefinition(
         Objects.requireNonNull(script, "script");
         Objects.requireNonNull(restart, "restart");
         config = config == null ? new JsonObject() : config;
+        packages = packages == null || packages.isEmpty() ? null : packages;
     }
 
     public static ServiceDefinition create(String tenant, String name, String script, JsonObject config, RestartPolicy restart,
@@ -58,7 +62,7 @@ public record ServiceDefinition(
 
     public static ServiceDefinition create(String tenant, String name, String script, JsonObject config, RestartPolicy restart,
                                            boolean enabled, boolean secrets, long now) {
-        return new ServiceDefinition(tenant, name, script, config, restart, enabled, false, 1, null, 0, 0, 0, 0, 0, null, now, now, secrets);
+        return new ServiceDefinition(tenant, name, script, config, restart, enabled, false, 1, null, 0, 0, 0, 0, 0, null, now, now, secrets, null);
     }
 
     public String key() {
@@ -76,17 +80,30 @@ public record ServiceDefinition(
 
     /** As {@link #redefined(String, JsonObject, RestartPolicy, long)}; a change of {@code secrets} is a new revision too. */
     public ServiceDefinition redefined(String script, JsonObject config, RestartPolicy restart, boolean secrets, long now) {
-        boolean changed = !this.script.equals(script) || !this.config.equals(config) || this.restart != restart || this.secrets != secrets;
+        return redefined(script, config, restart, secrets, packages, now);
+    }
+
+    /** As above; so is a change of the package versions it imports, such as a redeploy after a new one is published (D-089). */
+    public ServiceDefinition redefined(String script, JsonObject config, RestartPolicy restart, boolean secrets, JsonObject packages, long now) {
+        JsonObject lock = packages == null || packages.isEmpty() ? null : packages;
+        boolean changed = !this.script.equals(script) || !this.config.equals(config) || this.restart != restart || this.secrets != secrets
+                || !Objects.equals(this.packages, lock);
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, changed ? false : completed,
                 changed ? revision + 1 : revision, currentJobId, currentRevision, currentSince, runs,
-                changed ? 0 : consecutiveFailures, changed ? 0 : nextStartAt, lastExit, createdAt, now, secrets);
+                changed ? 0 : consecutiveFailures, changed ? 0 : nextStartAt, lastExit, createdAt, now, secrets, lock);
+    }
+
+    /** The exact versions its script imports (D-089). Only before it's first saved. */
+    public ServiceDefinition withPackages(JsonObject lock) {
+        return new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision, currentJobId, currentRevision,
+                currentSince, runs, consecutiveFailures, nextStartAt, lastExit, createdAt, updatedAt, secrets, lock);
     }
 
     /** Desired state: running or not. Enabling clears completion and backoff. */
     public ServiceDefinition withEnabled(boolean enabled, long now) {
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, enabled ? false : completed, revision,
                 currentJobId, currentRevision, currentSince, runs, enabled ? 0 : consecutiveFailures, enabled ? 0 : nextStartAt,
-                lastExit, createdAt, now, secrets);
+                lastExit, createdAt, now, secrets, packages);
     }
 
     /** Claims a new run. Only applies when no run is current and a start is due. */
@@ -95,7 +112,7 @@ public record ServiceDefinition(
             return Optional.empty();
         }
         return Optional.of(new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision,
-                jobId, revision, now, runs + 1, consecutiveFailures, nextStartAt, lastExit, createdAt, now, secrets));
+                jobId, revision, now, runs + 1, consecutiveFailures, nextStartAt, lastExit, createdAt, now, secrets, packages));
     }
 
     /**
@@ -134,7 +151,7 @@ public record ServiceDefinition(
             next = now + Math.min(delay, maxBackoff.toMillis());
         }
         return Optional.of(new ServiceDefinition(tenant, name, script, config, restart, enabled, done, revision,
-                null, 0, 0, runs, failures, next, exit, createdAt, now, secrets));
+                null, 0, 0, runs, failures, next, exit, createdAt, now, secrets, packages));
     }
 
     /** The state the API shows, given the current run's job (null if none or not found). */
@@ -173,7 +190,8 @@ public record ServiceDefinition(
                 .put("lastExit", lastExit)
                 .put("createdAt", createdAt)
                 .put("updatedAt", updatedAt)
-                .put("secrets", secrets);
+                .put("secrets", secrets)
+                .put("packages", packages);
     }
 
     public static ServiceDefinition fromJson(JsonObject json) {
@@ -195,6 +213,7 @@ public record ServiceDefinition(
                 json.getJsonObject("lastExit"),
                 json.getLong("createdAt", 0L),
                 json.getLong("updatedAt", 0L),
-                json.getBoolean("secrets", false));
+                json.getBoolean("secrets", false),
+                json.getJsonObject("packages"));
     }
 }

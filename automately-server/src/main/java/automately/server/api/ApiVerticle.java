@@ -199,7 +199,7 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/v1/jobs/:id/events").handler(this::streamEvents);
         router.get("/v1/jobs/:id/steps").handler(this::getSteps);
         router.post("/v1/jobs/:id/cancel").handler(this::cancelJob);
-        new ServiceRoutes(config, services, jobs, scheduler, domains, txt, hostRouter).mount(router);
+        new ServiceRoutes(config, services, jobs, scheduler, domains, txt, hostRouter, packages).mount(router);
         router.route().last().handler(ctx -> error(ctx, 404, "not_found", "No such route"));
         router.route().failureHandler(this::failure);
 
@@ -456,6 +456,12 @@ public final class ApiVerticle extends VerticleBase {
             maxAttempts = requested;
         }
 
+        Object packagesValue = body.getValue("packages", true);
+        if (!(packagesValue instanceof Boolean packagesAllowed)) {
+            error(ctx, 400, "invalid_request", "\"packages\" must be true or false");
+            return;
+        }
+
         // The job's script may read the tenant's secrets only if the submitting token may (D-068).
         boolean secretsAllowed = ctx.<automately.core.auth.Principal>get("principal").allows(automately.core.auth.Scopes.SECRETS_USE);
         java.util.function.UnaryOperator<Job> prepare = job -> job.withSecrets(secretsAllowed);
@@ -473,13 +479,34 @@ public final class ApiVerticle extends VerticleBase {
             Object data = callback.getValue("data");
             prepare = job -> job.withSecrets(secretsAllowed).withCallback(url, data).orElseThrow();
         }
-        scheduler.submit(ctx.get("tenant"), script, (JsonObject) input, timeout, onOrphan, maxAttempts, prepare)
-                .onSuccess(job -> ctx.response()
-                        .setStatusCode(202)
-                        .putHeader("Location", "/v1/jobs/" + job.id())
-                        .putHeader("Content-Type", "application/json")
-                        .end(job.toSummaryJson().encode()))
-                .onFailure(ctx::fail);
+        java.util.function.UnaryOperator<Job> prepared = prepare;
+        Duration jobTimeout = timeout;
+        OrphanPolicy policy = onOrphan;
+        int attempts = maxAttempts;
+        String tenant = ctx.get("tenant");
+        // What the script imports is resolved now, so every attempt runs the same versions (D-087, D-089).
+        packages.lockScript(tenant, script, packagesAllowed).onComplete(locked -> {
+            if (locked.failed()) {
+                refuseImports(ctx, locked.cause());
+                return;
+            }
+            scheduler.submit(tenant, script, (JsonObject) input, jobTimeout, policy, attempts, job -> prepared.apply(job).withPackages(locked.result()))
+                    .onSuccess(job -> ctx.response()
+                            .setStatusCode(202)
+                            .putHeader("Location", "/v1/jobs/" + job.id())
+                            .putHeader("Content-Type", "application/json")
+                            .end(job.toSummaryJson().encode()))
+                    .onFailure(ctx::fail);
+        });
+    }
+
+    /** A script whose imports can't be resolved: 400 saying which and why. */
+    static void refuseImports(RoutingContext ctx, Throwable err) {
+        if (err instanceof automately.core.runtime.HostException host) {
+            error(ctx, 400, host.code().equals("invalid_argument") ? "invalid_request" : host.code(), host.getMessage());
+        } else {
+            ctx.fail(err);
+        }
     }
 
     private void listJobs(RoutingContext ctx) {

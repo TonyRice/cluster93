@@ -105,9 +105,16 @@ final class NodeJobsApi implements JobsApi {
                 if (depth + 1 > MAX_DEPTH) {
                     return Future.failedFuture(HostException.limit("Jobs can start jobs at most " + MAX_DEPTH + " levels deep"));
                 }
+                JsonObject lock;
+                try {
+                    // It can import what the job starting it could (D-089).
+                    lock = automately.core.packages.PackageStore.inherit(script, self == null ? null : self.packages());
+                } catch (HostException e) {
+                    return Future.failedFuture(e);
+                }
                 return wiring.scheduler().submit(scope.tenant(), script, input == null ? new JsonObject() : input, jobTimeout, onOrphan, attempts,
                         // A started job may read secrets only if the job starting it may (D-068).
-                        job -> withCallback.apply(job.startedBy(scope.jobId(), depth).withSecrets(self != null && self.secrets())));
+                        job -> withCallback.apply(job.startedBy(scope.jobId(), depth).withSecrets(self != null && self.secrets()).withPackages(lock)));
             }).map(Job::toSummaryJson);
         });
     }

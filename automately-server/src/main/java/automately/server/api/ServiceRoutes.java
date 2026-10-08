@@ -33,9 +33,11 @@ final class ServiceRoutes {
     private final DomainStore domains;
     private final TxtResolver txt;
     private final HostRouter hostRouter;
+    private final automately.core.packages.PackageStore packages;
 
     ServiceRoutes(ServerConfig config, ServiceStore services, JobStore jobs, JobScheduler scheduler, DomainStore domains, TxtResolver txt,
-                  HostRouter hostRouter) {
+                  HostRouter hostRouter, automately.core.packages.PackageStore packages) {
+        this.packages = packages;
         this.domains = domains;
         this.txt = txt;
         this.hostRouter = hostRouter;
@@ -163,6 +165,18 @@ final class ServiceRoutes {
         }
         JsonObject serviceConfig = configValue == null ? new JsonObject() : (JsonObject) configValue;
 
+        // What its script imports is resolved now and kept on the revision; a redeploy resolves again (D-089).
+        packages.lockScript(tenant, script, true).onComplete(locked -> {
+            if (locked.failed()) {
+                ApiVerticle.refuseImports(ctx, locked.cause());
+            } else {
+                define(ctx, tenant, name, script, serviceConfig, restart, enabled, locked.result());
+            }
+        });
+    }
+
+    private void define(RoutingContext ctx, String tenant, String name, String script, JsonObject serviceConfig, RestartPolicy restart,
+                        boolean enabled, JsonObject lock) {
         services.get(tenant, name).compose(existing -> withinLimit(tenant, name, enabled && (existing == null || !existing.enabled()))
                         .compose(allowed -> {
                             if (!allowed) {
@@ -172,13 +186,14 @@ final class ServiceRoutes {
                             // Its runs may read secrets only if whoever defines it may (D-068).
                             boolean secrets = ctx.<automately.core.auth.Principal>get("principal").allows(automately.core.auth.Scopes.SECRETS_USE);
                             if (existing == null) {
-                                ServiceDefinition created = ServiceDefinition.create(tenant, name, script, serviceConfig, restart, enabled, secrets, now);
+                                ServiceDefinition created = ServiceDefinition.create(tenant, name, script, serviceConfig, restart, enabled, secrets, now)
+                                        .withPackages(lock);
                                 return services.create(created).map(ok -> ok
                                         ? () -> respond(ctx, 201, created)
                                         : () -> error(ctx, 409, "conflict", "The service was created concurrently; retry"));
                             }
                             return services.update(tenant, name, current -> Optional.of(
-                                            current.redefined(script, serviceConfig, restart, secrets, now).withEnabled(enabled, now)))
+                                            current.redefined(script, serviceConfig, restart, secrets, lock, now).withEnabled(enabled, now)))
                                     .map(updated -> updated.<Runnable>map(s -> () -> respond(ctx, 200, s))
                                             .orElse(() -> error(ctx, 404, "not_found", "No such service")));
                         }))

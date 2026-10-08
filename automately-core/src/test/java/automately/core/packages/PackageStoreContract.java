@@ -178,6 +178,107 @@ public abstract class PackageStoreContract {
         assertThatThrownBy(() -> await(store.forget(PackageStore.CLUSTER))).isInstanceOf(IllegalArgumentException.class);
     }
 
+    // --- locks and loading (D-089) ---
+
+    /** Publishes {@code name@version} with an index.js, and dependencies given as name, range pairs. */
+    private static void publish(PackageStore store, String owner, String name, String version, String... deps) throws Exception {
+        String index = "export const v = '" + name + "@" + version + "';";
+        upload(store, owner, index);
+        JsonObject dependencies = new JsonObject();
+        for (int i = 0; i < deps.length; i += 2) {
+            dependencies.put(deps[i], deps[i + 1]);
+        }
+        await(store.publish(owner, manifest(name, version, index).put("dependencies", dependencies), "u", "user"));
+    }
+
+    @Test
+    public void aLockPicksTheNewestReleaseThatMeetsEveryRange() throws Exception {
+        PackageStore store = store();
+        publish(store, "acme", "strings", "1.0.0");
+        publish(store, "acme", "strings", "1.4.0");
+        publish(store, "acme", "strings", "2.0.0");
+        publish(store, "acme", "strings", "2.1.0-beta.1");
+        publish(store, "acme", "report", "1.0.0", "strings", "^1.0.0");
+        publish(store, PackageStore.CLUSTER, "@cluster/dates", "3.0.0");
+
+        JsonObject alone = await(store.lock("acme", java.util.Map.of("strings", java.util.Set.of("."))));
+        assertThat(alone).isEqualTo(new JsonObject().put("strings", "2.0.0"));
+
+        // The script wants strings' newest, report needs ^1: one version meets both, so it's the newest 1.x.
+        JsonObject both = await(store.lock("acme", java.util.Map.of("strings", java.util.Set.of("."), "report", java.util.Set.of("."),
+                "@cluster/dates", java.util.Set.of("."))));
+        assertThat(both).isEqualTo(new JsonObject().put("@cluster/dates", "3.0.0").put("report", "1.0.0").put("strings", "1.4.0"));
+
+        assertThatThrownBy(() -> await(store.lock("acme", java.util.Map.of("nope", java.util.Set.of(".")))))
+                .hasMessageContaining("No package named \"nope\"");
+        assertThatThrownBy(() -> await(store.lock("globex", java.util.Map.of("strings", java.util.Set.of(".")))))
+                .as("a tenant's packages are its own").hasMessageContaining("No package named \"strings\"");
+        assertThatThrownBy(() -> await(store.lock("acme", java.util.Map.of("strings", java.util.Set.of("./report")))))
+                .hasMessageContaining("strings@2.0.0 doesn't export \"./report\"");
+    }
+
+    @Test
+    public void conflictingRangesAreReportedWithWhoAskedForEach() throws Exception {
+        PackageStore store = store();
+        publish(store, "acme", "strings", "1.0.0");
+        publish(store, "acme", "strings", "2.0.0");
+        publish(store, "acme", "old", "1.0.0", "strings", "^1.0.0");
+        publish(store, "acme", "new", "1.0.0", "strings", "^2.0.0");
+        assertThatThrownBy(() -> await(store.lock("acme", java.util.Map.of("old", java.util.Set.of("."), "new", java.util.Set.of(".")))))
+                .hasMessageContaining("No version of strings meets")
+                .hasMessageContaining("(from old@1.0.0)").hasMessageContaining("(from new@1.0.0)");
+    }
+
+    @Test
+    public void scriptsAreLockedFromWhatTheyImport() throws Exception {
+        PackageStore store = store();
+        publish(store, "acme", "strings", "1.0.0");
+        assertThat(await(store.lockScript("acme", "import { v } from 'strings'; import fs from 'fs'; export default () => v;", true)))
+                .isEqualTo(new JsonObject().put("strings", "1.0.0"));
+        assertThat(await(store.lockScript("acme", "export default () => 1;", true))).isEmpty();
+        assertThatThrownBy(() -> await(store.lockScript("acme", "import 'strings'; export default () => 1;", false)))
+                .hasMessageContaining("\"packages\": false");
+        assertThatThrownBy(() -> await(store.lockScript("acme", "export default async () => {\n  await import(name);\n};", true)))
+                .hasMessageContaining("import() on line 2 doesn't name a package");
+
+        JsonObject lock = new JsonObject().put("strings", "1.0.0");
+        assertThat(PackageStore.inherit("import 'strings';", lock)).isEqualTo(lock);
+        assertThat(PackageStore.inherit("export default () => 1;", lock)).isNull();
+        assertThatThrownBy(() -> PackageStore.inherit("import 'other';", lock)).hasMessageContaining("other isn't among them");
+    }
+
+    @Test
+    public void loadingFetchesEveryFileChecksItAndCachesIt() throws Exception {
+        PackageStore store = store();
+        publish(store, "acme", "strings", "1.0.0");
+        publish(store, PackageStore.CLUSTER, "@cluster/dates", "3.0.0");
+        PackageLoader loader = new PackageLoader(store, 1024 * 1024);
+        JsonObject lock = new JsonObject().put("strings", "1.0.0").put("@cluster/dates", "3.0.0");
+
+        automately.core.runtime.Packages loaded = await(loader.load("acme", lock));
+        assertThat(loaded.byName()).containsOnlyKeys("strings", "@cluster/dates");
+        assertThat(new String(loaded.byName().get("strings").files().get("index.js"), StandardCharsets.UTF_8)).isEqualTo("export const v = 'strings@1.0.0';");
+        assertThat(loaded.byName().get("strings").exports()).containsEntry(".", "index.js");
+        assertThat(loader.cachedBytes()).isPositive();
+
+        assertThatThrownBy(() -> await(loader.load("acme", new JsonObject().put("strings", "9.9.9")))).hasMessageContaining("no longer exists");
+    }
+
+    @Test
+    public void aFileThatDoesntMatchItsHashFailsTheLoad() throws Exception {
+        PackageStore store = store();
+        publish(store, "acme", "strings", "1.0.0");
+        try (var files = java.nio.file.Files.walk(dir)) {
+            for (Path file : files.filter(java.nio.file.Files::isRegularFile).toList()) {
+                java.nio.file.Files.writeString(file, "export const v = 'tampered';");
+            }
+        }
+        PackageLoader loader = new PackageLoader(store, 1024 * 1024);
+        assertThatThrownBy(() -> await(loader.load("acme", new JsonObject().put("strings", "1.0.0"))))
+                .hasMessageContaining("strings@1.0.0/index.js doesn't match its SHA-256");
+        assertThat(loader.cachedBytes()).as("nothing unchecked is cached").isZero();
+    }
+
     // --- helpers ---
 
     private static JsonObject manifest(String name, String version, String index) throws Exception {

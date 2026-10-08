@@ -150,6 +150,101 @@ class PackagesTest {
                 .bodyAsJsonObject().getJsonArray("missing")).hasSize(1);
     }
 
+    @Test
+    void aJobImportsPackagesAtTheVersionsLockedWhenItWasSubmitted() throws Exception {
+        String bearer = TestAuth.bearer("pk-runner");
+        publish(bearer, manifest("strings", "1.0.0", Map.of(
+                "index.js", "import { trim } from './lib/trim.js'; export const slug = s => trim(s).toLowerCase().replace(/ /g, '-');",
+                "lib/trim.js", "export const trim = s => s.trim();")), Map.of(
+                "index.js", "import { trim } from './lib/trim.js'; export const slug = s => trim(s).toLowerCase().replace(/ /g, '-');",
+                "lib/trim.js", "export const trim = s => s.trim();"));
+        Map<String, String> app = Map.of("index.js", "import { slug } from 'strings'; export const title = s => 'title:' + slug(s);");
+        publish(bearer, manifest("app", "1.0.0", app).put("dependencies", new JsonObject().put("strings", "^1.0.0")), app);
+
+        String script = "import { title } from 'app'; import { slug } from 'strings';"
+                + " export default async () => { const later = await import('strings'); return [title(' A B '), slug('C D'), later.slug('E F')]; };";
+        JsonObject first = submit(bearer, new JsonObject().put("script", script));
+        assertThat(first.getJsonObject("packages")).isEqualTo(new JsonObject().put("app", "1.0.0").put("strings", "1.0.0"));
+        JsonObject done = awaitJob(bearer, first.getString("id"));
+        assertThat(done.getString("status")).as(done.encodePrettily()).isEqualTo("SUCCEEDED");
+        assertThat(done.getJsonArray("output")).containsExactly("title:a-b", "c-d", "e-f");
+
+        Map<String, String> louder = Map.of("index.js", "export const slug = s => s.trim().toUpperCase().replace(/ /g, '_');");
+        publish(bearer, manifest("strings", "1.1.0", louder), louder);
+        JsonObject second = awaitJob(bearer, submit(bearer, new JsonObject().put("script", script)).getString("id"));
+        assertThat(second.getJsonObject("packages").getString("strings")).isEqualTo("1.1.0");
+        assertThat(second.getJsonArray("output")).containsExactly("title:A_B", "C_D", "E_F");
+        assertThat(get(bearer, "/v1/jobs/" + first.getString("id")).bodyAsJsonObject().getJsonObject("packages").getString("strings"))
+                .as("the first job's record still says what it ran").isEqualTo("1.0.0");
+    }
+
+    @Test
+    void importsAreCheckedWhenAJobIsSubmitted() throws Exception {
+        String bearer = TestAuth.bearer("pk-checked");
+        Map<String, String> files = Map.of("index.js", "export default 'x';");
+        publish(bearer, manifest("present", "1.0.0", files), files);
+
+        HttpResponse<Buffer> unknown = post(bearer, "/v1/jobs", new JsonObject().put("script", "import x from 'absent'; export default () => x;"));
+        assertThat(unknown.statusCode()).isEqualTo(400);
+        assertThat(unknown.bodyAsJsonObject().getJsonObject("error").getString("code")).isEqualTo("unresolved_import");
+        assertThat(unknown.bodyAsString()).contains("No package named \\\"absent\\\"");
+
+        HttpResponse<Buffer> computed = post(bearer, "/v1/jobs", new JsonObject().put("script", "export default async (i) => import(i.name);"));
+        assertThat(computed.statusCode()).isEqualTo(400);
+        assertThat(computed.bodyAsString()).contains("doesn't name a package with a string literal");
+
+        HttpResponse<Buffer> off = post(bearer, "/v1/jobs", new JsonObject().put("script", "import x from 'present'; export default () => x;")
+                .put("packages", false));
+        assertThat(off.statusCode()).isEqualTo(400);
+        assertThat(off.bodyAsString()).contains("\\\"packages\\\": false");
+
+        assertThat(post(bearer, "/v1/jobs", new JsonObject().put("script", "import p from 'path'; export default () => p;")).bodyAsString())
+                .contains("Node's \\\"path\\\" module isn't available");
+        assertThat(post(bearer, "/v1/jobs", new JsonObject().put("script", "export default () => 1;").put("packages", "yes")).statusCode())
+                .isEqualTo(400);
+        assertThat(post(bearer, "/v1/jobs", new JsonObject().put("script", "export default () => 1;").put("packages", false)).statusCode())
+                .as("no imports, nothing to refuse").isEqualTo(202);
+    }
+
+    @Test
+    void aStartedJobImportsWhatItsParentCould() throws Exception {
+        String bearer = TestAuth.bearer("pk-parent");
+        Map<String, String> files = Map.of("index.js", "export const shout = s => s.toUpperCase() + '!';");
+        publish(bearer, manifest("shout", "1.0.0", files), files);
+        String script = "import { shout } from 'shout';"
+                + " export default async () => {"
+                + "   const child = await jobs.run(\"import { shout } from 'shout'; export default () => shout('child');\");"
+                + "   const result = await child.result();"
+                + "   let refused; try { await jobs.run(\"import x from 'other'; export default () => x;\"); } catch (e) { refused = e.message; }"
+                + "   return [shout('parent'), result.output, refused];"
+                + " };";
+        JsonObject done = awaitJob(bearer, submit(bearer, new JsonObject().put("script", script)).getString("id"));
+        assertThat(done.getString("status")).as(done.encodePrettily()).isEqualTo("SUCCEEDED");
+        assertThat(done.getJsonArray("output").getString(0)).isEqualTo("PARENT!");
+        assertThat(done.getJsonArray("output").getString(1)).isEqualTo("CHILD!");
+        assertThat(done.getJsonArray("output").getString(2)).contains("only the packages its parent could");
+    }
+
+    @Test
+    void aServiceRevisionKeepsItsLockAndARedeployMovesIt() throws Exception {
+        String bearer = TestAuth.bearer("pk-service");
+        Map<String, String> v1 = Map.of("index.js", "export const v = 1;");
+        publish(bearer, manifest("lib", "1.0.0", v1), v1);
+        JsonObject service = new JsonObject().put("script", "import { v } from 'lib'; export default async (cfg, ctx) => { await new Promise(() => {}); };")
+                .put("enabled", false);
+        HttpResponse<Buffer> created = await(client.put(node.httpPort(), "localhost", "/v1/services/uses-lib").putHeader("Authorization", bearer)
+                .sendJsonObject(service));
+        assertThat(created.statusCode()).as(created.bodyAsString()).isEqualTo(201);
+        assertThat(created.bodyAsJsonObject().getJsonObject("packages")).isEqualTo(new JsonObject().put("lib", "1.0.0"));
+
+        Map<String, String> v2 = Map.of("index.js", "export const v = 2;");
+        publish(bearer, manifest("lib", "1.1.0", v2), v2);
+        JsonObject redeployed = await(client.put(node.httpPort(), "localhost", "/v1/services/uses-lib").putHeader("Authorization", bearer)
+                .sendJsonObject(service)).bodyAsJsonObject();
+        assertThat(redeployed.getJsonObject("packages").getString("lib")).isEqualTo("1.1.0");
+        assertThat(redeployed.getInteger("revision")).as("new versions are a new revision").isEqualTo(2);
+    }
+
     // --- helpers ---
 
     private static JsonObject manifest(String name, String version, Map<String, String> files) throws Exception {
@@ -158,6 +253,34 @@ class PackagesTest {
             hashes.put(file.getKey(), "sha256:" + sha(file.getValue()));
         }
         return new JsonObject().put("name", name).put("version", version).put("files", hashes);
+    }
+
+    /** Uploads the files and publishes the manifest; fails the test if either is refused. */
+    private static void publish(String bearer, JsonObject manifest, Map<String, String> files) throws Exception {
+        for (String content : files.values()) {
+            assertThat(upload(bearer, sha(content), content).statusCode()).isIn(200, 201);
+        }
+        HttpResponse<Buffer> published = post(bearer, "/v1/packages", manifest);
+        assertThat(published.statusCode()).as(published.bodyAsString()).isEqualTo(201);
+    }
+
+    private static JsonObject submit(String bearer, JsonObject job) throws Exception {
+        HttpResponse<Buffer> submitted = post(bearer, "/v1/jobs", job);
+        assertThat(submitted.statusCode()).as(submitted.bodyAsString()).isEqualTo(202);
+        return submitted.bodyAsJsonObject();
+    }
+
+    private static JsonObject awaitJob(String bearer, String id) throws Exception {
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(20).toNanos();
+        JsonObject last = null;
+        while (System.nanoTime() < deadline) {
+            last = get(bearer, "/v1/jobs/" + id).bodyAsJsonObject();
+            if (java.util.Set.of("SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "ORPHANED").contains(last.getString("status"))) {
+                return last;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("Job " + id + " never ended; last: " + (last == null ? null : last.encodePrettily()));
     }
 
     private static HttpResponse<Buffer> upload(String bearer, String hash, String content) throws Exception {

@@ -558,6 +558,12 @@ paths:
                 timeoutMs: { type: integer, minimum: 1 }
                 onOrphan: { type: string, enum: [fail, retry, resume] }
                 maxAttempts: { type: integer, minimum: 1, maximum: 10 }
+                packages:
+                  type: boolean
+                  default: true
+                  description: >-
+                    Whether the script may import packages (D-087). Its imports are found when it's submitted, and each package is
+                    locked to its newest release; `false` refuses any package import.
                 callback:
                   type: object
                   description: Where the result is POSTed, signed, when the job ends (D-062). `data` comes back unchanged.
@@ -2700,6 +2706,11 @@ components:
         parent: { type: [string, 'null'], description: 'The job whose script started this one (jobs.run).' }
         depth: { type: integer, description: '0 for jobs submitted from outside; one more than the parent otherwise.' }
         secrets: { type: boolean, description: 'Whether its script may read your secrets: submitted with secrets:use, or started by a job or service that may.' }
+        packages: { $ref: '#/components/schemas/PackageLock' }
+    PackageLock:
+      type: [object, 'null']
+      description: The exact package versions the script imports, decided when it was submitted (or the service defined), so every attempt runs the same code. Null if it imports none.
+      additionalProperties: { type: string }
     Service:
       type: object
       required: [name, status, enabled, revision, runs, hosts]
@@ -2724,6 +2735,7 @@ components:
         createdAt: { type: integer }
         updatedAt: { type: integer }
         secrets: { type: boolean, description: 'Whether its runs may read your secrets: whether the token that last defined it had secrets:use.' }
+        packages: { $ref: '#/components/schemas/PackageLock' }
     Domain:
       type: object
       required: [domain, service, verified, createdAt]

@@ -66,6 +66,7 @@ public final class NodeVerticle extends VerticleBase {
     private final Duration stopGrace;
     private final HostApisFactory hostApis;
     private final String endpoint;
+    private final automately.core.packages.PackageLoader packages;
 
     /** Jobs this node has accepted, by job id. The execution is null until the script has started. */
     private final Map<String, Slot> slots = new HashMap<>();
@@ -77,6 +78,14 @@ public final class NodeVerticle extends VerticleBase {
 
     public NodeVerticle(String nodeId, String instanceId, int capacity, JobStore jobs, JobStateStore state, NodeRegistry nodes,
                         ScriptRuntime runtime, Duration heartbeat, Duration stopGrace, HostApisFactory hostApis, String endpoint) {
+        this(nodeId, instanceId, capacity, jobs, state, nodes, runtime, heartbeat, stopGrace, hostApis, endpoint, null);
+    }
+
+    /** @param packages fetches what a job imports before it runs (D-089); null if this node has no package store */
+    public NodeVerticle(String nodeId, String instanceId, int capacity, JobStore jobs, JobStateStore state, NodeRegistry nodes,
+                        ScriptRuntime runtime, Duration heartbeat, Duration stopGrace, HostApisFactory hostApis, String endpoint,
+                        automately.core.packages.PackageLoader packages) {
+        this.packages = packages;
         this.hostApis = hostApis;
         this.endpoint = endpoint;
         this.nodeId = nodeId;
@@ -179,6 +188,27 @@ public final class NodeVerticle extends VerticleBase {
 
     private Future<Void> run(Job job) {
         int attempt = job.attempt();
+        return loadPackages(job).compose(loaded -> loaded.failed()
+                ? finish(job.id(), attempt, ExecutionResult.failed("Couldn't load the job's packages: " + loaded.cause().getMessage()), List.of())
+                : run(job, loaded.result()));
+    }
+
+    /** Everything the job's lock names, fetched and checked before an isolate is made (D-089). */
+    private Future<io.vertx.core.AsyncResult<automately.core.runtime.Packages>> loadPackages(Job job) {
+        if (job.packages() == null) {
+            return Future.succeededFuture(Future.succeededFuture(automately.core.runtime.Packages.NONE));
+        }
+        if (packages == null) {
+            return Future.succeededFuture(Future.failedFuture("this node has no package store"));
+        }
+        long loading = System.nanoTime();
+        return packages.load(job.tenant(), job.packages()).andThen(ar -> automately.core.metrics.Metrics.of(vertx)
+                .packagesLoaded(ar.succeeded(), java.time.Duration.ofNanos(System.nanoTime() - loading)))
+                .transform(Future::succeededFuture);
+    }
+
+    private Future<Void> run(Job job, automately.core.runtime.Packages imports) {
+        int attempt = job.attempt();
         return carriedState(job).compose(carried -> {
             if (stopping) {
                 return Future.succeededFuture();
@@ -192,7 +222,7 @@ public final class NodeVerticle extends VerticleBase {
             io.vertx.core.eventbus.MessageConsumer<Object> tail = vertx.eventBus().consumer(Addresses.jobTail(job.id()), msg -> msg.reply(logs.tail()));
             JobContext jobContext = new JobContext(job.id(), attempt, job.onOrphan(), job.previousAttempt(), carried.state(),
                     carried.service());
-            RunningExecution execution = runtime.execute(execution(job, jobContext), logSink(job.id(), logs), stateSink(job.id(), attempt),
+            RunningExecution execution = runtime.execute(execution(job, jobContext, imports), logSink(job.id(), logs), stateSink(job.id(), attempt),
                     hostApis.create(job.tenant(), job.id(), job.service() != null));
             slots.put(job.id(), new Slot(attempt, execution));
             if (job.cancelRequested() != null) {
@@ -348,8 +378,8 @@ public final class NodeVerticle extends VerticleBase {
         vertx.eventBus().publish(Addresses.jobEvents(jobId), event);
     }
 
-    private static Execution execution(Job job, JobContext context) {
+    private static Execution execution(Job job, JobContext context, automately.core.runtime.Packages imports) {
         return new Execution(job.id(), job.tenant(), job.script(), job.input(), Duration.ofMillis(job.timeoutMs()), context,
-                job.service() != null);
+                job.service() != null, imports);
     }
 }

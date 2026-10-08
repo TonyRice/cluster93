@@ -168,7 +168,7 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `POST` | `/v1/fs/move` · `/v1/fs/copy` | `{from, to, overwrite}`: a file or a whole folder; no bytes move, and copies share theirs |
 | `POST` · `GET` | `/v1/fs/share` · `/v1/shared/{token}` | `files:write`: a public link to a file `{path, expiresInSeconds}` · anyone can download it until it expires or the file changes; `POST /v1/fs/share/rotate` revokes them all |
 | `GET` · `PUT` · `DELETE` | `/v1/mounts` · `/v1/mounts/{path}` | `storage:write`: bind a folder to one of your providers `{provider, readOnly}` ([storage](docs/guides/storage.md)) |
-| `POST` · `PUT` · `GET` | `/v1/packages` · `/v1/packages/blobs/…` · `/v1/packages/{name}` | Publish versioned JavaScript: upload only the files the cluster lacks, then commit the manifest · list and inspect ([packages](docs/guides/packages.md)) |
+| `POST` · `PUT` · `GET` | `/v1/packages` · `/v1/packages/blobs/…` · `/v1/packages/{name}` | Publish versioned JavaScript: upload only the files the cluster lacks, then commit the manifest · list and inspect. Scripts import them by name, locked when the job is submitted ([packages](docs/guides/packages.md)) |
 | `GET` | `/v1/nodes` | Live nodes with capacity and load (`nodes:read`, or the admin) |
 | `GET` | `/health` | Liveness |
 | `GET` | `/ready` | Readiness: 200 once joined and the cluster is active, else 503 with reasons |
@@ -262,6 +262,7 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_CLUSTER_SIZE` | `1` | Nodes a brand-new durable cluster waits for before activating |
 | `AUTOMATELY_DATA_MEMORY_MB` | `256` | Off-heap memory for the data region (the rest stays on disk). At least `128` |
 | `AUTOMATELY_TENANT_STORAGE_MB` | `1024` | Per tenant, files and `kv` together; over it, uploads get 413 and `kv` writes fail |
+| `AUTOMATELY_PACKAGE_CACHE_MB` | `64` | Package files each node keeps in memory once fetched and checked, least recently used out first |
 | `AUTOMATELY_FILES_BACKEND` | `cluster` | Where file bytes live: `cluster` (replicated in the cluster), `disk` or `s3` ([storage](docs/design/storage-providers.md)) |
 | `AUTOMATELY_FILES_DIR` | | The folder for `disk` (shared by every node in a cluster) |
 | `AUTOMATELY_S3_BUCKET` · `_ENDPOINT` · `_REGION` · `_PREFIX` · `_PATH_STYLE` | | The bucket for `s3`; any S3-compatible endpoint (MinIO, R2, B2, Wasabi) |
@@ -326,7 +327,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/DECISIONS.md](docs/DECISIONS.md): the decision log
 - [docs/design/revival-plan.md](docs/design/revival-plan.md): the original plan (why and what), with current status
 - [docs/design/](docs/design/): designs for upcoming work, including [the file system](docs/design/vfs.md), [packages](docs/design/packages.md) and [the Node runtime](docs/design/node-runtime.md)
-- [docs/guides/packages.md](docs/guides/packages.md): publishing packages
+- [docs/guides/packages.md](docs/guides/packages.md): publishing packages and importing them from scripts
 - [docs/scripting/job-context.md](docs/scripting/job-context.md): the job context API for scripts (attempts, steps, checkpoints)
 - [docs/scripting/services.md](docs/scripting/services.md): services, timers and cancellation
 - [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus` and queues, `fetch`, `log`, `files`, and serving HTTP

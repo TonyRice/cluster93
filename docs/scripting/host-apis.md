@@ -106,6 +106,7 @@ await jobs.handle(id).result();  // follow a job you know the id of
 ```
 
 - **Who owns them.** Started jobs belong to your tenant and count toward its rate limit. Each records its `parent` and its `depth`.
+- **Packages.** A started job can import the [packages](../guides/packages.md) its parent could, at the same versions; importing any other package refuses the `jobs.run`.
 - **Limits.** Nesting stops at 5 levels, and one run can start at most 100 jobs. Both fail with `limit_exceeded`.
 - **Capacity.** A parent waiting on `result()` keeps its isolate. If no node has room for the child, the child fails at once, rather than the parent waiting for ever.
 - **Other tenants.** Another tenant's job ids look like missing ones: `get` gives `null`, and `result` and `stop` fail with `not_found`.

@@ -382,7 +382,8 @@ public final class Automately {
                     security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls()));
             return vertx.deployVerticle(endpoint)
                     .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes,
-                            runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port())))
+                            runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port(),
+                            new automately.core.packages.PackageLoader(packages, config.packageCacheBytes()))))
                     .compose(id -> vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, config.heartbeat(),
                             config.orphanGrace(), config.requeueAfter())))
                     .compose(id -> vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler,

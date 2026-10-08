@@ -26,6 +26,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Packages, step 2: jobs import packages (2026-10-08)
+
+### Added
+- **Scripts import packages (D-087, D-089).** `import { slug } from 'strings'`, a subpath like `'strings/report'`, `@cluster/` packages, and `import('strings')` with a literal name all work in jobs and services. **Why:** this is what publishing packages was for.
+  - **Locked at submission:** the server reads the script's imports and resolves each package and its dependencies to exact versions. The lock is saved on the job (`packages`, shown in the API) and on a service's revision, so retries and restarts run the same code even after a newer version is published.
+  - **Child jobs** started with `jobs.run` inherit their parent's lock.
+  - **`"packages": false`** on a job refuses any package import.
+- **Refused at submission with the reason** (400 `unresolved_import`): unknown packages, unmet or conflicting version ranges, `import()` without a literal name (with its line), Node's own modules, and paths or URLs. **Why:** a job should fail when it's sent, not halfway through.
+- **Loaded before the script runs (D-089).** The node fetches every file in the lock and checks it against its SHA-256 before making the isolate. Checked files stay in a per-node cache, `AUTOMATELY_PACKAGE_CACHE_MB` (64 by default). A corrupt or missing file fails the attempt before any code runs. There's a new `automately.packages.load` timer.
+
+### Fixed
+- **A script that throws while loading** (at the top level, or in a module it imports) now fails with that error and its stack. Before, it failed with a confusing "Cannot access … before initialization". **Top-level `await`** is now waited for properly. **Why:** the module's evaluation promise was being ignored (found in the step 2 spike).
+
+### Changed
+- **`import()` and `import.meta.url` now work** in the isolate (Javet supports neither). Each module's source is rewritten as it loads, keeping its line numbers. **The trade-off:** a module loaded with `import('x')` is evaluated up front with the others, rather than when the call runs.
+
 ## Packages, step 1: the store and publishing (2026-10-08)
 
 ### Added

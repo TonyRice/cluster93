@@ -65,7 +65,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             + "closeSync, lock, promises, constants";
     private static final String FS_PROMISES_NAMES = "readFile, writeFile, appendFile, mkdir, readdir, stat, lstat, access, rename, copyFile, rm, rmdir, unlink, open";
 
-    /** Modules a script can import (D-079); everything else is refused until packages exist. */
+    /** Modules the isolate provides itself (D-079); their names are {@link automately.core.packages.Imports#BUILT_INS}. */
     static final java.util.Map<String, String> BUILT_IN_MODULES = java.util.Map.of(
             "automately:fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;",
             "fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;",
@@ -267,14 +267,27 @@ public final class JavetScriptRuntime implements ScriptRuntime {
     }
 
     private ExecutionResult invokeModule(V8Runtime v8, Execution execution, Control control) throws JavetException {
-        // The few modules a script may import so far: the file system, under its own name and Node's (D-079).
-        v8.setV8ModuleResolver((runtime, name, referrer) -> BUILT_IN_MODULES.containsKey(name)
-                ? runtime.getExecutor(BUILT_IN_MODULES.get(name)).setResourceName(name).compileV8Module()
-                : null);
+        // Built-ins (D-079) and the job's packages (D-089), all already in memory.
+        v8.setV8ModuleResolver(new ModuleResolver(execution.packages(), BUILT_IN_MODULES));
         try (V8ValueObject prelude = v8.getExecutor(PRELUDE).setResourceName("automately:prelude").execute();
              ScriptEntryPoints js = new ScriptEntryPoints(v8, prelude);
-             V8Module module = v8.getExecutor(execution.script()).setResourceName("job.mjs").compileV8Module()) {
-            module.executeVoid();
+             V8Module module = v8.getExecutor(automately.core.packages.Imports.rewrite(execution.script(), ModuleResolver.JOB_URL))
+                     .setResourceName(ModuleResolver.JOB).compileV8Module()) {
+            // Evaluating a module answers a promise: it rejects if the module (or one it imports) throws, and settles
+            // later if one awaits at the top level.
+            try (V8Value evaluated = module.execute(true)) {
+                if (evaluated instanceof V8ValuePromise loading) {
+                    ExecutionResult early = runLoop(v8, loading, js, execution, control);
+                    if (early != null) {
+                        return early;
+                    }
+                    if (loading.isRejected()) {
+                        try (V8Value error = loading.getResult()) {
+                            return ExecutionResult.failed(describe(error));
+                        }
+                    }
+                }
+            }
             try (V8ValueObject namespace = (V8ValueObject) module.getNamespace();
                  V8Value entry = namespace.get("default")) {
                 if (!(entry instanceof V8ValueFunction fn)) {
@@ -293,6 +306,14 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 }
             }
         }
+    }
+
+    /** An error as the script would print it: its stack if it has one (which names the module and line), else its text. */
+    private static String describe(V8Value error) throws JavetException {
+        if (error instanceof com.caoccao.javet.values.reference.V8ValueError e && e.getStack() != null) {
+            return e.getStack();
+        }
+        return error == null ? "The script failed to load" : error.toString();
     }
 
     /**
