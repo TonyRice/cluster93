@@ -340,6 +340,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/scripting/job-context.md](docs/scripting/job-context.md): the job context API for scripts (attempts, steps, checkpoints)
 - [docs/scripting/services.md](docs/scripting/services.md): services, timers and cancellation
 - [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus` and queues, `fetch`, `log`, `files`, and serving HTTP
+- [docs/scripting/node-compat.md](docs/scripting/node-compat.md): Node compatibility in the isolate: every stand-in module and global, with its limits and differences from Node
 - [docs/guides/cli.md](docs/guides/cli.md): installing and using the CLI
 - [docs/guides/mcp.md](docs/guides/mcp.md): connecting AI agents over MCP
 - [docs/guides/callbacks.md](docs/guides/callbacks.md): receiving a job's result as a signed POST when it ends

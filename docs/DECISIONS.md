@@ -1678,3 +1678,19 @@ Everything is on the JVM's providers.
     - `createECDH` with fixed private keys in every point format
     - `diffieHellman`
   - **Standards:** RFC 7748's X25519 vectors.
+
+### D-105 — One reference for Node compatibility, and `console` completed
+**Date:** 2026-10-08 · **Status:** Accepted (Tony: "we should have documentation of all our polyfills with caveats")
+
+**Decision:**
+- **The reference:** `docs/scripting/node-compat.md` is the single reference for what the isolate provides of Node. It covers:
+  - the rules every stand-in follows
+  - a status table of modules
+  - every global, present and absent (taken from the isolate itself, not from memory)
+  - for each module, what's there, what isn't, its limits and where it differs from Node
+  - what's refused and why
+  - what the bundler does
+  - how compatibility is verified
+  - all the known differences in one list
+- **Keeping it current:** a change to any stand-in updates this page, as well as the changelog and its decision.
+- **Writing it found a gap:** `console` had only `log`, `info`, `warn` and `error`, so a library calling `console.debug`, `console.time` or `console.group` threw. `console` now has `debug`, `dir`, `table`, `trace`, `assert`, `group`/`groupCollapsed`/`groupEnd` (indenting what follows), `time`/`timeLog`/`timeEnd` and `count`/`countReset`, all writing to the job's log. `table` and `dir` print JSON rather than a table.

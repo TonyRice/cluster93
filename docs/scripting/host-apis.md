@@ -2,6 +2,8 @@
 
 **Status:** Implemented in phase 3 (2026-10-06). Design: [../design/host-apis.md](../design/host-apis.md).
 
+For Node's modules in the isolate (`crypto`, `stream`, `zlib`, `buffer`, …), with every limit and difference from Node, see [Node compatibility](node-compat.md).
+
 Everything here is scoped to your tenant automatically: keys, topics and hosts can't collide with another tenant's. Every call returns a promise. Failures reject with an `Error` whose `name` is `TypeError`, `RangeError`, `TimeoutError` or `Error`, and whose `code` says why (for example `egress_denied`, `limit_exceeded`, `no_handler`).
 
 ## `kv`: key-value storage

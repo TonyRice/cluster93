@@ -26,6 +26,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Node compatibility reference; `console` completed (2026-10-08)
+
+### Docs
+- **`docs/scripting/node-compat.md` (D-105):** every Node module and global the isolate provides, with each one's limits, caveats and differences from Node, what's refused and why, and how it's verified. **Why:** Tony asked for the polyfills to be documented entirely.
+
+### Fixed
+- **`console` lacked `debug`, `time`, `group`, `count`, `table`, `trace`, `assert` and `dir`,** so libraries calling them threw (D-105). They all write to the job's log now.
+
 ## Web Crypto's `subtle`, RSA encryption and ECDH (2026-10-08)
 
 ### Added

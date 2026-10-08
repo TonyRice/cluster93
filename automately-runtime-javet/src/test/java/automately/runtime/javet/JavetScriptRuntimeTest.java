@@ -123,6 +123,35 @@ class JavetScriptRuntimeTest {
         }
 
         @Test
+        void consoleHasTheMethodsLibrariesCall() throws Exception {
+            List<String> logs = new CopyOnWriteArrayList<>();
+            run("""
+                    export default () => {
+                      console.debug('details');
+                      console.dir({ a: 1 });
+                      console.trace('here');
+                      console.group('outer');
+                      console.count('x');
+                      console.count('x');
+                      console.groupEnd();
+                      console.assert(1 === 2, 'math');
+                      console.assert(true, 'fine');
+                      console.time('t');
+                      console.timeEnd('t');
+                      console.timeEnd('never');
+                    }
+                    """, new JsonObject(), Duration.ofSeconds(2), logs);
+
+            assertThat(logs).hasSize(9);
+            assertThat(logs.get(0)).isEqualTo("debug:details");
+            assertThat(logs.get(1)).isEqualTo("info:{\"a\":1}");
+            assertThat(logs.get(2)).startsWith("debug:here \n").contains("job.mjs");
+            assertThat(logs.subList(3, 9)).containsExactly("info:outer", "info:  x: 1", "info:  x: 2", "error:Assertion failed: math",
+                    logs.get(7), "warn:No such label 'never' for console.timeEnd()");
+            assertThat(logs.get(7)).matches("info:t: \\d+ms");
+        }
+
+        @Test
         void undefinedResultBecomesNull() throws Exception {
             ExecutionResult result = run("export default () => {}");
 
