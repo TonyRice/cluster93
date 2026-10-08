@@ -78,4 +78,45 @@ class S3BlobStoreTest extends BlobStoreContract {
                     .isInstanceOf(ExecutionException.class).cause().hasMessageContaining("Can't use s3://");
         }
     }
+
+    /**
+     * The gateway closes the connection after each download (Connection: close). A reader that pauses after every chunk,
+     * as a node forwarding to a slower client does, used to lose the end of the file about 2% of the time (D-081).
+     */
+    @Test
+    void aReaderThatPausesEveryChunkGetsTheWholeFile() throws Exception {
+        byte[] data = new byte[6 * 1024 * 1024];
+        new java.util.Random(4).nextBytes(data);
+        String id = write(data);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            for (int round = 0; round < 20; round++) {
+                List<java.util.concurrent.CompletableFuture<Integer>> reads = new java.util.ArrayList<>();
+                for (int i = 0; i < 6; i++) {
+                    automately.core.runtime.BodyStream stream = blobs.open(id, data.length, 0, data.length - 1);
+                    java.util.concurrent.CompletableFuture<Integer> done = new java.util.concurrent.CompletableFuture<>();
+                    io.vertx.core.buffer.Buffer received = io.vertx.core.buffer.Buffer.buffer();
+                    stream.handler(chunk -> {
+                        synchronized (received) {
+                            received.appendBuffer(chunk);
+                        }
+                        stream.pause();
+                        pool.submit(stream::resume);
+                    }, () -> {
+                        synchronized (received) {
+                            // Every byte, once, in order.
+                            done.complete(java.util.Arrays.equals(received.getBytes(), data) ? received.length() : -received.length());
+                        }
+                    }, done::completeExceptionally);
+                    stream.resume();
+                    reads.add(done);
+                }
+                for (java.util.concurrent.CompletableFuture<Integer> read : reads) {
+                    assertThat(read.get(60, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(data.length);
+                }
+            }
+        } finally {
+            pool.shutdown();
+        }
+    }
 }

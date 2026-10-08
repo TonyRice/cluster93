@@ -16,6 +16,8 @@ import java.util.regex.Pattern;
  */
 public final class FileResponder {
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(FileResponder.class);
+
     private static final Pattern RANGE = Pattern.compile("bytes=(\\d*)-(\\d*)");
 
     private FileResponder() {
@@ -93,6 +95,8 @@ public final class FileResponder {
             out.end();
             done.tryComplete();
         }, err -> {
+            // Once the headers are out, failing means cutting the connection; say why, or nobody can tell.
+            LOG.warn("Serving a file failed partway: {}", err.toString(), err.getCause() == null ? null : err.getCause());
             out.fail(500, String.valueOf(err.getMessage()));
             done.tryFail(err);
         });

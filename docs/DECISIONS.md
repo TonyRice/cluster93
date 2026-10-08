@@ -1115,3 +1115,28 @@ Also the CLI flow.
   - links: fetched without a token, tampered, stopped by a new version, revoked by rotation
 - `FileLocksTest`: expiry, takeover, renewal, per-tenant names, the TTL limit.
 - `ContractTest` (four operations) and the CLI.
+
+### D-081 — S3 downloads carry on where they stopped if the connection closes
+**Date:** 2026-10-08 · **Status:** Accepted. Resolves the intermittent parked in NOTES since 2026-10-07
+
+**Evidence:**
+- **Seen twice** in test runs: `StorageProvidersTest` lost the end of a 6 MB download from a tenant's S3 bucket, and the client saw "Connection was closed".
+- **Reproduced:** a node serving the file to 6 clients at once failed in 4 to 6 of 360 downloads, always partway and near the end (5.5 to 6.2 MB of 6.3 MB), 50 to 200 ms in.
+- **Ruled out:**
+  - **Idle connections:** there was no idle time.
+  - **Slow reading:** the gateway tolerates pauses of 35 s.
+  - **The pinned client:** it was fine.
+  - **Calling resume from another thread:** still failed when resumed on the response's own thread.
+- **The cause:**
+  - **The server closes early.** The S3 gateway sends `Connection: close` and closes as soon as it has sent the last byte.
+  - **The reader is still paused.** When that close arrives while some chunks are still buffered behind a pause, Vert.x reports the close as a failure and drops those chunks.
+  - **Why the node is exposed:** a node forwarding a file pauses its S3 response after every chunk, as backpressure towards a slower client. That's why direct downloads never failed and node downloads did.
+  - **Beyond the test gateway:** AWS keeps connections open, but other S3-compatible servers, or proxies in front of S3, may close like this.
+- **Diagnosis was slow** because the node cut the client's connection without saying why.
+
+**Decision:**
+- **Resume instead of failing.** A ranged S3 download (`ResumingRangeBody`) that closes or ends early asks for the rest with a new range request from the byte it reached, up to 3 times. Range GETs are safe to repeat. Chunks that arrive late from the closed response are ignored, so every byte is delivered once, in order. This is what AWS's own SDKs do.
+- **Log it.** `FileResponder` now logs a warning with the cause whenever a file fails after its headers have gone out.
+- **Streaming stays as it is.** Forwarding chunk by chunk, with backpressure, is what keeps a node from holding whole files in memory.
+
+**Tests:** `S3BlobStoreTest.aReaderThatPausesEveryChunkGetsTheWholeFile` reads 120 6 MB downloads that way, pausing on every chunk and resuming from another thread, and checks every byte. Before the fix it failed about 2% of reads. A throwaway node-level probe went from 4 to 6 failures in 360 to none.

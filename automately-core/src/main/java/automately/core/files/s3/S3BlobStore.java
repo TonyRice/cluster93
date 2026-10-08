@@ -59,10 +59,14 @@ public final class S3BlobStore implements BlobStore {
     @Override
     public BodyStream open(String blobId, long size, long start, long endInclusive) {
         long end = Math.min(endInclusive, size - 1);
-        return BodyStreams.lazy(end < start ? null : () -> s3.getRange(key(blobId), start, end)
+        if (end < start) {
+            return BodyStreams.lazy(null, () -> { });
+        }
+        // Carries on with a new range if the connection closes partway (D-081).
+        return new ResumingRangeBody(offset -> s3.getRange(key(blobId), start + offset, end)
                 .recover(err -> Future.failedFuture(err instanceof S3Client.S3Exception e && e.status() == 404
                         ? new IllegalStateException("File data is missing (it was replaced or deleted)")
-                        : unavailable(err))), () -> { });
+                        : unavailable(err))), end - start + 1);
     }
 
     /** The object, and any multipart upload of it that never finished (a node died mid-upload). */

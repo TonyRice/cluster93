@@ -26,6 +26,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Fixed: S3 downloads cut off near the end (2026-10-08)
+
+### Fixed
+- **Downloads from S3 sometimes lost their last few chunks** ("Connection was closed"), about 2% of the time when a node served them to a slower client (D-081).
+  - **Why:** the S3 server closed the connection as soon as it had sent the last byte, while the node, pausing for backpressure, still had chunks buffered. Vert.x reported that as a failure.
+  - **Now:** a download that closes or ends early carries on with a range request from the byte it reached, up to 3 times. Every byte is delivered once, in order.
+- **A file that fails after its headers have gone out is now logged with its cause.** Before, the client connection was cut without a word.
+
 ## The file system, part 5 — Handles, locks and public links (2026-10-07)
 
 ### Added
