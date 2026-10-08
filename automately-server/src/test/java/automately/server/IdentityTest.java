@@ -92,7 +92,7 @@ class IdentityTest {
 
         assertThat(call(HttpMethod.POST, bob, "/v1/jobs", job()).statusCode()).isEqualTo(202);
         assertThat(call(HttpMethod.PUT, bob, "/v1/secrets/x", new JsonObject().put("value", "v")).statusCode())
-                .as("developers use secrets but don't set them").isEqualTo(403);
+                .as("developers set secrets as well as use them").isEqualTo(201);
         assertThat(call(HttpMethod.POST, bob, "/v1/tokens", new JsonObject().put("name", "t").put("scopes", new JsonArray().add("jobs:read")))
                 .statusCode()).isEqualTo(403);
 
@@ -103,7 +103,7 @@ class IdentityTest {
         assertThat(call(HttpMethod.GET, bob, "/v1/jobs", null).statusCode()).isEqualTo(200);
 
         // Removed: every token of theirs stops.
-        assertThat(call(HttpMethod.DELETE, alice, "/v1/members/bert", null).statusCode()).isEqualTo(204);
+        assertThat(call(HttpMethod.DELETE, alice, "/v1/members/bert", null).statusCode()).isEqualTo(200);
         HttpResponse<Buffer> gone = call(HttpMethod.GET, bob, "/v1/jobs", null);
         assertThat(gone.statusCode()).isEqualTo(401);
     }
@@ -250,6 +250,87 @@ class IdentityTest {
         String operatorLog = call(HttpMethod.GET, TestAuth.ADMIN, "/v1/admin/audit?limit=1000", null).bodyAsString();
         assertThat(operatorLog).contains("createTenantInvite").contains("\"tenant\":\"audited\"");
         assertThat(call(HttpMethod.GET, TestAuth.bearer("someone-else-entirely"), "/v1/audit", null).bodyAsString()).doesNotContain("audrey");
+    }
+
+    @Test
+    void aRenamedUserKeepsEverything() throws Exception {
+        String alice = owner("renamed-co", "old-name");
+        owner("taken-co", "taken");
+
+        assertThat(call(HttpMethod.PATCH, alice, "/v1/me", new JsonObject().put("name", "taken")).statusCode()).isEqualTo(409);
+        HttpResponse<Buffer> renamed = call(HttpMethod.PATCH, alice, "/v1/me", new JsonObject().put("name", "new-name"));
+        assertThat(renamed.statusCode()).as(renamed.bodyAsString()).isEqualTo(200);
+
+        JsonObject whoami = call(HttpMethod.GET, alice, "/v1/whoami", null).bodyAsJsonObject();
+        assertThat(whoami.getString("user")).as("the same token, under the new name").isEqualTo("new-name");
+        assertThat(whoami.getBoolean("owner")).isTrue();
+        assertThat(call(HttpMethod.GET, alice, "/v1/members/new-name", null).statusCode()).isEqualTo(200);
+        assertThat(call(HttpMethod.GET, alice, "/v1/members/old-name", null).statusCode()).isEqualTo(404);
+
+        // The old name is free again; an operator can rename too.
+        assertThat(call(HttpMethod.PATCH, TestAuth.ADMIN, "/v1/users/new-name", new JsonObject().put("name", "old-name")).statusCode()).isEqualTo(200);
+        assertThat(call(HttpMethod.GET, alice, "/v1/whoami", null).bodyAsJsonObject().getString("user")).isEqualTo("old-name");
+    }
+
+    @Test
+    void twoOwnersRemovingEachOtherAtOnceLeaveOne() throws Exception {
+        String first = owner("raced", "racer-one");
+        String code = invite(first, new JsonObject().put("roles", new JsonArray().add("owner"))).getString("code");
+        String second = "Bearer " + redeem(code, "racer-two", null).bodyAsJsonObject().getJsonObject("token").getString("token");
+
+        for (int round = 0; round < 5; round++) {
+            Future<HttpResponse<Buffer>> a = client.request(HttpMethod.PUT, node.httpPort(), "localhost", "/v1/members/racer-two")
+                    .putHeader("Authorization", first).sendJsonObject(new JsonObject().put("roles", new JsonArray().add("viewer")));
+            Future<HttpResponse<Buffer>> b = client.request(HttpMethod.PUT, node.httpPort(), "localhost", "/v1/members/racer-one")
+                    .putHeader("Authorization", second).sendJsonObject(new JsonObject().put("roles", new JsonArray().add("viewer")));
+            await(Future.join(a, b));
+            JsonArray members = call(HttpMethod.GET, TestAuth.ADMIN, "/v1/tenants/raced/members", null).bodyAsJsonObject().getJsonArray("members");
+            long owners = members.stream().filter(m -> ((JsonObject) m).getBoolean("owner")).count();
+            assertThat(owners).as("round " + round + ": " + members.encode()).isEqualTo(1);
+            // Make both owners again for the next round, through whichever one still is.
+            String still = members.stream().map(JsonObject.class::cast).filter(m -> m.getBoolean("owner")).findFirst().orElseThrow().getString("user");
+            String other = still.equals("racer-one") ? "racer-two" : "racer-one";
+            assertThat(call(HttpMethod.PUT, still.equals("racer-one") ? first : second, "/v1/members/" + other,
+                    new JsonObject().put("roles", new JsonArray().add("owner"))).statusCode()).isEqualTo(200);
+        }
+    }
+
+    @Test
+    void serviceTokensOutliveTheirMakerButAreFlagged() throws Exception {
+        String alice = owner("flagged", "fiona");
+        String admin = join(alice, "adam", List.of("admin"), List.of());
+        JsonObject ci = call(HttpMethod.POST, admin, "/v1/tokens", new JsonObject().put("name", "ci").put("scopes", new JsonArray().add("jobs:write")))
+                .bodyAsJsonObject();
+        JsonObject listed = tokenNamed(alice, "ci");
+        assertThat(listed.getString("createdByName")).isEqualTo("adam");
+        assertThat(listed.getBoolean("makerGone")).isFalse();
+
+        HttpResponse<Buffer> removed = call(HttpMethod.DELETE, alice, "/v1/members/adam", null);
+        assertThat(removed.statusCode()).isEqualTo(200);
+        assertThat(removed.bodyAsJsonObject().getJsonArray("serviceTokens").getJsonObject(0).getString("id")).isEqualTo(ci.getString("id"));
+
+        assertThat(call(HttpMethod.POST, "Bearer " + ci.getString("token"), "/v1/jobs", job()).statusCode()).as("still works").isEqualTo(202);
+        assertThat(tokenNamed(alice, "ci").getBoolean("makerGone")).isTrue();
+    }
+
+    @Test
+    void theAuditChainVerifies() throws Exception {
+        String alice = owner("chained", "chen");
+        call(HttpMethod.POST, alice, "/v1/jobs", job());
+        JsonObject entry = call(HttpMethod.GET, alice, "/v1/audit?limit=1", null).bodyAsJsonObject().getJsonArray("entries").getJsonObject(0);
+        assertThat(entry.getString("chain")).startsWith("identity/");
+        assertThat(entry.getString("hash")).hasSize(64);
+
+        JsonObject verified = call(HttpMethod.GET, TestAuth.ADMIN, "/v1/admin/audit/verify", null).bodyAsJsonObject();
+        assertThat(verified.getBoolean("ok")).as(verified.encodePrettily()).isTrue();
+        assertThat(verified.getBoolean("keyed")).isTrue();
+        assertThat(verified.getLong("checked")).isPositive();
+        assertThat(call(HttpMethod.GET, alice, "/v1/admin/audit/verify", null).statusCode()).isEqualTo(403);
+    }
+
+    private static JsonObject tokenNamed(String bearer, String name) throws Exception {
+        return call(HttpMethod.GET, bearer, "/v1/tokens", null).bodyAsJsonObject().getJsonArray("tokens").stream().map(JsonObject.class::cast)
+                .filter(t -> t.getString("name").equals(name)).findFirst().orElseThrow();
     }
 
     @Test

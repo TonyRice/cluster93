@@ -37,8 +37,10 @@ final class IdentityRoutes {
     private final AuthStore authStore;
     private final Authenticator authenticator;
     private final SecureRandom random;
+    private final String secretsKey;
 
-    IdentityRoutes(Identity identity, AuditLog audit, AuthStore authStore, Authenticator authenticator, SecureRandom random) {
+    IdentityRoutes(Identity identity, AuditLog audit, AuthStore authStore, Authenticator authenticator, SecureRandom random, String secretsKey) {
+        this.secretsKey = secretsKey;
         this.identity = identity;
         this.audit = audit;
         this.authStore = authStore;
@@ -51,7 +53,7 @@ final class IdentityRoutes {
 
         router.get("/v1/me").handler(ctx -> respond(ctx, identity.me(principal(ctx).user()), 200));
         router.patch("/v1/me").handler(ctx -> withBody(ctx, body -> respond(ctx, identity.updateProfile(principal(ctx).user(),
-                body.getString("displayName"), body.getString("email")).map(User::toJson), 200)));
+                body.getString("name"), body.getString("displayName"), body.getString("email")).map(User::toJson), 200)));
         router.get("/v1/me/tokens").handler(ctx -> respond(ctx, identity.tokensOf(principal(ctx).user())
                 .map(all -> new JsonObject().put("tokens", new JsonArray(all.stream().map(ApiToken::toViewJson).toList()))), 200));
         router.post("/v1/me/tokens").handler(this::createMyToken);
@@ -62,7 +64,8 @@ final class IdentityRoutes {
         router.get("/v1/members/:user").handler(ctx -> respond(ctx, identity.member(tenant(ctx), ctx.pathParam("user")), 200));
         router.put("/v1/members/:user").handler(ctx -> withBody(ctx, body -> respond(ctx, identity.setMember(principal(ctx), tenant(ctx),
                 ctx.pathParam("user"), strings(body, "roles"), strings(body, "groups")), 200)));
-        router.delete("/v1/members/:user").handler(ctx -> done(ctx, identity.removeMember(principal(ctx), tenant(ctx), ctx.pathParam("user"))));
+        router.delete("/v1/members/:user").handler(ctx -> respond(ctx, identity.removeMember(principal(ctx), tenant(ctx), ctx.pathParam("user"))
+                .map(tokens -> left(ctx.pathParam("user"), tokens)), 200));
 
         router.get("/v1/roles").handler(ctx -> respond(ctx, identity.roles(tenant(ctx))
                 .map(all -> list("roles", all.stream().map(Access.Role::toJson).toList())), 200));
@@ -80,15 +83,19 @@ final class IdentityRoutes {
         router.post("/v1/invites").handler(ctx -> invite(ctx, tenant(ctx)));
         router.delete("/v1/invites/:id").handler(ctx -> removed(ctx, identity.deleteInvite(tenant(ctx), ctx.pathParam("id")), "No such invite"));
 
-        router.get("/v1/audit").handler(ctx -> page(ctx, (before, limit) -> audit.tenant(tenant(ctx), before, limit)));
+        // Only what happened since this tenant was created: an earlier tenant of the same name keeps its own history.
+        router.get("/v1/audit").handler(ctx -> authStore.tenant(tenant(ctx)).onFailure(ctx::fail).onSuccess(found ->
+                page(ctx, (before, limit) -> audit.tenant(tenant(ctx), found == null ? Long.MAX_VALUE : found.createdAt(), before, limit))));
 
         router.get("/v1/users").handler(ctx -> respond(ctx, identity.users().map(all -> list("users", all.stream().map(User::toJson).toList())), 200));
         router.get("/v1/users/:name").handler(ctx -> respond(ctx, identity.user(ctx.pathParam("name")).compose(user -> user == null
                 ? Future.failedFuture(new AuthFailure(404, "not_found", "No user named " + ctx.pathParam("name")))
                 : Future.succeededFuture(user.toJson())), 200));
         router.patch("/v1/users/:name").handler(ctx -> withBody(ctx, body -> respond(ctx, identity.updateUser(ctx.pathParam("name"),
-                body.getBoolean("disabled"), body.getBoolean("operator")).map(User::toJson), 200)));
-        router.delete("/v1/users/:name").handler(ctx -> done(ctx, identity.deleteUser(ctx.pathParam("name"))));
+                body.getString("name"), body.getBoolean("disabled"), body.getBoolean("operator")).map(User::toJson), 200)));
+        router.delete("/v1/users/:name").handler(ctx -> respond(ctx, identity.deleteUser(ctx.pathParam("name"))
+                .map(tokens -> left(ctx.pathParam("name"), tokens)), 200));
+        router.get("/v1/admin/audit/verify").handler(ctx -> respond(ctx, automately.core.audit.AuditVerifier.verify(audit, secretsKey), 200));
         router.post("/v1/admin/invites").handler(ctx -> invite(ctx, Identity.OPERATORS));
         router.get("/v1/admin/audit").handler(ctx -> page(ctx, audit::operators));
         router.get("/v1/tenants/:tenant/members").handler(ctx -> withTenant(ctx, tenant ->
@@ -106,9 +113,9 @@ final class IdentityRoutes {
             redeemed.onSuccess(result -> {
                 JsonObject token = result.getJsonObject("token");
                 // Public routes aren't audited on the way in, since nobody is known yet; this records who it became.
-                audit.record(new AuditEntry(AuditEntry.newId(System.currentTimeMillis(), random), System.currentTimeMillis(),
-                        result.getString("tenant"), result.getJsonObject("user").getString("name"), token.getString("id"),
-                        result.getBoolean("operator", false), "redeemInvite", "POST", ctx.request().path(), 201,
+                JsonObject user = result.getJsonObject("user");
+                audit.record(AuditEntry.of(System.currentTimeMillis(), random, result.getString("tenant"), user.getString("name"),
+                        user.getString("id"), token.getString("id"), result.getBoolean("operator", false), "redeemInvite", "POST", ctx.request().path(), 201,
                         ctx.request().remoteAddress() == null ? null : ctx.request().remoteAddress().hostAddress(),
                         ctx.request().getHeader("X-Forwarded-For")));
             });
@@ -176,6 +183,14 @@ final class IdentityRoutes {
                 then.accept(tenant.name());
             }
         });
+    }
+
+    /**
+     * Who was removed, and the service tokens they made: those keep working, since they belong to the tenant, so the
+     * answer lists them for the caller to keep or revoke (D-070).
+     */
+    private static JsonObject left(String user, List<JsonObject> serviceTokens) {
+        return new JsonObject().put("user", user).put("serviceTokens", new JsonArray(serviceTokens));
     }
 
     private static Principal principal(RoutingContext ctx) {

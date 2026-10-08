@@ -48,10 +48,12 @@ final class TokensCommand extends Base {
         tokens.path("tokens").forEach(t -> {
             List<String> scopes = new ArrayList<>();
             t.path("scopes").forEach(s -> scopes.add(s.asText()));
-            rows.add(List.of(Json.text(t, "id"), Json.text(t, "name"), String.join(",", scopes), Output.time(t, "createdAt"),
+            String by = !Json.text(t, "createdByName").isEmpty() ? Json.text(t, "createdByName") : Json.text(t, "createdBy");
+            String kind = !Json.text(t, "user").isEmpty() ? "personal" : t.path("makerGone").asBoolean() ? "service, maker left" : "service";
+            rows.add(List.of(Json.text(t, "id"), Json.text(t, "name"), kind, by, String.join(",", scopes), Output.time(t, "createdAt"),
                     Output.time(t, "expiresAt"), Output.time(t, "lastUsedAt")));
         });
-        Output.table(command.out(), List.of("ID", "NAME", "SCOPES", "CREATED", "EXPIRES", "LAST USED"), rows);
+        Output.table(command.out(), List.of("ID", "NAME", "KIND", "BY", "SCOPES", "CREATED", "EXPIRES", "LAST USED"), rows);
     }
 
     @Command(name = "create", description = "Mint a token for your tenant, with scopes your token also has. Prints the secret once.")

@@ -9,8 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Command(name = "users", description = "Operators: every user (D-070). Invite operators with: invites create --operator.",
-        subcommands = {UsersCommand.Ls.class, UsersCommand.Disable.class, UsersCommand.Enable.class, UsersCommand.Operator.class,
-                UsersCommand.Rm.class})
+        subcommands = {UsersCommand.Ls.class, UsersCommand.Rename.class, UsersCommand.Disable.class, UsersCommand.Enable.class,
+                UsersCommand.Operator.class, UsersCommand.Rm.class})
 final class UsersCommand extends Base {
 
     @Override
@@ -18,8 +18,14 @@ final class UsersCommand extends Base {
         return Ls.list(this);
     }
 
-    static int update(Base command, String user, String field, boolean value, String done) {
-        JsonNode updated = command.api().patch("/v1/users/" + Api.segment(user), Json.object().put(field, value));
+    static int update(Base command, String user, String field, Object value, String done) {
+        var body = Json.object();
+        if (value instanceof Boolean flag) {
+            body.put(field, flag);
+        } else {
+            body.put(field, String.valueOf(value));
+        }
+        JsonNode updated = command.api().patch("/v1/users/" + Api.segment(user), body);
         if (!command.printedJson(updated)) {
             command.out().println(done);
         }
@@ -43,6 +49,20 @@ final class UsersCommand extends Base {
                     u.path("operator").asBoolean() ? "yes" : "", u.path("disabled").asBoolean() ? "disabled" : "", Output.time(u, "createdAt"))));
             Output.table(command.out(), List.of("USER", "NAME", "EMAIL", "OPERATOR", "STATUS", "CREATED"), rows);
             return 0;
+        }
+    }
+
+    @Command(name = "rename", description = "Change a user's name. Their memberships, tokens and history follow.")
+    static final class Rename extends Base {
+        @Parameters(index = "0", paramLabel = "USER")
+        String user;
+
+        @Parameters(index = "1", paramLabel = "NEW_NAME")
+        String name;
+
+        @Override
+        int execute() {
+            return update(this, user, "name", name, "Renamed " + user + " to " + name);
         }
     }
 
@@ -89,8 +109,7 @@ final class UsersCommand extends Base {
 
         @Override
         int execute() {
-            api().delete("/v1/users/" + Api.segment(user));
-            out().println("Deleted " + user);
+            MembersCommand.printLeft(this, api().delete("/v1/users/" + Api.segment(user)));
             return 0;
         }
     }

@@ -37,7 +37,9 @@ Automately runs other people's code. This page describes who is trusted, what ea
   - Nobody grants more than their own scopes cover, before and after the change.
   - Only owners grant `owner`, and a tenant keeps its last owner.
 - **Operators** are named users with the admin token's powers, and no more: they still can't read tenant data. Use them instead of sharing the admin token.
-- **The audit log:** every change and every refused attempt is recorded with who, when and from where. Tenants see their own; operators see the cluster's and everything operators did. It's kept 90 days, and isn't tamper-evident yet.
+- **The audit log:** every change and every refused attempt is recorded with who, when and from where. Tenants see their own; operators see the cluster's and everything operators did. It's kept 90 days.
+  - **Tamper evidence (D-072):** each node chains its entries with an HMAC keyed by `AUTOMATELY_SECRETS_KEY`, and `automately audit verify` finds changed, removed or relinked entries.
+  - **Export (D-073):** set `AUTOMATELY_AUDIT_S3_BUCKET` to copy the log out of the cluster. That's the record someone with database access can't rewrite, including its newest entries.
 
 **API access** (D-044 to D-046, D-050, D-051):
 - **Tokens.** Every `/v1` call needs a bearer token. Tokens are 256-bit random with a checksum and a scanner-friendly `atly_` prefix. Only their SHA-256 is stored, and revocation takes effect on the next request.
@@ -92,4 +94,5 @@ Automately runs other people's code. This page describes who is trusted, what ea
 - [ ] `AUTOMATELY_EGRESS_ALLOW_PRIVATE` is left off in production.
 - [ ] Tenant tokens are scoped to what each client needs, with expiry for CI tokens.
 - [ ] People use their own users (invites), and operators their own operator users; the admin token is kept for emergencies.
+- [ ] The audit log is exported (`AUTOMATELY_AUDIT_S3_BUCKET`) to a bucket the cluster's operators can't delete from (object lock or a separate account), and node clocks are kept in sync.
 - [ ] `AUTOMATELY_DATA_DIR` is on durable storage and backed up (the cluster replicates, but a backup protects against operator error).

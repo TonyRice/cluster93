@@ -78,7 +78,9 @@ public record ServerConfig(
         Path tlsDirectory,
         String join,
         Duration clusterJoinTimeout,
-        Duration auditRetention) {
+        Duration auditRetention,
+        automately.core.files.s3.S3Settings auditS3,
+        Duration auditExportInterval) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
 
@@ -152,7 +154,10 @@ public record ServerConfig(
                 blankToNull(env.get("AUTOMATELY_JOIN")),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS", "60000"))),
                 // How long audit entries are kept (D-071).
-                Duration.ofDays(Long.parseLong(env.getOrDefault("AUTOMATELY_AUDIT_RETENTION_DAYS", "90").trim())));
+                Duration.ofDays(Long.parseLong(env.getOrDefault("AUTOMATELY_AUDIT_RETENTION_DAYS", "90").trim())),
+                // Where the audit log is copied, outside the cluster (D-073); null keeps it in the cluster only.
+                automately.core.files.s3.S3Settings.auditFromEnv(env),
+                Duration.ofSeconds(Long.parseLong(env.getOrDefault("AUTOMATELY_AUDIT_EXPORT_INTERVAL_S", "300").trim())));
     }
 
     private static boolean clusterTlsRequired(String value) {

@@ -18,6 +18,7 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
@@ -27,7 +28,8 @@ import java.util.regex.Pattern;
 /**
  * Users, memberships, roles, groups and invites (D-070): who a personal token belongs to, and what they may do now.
  * Every change follows one rule against escalation: a caller grants only what they hold themselves, covering both the
- * old and the new; only owners (and operators) grant or remove {@code owner}; a tenant keeps at least one owner.
+ * old and the new; only owners (and operators) grant or remove {@code owner}; a tenant keeps at least one owner, which
+ * the tenant's access document guards atomically. Users are stored by an id that never changes, so names can.
  * Failures are {@link AuthFailure}s carrying the HTTP status and code to answer with.
  */
 public final class Identity {
@@ -36,11 +38,12 @@ public final class Identity {
     public static final String OPERATORS = "@operators";
 
     public static final Records.Kind USERS = new Records.Kind("USERS", List.of());
+    public static final Records.Kind USER_NAMES = new Records.Kind("USER_NAMES", List.of());
     public static final Records.Kind MEMBERS = new Records.Kind("MEMBERS", List.of("tenant", "user"));
     public static final Records.Kind ACCESS = new Records.Kind("TENANT_ACCESS", List.of());
     public static final Records.Kind INVITES = new Records.Kind("INVITES", List.of("tenant", "id"));
     /** Every collection identity keeps, for stores that create tables up front. */
-    public static final List<Records.Kind> KINDS = List.of(USERS, MEMBERS, ACCESS, INVITES);
+    public static final List<Records.Kind> KINDS = List.of(USERS, USER_NAMES, MEMBERS, ACCESS, INVITES);
 
     public static final String USER_RULE = "lowercase letters, digits, '_' and '-', up to 39 characters, starting with a letter or digit";
     public static final String NAME_RULE = "lowercase letters, digits, '_' and '-', up to 63 characters, starting with a letter or digit";
@@ -58,6 +61,7 @@ public final class Identity {
     private static final String INVITE_GONE = "No such invite: it was used, withdrawn or expired";
 
     private final Records users;
+    private final Records names;
     private final Records members;
     private final Records access;
     private final Records invites;
@@ -71,6 +75,7 @@ public final class Identity {
 
     public Identity(Records.Factory records, AuthStore tokens, LongSupplier clock) {
         this.users = records.open(USERS);
+        this.names = records.open(USER_NAMES);
         this.members = records.open(MEMBERS);
         this.access = records.open(ACCESS);
         this.invites = records.open(INVITES);
@@ -82,7 +87,7 @@ public final class Identity {
 
     /** Who a personal token acts as now: an operator, or a member with their current roles' scopes. Fails with 401. */
     public Future<Principal> resolve(ApiToken token) {
-        return user(token.user()).compose(user -> {
+        return userById(token.user()).compose(user -> {
             if (user == null) {
                 return Future.failedFuture(AuthFailure.unauthenticated("This token's user no longer exists"));
             }
@@ -91,94 +96,109 @@ public final class Identity {
             }
             if (OPERATORS.equals(token.tenant())) {
                 return user.operator()
-                        ? Future.succeededFuture(Principal.operator(user.name(), token.id()))
+                        ? Future.succeededFuture(Principal.operator(user.id(), user.name(), token.id()))
                         : Future.failedFuture(AuthFailure.unauthenticated(user.name() + " is no longer an operator"));
             }
-            return membership(token.tenant(), user.name()).compose(member -> {
+            return membership(token.tenant(), user.id()).compose(member -> {
                 if (member == null) {
                     return Future.failedFuture(AuthFailure.unauthenticated(user.name() + " is no longer a member of " + token.tenant()));
                 }
                 return access(token.tenant()).map(acc -> new Principal(false, token.tenant(),
-                        Roles.intersect(token.scopes(), Roles.scopes(member, acc)), token.id(), user.name(), member.owner()));
+                        Roles.intersect(token.scopes(), Roles.scopes(member, acc)), token.id(), user.id(), user.name(), member.owner()));
             });
         });
     }
 
     // ---- Users ----
 
-    /** Null if there's none. */
+    /** By name; null if there's none. */
     public Future<User> user(String name) {
-        return name == null ? Future.succeededFuture() : users.get(name).map(json -> json == null ? null : User.fromJson(json));
+        if (name == null) {
+            return Future.succeededFuture();
+        }
+        return names.get(name).compose(json -> json == null ? Future.succeededFuture() : userById(json.getString("id")))
+                .map(user -> user != null && user.name().equals(name) ? user : null);
+    }
+
+    /** By id; null if there's none. */
+    public Future<User> userById(String id) {
+        return id == null ? Future.succeededFuture() : users.get(id).map(json -> json == null ? null : User.fromJson(json));
     }
 
     public Future<List<User>> users() {
         return users.all().map(rows -> rows.stream().map(User::fromJson).sorted(Comparator.comparing(User::name)).toList());
     }
 
-    /** An operator enables, disables, or makes or unmakes an operator. Losing either takes effect on the next request. */
-    public Future<User> updateUser(String name, Boolean disabled, Boolean operator) {
-        return users.update(name, json -> {
-                    User user = User.fromJson(json);
-                    if (disabled != null) {
-                        user = user.withDisabled(disabled);
-                    }
-                    if (operator != null) {
-                        user = user.withOperator(operator);
-                    }
-                    return Optional.of(user.toJson());
-                })
-                .compose(updated -> updated.isEmpty() ? failed(notFound("No user named " + name)) : Future.succeededFuture(User.fromJson(updated.get())))
-                .compose(user -> user.operator() ? Future.succeededFuture(user) : revokeTokens(OPERATORS, name).map(user));
+    /**
+     * An operator renames, enables or disables a user, or makes or unmakes an operator. Losing either takes effect on
+     * the next request; a rename keeps everything, since memberships and tokens hold the user's id.
+     */
+    public Future<User> updateUser(String name, String newName, Boolean disabled, Boolean operator) {
+        return existing(name).compose(user -> (newName == null ? Future.succeededFuture(user) : rename(user, newName)).compose(renamed ->
+                users.update(renamed.id(), json -> {
+                            User current = User.fromJson(json);
+                            if (disabled != null) {
+                                current = current.withDisabled(disabled);
+                            }
+                            if (operator != null) {
+                                current = current.withOperator(operator);
+                            }
+                            return Optional.of(current.toJson());
+                        })
+                        .map(updated -> User.fromJson(updated.orElseThrow()))
+                        .compose(updated -> updated.operator() ? Future.succeededFuture(updated) : revokeTokens(OPERATORS, updated.id()).map(updated))));
     }
 
-    /** Deletes a user, their memberships and their personal tokens; refused while they're a tenant's last owner. */
-    public Future<Void> deleteUser(String name) {
-        return user(name).compose(user -> {
-            if (user == null) {
-                return failed(notFound("No user named " + name));
-            }
-            return memberships(name).compose(owned -> {
-                Future<Void> checks = Future.succeededFuture();
+    /**
+     * Deletes a user, their memberships and their personal tokens; refused while they're a tenant's last owner.
+     * Completes with the service tokens they made, which keep working, for the caller to decide about.
+     */
+    public Future<List<JsonObject>> deleteUser(String name) {
+        return existing(name).compose(user -> memberships(user.id()).compose(owned -> {
+            List<String> ownedTenants = owned.stream().filter(Member::owner).map(Member::tenant).toList();
+            return releaseOwnerships(ownedTenants, user.id()).compose(v -> {
+                Future<Void> removed = revokeTokens(OPERATORS, user.id());
                 for (Member member : owned) {
-                    if (member.owner()) {
-                        checks = checks.compose(v -> requireAnotherOwner(member.tenant(), name));
-                    }
+                    removed = removed.compose(v2 -> members.remove(member.key()).compose(x -> revokeTokens(member.tenant(), user.id())));
                 }
-                return checks.compose(v -> {
-                    Future<Void> removed = revokeTokens(OPERATORS, name);
-                    for (Member member : owned) {
-                        removed = removed.compose(v2 -> members.remove(member.key()).compose(x -> revokeTokens(member.tenant(), name)));
-                    }
-                    return removed.compose(v2 -> users.remove(name)).mapEmpty();
-                });
+                return removed.compose(v2 -> users.remove(user.id()))
+                        .compose(v2 -> names.remove(user.name()))
+                        .compose(v2 -> madeBy(owned.stream().map(Member::tenant).toList(), user.id()));
             });
-        });
+        }));
     }
 
     // ---- You ----
 
     /** A user, with each tenant they belong to and what they may do there. */
-    public Future<JsonObject> me(String name) {
-        return user(name).compose(user -> {
+    public Future<JsonObject> me(String id) {
+        return userById(id).compose(user -> {
             if (user == null) {
-                return failed(notFound("No user named " + name));
+                return failed(notFound("No such user"));
             }
-            return memberships(name).compose(owned -> {
-                List<Future<JsonObject>> views = owned.stream().map(this::memberView).toList();
+            return memberships(id).compose(owned -> {
+                List<Future<JsonObject>> views = owned.stream().map(m -> access(m.tenant()).map(acc -> view(m, user.name(), acc))).toList();
                 return Future.all(views).map(all -> user.toJson().put("memberships",
                         new JsonArray(views.stream().map(Future::result).toList())));
             });
         });
     }
 
-    public Future<User> updateProfile(String name, String displayName, String email) {
+    /** A user changes their own name, display name or email. */
+    public Future<User> updateProfile(String id, String newName, String displayName, String email) {
         try {
             checkProfile(displayName, email);
         } catch (AuthFailure e) {
             return Future.failedFuture(e);
         }
-        return users.update(name, json -> Optional.of(User.fromJson(json).withProfile(displayName, email).toJson()))
-                .compose(updated -> updated.isEmpty() ? failed(notFound("No user named " + name)) : Future.succeededFuture(User.fromJson(updated.get())));
+        return userById(id).compose(user -> {
+            if (user == null) {
+                return failed(notFound("No such user"));
+            }
+            return (newName == null ? Future.succeededFuture(user) : rename(user, newName)).compose(renamed ->
+                    users.update(id, json -> Optional.of(User.fromJson(json).withProfile(displayName, email).toJson()))
+                            .map(updated -> User.fromJson(updated.orElseThrow())));
+        });
     }
 
     /** A user's personal tokens, in every tenant (and as an operator). */
@@ -206,7 +226,7 @@ public final class Identity {
         }
         Future<Void> allowed;
         if (OPERATORS.equals(tenant)) {
-            allowed = user(caller.user()).compose(user -> user != null && user.operator() ? Future.succeededFuture()
+            allowed = userById(caller.user()).compose(user -> user != null && user.operator() ? Future.succeededFuture()
                     : failed(forbidden("Only operators can make operator tokens")));
         } else {
             allowed = membership(tenant, caller.user()).compose(member -> {
@@ -238,7 +258,7 @@ public final class Identity {
         }
     }
 
-    /** A new token (not yet saved). {@code user} is null for a service token. */
+    /** A new token (not yet saved). {@code user} is null for a service token; {@code createdBy} is the maker's id. */
     public Minted mint(String tenant, String name, Set<String> scopes, Long days, String user, String createdBy) {
         String trimmed = name == null ? "" : name.trim();
         if (trimmed.isEmpty() || trimmed.length() > 100) {
@@ -254,56 +274,112 @@ public final class Identity {
         return new Minted(token, secret);
     }
 
+    /**
+     * Tokens as the API shows them, with their maker's name, and {@code makerGone} for a service token whose maker is
+     * no longer an enabled member (or operator): it keeps working, but someone should decide about it.
+     */
+    public Future<List<JsonObject>> tokenViews(String tenant, List<ApiToken> list) {
+        Set<String> makers = new HashSet<>();
+        list.forEach(t -> {
+            if (isUserId(t.createdBy())) {
+                makers.add(t.createdBy());
+            }
+        });
+        Map<String, Future<JsonObject>> standing = new java.util.HashMap<>();
+        makers.forEach(id -> standing.put(id, standing(tenant, id)));
+        return Future.all(List.copyOf(standing.values())).map(all -> list.stream().map(token -> {
+            JsonObject view = token.toViewJson();
+            JsonObject maker = isUserId(token.createdBy()) ? standing.get(token.createdBy()).result() : null;
+            if (maker != null) {
+                view.put("createdByName", maker.getString("name"));
+                if (token.user() == null) {
+                    view.put("makerGone", !maker.getBoolean("active"));
+                }
+            }
+            return view;
+        }).toList());
+    }
+
+    /** {name, active}: whether a user still stands behind tokens they made in this tenant. */
+    private Future<JsonObject> standing(String tenant, String id) {
+        return userById(id).compose(user -> {
+            if (user == null) {
+                return Future.succeededFuture(new JsonObject().put("name", (String) null).put("active", false));
+            }
+            if (user.disabled()) {
+                return Future.succeededFuture(new JsonObject().put("name", user.name()).put("active", false));
+            }
+            return membership(tenant, id).map(member -> new JsonObject().put("name", user.name()).put("active", member != null || user.operator()));
+        });
+    }
+
+    /** The service tokens a user made in these tenants that still work. */
+    private Future<List<JsonObject>> madeBy(List<String> tenants, String user) {
+        List<Future<List<ApiToken>>> lists = tenants.stream().map(tokens::tokens).toList();
+        return Future.all(lists).map(all -> lists.stream().flatMap(f -> f.result().stream())
+                .filter(t -> t.user() == null && user.equals(t.createdBy()))
+                .map(ApiToken::toViewJson).toList());
+    }
+
     // ---- Members ----
 
     public Future<List<JsonObject>> members(String tenant) {
-        return members.where("tenant", tenant).compose(rows -> access(tenant).map(acc -> rows.stream().map(Member::fromJson)
-                .sorted(Comparator.comparing(Member::user)).map(m -> view(m, acc)).toList()));
+        return members.where("tenant", tenant).compose(rows -> access(tenant).compose(acc -> {
+            List<Member> all = rows.stream().map(Member::fromJson).toList();
+            List<Future<User>> found = all.stream().map(m -> userById(m.user())).toList();
+            return Future.all(found).map(v -> {
+                List<JsonObject> views = new ArrayList<>();
+                for (int i = 0; i < all.size(); i++) {
+                    User user = found.get(i).result();
+                    views.add(view(all.get(i), user == null ? null : user.name(), acc));
+                }
+                views.sort(Comparator.comparing(json -> String.valueOf(json.getString("user"))));
+                return views;
+            });
+        }));
     }
 
     /** One member, with what they may do now; fails 404 if they aren't one. */
-    public Future<JsonObject> member(String tenant, String user) {
-        return membership(tenant, user).compose(member -> member == null
-                ? failed(notFound(user + " isn't a member of " + tenant))
-                : memberView(member));
+    public Future<JsonObject> member(String tenant, String name) {
+        return memberNamed(tenant, name).compose(found -> access(tenant).map(acc -> view(found.member(), name, acc)));
     }
 
     /** Sets a member's direct roles and groups. New members come in through invites. */
-    public Future<JsonObject> setMember(Principal caller, String tenant, String user, List<String> roles, List<String> groups) {
-        return membership(tenant, user).compose(old -> {
-            if (old == null) {
-                return failed(notFound(user + " isn't a member of " + tenant + "; invite them"));
+    public Future<JsonObject> setMember(Principal caller, String tenant, String name, List<String> roles, List<String> groups) {
+        return memberNamed(tenant, name).compose(found -> access(tenant).compose(acc -> {
+            Member old = found.member();
+            checkGrants(roles, groups, acc);
+            Member next = old.with(distinct(roles), distinct(groups));
+            checkCovers(caller, Roles.union(Roles.scopes(old, acc), Roles.scopes(next, acc)));
+            if (old.owner() != next.owner() && !caller.ownerPowers()) {
+                throw forbidden("Only an owner can grant or remove " + Roles.OWNER);
             }
-            return access(tenant).compose(acc -> {
-                checkGrants(roles, groups, acc);
-                Member next = old.with(distinct(roles), distinct(groups));
-                checkCovers(caller, Roles.union(Roles.scopes(old, acc), Roles.scopes(next, acc)));
-                if (old.owner() != next.owner() && !caller.ownerPowers()) {
-                    throw forbidden("Only an owner can grant or remove " + Roles.OWNER);
-                }
-                Future<Void> owners = old.owner() && !next.owner() ? requireAnotherOwner(tenant, user) : Future.succeededFuture();
-                return owners.compose(v -> members.update(old.key(), json -> Optional.of(Member.fromJson(json).with(next.roles(), next.groups()).toJson())))
-                        .compose(updated -> updated.isEmpty() ? failed(notFound(user + " isn't a member of " + tenant))
-                                : Future.succeededFuture(view(Member.fromJson(updated.get()), acc)));
-            });
-        });
+            Future<Void> guard = old.owner() == next.owner() ? Future.succeededFuture()
+                    : next.owner() ? claimOwner(tenant, old.user()) : releaseOwner(tenant, old.user());
+            return guard.compose(v -> members.update(old.key(), json -> Optional.of(Member.fromJson(json).with(next.roles(), next.groups()).toJson()))
+                            .recover(err -> undoOwnerChange(tenant, old, next).compose(x -> Future.failedFuture(err))))
+                    .compose(updated -> updated.isEmpty()
+                            ? undoOwnerChange(tenant, old, next).compose(x -> failed(notFound(name + " isn't a member of " + tenant)))
+                            : access(tenant).map(now -> view(Member.fromJson(updated.get()), name, now)));
+        }));
     }
 
-    /** Removes a member, and deletes their personal tokens for this tenant. */
-    public Future<Void> removeMember(Principal caller, String tenant, String user) {
-        return membership(tenant, user).compose(old -> {
-            if (old == null) {
-                return failed(notFound(user + " isn't a member of " + tenant));
+    /**
+     * Removes a member, and deletes their personal tokens for this tenant. Completes with the service tokens they made
+     * here, which keep working, for the caller to decide about.
+     */
+    public Future<List<JsonObject>> removeMember(Principal caller, String tenant, String name) {
+        return memberNamed(tenant, name).compose(found -> access(tenant).compose(acc -> {
+            Member old = found.member();
+            checkCovers(caller, Roles.scopes(old, acc));
+            if (old.owner() && !caller.ownerPowers()) {
+                throw forbidden("Only an owner can remove an owner");
             }
-            return access(tenant).compose(acc -> {
-                checkCovers(caller, Roles.scopes(old, acc));
-                if (old.owner() && !caller.ownerPowers()) {
-                    throw forbidden("Only an owner can remove an owner");
-                }
-                Future<Void> owners = old.owner() ? requireAnotherOwner(tenant, user) : Future.succeededFuture();
-                return owners.compose(v -> members.remove(old.key())).compose(v -> revokeTokens(tenant, user));
-            });
-        });
+            Future<Void> guard = old.owner() ? releaseOwner(tenant, old.user()) : Future.succeededFuture();
+            return guard.compose(v -> members.remove(old.key()))
+                    .compose(v -> revokeTokens(tenant, old.user()))
+                    .compose(v -> madeBy(List.of(tenant), old.user()));
+        }));
     }
 
     // ---- Roles ----
@@ -356,8 +432,8 @@ public final class Identity {
                 return failed(notFound("No role named " + name));
             }
             checkCovers(caller, role.scopes());
-            return members.where("tenant", tenant).compose(rows -> {
-                List<String> holders = rows.stream().map(Member::fromJson).filter(m -> m.roles().contains(name)).map(Member::user).sorted().toList();
+            return members(tenant).compose(all -> {
+                List<String> holders = all.stream().filter(m -> m.getJsonArray("roles").contains(name)).map(m -> m.getString("user")).sorted().toList();
                 List<String> inGroups = acc.groups().values().stream().filter(g -> g.roles().contains(name)).map(Access.Group::name).sorted().toList();
                 if (!holders.isEmpty() || !inGroups.isEmpty()) {
                     return failed(conflict("The role " + name + " is still granted" + (holders.isEmpty() ? "" : " to " + holders)
@@ -370,15 +446,13 @@ public final class Identity {
 
     // ---- Groups ----
 
-    /** Each group with its roles and members. */
+    /** Each group with its roles and members (by name). */
     public Future<List<JsonObject>> groups(String tenant) {
-        return access(tenant).compose(acc -> members.where("tenant", tenant).map(rows -> {
-            List<Member> all = rows.stream().map(Member::fromJson).toList();
-            return acc.groups().values().stream().sorted(Comparator.comparing(Access.Group::name))
-                    .map(group -> group.toJson().put("members", new JsonArray(all.stream().filter(m -> m.groups().contains(group.name()))
-                            .map(Member::user).sorted().toList())))
-                    .toList();
-        }));
+        return access(tenant).compose(acc -> members(tenant).map(all -> acc.groups().values().stream()
+                .sorted(Comparator.comparing(Access.Group::name))
+                .map(group -> group.toJson().put("members", new JsonArray(all.stream()
+                        .filter(m -> m.getJsonArray("groups").contains(group.name())).map(m -> m.getString("user")).sorted().toList())))
+                .toList()));
     }
 
     /** Creates or changes a group's roles. Members join a group through their membership's {@code groups}. */
@@ -454,7 +528,7 @@ public final class Identity {
 
     /**
      * Invites someone to a tenant with these roles and groups, or, for {@link #OPERATORS} (operators only), to become
-     * an operator. {@code user}, if given, is who may redeem it: an existing user, or the name a new one will take.
+     * an operator. {@code user}, if given, is who may redeem it: an existing user's name, or the name a new one will take.
      */
     public Future<Created> invite(Principal caller, String tenant, List<String> roles, List<String> groups, String user, Integer days,
                                   String note) {
@@ -487,8 +561,10 @@ public final class Identity {
                 if (roles.contains(Roles.OWNER) && !caller.ownerPowers()) {
                     throw forbidden("Only an owner can invite an owner");
                 }
-                return user == null ? Future.succeededFuture() : membership(tenant, user).compose(existing -> existing != null
-                        ? failed(conflict(user + " is already a member of " + tenant)) : Future.succeededFuture());
+                return user == null ? Future.succeededFuture() : user(user).compose(existing -> existing == null
+                        ? Future.succeededFuture()
+                        : membership(tenant, existing.id()).compose(m -> m != null
+                                ? failed(conflict(user + " is already a member of " + tenant)) : Future.succeededFuture()));
             });
         }
         return allowed.compose(v -> invites.where("tenant", tenant)).compose(open -> {
@@ -513,7 +589,7 @@ public final class Identity {
     /**
      * Redeems an invite. Without a caller, a new user is created, named by the invite or by {@code name}. With one (a
      * personal token), the invite is added to that existing user. Either way the invite is used up, and the answer
-     * carries a new personal token for the tenant: {@code {user, tenant, operator, token}}.
+     * carries a new personal token for the tenant: {@code {user, tenant, operator, roles, groups, token}}.
      */
     public Future<JsonObject> redeem(String code, Principal caller, String name, String displayName, String email, String tokenName) {
         if (code == null || !TokenFormat.looksValid(code)) {
@@ -526,66 +602,74 @@ public final class Identity {
             if (invite == null || invite.expired(now)) {
                 return failed(notFound(INVITE_GONE));
             }
-            boolean existing = caller != null;
-            String target;
-            if (existing) {
-                if (caller.user() == null) {
-                    throw invalid("Redeem an invite with your own personal token, or with none to become a new user");
-                }
-                target = caller.user();
-                if (invite.user() != null && !invite.user().equals(target)) {
-                    throw forbidden("This invite is for the user " + invite.user());
-                }
-            } else {
+            if (caller != null && caller.user() == null) {
+                throw invalid("Redeem an invite with your own personal token, or with none to become a new user");
+            }
+            if (caller == null) {
                 if (name != null && invite.user() != null && !name.equals(invite.user())) {
                     throw invalid("This invite is for the user " + invite.user());
                 }
-                target = invite.user() != null ? invite.user() : name;
+                String target = invite.user() != null ? invite.user() : name;
                 if (target == null) {
                     throw invalid("Choose a user name: \"name\"");
                 }
                 checkUserName(target);
                 checkProfile(displayName, email);
+                return user(target).compose(existing -> {
+                    if (existing != null) {
+                        throw conflict("The user " + target + " already exists. If that's you, log in and redeem the invite with your token");
+                    }
+                    return claim(hash, json, invite, null, target, displayName, email, now, tokenName);
+                });
             }
-            boolean operators = OPERATORS.equals(invite.tenant());
-            return user(target).compose(user -> {
-                if (!existing && user != null) {
-                    throw conflict("The user " + target + " already exists. If that's you, log in and redeem the invite with your token");
+            return userById(caller.user()).compose(user -> {
+                if (invite.user() != null && !invite.user().equals(user.name())) {
+                    throw forbidden("This invite is for the user " + invite.user());
                 }
-                if (operators && user != null && user.operator()) {
-                    throw conflict(target + " is already an operator");
+                return claim(hash, json, invite, user, user.name(), null, null, now, tokenName);
+            });
+        });
+    }
+
+    /** Uses up the invite and joins {@code existing} (or a new user named {@code name}) to its tenant or the operators. */
+    private Future<JsonObject> claim(String hash, JsonObject stored, Invite invite, User existing, String name, String displayName, String email,
+                                     long now, String tokenName) {
+        boolean operators = OPERATORS.equals(invite.tenant());
+        if (operators && existing != null && existing.operator()) {
+            return failed(conflict(name + " is already an operator"));
+        }
+        Future<Member> already = operators || existing == null ? Future.succeededFuture() : membership(invite.tenant(), existing.id());
+        return already.compose(member -> {
+            if (member != null) {
+                throw conflict(name + " is already a member of " + invite.tenant());
+            }
+            return invites.remove(hash);
+        }).compose(claimed -> {
+            if (claimed == null) {
+                return failed(notFound(INVITE_GONE));
+            }
+            Future<User> user = existing != null ? Future.succeededFuture(existing)
+                    : createUser(name, displayName, email, now).recover(err -> restore(hash, stored).compose(v -> Future.failedFuture(err)));
+            return user.compose(joining -> {
+                Future<Void> joined;
+                if (operators) {
+                    joined = users.update(joining.id(), u -> Optional.of(User.fromJson(u).withOperator(true).toJson())).mapEmpty();
+                } else {
+                    Member member = new Member(invite.tenant(), joining.id(), invite.roles(), invite.groups(), now, invite.createdBy());
+                    joined = members.putIfAbsent(member.key(), member.toJson()).compose(stored2 -> stored2
+                            ? (member.owner() ? claimOwner(invite.tenant(), joining.id()) : Future.<Void>succeededFuture())
+                            : restore(hash, stored).compose(v -> failed(conflict(name + " is already a member of " + invite.tenant()))));
                 }
-                Future<Member> already = operators ? Future.succeededFuture() : membership(invite.tenant(), target);
-                return already.compose(member -> {
-                    if (member != null) {
-                        throw conflict(target + " is already a member of " + invite.tenant());
-                    }
-                    return invites.remove(hash);
-                }).compose(claimed -> {
-                    if (claimed == null) {
-                        return failed(notFound(INVITE_GONE));
-                    }
-                    Future<Void> created = existing ? Future.succeededFuture()
-                            : users.putIfAbsent(target, new User(target, displayName, email, false, false, now).toJson())
-                            .compose(stored -> stored ? Future.<Void>succeededFuture()
-                                    : restore(hash, claimed).compose(v -> failed(conflict("The user " + target + " already exists"))));
-                    Future<Void> joined = created.compose(v -> operators
-                            ? users.update(target, u -> Optional.of(User.fromJson(u).withOperator(true).toJson())).mapEmpty()
-                            : members.putIfAbsent(Member.key(invite.tenant(), target),
-                                    new Member(invite.tenant(), target, invite.roles(), invite.groups(), now, invite.createdBy()).toJson())
-                            .compose(stored -> stored ? Future.<Void>succeededFuture()
-                                    : restore(hash, claimed).compose(v2 -> failed(conflict(target + " is already a member of " + invite.tenant())))));
-                    return joined.compose(v -> {
-                        Minted minted = mint(invite.tenant(), tokenName == null || tokenName.isBlank() ? "login" : tokenName, Set.of(Scopes.ALL),
-                                null, target, target);
-                        return tokens.saveToken(minted.token()).compose(x -> user(target)).map(saved -> new JsonObject()
-                                .put("user", saved.toJson())
-                                .put("tenant", operators ? null : invite.tenant())
-                                .put("operator", operators)
-                                .put("roles", new JsonArray(invite.roles()))
-                                .put("groups", new JsonArray(invite.groups()))
-                                .put("token", minted.toJson()));
-                    });
+                return joined.compose(v -> {
+                    Minted minted = mint(invite.tenant(), tokenName == null || tokenName.isBlank() ? "login" : tokenName, Set.of(Scopes.ALL),
+                            null, joining.id(), joining.id());
+                    return tokens.saveToken(minted.token()).compose(x -> userById(joining.id())).map(saved -> new JsonObject()
+                            .put("user", saved.toJson())
+                            .put("tenant", operators ? null : invite.tenant())
+                            .put("operator", operators)
+                            .put("roles", new JsonArray(invite.roles()))
+                            .put("groups", new JsonArray(invite.groups()))
+                            .put("token", minted.toJson()));
                 });
             });
         });
@@ -605,12 +689,58 @@ public final class Identity {
 
     // ---- Helpers ----
 
-    private Future<Member> membership(String tenant, String user) {
-        return members.get(Member.key(tenant, user)).map(json -> json == null ? null : Member.fromJson(json));
+    private record Found(User user, Member member) {
     }
 
-    private Future<List<Member>> memberships(String user) {
-        return members.where("user", user).map(rows -> rows.stream().map(Member::fromJson).sorted(Comparator.comparing(Member::tenant)).toList());
+    /** The named user's membership of the tenant; fails 404 if they aren't a member. */
+    private Future<Found> memberNamed(String tenant, String name) {
+        return user(name).compose(user -> {
+            if (user == null) {
+                return failed(notFound(name + " isn't a member of " + tenant));
+            }
+            return membership(tenant, user.id()).compose(member -> member == null
+                    ? failed(notFound(name + " isn't a member of " + tenant))
+                    : Future.succeededFuture(new Found(user, member)));
+        });
+    }
+
+    private Future<User> existing(String name) {
+        return user(name).compose(user -> user == null ? failed(notFound("No user named " + name)) : Future.succeededFuture(user));
+    }
+
+    /** A new user with a fresh id, reserving the name first so two can't take it. */
+    private Future<User> createUser(String name, String displayName, String email, long now) {
+        User user = new User("usr_" + hex(8), name, displayName, email, false, false, now);
+        return names.putIfAbsent(name, new JsonObject().put("id", user.id()).put("name", name)).compose(reserved -> reserved
+                ? users.put(user.id(), user.toJson()).map(user)
+                : failed(conflict("The user " + name + " already exists")));
+    }
+
+    /** Takes the new name (it must be free), then gives up the old one. Memberships and tokens hold the id, so they follow. */
+    private Future<User> rename(User user, String newName) {
+        if (newName.equals(user.name())) {
+            return Future.succeededFuture(user);
+        }
+        try {
+            checkUserName(newName);
+        } catch (AuthFailure e) {
+            return Future.failedFuture(e);
+        }
+        return names.putIfAbsent(newName, new JsonObject().put("id", user.id()).put("name", newName)).compose(reserved -> {
+            if (!reserved) {
+                return failed(conflict("The name " + newName + " is taken"));
+            }
+            return users.update(user.id(), json -> Optional.of(User.fromJson(json).withName(newName).toJson()))
+                    .compose(updated -> names.remove(user.name()).map(User.fromJson(updated.orElseThrow())));
+        });
+    }
+
+    private Future<Member> membership(String tenant, String userId) {
+        return members.get(Member.key(tenant, userId)).map(json -> json == null ? null : Member.fromJson(json));
+    }
+
+    private Future<List<Member>> memberships(String userId) {
+        return members.where("user", userId).map(rows -> rows.stream().map(Member::fromJson).sorted(Comparator.comparing(Member::tenant)).toList());
     }
 
     private Future<Access> access(String tenant) {
@@ -624,19 +754,50 @@ public final class Identity {
                 .map(updated -> Access.fromJson(updated.orElse(null)));
     }
 
-    private Future<JsonObject> memberView(Member member) {
-        return access(member.tenant()).map(acc -> view(member, acc));
+    private Future<Void> claimOwner(String tenant, String user) {
+        return editAccess(tenant, acc -> acc.withOwner(user)).mapEmpty();
     }
 
-    private static JsonObject view(Member member, Access access) {
-        return member.toJson().put("scopes", new JsonArray(Roles.scopes(member, access).stream().sorted().toList())).put("owner", member.owner());
+    /** Atomically gives up ownership, refusing if it would leave the tenant without an owner. */
+    private Future<Void> releaseOwner(String tenant, String user) {
+        return editAccess(tenant, acc -> {
+            if (acc.owners().contains(user) && acc.owners().size() <= 1) {
+                throw conflict("This is the last owner of " + tenant + "; make someone else an owner first");
+            }
+            return acc.withoutOwner(user);
+        }).mapEmpty();
     }
 
-    private Future<Void> requireAnotherOwner(String tenant, String leaving) {
-        return members.where("tenant", tenant).compose(rows -> rows.stream().map(Member::fromJson)
-                .anyMatch(m -> m.owner() && !m.user().equals(leaving))
-                ? Future.succeededFuture()
-                : failed(conflict(leaving + " is the last owner of " + tenant + "; make someone else an owner first")));
+    /** Releases ownership of several tenants, putting back the ones already released if any can't be. */
+    private Future<Void> releaseOwnerships(List<String> tenants, String user) {
+        Future<List<String>> released = Future.succeededFuture(List.of());
+        for (String tenant : tenants) {
+            released = released.compose(done -> releaseOwner(tenant, user).map(v -> {
+                List<String> next = new ArrayList<>(done);
+                next.add(tenant);
+                return next;
+            }).recover(err -> {
+                Future<Void> undo = Future.succeededFuture();
+                for (String back : done) {
+                    undo = undo.compose(v -> claimOwner(back, user));
+                }
+                return undo.compose(v -> Future.failedFuture(err));
+            }));
+        }
+        return released.mapEmpty();
+    }
+
+    private Future<Void> undoOwnerChange(String tenant, Member old, Member next) {
+        if (old.owner() == next.owner()) {
+            return Future.succeededFuture();
+        }
+        return (old.owner() ? claimOwner(tenant, old.user()) : editAccess(tenant, acc -> acc.withoutOwner(old.user())).<Void>mapEmpty())
+                .recover(err -> Future.succeededFuture());
+    }
+
+    private static JsonObject view(Member member, String name, Access access) {
+        return member.toJson().put("userId", member.user()).put("user", name)
+                .put("scopes", new JsonArray(Roles.scopes(member, access).stream().sorted().toList())).put("owner", member.owner());
     }
 
     private Future<Void> revokeTokens(String tenant, String user) {
@@ -646,6 +807,10 @@ public final class Identity {
 
     private Future<Void> restore(String hash, JsonObject invite) {
         return invites.putIfAbsent(hash, invite).mapEmpty();
+    }
+
+    static boolean isUserId(String value) {
+        return value != null && value.startsWith("usr_");
     }
 
     private static void checkGrants(List<String> roles, List<String> groups, Access acc) {

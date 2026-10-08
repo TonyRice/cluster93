@@ -20,7 +20,8 @@ public final class IgniteStores {
             IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
             IgniteStorageConfigStore.POLICIES, IgniteStorageConfigStore.PROVIDERS, IgniteStorageConfigStore.ROUTES,
             IgniteQueueStore.TABLE, IgniteAuditLog.TABLE),
-            automately.core.identity.Identity.KINDS.stream().map(IgniteRecords::definition)).toList();
+            java.util.stream.Stream.concat(automately.core.identity.Identity.KINDS.stream(),
+                    java.util.stream.Stream.of(automately.core.audit.AuditExporter.STATE)).map(IgniteRecords::definition)).toList();
 
     public final JobStore jobs;
     public final JobStateStore state;

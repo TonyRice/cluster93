@@ -161,8 +161,8 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/v1/nodes").handler(this::listNodes);
         new McpRoutes(vertx, authenticator, limiter, () -> server.actualPort(), loopbackSecret).mount(router);
         new AuthRoutes(authStore, authenticator, identity, this::isEmpty, tenant -> storage.config().forget(tenant).compose(v -> secrets.forget(tenant))
-                .compose(v -> identity.forgetTenant(tenant)).compose(v -> audit.forget(tenant))).mount(router);
-        new IdentityRoutes(identity, audit, authStore, authenticator, auditIds).mount(router);
+                .compose(v -> identity.forgetTenant(tenant))).mount(router);
+        new IdentityRoutes(identity, audit, authStore, authenticator, auditIds, config.secretsKey()).mount(router);
         new StorageApi(storage, files, authStore, quota).mount(router);
         new FilesRoutes(files, quota, room).mount(router);
         new BusRoutes(vertx).mount(router);
@@ -375,9 +375,8 @@ public final class ApiVerticle extends VerticleBase {
         String forwarded = ctx.request().getHeader("X-Forwarded-For");
         ctx.addEndHandler(ended -> {
             long now = System.currentTimeMillis();
-            audit.record(new automately.core.audit.AuditEntry(automately.core.audit.AuditEntry.newId(now, auditIds), now, auditedTenant,
-                            principal.user(), principal.tokenId(), principal.admin(), rule.operationId(), method.name(), path,
-                            ctx.response().getStatusCode(), ip, forwarded))
+            audit.record(automately.core.audit.AuditEntry.of(now, auditIds, auditedTenant, principal.userName(), principal.user(),
+                            principal.tokenId(), principal.admin(), rule.operationId(), method.name(), path, ctx.response().getStatusCode(), ip, forwarded))
                     .onFailure(err -> LOG.warn("Couldn't record {} {} in the audit log: {}", method, path, err.getMessage()));
         });
     }

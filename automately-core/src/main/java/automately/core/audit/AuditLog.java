@@ -11,15 +11,18 @@ public interface AuditLog {
 
     Future<Void> record(AuditEntry entry);
 
-    /** A tenant's entries. */
-    Future<List<AuditEntry>> tenant(String tenant, String before, int limit);
+    /**
+     * A tenant's entries from {@code since} on. A deleted tenant's entries stay until they're pruned (taking them out
+     * would break the chains, D-072), so a new tenant with the same name asks only for those after it was created.
+     */
+    Future<List<AuditEntry>> tenant(String tenant, long since, String before, int limit);
 
     /** What operators see: entries without a tenant, and everything done as an operator or with the admin token. */
     Future<List<AuditEntry>> operators(String before, int limit);
 
-    /** Deletes entries from before {@code at}. */
-    Future<Void> prune(long at);
+    /** Every entry, oldest first, after the entry id {@code after} (or from the start): for verifying and exporting. */
+    Future<List<AuditEntry>> scan(String after, int limit);
 
-    /** Deletes a deleted tenant's entries. */
-    Future<Void> forget(String tenant);
+    /** Deletes entries from before {@code at}: only ever a chain's oldest, which verifying expects. */
+    Future<Void> prune(long at);
 }

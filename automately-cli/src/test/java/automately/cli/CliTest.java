@@ -398,17 +398,32 @@ class CliTest {
         config = pat;
 
         assertThat(cli("members").out()).contains("pat").contains("quinn").contains("readers");
-        assertThat(cli("members", "set", "quinn", "--role", "developer").code()).isZero();
+        assertThat(cli("members", "set", "quinn", "--role", "admin").code()).isZero();
         assertThat(cli("groups").out()).contains("readers").doesNotContain("quinn");
-        assertThat(cli("members", "rm", "quinn").code()).isZero();
+
+        // Quinn makes a CI token, renames themselves, and leaves: the token keeps working, flagged.
+        config = home.resolve("quinn");
+        assertThat(cli("tokens", "create", "ci", "--scope", "jobs:read").code()).isZero();
+        Result renamed = cli("profile", "--name", "quinn-r", "--display-name", "Quinn");
+        assertThat(renamed.code()).as(renamed.err()).isZero();
+        assertThat(renamed.out()).contains("quinn-r (Quinn)").contains("people");
+        config = pat;
+        Result removed = cli("members", "rm", "quinn-r");
+        assertThat(removed.code()).as(removed.err()).isZero();
+        assertThat(removed.err()).contains("still work").contains("ci");
+        assertThat(cli("tokens", "ls").out()).contains("service, maker left").contains("quinn-r");
         config = home.resolve("quinn");
         assertThat(cli("whoami").err()).as("removing a member deletes their tokens").contains("Unknown or revoked token");
         config = pat;
 
         assertThat(cli("audit").out()).contains("removeMember").contains("redeemInvite").contains("pat");
-        assertThat(cli("--url", url, "--token", ADMIN, "users").out()).contains("pat").contains("quinn");
+        assertThat(cli("--url", url, "--token", ADMIN, "users").out()).contains("pat").contains("quinn-r");
+        assertThat(cli("--url", url, "--token", ADMIN, "users", "rename", "quinn-r", "quinn").code()).isZero();
         assertThat(cli("--url", url, "--token", ADMIN, "users", "disable", "quinn").code()).isZero();
         assertThat(cli("--url", url, "--token", ADMIN, "audit", "--operators").out()).contains("createTenantInvite");
+        Result verified = cli("--url", url, "--token", ADMIN, "audit", "verify");
+        assertThat(verified.code()).as(verified.out()).isZero();
+        assertThat(verified.out()).contains("OK: nothing was changed or removed");
     }
 
     private static <T> T await(Future<T> future) throws Exception {

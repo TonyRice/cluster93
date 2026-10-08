@@ -297,13 +297,29 @@ public final class Automately {
         // Personal tokens act as their user, with what the user's roles give them now (D-070).
         automately.core.identity.Identity identity = new automately.core.identity.Identity(stores.records(), stores.auth());
         Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken(), identity::resolve);
-        // Each node prunes the audit log hourly; the deletes are idempotent, so overlapping is harmless (D-071).
-        vertx.setPeriodic(java.time.Duration.ofHours(1).toMillis(), id -> stores.audit().prune(System.currentTimeMillis() - config.auditRetention().toMillis())
-                .onFailure(err -> LOG.warn("Pruning the audit log failed: {}", err.getMessage())));
+        // Every entry this node records is chained, keyed with the secrets key when there is one (D-072).
+        automately.core.audit.AuditLog audit = new automately.core.audit.AuditChain(config.nodeId() + "/" + instanceId, config.secretsKey())
+                .sealing(stores.audit());
+        // The audit log is copied to a bucket outside the cluster when one is configured (D-073); one node at a time.
+        automately.core.audit.AuditExporter exporter = config.auditS3() == null ? null : new automately.core.audit.AuditExporter(vertx, audit,
+                stores.records().open(automately.core.audit.AuditExporter.STATE), new automately.core.files.s3.S3Client(vertx, config.auditS3()),
+                instanceId, config.auditExportInterval(), java.time.Duration.ofMinutes(1));
+        if (exporter != null) {
+            exporter.start();
+            LOG.info("The audit log is exported to {}", config.auditS3().describe());
+        }
+        // Each node prunes the audit log hourly; the deletes are idempotent, so overlapping is harmless (D-071). With an
+        // export, nothing is pruned before it has been copied out.
+        vertx.setPeriodic(java.time.Duration.ofHours(1).toMillis(), id -> {
+            long cutoff = System.currentTimeMillis() - config.auditRetention().toMillis();
+            (exporter == null ? Future.succeededFuture(cutoff) : exporter.exportedBefore().map(exported -> Math.min(exported, cutoff)))
+                    .compose(audit::prune)
+                    .onFailure(err -> LOG.warn("Pruning the audit log failed: {}", err.getMessage()));
+        });
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, tenantSecrets, identity, stores.audit(), limiter,
+                queues, callbackSecrets, tenantSecrets, identity, audit, limiter,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
                 () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.

@@ -37,9 +37,9 @@ public final class IgniteAuditLog implements AuditLog {
     }
 
     @Override
-    public Future<List<AuditEntry>> tenant(String tenant, String before, int limit) {
-        return table.queryJson("SELECT json FROM AUDIT WHERE tenant = ? AND _KEY < ? ORDER BY _KEY DESC LIMIT ?",
-                tenant, before == null ? END : before, Math.min(limit, MAX_PAGE)).map(rows -> rows.stream().map(AuditEntry::fromJson).toList());
+    public Future<List<AuditEntry>> tenant(String tenant, long since, String before, int limit) {
+        return table.queryJson("SELECT json FROM AUDIT WHERE tenant = ? AND at >= ? AND _KEY < ? ORDER BY _KEY DESC LIMIT ?",
+                tenant, since, before == null ? END : before, Math.min(limit, MAX_PAGE)).map(rows -> rows.stream().map(AuditEntry::fromJson).toList());
     }
 
     @Override
@@ -49,12 +49,14 @@ public final class IgniteAuditLog implements AuditLog {
     }
 
     @Override
+    public Future<List<AuditEntry>> scan(String after, int limit) {
+        return table.queryJson("SELECT json FROM AUDIT WHERE _KEY > ? ORDER BY _KEY LIMIT ?", after == null ? "" : after,
+                Math.min(limit, MAX_PAGE)).map(rows -> rows.stream().map(AuditEntry::fromJson).toList());
+    }
+
+    @Override
     public Future<Void> prune(long at) {
         return table.query("DELETE FROM AUDIT WHERE at < ?", at).mapEmpty();
     }
 
-    @Override
-    public Future<Void> forget(String tenant) {
-        return table.query("DELETE FROM AUDIT WHERE tenant = ?", tenant).mapEmpty();
-    }
 }

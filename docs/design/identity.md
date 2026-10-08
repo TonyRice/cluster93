@@ -35,7 +35,7 @@ Without people, access can't be taken away from someone who leaves either. Today
 |---|---|
 | `owner` | `*`, and owner powers: only owners grant or remove `owner`, and a tenant always keeps one |
 | `admin` | `*` |
-| `developer` | jobs, services, files, bus and queues (read and write), `secrets:read`, `secrets:use`, `nodes:read`, `storage:read`, `members:read` |
+| `developer` | jobs, services, files, bus and queues (read and write), `secrets:read`, `secrets:write` (D-074), `secrets:use`, `nodes:read`, `storage:read`, `members:read` |
 | `viewer` | every `:read` scope except `audit:read` |
 
 **New scopes:** `members:read`, `members:write` (members, roles, groups and invites) and `audit:read`.
@@ -106,9 +106,14 @@ A caller can only grant what they hold themselves.
 - **Resolving a personal token takes four reads by key:** the token, the user, the membership and the tenant's access document. No SQL runs per request.
 - **Identity logic is written once,** against a small `Records` interface (get, put, compare-and-set, list by an indexed field). That interface has an in-memory and an Ignite implementation, with one contract test for both.
 
+## Follow-ups (D-072 to D-074)
+- **Tamper evidence:** chained audit entries, keyed, with `GET /v1/admin/audit/verify`.
+- **Export:** to S3.
+- **Users:** stable ids and renames; developers set secrets.
+- **The owner guard:** atomic.
+- **Service tokens:** kept when their maker leaves, but flagged.
+
 ## Not in this step
 - **Sign-in:** passkeys, OIDC, sessions and cookies come with the console.
-- **Renaming users.**
-- **Audit export:** to S3, or to a SIEM.
+- **Audit export to a webhook:** S3 is done.
 - **Per-resource permissions:** for example, one service only. Links bring the first of these, their deployer lists.
-- **A known race:** two owners removing each other at the same moment could leave none. An operator can invite a new owner.

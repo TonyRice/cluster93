@@ -68,6 +68,7 @@ final class RouteScopes {
             rule("DELETE", "/v1/users/" + SEG, "deleteUser", Who.ADMIN, null),
             json("POST", "/v1/admin/invites", "createOperatorInvite", Who.ADMIN, null, SMALL),
             rule("GET", "/v1/admin/audit", "listOperatorAudit", Who.ADMIN, null),
+            rule("GET", "/v1/admin/audit/verify", "verifyAudit", Who.ADMIN, null),
             rule("GET", "/v1/tenants/" + SEG + "/members", "listTenantMembers", Who.ADMIN, null),
             json("POST", "/v1/tenants/" + SEG + "/invites", "createTenantInvite", Who.ADMIN, null, SMALL),
 

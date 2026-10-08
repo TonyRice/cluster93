@@ -5,7 +5,7 @@ import io.vertx.core.json.JsonObject;
 
 import java.util.List;
 
-/** A user's membership of a tenant (D-070): the roles granted to them directly, and the groups they're in. */
+/** A user's membership of a tenant (D-070): the roles granted to them directly, and the groups they're in. {@code user} is the user's id. */
 public record Member(String tenant, String user, List<String> roles, List<String> groups, long joinedAt, String invitedBy) {
 
     public Member {

@@ -25,8 +25,8 @@ public final class Roles {
         roles.put(ADMIN, new Access.Role(ADMIN, Set.of(Scopes.ALL), "Everything except owner powers", true));
         roles.put(DEVELOPER, new Access.Role(DEVELOPER, Set.of(Scopes.JOBS_READ, Scopes.JOBS_WRITE, Scopes.SERVICES_READ, Scopes.SERVICES_WRITE,
                 Scopes.FILES_READ, Scopes.FILES_WRITE, Scopes.BUS_PUBLISH, Scopes.BUS_REQUEST, Scopes.QUEUES_READ, Scopes.QUEUES_WRITE,
-                Scopes.SECRETS_READ, Scopes.SECRETS_USE, Scopes.NODES_READ, Scopes.STORAGE_READ, Scopes.MEMBERS_READ),
-                "Builds and runs things: jobs, services, files, bus and queues; scripts may use secrets but not set them", true));
+                Scopes.SECRETS_READ, Scopes.SECRETS_WRITE, Scopes.SECRETS_USE, Scopes.NODES_READ, Scopes.STORAGE_READ, Scopes.MEMBERS_READ),
+                "Builds and runs things: jobs, services, files, bus, queues and secrets", true));
         roles.put(VIEWER, new Access.Role(VIEWER, Set.of(Scopes.JOBS_READ, Scopes.SERVICES_READ, Scopes.FILES_READ, Scopes.QUEUES_READ,
                 Scopes.SECRETS_READ, Scopes.NODES_READ, Scopes.STORAGE_READ, Scopes.MEMBERS_READ),
                 "Reads everything except the audit log; changes nothing", true));

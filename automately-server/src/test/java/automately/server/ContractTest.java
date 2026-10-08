@@ -192,7 +192,7 @@ class ContractTest {
         String person = "Bearer " + redeemed.getJsonObject("token").getString("token");
         calls.check("listTenantMembers", "GET", "/v1/tenants/contract/members", admin, null);
         calls.check("getMe", "GET", "/v1/me", person, null);
-        calls.check("updateMe", "PATCH", "/v1/me", person, new JsonObject().put("displayName", "Casey"));
+        calls.check("updateMe", "PATCH", "/v1/me", person, new JsonObject().put("displayName", "Casey").put("name", "casey-c"));
         JsonObject laptop = calls.check("createMyToken", "POST", "/v1/me/tokens", person, new JsonObject().put("name", "laptop")).bodyAsJsonObject();
         calls.check("listMyTokens", "GET", "/v1/me/tokens", person, null);
         calls.check("revokeMyToken", "DELETE", "/v1/me/tokens/" + laptop.getString("id"), person, null);
@@ -216,6 +216,7 @@ class ContractTest {
         calls.check("listAudit", "GET", "/v1/audit?limit=5", person, null);
         calls.check("createOperatorInvite", "POST", "/v1/admin/invites", admin, new JsonObject().put("note", "a second operator"));
         calls.check("listOperatorAudit", "GET", "/v1/admin/audit?limit=5", admin, null);
+        calls.check("verifyAudit", "GET", "/v1/admin/audit/verify", admin, null);
         calls.check("listUsers", "GET", "/v1/users", admin, null);
         calls.check("getUser", "GET", "/v1/users/sam", admin, null);
         calls.check("updateUser", "PATCH", "/v1/users/sam", admin, new JsonObject().put("disabled", true));

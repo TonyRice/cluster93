@@ -1298,7 +1298,7 @@ paths:
     patch:
       operationId: updateMe
       tags: [identity]
-      summary: Change your display name or email
+      summary: Change your name, display name or email
       security:
         - bearer: []
       requestBody:
@@ -1308,6 +1308,7 @@ paths:
             schema:
               type: object
               properties:
+                name: { $ref: '#/components/schemas/UserName' }
                 displayName: { type: [string, 'null'], maxLength: 100 }
                 email: { type: [string, 'null'], maxLength: 254 }
       responses:
@@ -1414,7 +1415,16 @@ paths:
       security:
         - bearer: ['members:write']
       responses:
-        '204': { description: 'Removed.' }
+        '200':
+          description: Removed. Service tokens they made keep working (they belong to the tenant) and are listed here to keep or revoke.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, serviceTokens]
+                properties:
+                  user: { type: string }
+                  serviceTokens: { type: array, items: { $ref: '#/components/schemas/Token' } }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/roles:
@@ -1617,7 +1627,7 @@ paths:
     patch:
       operationId: updateUser
       tags: [admin]
-      summary: Disable or enable a user, or make or unmake an operator
+      summary: Rename, disable or enable a user, or make or unmake an operator
       security:
         - bearer: [admin]
       description: Disabling stops every token the user has on its next use; so does taking away operator, for operator tokens.
@@ -1628,6 +1638,7 @@ paths:
             schema:
               type: object
               properties:
+                name: { $ref: '#/components/schemas/UserName' }
                 disabled: { type: boolean }
                 operator: { type: boolean }
       responses:
@@ -1636,11 +1647,20 @@ paths:
     delete:
       operationId: deleteUser
       tags: [admin]
-      summary: Delete a user, their memberships and their tokens (not while they're a tenant's last owner)
+      summary: Delete a user, their memberships and their personal tokens (not while they're a tenant's last owner)
       security:
         - bearer: [admin]
       responses:
-        '204': { description: 'Deleted.' }
+        '200':
+          description: Removed. Service tokens they made keep working (they belong to the tenant) and are listed here to keep or revoke.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, serviceTokens]
+                properties:
+                  user: { type: string }
+                  serviceTokens: { type: array, items: { $ref: '#/components/schemas/Token' } }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/admin/invites:
@@ -1676,6 +1696,38 @@ paths:
         - $ref: '#/components/parameters/before'
       responses:
         '200': { $ref: '#/components/responses/AuditPage' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/admin/audit/verify:
+    get:
+      operationId: verifyAudit
+      tags: [admin, audit]
+      summary: Check every node's audit chain for changed, missing or relinked entries
+      security:
+        - bearer: [admin]
+      responses:
+        '200':
+          description: The result. A chain that starts after 1 was pruned at its start, which is expected.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, keyed, checked, chains, problems]
+                properties:
+                  ok: { type: boolean }
+                  keyed: { type: boolean, description: 'Checked with the secrets key (HMAC); without one, hashes are plain SHA-256.' }
+                  checked: { type: integer }
+                  unchained: { type: integer }
+                  chains: { type: array, items: { type: object } }
+                  problems:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        chain: { type: string }
+                        seq: { type: integer }
+                        id: { type: string }
+                        problem: { type: string }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/tenants/{tenant}/members:
@@ -2003,7 +2055,8 @@ components:
         admin: { type: boolean }
         tenant: { type: string }
         token: { type: [string, 'null'] }
-        user: { type: [string, 'null'], description: 'The user, for a personal token (D-070).' }
+        user: { type: [string, 'null'], description: "The user's name, for a personal token (D-070)." }
+        userId: { type: [string, 'null'] }
         owner: { type: boolean }
         scopes:
           type: array
@@ -2057,11 +2110,16 @@ components:
         expiresAt: { type: [integer, 'null'] }
         lastUsedAt: { type: [integer, 'null'] }
         user: { type: [string, 'null'], description: 'Set for a personal token: it acts as this user (D-070).' }
-        createdBy: { type: [string, 'null'], description: 'The user (or token) that made it.' }
+        createdBy: { type: [string, 'null'], description: "The id of the user (or token) that made it, or admin." }
+        createdByName: { type: [string, 'null'], description: "The maker's current name, when a user made it." }
+        makerGone:
+          type: boolean
+          description: A service token whose maker is no longer an enabled member. It keeps working; decide whether to keep it.
     User:
       type: object
-      required: [name, operator, disabled, createdAt]
+      required: [id, name, operator, disabled, createdAt]
       properties:
+        id: { type: string, description: 'Never changes, unlike the name.' }
         name: { type: string }
         displayName: { type: [string, 'null'] }
         email: { type: [string, 'null'] }
@@ -2073,7 +2131,8 @@ components:
       required: [tenant, user, roles, groups, scopes, owner, joinedAt]
       properties:
         tenant: { type: string }
-        user: { type: string }
+        user: { type: [string, 'null'], description: "The member's name." }
+        userId: { type: string }
         roles: { type: array, items: { type: string } }
         groups: { type: array, items: { type: string } }
         scopes: { type: array, items: { type: string }, description: 'What the member may do now, from their roles and groups.' }
@@ -2120,7 +2179,8 @@ components:
         actor:
           type: object
           properties:
-            user: { type: [string, 'null'] }
+            user: { type: [string, 'null'], description: "The user's name at the time." }
+            userId: { type: [string, 'null'] }
             token: { type: [string, 'null'] }
             operator: { type: boolean, description: 'Acting as an operator, or with the admin token.' }
         action: { type: string, description: 'The API operation.' }
@@ -2129,6 +2189,10 @@ components:
         status: { type: integer }
         ip: { type: [string, 'null'] }
         forwardedFor: { type: [string, 'null'], description: 'The X-Forwarded-For header as received; not verified.' }
+        chain: { type: [string, 'null'], description: "The recording node's chain (D-072)." }
+        seq: { type: integer }
+        prev: { type: [string, 'null'], description: 'The hash of the entry before it in its chain.' }
+        hash: { type: [string, 'null'], description: 'HMAC-SHA256 (with the secrets key) or SHA-256 of the rest of the entry.' }
     AuditPage:
       type: object
       required: [entries]

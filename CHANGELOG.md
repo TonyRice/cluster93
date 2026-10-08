@@ -26,6 +26,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Security groundwork, part 4b — Identity and audit follow-ups (2026-10-07)
+
+### Added
+- **The audit log is tamper-evident (D-072).**
+  - **The chain:** each node chains its entries, each carrying the previous entry's hash. The hash is keyed with `AUTOMATELY_SECRETS_KEY`, so someone with database access but without the key can't forge them.
+  - **Checking:** `GET /v1/admin/audit/verify` (`automately audit verify`) reports changed, missing or relinked entries.
+- **The audit log is exported to S3 (D-073).** Set `AUTOMATELY_AUDIT_S3_BUCKET`, and new entries go out as NDJSON every 5 minutes, one node at a time. Nothing is pruned before it's exported. **Why:** a copy outside the cluster, for SIEMs and as the anchor tamper evidence needs.
+- **Renaming users (D-074).** Users have a stable id, so `automately profile --name` (yourself) or `automately users rename` (operators) changes the name and everything follows.
+- **`automately profile`:** you, your tenants and what you may do in each.
+
+### Changed
+- **Developers can set secrets** (`secrets:write`), not just use them. **Why:** their scripts could already read every secret, so withholding it protected nothing.
+- **The last owner is guarded atomically.** Two owners removing each other at once can no longer leave a tenant with none.
+- **Removing a member, or deleting a user,** lists the service tokens they made. Those keep working, since they belong to the tenant. Token listings show who made each and flag `makerGone`.
+- **A deleted tenant's audit entries stay until pruned** instead of being deleted with it, since removing them would break the chains. A new tenant with the same name sees only its own.
+- **The API now answers with names:** `whoami` and member views give the user's name, alongside `userId`.
+
 ## Security groundwork, part 4 — Users, roles and the audit log (2026-10-07)
 
 ### Added

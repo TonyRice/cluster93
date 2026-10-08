@@ -20,8 +20,8 @@ public final class MemoryAuditLog implements AuditLog {
     }
 
     @Override
-    public Future<List<AuditEntry>> tenant(String tenant, String before, int limit) {
-        return page(e -> Objects.equals(tenant, e.tenant()), before, limit);
+    public Future<List<AuditEntry>> tenant(String tenant, long since, String before, int limit) {
+        return page(e -> Objects.equals(tenant, e.tenant()) && e.at() >= since, before, limit);
     }
 
     @Override
@@ -35,14 +35,15 @@ public final class MemoryAuditLog implements AuditLog {
     }
 
     @Override
+    public Future<List<AuditEntry>> scan(String after, int limit) {
+        NavigableMap<String, AuditEntry> newer = after == null ? entries : entries.tailMap(after, false);
+        return Future.succeededFuture(newer.values().stream().limit(Math.min(limit, MAX_PAGE)).toList());
+    }
+
+    @Override
     public Future<Void> prune(long at) {
         entries.values().removeIf(e -> e.at() < at);
         return Future.succeededFuture();
     }
 
-    @Override
-    public Future<Void> forget(String tenant) {
-        entries.values().removeIf(e -> tenant.equals(e.tenant()));
-        return Future.succeededFuture();
-    }
 }

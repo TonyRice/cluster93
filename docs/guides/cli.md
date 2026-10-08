@@ -72,8 +72,9 @@ The URL and token are saved in `~/.config/automately/config.json` (`%APPDATA%\au
 | `invites create --role R [--group G] [--user U]` · `invites ls · rm` | Invite people. The code is printed once. Operators: `--tenant T` (a first owner) or `--operator` |
 | `members · members set USER --role R --group G · members rm USER` | Who's in your tenant and what they may do |
 | `roles · roles set NAME --scope S · roles rm` · `groups · groups set NAME --role R · groups rm` | Your own roles and groups |
-| `audit [--limit N] [--before ID] [--operators]` | Who changed what, newest first |
-| `users · users disable · enable · operator [--remove] · rm` | Operators: every user |
+| `audit [--limit N] [--before ID] [--operators]` · `audit verify` | Who changed what, newest first · operators: check the audit chains for tampering |
+| `profile [--name N] [--display-name D] [--email E]` | You and your tenants; change your name or details |
+| `users · users rename OLD NEW · disable · enable · operator [--remove] · rm` | Operators: every user |
 | `tenants create · ls · rm · token · tokens · revoke · storage-policy` | Admin only |
 | `mcp` | The MCP stdio bridge for AI agents ([MCP guide](mcp.md)) |
 | `cluster init --nodes a,b,c [--host a=10.0.0.11]` | Operator: create the cluster's CA and a join line per node. `ca.key` stays with you ([cluster guide](cluster.md)) |

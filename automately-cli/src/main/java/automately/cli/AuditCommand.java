@@ -7,8 +7,25 @@ import picocli.CommandLine.Option;
 import java.util.ArrayList;
 import java.util.List;
 
-@Command(name = "audit", description = "Who changed what, newest first (D-071). Needs audit:read; --operators shows the cluster's log.")
+@Command(name = "audit", description = "Who changed what, newest first (D-071). Needs audit:read; --operators shows the cluster's log.",
+        subcommands = AuditCommand.Verify.class)
 final class AuditCommand extends Base {
+
+    @Command(name = "verify", description = "Operators: check every node's audit chain for changed, missing or relinked entries (D-072).")
+    static final class Verify extends Base {
+        @Override
+        int execute() {
+            JsonNode result = api().get("/v1/admin/audit/verify");
+            if (printedJson(result)) {
+                return result.path("ok").asBoolean() ? 0 : 1;
+            }
+            out().println("Checked " + Json.text(result, "checked") + " entries in " + result.path("chains").size() + " chains"
+                    + (result.path("keyed").asBoolean() ? ", with the secrets key." : ", without a secrets key (plain hashes)."));
+            result.path("problems").forEach(p -> out().println("  " + Json.text(p, "chain") + " #" + Json.text(p, "seq") + ": " + Json.text(p, "problem")));
+            out().println(result.path("ok").asBoolean() ? "OK: nothing was changed or removed." : "PROBLEMS FOUND.");
+            return result.path("ok").asBoolean() ? 0 : 1;
+        }
+    }
 
     @Option(names = "--limit", defaultValue = "50", paramLabel = "N", description = "How many (at most 1000).")
     int limit;

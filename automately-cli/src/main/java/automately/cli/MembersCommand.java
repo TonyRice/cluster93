@@ -17,6 +17,20 @@ final class MembersCommand extends Base {
         return new Ls().list(this, api().get("/v1/members"));
     }
 
+    /** Who was removed, and the service tokens they made, which keep working until someone revokes them. */
+    static void printLeft(Base command, JsonNode left) {
+        if (command.printedJson(left)) {
+            return;
+        }
+        command.out().println("Removed " + Json.text(left, "user"));
+        JsonNode tokens = left.path("serviceTokens");
+        if (!tokens.isEmpty()) {
+            command.err().println("Service tokens they made still work (they belong to the tenant). Keep them, or revoke with: automately tokens revoke ID");
+            tokens.forEach(t -> command.err().println("  " + Json.text(t, "id") + "  " + Json.text(t, "name") + "  " + joined(t.path("scopes"))
+                    + (Json.text(t, "tenant").isEmpty() ? "" : "  (" + Json.text(t, "tenant") + ")")));
+        }
+    }
+
     static String joined(JsonNode array) {
         List<String> values = new ArrayList<>();
         array.forEach(value -> values.add(value.asText()));
@@ -74,8 +88,7 @@ final class MembersCommand extends Base {
 
         @Override
         int execute() {
-            api().delete("/v1/members/" + Api.segment(user));
-            out().println("Removed " + user);
+            printLeft(this, api().delete("/v1/members/" + Api.segment(user)));
             return 0;
         }
     }

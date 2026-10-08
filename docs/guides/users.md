@@ -44,7 +44,7 @@ What the invitee runs depends on who they are:
 |---|---|
 | `owner` | Everything (`*`), and owner powers: only owners grant or remove `owner`, and a tenant always keeps one |
 | `admin` | Everything (`*`) |
-| `developer` | Jobs, services, files, bus and queues; scripts may use secrets (`secrets:use`) but developers don't set them; read nodes, storage and members |
+| `developer` | Jobs, services, files, bus, queues and secrets (set them, and scripts may use them); read nodes, storage and members |
 | `viewer` | Read everything except the audit log |
 
 Make your own from scopes, and put people in groups:
@@ -68,7 +68,19 @@ A personal token's scopes are worked out on **every request** from its user's cu
 - **Removing someone** from a tenant deletes their personal tokens for it.
 - **Disabling a user** (`automately users disable bob`, for operators) stops all of their tokens.
 
-**Service tokens** (`automately tokens create`) belong to the tenant, not a person, and keep their fixed scopes. Each records who made it. Revoke them yourself when someone leaves.
+**Service tokens** (`automately tokens create`) belong to the tenant, not a person, and keep their fixed scopes.
+- **Who made it:** each one records its maker.
+- **When the maker leaves:** removing them (or deleting their user) lists the service tokens they made, which keep working. `automately tokens ls` marks them "maker left". Keep them, or revoke them.
+
+## Your profile, and renaming
+
+```bash
+automately profile                                  # you, your tenants, and what you may do in each
+automately profile --name bobby --display-name "Bob" --email bob@example.com
+automately users rename bobby bob                   # operators
+```
+
+Memberships, tokens and the audit history hold your user's id, so they follow a rename.
 
 ## Several tenants
 
@@ -98,4 +110,12 @@ automately audit --operators     # the cluster's, and everything operators did
 - **Each entry:** the user and token, the API operation, the path, the status, the client address, and any `X-Forwarded-For` header.
 - **Not recorded:** reads, bus messages and queue pushes.
 
-**How long it lasts:** entries are kept for `AUTOMATELY_AUDIT_RETENTION_DAYS` (90 by default). Deleting a tenant deletes its log.
+**How long it lasts:** entries are kept for `AUTOMATELY_AUDIT_RETENTION_DAYS` (90 by default). A deleted tenant's entries stay until then too, and a new tenant with the same name sees only its own.
+
+**Tamper evidence:** each node chains its entries, with an HMAC keyed by `AUTOMATELY_SECRETS_KEY`. Operators check every chain with:
+
+```bash
+automately audit verify      # OK, or which entries were changed or removed
+```
+
+**Export:** set `AUTOMATELY_AUDIT_S3_BUCKET`, plus the usual S3 settings (see the README). The log is then copied out every 5 minutes as NDJSON files, to `audit/YYYY/MM/DD/` in the bucket. That copy is the record nobody inside the cluster can rewrite. Entries are only pruned after they've been exported.

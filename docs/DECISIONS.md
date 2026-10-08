@@ -855,3 +855,68 @@ Also `RecordsContract` (in memory and on Ignite, including a field named `user`)
 **Not yet:** export to S3 or a SIEM, and tamper evidence (hash-chaining entries).
 
 **Tests:** `AuditLogContract` (in memory and on Ignite: paging, the operator view, pruning, forgetting) and `IdentityTest` (what is and isn't recorded, actors, paging, who sees what).
+
+### D-072 — The audit log is tamper-evident; deleted tenants' entries stay until pruned
+**Date:** 2026-10-07 · **Status:** Accepted (Tony asked for tamper evidence). Extends D-071, and supersedes its "deleting a tenant deletes its log"
+
+**Decision:**
+- **Each node chains its own entries.** An entry carries the node's chain id (`<node>/<process instance>`), the next number in that chain, the previous entry's hash, and its own hash over all of that.
+  - **Keying:** with `AUTOMATELY_SECRETS_KEY` the hash is an HMAC-SHA256 under a key derived from it. Someone who can write to the database but doesn't hold the key can't forge a consistent chain. Without a key it's plain SHA-256, which still shows careless edits.
+  - **Why per node:** one chain for the whole cluster would make every write wait on every other.
+- **Checking:** `GET /v1/admin/audit/verify` (`automately audit verify`) reads every entry and reports any:
+  - whose contents don't match its hash
+  - that doesn't link to the one before
+  - number missing from the middle of a chain
+  A chain starting after 1 has been pruned at its start, which is expected.
+- **A deleted tenant's entries are no longer deleted with it.** They stay until normal retention prunes them, because removing them would punch holes in the chains, indistinguishable from tampering. That's also the better record when something went wrong. A new tenant that reuses the name sees only entries since it was created.
+
+**Limits:**
+- **The newest entries:** deleting entries at the very end of a chain isn't detectable from the chain alone. The export (D-073) is the outside copy that covers that.
+- **Failed writes:** a write that fails after its number was given shows up as a missing number.
+- **Rotating the secrets key** makes older entries fail verification.
+
+**Tests:**
+- `AuditChainTest`: an untouched log verifies; changed entries are found, as are missing ones; a pruned start isn't flagged; a forgery without the key fails.
+- `IdentityTest`: the server's chain verifies after a run of real changes, tenant deletion included.
+
+### D-073 — The audit log is exported to an S3 bucket
+**Date:** 2026-10-07 · **Status:** Accepted (Tony chose S3)
+
+**Decision:**
+- **Turning it on:** set `AUTOMATELY_AUDIT_S3_BUCKET`, and the cluster copies new entries there every `AUTOMATELY_AUDIT_EXPORT_INTERVAL_S` (300). The other settings are `AUTOMATELY_AUDIT_S3_ENDPOINT`, `_REGION`, `_PREFIX`, `_PATH_STYLE`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` and `_SESSION_TOKEN`. Each falls back to `AUTOMATELY_S3_*`, then the AWS variables.
+- **The files:** NDJSON, oldest first, at `<prefix>audit/YYYY/MM/DD/<first id>_<last id>.ndjson`. SIEMs ingest from S3.
+- **One node at a time:** a node holds a lease, a compare-and-set record that also keeps the cursor (the last entry exported). If that node dies, the lease runs out and another node continues.
+- **The settle window:** entries younger than a minute wait for the next round, so one recorded a moment late on another node isn't skipped. Node clocks must be kept in sync (NTP).
+- **Pruning waits for the export:** with an export, nothing is pruned before it has been copied out.
+- **It uses the S3 client already written for files (D-056).**
+
+**Tests:** `AuditExporterTest`, against a real S3 server in Docker:
+- entries go out once
+- recent ones wait
+- later rounds pick up new ones
+- only one node exports at a time
+
+### D-074 — Identity refinements: developers set secrets, renames, the owner guard, flagged service tokens
+**Date:** 2026-10-07 · **Status:** Accepted (Tony). Amends D-070
+
+**Decision:**
+- **`developer` gets `secrets:write`.** Withholding it protected nothing, since developers' scripts can already read every secret with `secrets:use`. It only got in the way.
+- **Users have a stable id** (`usr_…`) as well as a name.
+  - **What holds the id:** memberships, tokens and audit entries. The audit entry also keeps the name at the time.
+  - **Renaming:** `PATCH /v1/me {name}` (`automately profile --name`) or, for operators, `PATCH /v1/users/{name} {name}` (`automately users rename`). Everything follows.
+  - **Reserving names:** a name is held in its own record with put-if-absent, so two users can't take it at once.
+- **The last owner is guarded atomically.**
+  - The tenant's access document keeps the set of owners. Every grant or removal of `owner` goes through that document's compare-and-set, which refuses to empty it.
+  - This closes D-070's known race: two owners removing each other at once. `IdentityTest` runs that race five times and always keeps exactly one owner.
+- **Service tokens outlive their makers, flagged** (Tony's choice over tying them to their maker):
+  - **They keep working:** they belong to the tenant.
+  - **Removing a member, or deleting a user,** answers with the service tokens they made, to keep or revoke.
+  - **Token listings** show the maker's name and `makerGone` when the maker is no longer an enabled member.
+
+**Tests:** `IdentityTest`:
+- renaming, by the user and by an operator
+- the owner race
+- flagged tokens
+- developers setting secrets
+
+Also the CLI flow.

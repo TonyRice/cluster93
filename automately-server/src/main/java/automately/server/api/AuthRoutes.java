@@ -62,9 +62,9 @@ final class AuthRoutes {
     private void whoami(RoutingContext ctx) {
         Principal principal = ctx.get("principal");
         ctx.json(principal.admin()
-                ? new JsonObject().put("admin", true).put("user", principal.user()).put("token", principal.tokenId())
+                ? new JsonObject().put("admin", true).put("user", principal.userName()).put("userId", principal.user()).put("token", principal.tokenId())
                 : new JsonObject().put("admin", false).put("tenant", principal.tenant()).put("token", principal.tokenId())
-                        .put("user", principal.user()).put("owner", principal.owner())
+                        .put("user", principal.userName()).put("userId", principal.user()).put("owner", principal.owner())
                         .put("scopes", new JsonArray(principal.scopes().stream().sorted().toList())));
     }
 
@@ -111,8 +111,9 @@ final class AuthRoutes {
     }
 
     private void listTokens(RoutingContext ctx, String tenant) {
-        store.tokens(tenant).onFailure(ctx::fail)
-                .onSuccess(all -> ctx.json(new JsonObject().put("tokens", new JsonArray(all.stream().map(ApiToken::toViewJson).toList()))));
+        // Each with its maker's name, and flagged when its maker has left (D-070).
+        store.tokens(tenant).compose(all -> identity.tokenViews(tenant, all)).onFailure(ctx::fail)
+                .onSuccess(views -> ctx.json(new JsonObject().put("tokens", new JsonArray(views))));
     }
 
     /** {@code limit} is the minting token's scopes (a token can only mint narrower ones), or null for the admin. */
@@ -148,7 +149,7 @@ final class AuthRoutes {
         }
         // A service token: no user, fixed scopes, owned by the tenant; it records who made it (D-070).
         automately.core.identity.Identity.Minted minted = identity.mint(tenant, name, scopes, days == null ? null : ((Number) days).longValue(),
-                null, ctx.<Principal>get("principal").actor());
+                null, ctx.<Principal>get("principal").maker());
         store.saveToken(minted.token()).onFailure(ctx::fail).onSuccess(v -> {
             ctx.response().setStatusCode(201).putHeader("Cache-Control", "no-store");
             // The secret is shown once, here, and never again.

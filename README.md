@@ -134,7 +134,7 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `GET` · `PUT` · `DELETE` | `/v1/roles/{name}` · `/v1/groups/{name}` | Custom roles `{scopes}` and groups `{roles}` |
 | `GET` · `POST` · `DELETE` | `/v1/invites` | Invite `{roles, groups, user?, expiresInDays?}` (the code is returned once) · list · withdraw |
 | `GET` | `/v1/audit` | `audit:read`: who changed what, newest first (`?limit&before`) |
-| `GET` · `PATCH` · `DELETE` | `/v1/users/{name}` | *Admin.* Users: disable, make or unmake operators · `POST /v1/admin/invites` invites an operator · `GET /v1/admin/audit` |
+| `GET` · `PATCH` · `DELETE` | `/v1/users/{name}` | *Admin.* Users: rename, disable, make or unmake operators · `POST /v1/admin/invites` invites an operator · `GET /v1/admin/audit` · `GET /v1/admin/audit/verify` checks the audit chains |
 | `POST` · `GET` | `/v1/tenants/{name}/invites` · `…/members` | *Admin.* Invite a tenant's first owner · its members |
 | `GET` · `PUT` | `/v1/tenants/{name}/storage-policy` | *Admin.* Which storage provider types a tenant may use, its disk allotment, private endpoints |
 | `GET` | `/v1/storage` | `storage:read`: your quota, disk use, routes |
@@ -268,7 +268,9 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_MIN_FREE_DISK_MB` | `1024` | Durable nodes refuse writes (507) below this much free disk |
 | `AUTOMATELY_BASELINE_ADJUST_MS` | `60000` | How long a missing data node is waited for before its data is rebalanced |
 | `AUTOMATELY_JOB_RETENTION_DAYS` | `7` | Finished jobs older than this are deleted |
-| `AUTOMATELY_AUDIT_RETENTION_DAYS` | `90` | Audit entries older than this are deleted (D-071) |
+| `AUTOMATELY_AUDIT_RETENTION_DAYS` | `90` | Audit entries older than this are deleted (D-071), once exported if there's an export |
+| `AUTOMATELY_AUDIT_S3_BUCKET` · `_ENDPOINT` · `_REGION` · `_PREFIX` · `_ACCESS_KEY_ID` · `_SECRET_ACCESS_KEY` | | Export the audit log to this bucket as NDJSON (D-073); each falls back to `AUTOMATELY_S3_*` and `AWS_*` |
+| `AUTOMATELY_AUDIT_EXPORT_INTERVAL_S` | `300` | How often the audit log is exported |
 
 ## Build
 

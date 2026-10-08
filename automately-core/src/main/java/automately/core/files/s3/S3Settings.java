@@ -37,6 +37,27 @@ public record S3Settings(URI endpoint, String region, String bucket, String pref
                 first(env.get("AUTOMATELY_S3_SESSION_TOKEN"), env.get("AWS_SESSION_TOKEN")));
     }
 
+    /**
+     * The audit export's bucket (D-073): {@code AUTOMATELY_AUDIT_S3_*}, each falling back to {@code AUTOMATELY_S3_*} and
+     * the AWS variables, so one set of credentials can serve both. Null if {@code AUTOMATELY_AUDIT_S3_BUCKET} isn't set.
+     */
+    public static S3Settings auditFromEnv(Map<String, String> env) {
+        String bucket = env.get("AUTOMATELY_AUDIT_S3_BUCKET");
+        if (bucket == null || bucket.isBlank()) {
+            return null;
+        }
+        Map<String, String> merged = new java.util.HashMap<>(env);
+        for (String name : java.util.List.of("REGION", "ENDPOINT", "PATH_STYLE", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY", "SESSION_TOKEN")) {
+            String own = env.get("AUTOMATELY_AUDIT_S3_" + name);
+            if (own != null && !own.isBlank()) {
+                merged.put("AUTOMATELY_S3_" + name, own);
+            }
+        }
+        merged.put("AUTOMATELY_S3_BUCKET", bucket.trim());
+        merged.put("AUTOMATELY_S3_PREFIX", env.getOrDefault("AUTOMATELY_AUDIT_S3_PREFIX", env.getOrDefault("AUTOMATELY_S3_PREFIX", "automately/")));
+        return fromEnv(merged);
+    }
+
     /** No secrets, for logs. */
     public String describe() {
         return "s3://" + bucket + "/" + prefix + " at " + endpoint + " (" + region + (pathStyle ? ", path-style" : "") + ")";
