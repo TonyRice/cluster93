@@ -26,6 +26,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Design: packages (2026-10-08)
+
+### Docs
+- **`docs/design/packages.md` (D-083):** the accepted plan for packages.
+  - **What they are:** versioned JavaScript, bundled with esbuild on the developer's machine and published to the cluster. Stored once per file hash in the cluster's own storage.
+  - **How they run:** resolved into a lock saved on each job, then fetched and checked before the script starts.
+  - **Visibility:** private, or cluster-wide from operators.
+  - **Native code** is detected at publish and pointed at the Node runtime.
+  - **Why:** it's the next roadmap step, and its plan should be on record before the Node runtime is designed alongside it.
+
 ## Folder operations look atomic (2026-10-08)
 
 ### Changed

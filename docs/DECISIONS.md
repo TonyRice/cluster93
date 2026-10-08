@@ -1166,3 +1166,23 @@ Also the CLI flow.
 - a copy shows whole and a delete shows gone
 
 The existing file tests all pass through the wrapper.
+
+### D-083 — Packages: versioned JavaScript published to the cluster, resolved once per job
+**Date:** 2026-10-08 · **Status:** Accepted (Tony). Design: `docs/design/packages.md`. Not built yet
+
+**Decision:**
+- **The unit:** a **package** is an immutable version of ES-module files with a manifest of SHA-256 hashes. Users call them "packages" (Tony).
+- **Pushed, never pulled:**
+  - **Publishing:** developers publish with `automately packages publish`, which bundles npm dependencies with the project's own esbuild on their machine (Tony) and uploads only the files the cluster lacks.
+  - **No registry access:** the cluster never runs `npm install` or reaches a registry.
+- **Storage:**
+  - **Manifests** go in a replicated `PACKAGES` table, recording who published.
+  - **File contents** are stored once per hash (`PACKAGE_BLOBS`) in the cluster's own storage, outside tenants' file trees.
+  - **In `fs`:** `/packages` is a read-only view.
+  - **Shared later:** apps' deployments can share the store.
+- **Visibility:** private to the tenant, or cluster-wide from operators (Tony).
+- **Resolved once, at submission:** into a lock saved on the job (at most 500 packages), so retries run identical code. Services run from a package version, which is their revision.
+- **Loading:** files are fetched, verified and cached per node by hash before the script starts. The isolate's resolver only maps names, and refuses URLs, absolute paths and anything not in the lock.
+- **Native code:** it's detected when publishing and pointed at the Node runtime, which is designed separately. `automately.json` has a `runtime` field from day one.
+
+**Open:** whether inline scripts may import packages, and how. Tony is undecided, and it can be added later.

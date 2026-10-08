@@ -324,7 +324,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/benchmarks.md](docs/benchmarks.md): measured performance, and how to rerun it
 - [docs/DECISIONS.md](docs/DECISIONS.md): the decision log
 - [docs/design/revival-plan.md](docs/design/revival-plan.md): the original plan (why and what), with current status
-- [docs/design/](docs/design/): designs for upcoming work
+- [docs/design/](docs/design/): designs for upcoming work, including [the file system](docs/design/vfs.md) and [packages](docs/design/packages.md)
 - [docs/scripting/job-context.md](docs/scripting/job-context.md): the job context API for scripts (attempts, steps, checkpoints)
 - [docs/scripting/services.md](docs/scripting/services.md): services, timers and cancellation
 - [docs/scripting/host-apis.md](docs/scripting/host-apis.md): `kv`, `bus` and queues, `fetch`, `log`, `files`, and serving HTTP
