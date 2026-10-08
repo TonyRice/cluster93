@@ -26,6 +26,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Packages: stand-ins for Node's path, events, buffer, url and util (2026-10-08)
+
+### Added
+- **`path`, `events`, `buffer`, `url` and `util` in the isolate (D-090),** with or without `node:`. **Why:** bundled npm code reaches for these constantly, and they were the reason many packages couldn't be published. Their results match Node's own modules on about 500 checked cases. `events` and `node:events` are one module, so `EventEmitter` is the same class everywhere.
+- **Publishing keeps them as imports** instead of refusing them, and job submission no longer refuses them. The rest of Node (`crypto`, `stream`, `http`, …) is still refused, pointing at the Node runtime.
+
 ## Packages, step 2: jobs import packages (2026-10-08)
 
 ### Added

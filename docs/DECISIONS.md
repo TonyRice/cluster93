@@ -1347,3 +1347,17 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - a disk tier for the cache (the design's "then from the data directory")
   - services from a package version, `/packages` in `fs` and the MCP tools (step 3)
   - yank, block and purge (step 4)
+
+### D-090 — Stand-ins for Node's path, events, buffer, url and util in the isolate
+**Date:** 2026-10-08 · **Status:** Accepted. Finishes step 2 of D-083; follows D-088's "Not yet"
+
+- **What:** scripts and packages can import `path`, `events`, `buffer`, `url` and `util`, with or without `node:` (and `path/posix`). They're small ES modules shipped with the runtime and compiled only when imported. Publishing keeps them as imports instead of refusing them, and submission doesn't count them as packages.
+- **One module per built-in:** every name a built-in is imported by maps to one module, so `events` and `node:events` give the same `EventEmitter`, and `instanceof` works across packages.
+- **How faithful:**
+  - **Checked against Node:** `path`, `url`, `Buffer` and `util` were checked against Node 26's own modules on about 500 cases (normalisation, parsing, relative URLs, every encoding, number reads and writes, `inspect`, `format`), and all matched.
+  - **`events`** is Node's constructor-function `EventEmitter`, so older `EventEmitter.call(this)` with `util.inherits` code works as well as `class … extends`.
+  - **`url`** is a compact WHATWG `URL` and `URLSearchParams`, since V8 has none. Hostnames are lowercased but not converted to punycode, and IPv6 isn't normalised. The legacy `parse`, `format` and `resolve` are included.
+  - **`util.inspect`** is a readable approximation of Node's output.
+- **Not globals:** `Buffer`, `URL`, `process` and the rest aren't defined globally. Bundled npm code that uses them without importing them still fails. Adding web and Node globals is a separate decision (NOTES.md).
+- **Everything else** of Node's (`crypto`, `stream`, `http`, `child_process`, …) is still refused at publish and at submission, pointing at `"runtime": "node"`.
+- **Why stand-ins and not a Node layer:** these five are pure JavaScript, cover most of what bundled npm libraries reach for, and stay inside the sandbox. Anything needing I/O or native code belongs in the Node runtime (D-084).

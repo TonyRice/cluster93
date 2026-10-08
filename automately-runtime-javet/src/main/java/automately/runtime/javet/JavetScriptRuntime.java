@@ -65,13 +65,41 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             + "closeSync, lock, promises, constants";
     private static final String FS_PROMISES_NAMES = "readFile, writeFile, appendFile, mkdir, readdir, stat, lstat, access, rename, copyFile, rm, rmdir, unlink, open";
 
-    /** Modules the isolate provides itself (D-079); their names are {@link automately.core.packages.Imports#BUILT_INS}. */
-    static final java.util.Map<String, String> BUILT_IN_MODULES = java.util.Map.of(
-            "automately:fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;",
-            "fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;",
+    /**
+     * Modules the isolate provides itself, by every name they're imported as (D-079, D-090), mapped to one module name
+     * each, so {@code events} and {@code node:events} are the same module and {@code EventEmitter} the same class. The
+     * names are {@link automately.core.packages.Imports#BUILT_INS}.
+     */
+    static final java.util.Map<String, String> BUILT_IN_MODULES = java.util.Map.ofEntries(
+            java.util.Map.entry("fs", "node:fs"), java.util.Map.entry("node:fs", "node:fs"), java.util.Map.entry("automately:fs", "node:fs"),
+            java.util.Map.entry("fs/promises", "node:fs/promises"), java.util.Map.entry("node:fs/promises", "node:fs/promises"),
+            java.util.Map.entry("path", "node:path"), java.util.Map.entry("node:path", "node:path"),
+            java.util.Map.entry("path/posix", "node:path"), java.util.Map.entry("node:path/posix", "node:path"),
+            java.util.Map.entry("events", "node:events"), java.util.Map.entry("node:events", "node:events"),
+            java.util.Map.entry("buffer", "node:buffer"), java.util.Map.entry("node:buffer", "node:buffer"),
+            java.util.Map.entry("url", "node:url"), java.util.Map.entry("node:url", "node:url"),
+            java.util.Map.entry("util", "node:util"), java.util.Map.entry("node:util", "node:util"));
+
+    /** Each built-in module's source: fs re-exports the global; the others are stand-ins for Node's (js/node/). */
+    static final java.util.Map<String, String> BUILT_IN_SOURCES = java.util.Map.of(
             "node:fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;",
-            "fs/promises", "export default globalThis.fs.promises; export const { " + FS_PROMISES_NAMES + " } = globalThis.fs.promises;",
-            "node:fs/promises", "export default globalThis.fs.promises; export const { " + FS_PROMISES_NAMES + " } = globalThis.fs.promises;");
+            "node:fs/promises", "export default globalThis.fs.promises; export const { " + FS_PROMISES_NAMES + " } = globalThis.fs.promises;",
+            "node:path", resource("node/path.js"),
+            "node:events", resource("node/events.js"),
+            "node:buffer", resource("node/buffer.js"),
+            "node:url", resource("node/url.js"),
+            "node:util", resource("node/util.js"));
+
+    private static String resource(String file) {
+        try (java.io.InputStream in = JavetScriptRuntime.class.getResourceAsStream("js/" + file)) {
+            if (in == null) {
+                throw new IllegalStateException("Missing js/" + file);
+            }
+            return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
 
     private static String loadPrelude() {
         StringBuilder prelude = new StringBuilder("(() => {\n");
@@ -268,7 +296,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     private ExecutionResult invokeModule(V8Runtime v8, Execution execution, Control control) throws JavetException {
         // Built-ins (D-079) and the job's packages (D-089), all already in memory.
-        v8.setV8ModuleResolver(new ModuleResolver(execution.packages(), BUILT_IN_MODULES));
+        v8.setV8ModuleResolver(new ModuleResolver(execution.packages(), BUILT_IN_MODULES, BUILT_IN_SOURCES));
         try (V8ValueObject prelude = v8.getExecutor(PRELUDE).setResourceName("automately:prelude").execute();
              ScriptEntryPoints js = new ScriptEntryPoints(v8, prelude);
              V8Module module = v8.getExecutor(automately.core.packages.Imports.rewrite(execution.script(), ModuleResolver.JOB_URL))

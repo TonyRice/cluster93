@@ -79,7 +79,7 @@ class ImportsTest {
 
     @Test
     void namesThatCantBePackagesAreRefusedWithAReason() {
-        assertThatThrownBy(() -> Imports.packages(Imports.scan("import path from 'path';"))).hasMessageContaining("Node's \"path\" module");
+        assertThatThrownBy(() -> Imports.packages(Imports.scan("import c from 'crypto';"))).hasMessageContaining("Node's \"crypto\" module");
         assertThatThrownBy(() -> Imports.packages(Imports.scan("import x from 'node:crypto';"))).hasMessageContaining("\"crypto\"");
         assertThatThrownBy(() -> Imports.packages(Imports.scan("import x from './local.js';"))).hasMessageContaining("is a path or URL");
         assertThatThrownBy(() -> Imports.packages(Imports.scan("import x from 'https://esm.sh/x';"))).hasMessageContaining("is a path or URL");

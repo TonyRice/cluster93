@@ -2,7 +2,7 @@
 
 A package is versioned JavaScript you publish to the cluster once, and import from your scripts and services ([design](../design/packages.md), D-083). A published version never changes; a fix is a new version.
 
-> **Status:** publishing (step 1) and importing from jobs and services (step 2) are built. Stand-ins for Node's `path`, `events`, `buffer`, `url` and `util` come next; services built from a package version, and reading a package's own files through `/packages`, come with step 3.
+> **Status:** publishing (step 1) and importing from jobs and services (step 2), with stand-ins for Node's `path`, `events`, `buffer`, `url` and `util`, are built. Services built from a package version, and reading a package's own files through `/packages`, come with step 3.
 
 ## Publish
 ```bash
@@ -35,7 +35,7 @@ Optional; `package.json`'s `name`, `version` and `main` (or `module`, or a strin
 ### What a package can't hold
 - **Native code** (`sharp`, `bcrypt`, anything with a `.node` file or a native build) stops the publish, naming the package and what pulled it in. Run that code in the Node runtime instead (`"runtime": "node"`, [design](../design/node-runtime.md)).
 - **Optional native extras** (`bufferutil`, `utf-8-validate`, `fsevents`) are left out with a warning; the packages that use them work without them.
-- **Node built-ins** other than `fs` (`node:fs`, `fs/promises`) stop the publish for now. The isolate provides `fs` and the `automately:*` modules; stand-ins for `path`, `events`, `buffer`, `url` and `util` come with step 2.
+- **Node built-ins:** the isolate provides `fs` (and `fs/promises`) plus stand-ins for `path`, `events`, `buffer`, `url` and `util` (with or without `node:`), and these stay imports. Any other Node module (`crypto`, `stream`, `http`, …) stops the publish; run that code in the Node runtime. `Buffer`, `URL` and `process` aren't globals, so code that uses them without importing them fails when it runs.
 - **WebAssembly** is fine: `.wasm` files are package files like any other.
 
 ### Limits

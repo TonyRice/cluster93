@@ -198,8 +198,8 @@ class PackagesTest {
         assertThat(off.statusCode()).isEqualTo(400);
         assertThat(off.bodyAsString()).contains("\\\"packages\\\": false");
 
-        assertThat(post(bearer, "/v1/jobs", new JsonObject().put("script", "import p from 'path'; export default () => p;")).bodyAsString())
-                .contains("Node's \\\"path\\\" module isn't available");
+        assertThat(post(bearer, "/v1/jobs", new JsonObject().put("script", "import p from 'crypto'; export default () => p;")).bodyAsString())
+                .contains("Node's \\\"crypto\\\" module isn't available");
         assertThat(post(bearer, "/v1/jobs", new JsonObject().put("script", "export default () => 1;").put("packages", "yes")).statusCode())
                 .isEqualTo(400);
         assertThat(post(bearer, "/v1/jobs", new JsonObject().put("script", "export default () => 1;").put("packages", false)).statusCode())

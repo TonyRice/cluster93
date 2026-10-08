@@ -1,0 +1,112 @@
+package automately.runtime.javet;
+
+import automately.core.job.OrphanPolicy;
+import automately.core.runtime.Execution;
+import automately.core.runtime.ExecutionResult;
+import automately.core.runtime.JobContext;
+import automately.core.runtime.StateSink;
+import io.vertx.core.Vertx;
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * The stand-ins for Node's path, events, buffer, url and util (D-090), run in the isolate. Their results were checked
+ * against Node's own modules when they were written; these tests make sure they load and behave in V8 without Node.
+ */
+class NodeStandInsTest {
+
+    private static Vertx vertx;
+    private static JavetScriptRuntime runtime;
+
+    @BeforeAll
+    static void setUp() {
+        vertx = Vertx.vertx();
+        runtime = new JavetScriptRuntime(vertx, 64, 2);
+    }
+
+    @AfterAll
+    static void tearDown() throws Exception {
+        vertx.close().toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void path() throws Exception {
+        assertThat(output("import path from 'path'; import { join } from 'node:path'; import posix from 'path/posix';"
+                + "export default () => [path.join('/a', 'b', '../c'), join('x', './y/'), path.resolve('a', '../b'), path.relative('/a/b', '/a/c/d'),"
+                + " path.extname('f.tar.gz'), path.basename('/x/y.js', '.js'), path.dirname('/x/y/z'), path.parse('/home/u/f.txt').name,"
+                + " posix === path];"))
+                .containsExactly("/a/c", "x/y/", "/b", "../c/d", ".gz", "y", "/x/y", "f", true);
+    }
+
+    @Test
+    void events() throws Exception {
+        assertThat(output("import EventEmitter, { once } from 'events'; import { EventEmitter as Same } from 'node:events'; import util from 'util';"
+                + "function Old() { EventEmitter.call(this); } util.inherits(Old, EventEmitter);"
+                + "class New extends EventEmitter {}"
+                + "export default async () => { const seen = [];"
+                + " const old = new Old(); old.on('x', v => seen.push('old ' + v)); old.emit('x', 1);"
+                + " const e = new New(); e.once('y', v => seen.push('once ' + v)); e.emit('y', 2); e.emit('y', 3);"
+                + " const f = () => seen.push('removed'); e.on('z', f); e.off('z', f); e.emit('z');"
+                + " setTimeout(() => e.emit('later', 'a', 'b'), 1); seen.push((await once(e, 'later')).join(''));"
+                + " try { e.emit('error', new Error('unhandled')); } catch (err) { seen.push(err.message); }"
+                + " seen.push(Same === EventEmitter, old instanceof EventEmitter, e.listenerCount('y'));"
+                + " return seen; };"))
+                .containsExactly("old 1", "once 2", "ab", "unhandled", true, true, 0);
+    }
+
+    @Test
+    void buffer() throws Exception {
+        assertThat(output("import { Buffer } from 'buffer'; import buf from 'node:buffer';"
+                + "export default () => { const b = Buffer.from('héllo'); const n = Buffer.alloc(4); n.writeUInt32BE(0xdeadbeef);"
+                + " return [b.toString('hex'), b.toString('base64'), Buffer.from('aGk=', 'base64').toString(), n.readUInt32LE(0),"
+                + " Buffer.concat([Buffer.from('a'), Buffer.from('b')]).toString(), Buffer.isBuffer(b.slice(1)), buf.Buffer === Buffer,"
+                + " b.length, Buffer.byteLength('héllo')]; };"))
+                .containsExactly("68c3a96c6c6f", "aMOpbGxv", "hi", 4022250974L, "ab", true, true, 6, 6);
+    }
+
+    @Test
+    void url() throws Exception {
+        assertThat(output("import { URL, URLSearchParams, fileURLToPath, pathToFileURL } from 'url';"
+                + "export default () => { const u = new URL('../x?a=1#h', 'https://Example.com:443/p/q/r');"
+                + " u.searchParams.append('b', 'two words');"
+                + " return [u.href, u.host, u.origin, new URLSearchParams('a=1&a=2').getAll('a').join(','),"
+                + " fileURLToPath('file:///tmp/a%20b'), pathToFileURL('/tmp/a b').href]; };"))
+                .containsExactly("https://example.com/p/x?a=1&b=two+words#h", "example.com", "https://example.com", "1,2",
+                        "/tmp/a b", "file:///tmp/a%20b");
+    }
+
+    @Test
+    void util() throws Exception {
+        assertThat(output("import util, { format, promisify, isDeepStrictEqual } from 'node:util';"
+                + "const later = (x, cb) => setTimeout(() => cb(null, x * 2), 1);"
+                + "export default async () => [format('%s=%d %j', 'n', 4, { a: 1 }), util.inspect({ a: [1, { b: 'c' }] }),"
+                + " await promisify(later)(21), isDeepStrictEqual(new Map([[1, { a: 2 }]]), new Map([[1, { a: 2 }]])), util.types.isDate(new Date())];"))
+                .containsExactly("n=4 {\"a\":1}", "{ a: [ 1, { b: 'c' } ] }", 42, true, true);
+    }
+
+    @Test
+    void aBundledPackageUsingThemLoads() throws Exception {
+        // What esbuild leaves behind for npm code using Node's modules: plain imports, now answered by the stand-ins.
+        assertThat(output("import { EventEmitter } from 'node:events'; import { Buffer } from 'node:buffer'; import { join } from 'node:path';"
+                + "class Bus extends EventEmitter {} export default () => { const b = new Bus(); let got;"
+                + " b.on('m', (x) => { got = Buffer.from(join('a', x)).toString('base64'); }); b.emit('m', 'b'); return [got]; };"))
+                .containsExactly("YS9i");
+    }
+
+    private static JsonArray output(String script) throws Exception {
+        Execution execution = new Execution("job-1", "tenant-a", script, new JsonObject(), Duration.ofSeconds(5),
+                JobContext.firstAttempt("job-1", OrphanPolicy.FAIL));
+        ExecutionResult result = runtime.execute(execution, (level, line) -> { }, StateSink.DISCARD)
+                .result().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+        assertThat(result.error()).isNull();
+        return (JsonArray) result.output();
+    }
+}

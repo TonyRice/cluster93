@@ -16,7 +16,8 @@ import java.util.Map;
 /**
  * Maps what a module imports to a module, from the job's packages alone, with no I/O (D-083 §5, D-089):
  * <ul>
- *   <li>Built-ins ({@code fs}, {@code automately:fs}) are the isolate's own.</li>
+ *   <li>Built-ins ({@code fs}, {@code automately:fs}, and stand-ins for Node's {@code path}, {@code events},
+ *       {@code buffer}, {@code url} and {@code util}) are the isolate's own.</li>
  *   <li>A bare name is a package in the job's lock, through its {@code exports}. The job's script can import any of
  *       them; a package only those it declared as dependencies (and itself).</li>
  *   <li>{@code ./} and {@code ../} paths are files of the same package, never outside it. The job's script has no
@@ -33,7 +34,9 @@ final class ModuleResolver implements IV8ModuleResolver {
     static final String JOB_URL = "file:///job.mjs";
 
     private final Packages packages;
+    /** Every name a built-in is imported as → its module name; and each module's source. */
     private final Map<String, String> builtIns;
+    private final Map<String, String> builtInSources;
     private final Map<String, IV8Module> modules = new HashMap<>();
     /** Which package file each compiled module is, so its own imports resolve against it. */
     private final Map<String, Location> locations = new HashMap<>();
@@ -45,9 +48,10 @@ final class ModuleResolver implements IV8ModuleResolver {
     private record Target(String url, String builtIn, Location file) {
     }
 
-    ModuleResolver(Packages packages, Map<String, String> builtIns) {
+    ModuleResolver(Packages packages, Map<String, String> builtIns, Map<String, String> builtInSources) {
         this.packages = packages;
         this.builtIns = builtIns;
+        this.builtInSources = builtInSources;
     }
 
     @Override
@@ -81,7 +85,8 @@ final class ModuleResolver implements IV8ModuleResolver {
 
     private Target target(String name, IV8Module referrer) throws JavetException {
         if (builtIns.containsKey(name)) {
-            return new Target(name, builtIns.get(name), null);
+            String module = builtIns.get(name);
+            return new Target(module, builtInSources.get(module), null);
         }
         String from = referrer == null ? JOB : referrer.getResourceName();
         Location here = locations.get(from);

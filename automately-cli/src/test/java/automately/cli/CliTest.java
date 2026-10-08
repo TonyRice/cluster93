@@ -531,10 +531,17 @@ class CliTest {
         assertThat(refused.code()).isEqualTo(1);
         assertThat(refused.err()).contains("fake-sharp needs native code (pulled in by your code)").contains("\"runtime\": \"node\"");
 
-        Files.writeString(project.resolve("src/index.js"), "import path from 'node:path';\nimport bufferutil from 'bufferutil';\nexport default [path, bufferutil];\n");
+        Files.writeString(project.resolve("src/index.js"), "import crypto from 'node:crypto';\nimport bufferutil from 'bufferutil';\nexport default [crypto, bufferutil];\n");
         Result builtins = cli("packages", "publish", project.toString(), "--dry-run");
         assertThat(builtins.code()).isEqualTo(1);
-        assertThat(builtins.err()).contains("bufferutil").contains("left out").contains("path (imported by src/index.js)");
+        assertThat(builtins.err()).contains("bufferutil").contains("left out").contains("crypto (imported by src/index.js)");
+
+        // Node's path, events, buffer, url and util have stand-ins in the isolate (D-090), so they stay imports.
+        Files.writeString(project.resolve("src/index.js"), "import path from 'node:path';\nimport { EventEmitter } from 'events';\n"
+                + "import { Buffer } from 'buffer';\nimport { URL } from 'url';\nimport util from 'node:util';\n"
+                + "export default [path, EventEmitter, Buffer, URL, util];\n");
+        Result standIns = cli("packages", "publish", project.toString(), "--dry-run");
+        assertThat(standIns.code()).as(standIns.err()).isZero();
     }
 
     private static <T> T await(Future<T> future) throws Exception {

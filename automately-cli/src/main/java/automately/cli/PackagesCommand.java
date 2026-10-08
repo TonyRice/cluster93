@@ -327,8 +327,8 @@ final class PackagesCommand extends Base {
             List<String> builtins = new ArrayList<>();
             result.path("builtins").forEach(b -> builtins.add(b.asText()));
             if (!builtins.isEmpty()) {
-                throw new CliException("These Node built-ins aren't available to packages yet:\n  " + String.join("\n  ", builtins)
-                        + "\nPackages run in the isolate, which provides fs and the automately:* modules; "
+                throw new CliException("These Node built-ins aren't available to packages:\n  " + String.join("\n  ", builtins)
+                        + "\nPackages run in the isolate, which provides fs, path, events, buffer, url, util and the automately:* modules; "
                         + "for the rest of Node, set \"runtime\": \"node\" (D-084).");
             }
             Map<String, Path> files = new TreeMap<>();

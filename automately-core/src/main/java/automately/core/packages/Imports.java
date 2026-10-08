@@ -23,8 +23,11 @@ import java.util.regex.Pattern;
  */
 public final class Imports {
 
-    /** Modules the isolate provides itself (D-079); they're never packages. */
-    public static final Set<String> BUILT_INS = Set.of("fs", "node:fs", "fs/promises", "node:fs/promises", "automately:fs");
+    /** Modules the isolate provides itself (D-079, D-090); they're never packages. */
+    public static final Set<String> BUILT_INS = Set.of("fs", "node:fs", "fs/promises", "node:fs/promises", "automately:fs",
+            // Stand-ins for Node's own (D-090).
+            "path", "node:path", "path/posix", "node:path/posix", "events", "node:events", "buffer", "node:buffer", "url", "node:url",
+            "util", "node:util");
 
     /** Node's own modules, to say why one can't be imported instead of "no package named path". */
     private static final Set<String> NODE_MODULES = Set.of("assert", "async_hooks", "buffer", "child_process", "cluster", "console", "constants",
@@ -82,7 +85,7 @@ public final class Imports {
         String bare = specifier.startsWith("node:") ? specifier.substring(5) : specifier;
         String module = bare.contains("/") ? bare.substring(0, bare.indexOf('/')) : bare;
         if (specifier.startsWith("node:") || NODE_MODULES.contains(module)) {
-            return "Node's \"" + module + "\" module isn't available in the isolate (only fs is); run code that needs it with \"runtime\": \"node\"";
+            return "Node's \"" + module + "\" module isn't available in the isolate (fs, path, events, buffer, url and util are); run code that needs it with \"runtime\": \"node\"";
         }
         if (specifier.startsWith("automately:")) {
             return "There's no built-in module named \"" + specifier + "\"";
