@@ -18,13 +18,33 @@ import java.util.function.LongFunction;
  * <p>Two more ways it was cut off under load (D-094): a close reported as an error just after the last byte (the
  * download was complete, so that's its end), and a request that failed to open because it went out on a pooled
  * connection the server was closing (retried like a resume). An answer that won't change, a 4xx, isn't retried.
+ *
+ * <p>Asking again (D-098) is told it's a retry, so the store can use a fresh connection rather than another pooled one that may
+ * be closing too, and it waits a little longer each time. Only failures that brought no new bytes count towards
+ * {@link #MAX_RESUMES}: a long download over a flaky connection keeps going as long as it makes progress.
  */
 final class ResumingRangeBody implements BodyStream {
 
     static final int MAX_RESUMES = 3;
+    /** The first wait before asking again; it doubles each time. */
+    static final long BACKOFF_MS = 50;
 
-    /** Opens the range from {@code offset} bytes into it to its end. */
-    private final LongFunction<Future<? extends ReadStream<Buffer>>> openFrom;
+    /** Opens the range from {@code offset} bytes into it to its end; {@code retry} says it's being asked for again. */
+    @FunctionalInterface
+    interface Opener {
+        Future<? extends ReadStream<Buffer>> open(long offset, boolean retry);
+    }
+
+    /** Runs a task after a delay; immediately when there's no delay. */
+    @FunctionalInterface
+    interface Later {
+        void run(long delayMs, Runnable task);
+
+        Later NOW = (delayMs, task) -> task.run();
+    }
+
+    private final Opener openFrom;
+    private final Later later;
     private final long length;
     /** What the reader is told when it finally fails: the store's own wording for the cause. */
     private final java.util.function.UnaryOperator<Throwable> describe;
@@ -36,15 +56,21 @@ final class ResumingRangeBody implements BodyStream {
     private boolean opening;
     private boolean finished;
     private long delivered;
+    /** Failures in a row that brought no new bytes. */
     private int resumes;
+    /** Every time it has asked again, so retries know they're retries. */
+    private int attempts;
+    /** How much had been delivered when the current stream was opened. */
+    private long openedAt;
 
     ResumingRangeBody(LongFunction<Future<? extends ReadStream<Buffer>>> openFrom, long length) {
-        this(openFrom, length, java.util.function.UnaryOperator.identity());
+        this((offset, retry) -> openFrom.apply(offset), length, Later.NOW, java.util.function.UnaryOperator.identity());
     }
 
-    ResumingRangeBody(LongFunction<Future<? extends ReadStream<Buffer>>> openFrom, long length, java.util.function.UnaryOperator<Throwable> describe) {
+    ResumingRangeBody(Opener openFrom, long length, Later later, java.util.function.UnaryOperator<Throwable> describe) {
         this.openFrom = openFrom;
         this.length = length;
+        this.later = later;
         this.describe = describe;
     }
 
@@ -97,10 +123,13 @@ final class ResumingRangeBody implements BodyStream {
 
     private void open() {
         long from;
+        boolean retry;
         synchronized (this) {
             from = delivered;
+            openedAt = delivered;
+            retry = attempts > 0;
         }
-        openFrom.apply(from).onComplete(ar -> {
+        openFrom.open(from, retry).onComplete(ar -> {
             if (ar.failed()) {
                 resumeOrFail(ar.cause());
                 return;
@@ -159,6 +188,7 @@ final class ResumingRangeBody implements BodyStream {
     private void resumeOrFail(Throwable cause) {
         boolean again;
         boolean complete;
+        long wait = 0;
         synchronized (this) {
             if (finished) {
                 return;
@@ -166,16 +196,22 @@ final class ResumingRangeBody implements BodyStream {
             current = null;
             opening = false;
             complete = delivered >= length;
+            if (delivered > openedAt) {
+                // It got further this time: only failures without progress count towards giving up.
+                resumes = 0;
+            }
             again = !complete && resumes < MAX_RESUMES && retryable(cause);
             if (again) {
+                wait = BACKOFF_MS << resumes;
                 resumes++;
+                attempts++;
                 opening = true;
             }
         }
         if (complete) {
             done();
         } else if (again) {
-            open();
+            later.run(wait, this::open);
         } else {
             fail(cause);
         }

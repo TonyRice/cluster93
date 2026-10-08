@@ -26,6 +26,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Fixed: S3 downloads under heavy load (2026-10-08)
+
+### Fixed
+- **An S3 download could still fail under heavy load (D-098):** every retry landed on another pooled connection that was closing. Retries now go out on a fresh connection and back off briefly (50, 100, 200 ms). Only failures that make no progress count towards giving up, so a long download over a flaky link keeps going as long as it gets further. Other requests that are safe to repeat (GET, HEAD, DELETE, PUT) now retry the same way. **The root cause:** an answer cut short by the server closing the connection was being delivered as complete (0 of 287 bytes). A length that doesn't match `Content-Length` is now treated as a failure, and a blob's writer cleans up any extra upload a retried start left behind. Every PUT now carries `Content-MD5`, so S3 refuses a body that isn't exactly what was meant. That guarded against a bug in the retry itself, which the stress test caught before it shipped: a retried PUT resent an already-consumed buffer.
+
 ## `crypto` in the isolate: randomness, hashing, HMAC (2026-10-08)
 
 ### Added

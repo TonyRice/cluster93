@@ -47,7 +47,8 @@ class S3BlobStoreTest extends BlobStoreContract {
         String aborted = java.util.UUID.randomUUID().toString();
         var writer = await(blobs.create(aborted, "application/test"));
         await(writer.write(io.vertx.core.buffer.Buffer.buffer(bytes(S3BlobStore.PART_SIZE + 1, 10))));
-        assertThat(await(s3.unfinishedUploads(settings.prefix() + aborted))).hasSize(1);
+        // Usually one; two if starting it was asked again after a lost answer (D-098). The abort must leave none either way.
+        assertThat(await(s3.unfinishedUploads(settings.prefix() + aborted))).isNotEmpty();
         await(writer.abort());
         assertThat(await(s3.unfinishedUploads(settings.prefix() + aborted))).isEmpty();
     }

@@ -1503,3 +1503,19 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - **The standards' vectors:** FIPS 180-4, RFC 1321 and RFC 4231, including an empty HMAC key.
   - **Real Node:** a `RealNpmPackagesTest` module's output matches Node's byte for byte.
   - **Real libraries:** uuid (v4 and v7) and nanoid now run.
+
+### D-098 — S3 retries: a fresh connection, a backoff, only failures without progress count, and plain requests too
+**Date:** 2026-10-08 · **Status:** Accepted. Completes D-081 and D-094
+
+- **Evidence:** after D-094, `S3BlobStoreTest`'s stress case passed 20 runs in a row on a quiet machine, but failed once during a full build. This time the error was the wrapped "The file storage backend failed: Connection was closed", so all four attempts had failed. Under load the gateway's closes are processed late, and an immediate retry from the pool landed on another connection that was itself closing.
+- **Now:**
+  - **Retries use a fresh connection.** A range asked for again goes out on a second S3 client without keep-alive, so it can never be a pooled connection that's closing. First requests still use the pool.
+  - **Retries wait a little:** 50 ms, then 100, then 200, so the close events are handled before the next try.
+  - **Only failures that brought no new bytes count** towards the limit of 3. A download that gets further each time keeps going, so a long download over a flaky link isn't capped at four drops in total, while one that fails without progress still gives up quickly.
+- **The other requests had no retry at all.** Under the same load, a listing came back as a 200 with an empty body. **Now:** requests that mean the same thing when repeated (GET, HEAD, DELETE, and PUT, which writes the same bytes again) get the same treatment: up to 3 retries, on a fresh connection, after the same backoff. A GET's empty answer counts as a failure. POST isn't repeated (a second "create multipart upload" would leave an orphan behind), and neither is an answer from S3 itself (4xx or 5xx).
+- **The root of the empty answers, caught with a diagnostic under load:** the gateway sent `Content-Length: 287` and `Connection: close`, and the client delivered a body of 0 bytes as if it were complete. A body cut short by the close can be reported as whole. **Now:** an answer whose length doesn't match its `Content-Length` is a transport failure, retried like any other. A range download already counted its bytes (D-081).
+- **Starting a multipart upload** (a POST) is asked again only when its answer can't be read. The lost answer may still have started an upload, which the stress test caught as an orphan. So a blob's writer, after it finishes and when it aborts, aborts *every* unfinished upload of its key, not only its own. That's safe because each blob's key is its own.
+- **A regression the stress test caught before it shipped:** the first version of the PUT retry resent the *same* `Buffer`. Sending consumes a Buffer, so the retry sent only the bytes the failed attempt hadn't. The signature's payload hash and length were computed from what was left, so S3 accepted a part missing its first 147,392 bytes, and the blob read back shifted. **Now:**
+  - the bytes are copied once and every attempt sends a new Buffer of them;
+  - every PUT carries `Content-MD5` of the intended bytes, so S3 refuses any body that differs, and this class of bug can't store wrong data silently again.
+- **Tests:** `ResumingRangeBodyTest` adds a download that drops after every byte (8 drops) and still completes, and checks that retries are marked as retries and back off. **The stress test** ran 40 times under CPU load from 8 busy processes and passed every time. Before, 1 in 20 failed; an intermediate version failed 3 in 40.

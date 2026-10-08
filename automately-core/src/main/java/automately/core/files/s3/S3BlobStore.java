@@ -64,7 +64,8 @@ public final class S3BlobStore implements BlobStore {
         }
         // Carries on with a new range if the connection closes partway, or a request fails to open (D-081, D-094); the
         // reader sees the store's wording only if it gives up.
-        return new ResumingRangeBody(offset -> s3.getRange(key(blobId), start + offset, end), end - start + 1,
+        return new ResumingRangeBody((offset, retry) -> s3.getRange(key(blobId), start + offset, end, retry), end - start + 1,
+                (delayMs, task) -> s3.vertx().setTimer(Math.max(1, delayMs), id -> task.run()),
                 err -> err instanceof S3Client.S3Exception e && e.status() == 404
                         ? new IllegalStateException("File data is missing (it was replaced or deleted)")
                         : unavailable(err));
@@ -129,13 +130,22 @@ public final class S3BlobStore implements BlobStore {
             Future<Void> done = uploadId == null
                     ? s3.putObject(key, pending, contentType)
                     : (pending.length() > 0 ? sendPart(pending) : Future.<Void>succeededFuture())
-                            .compose(v -> s3.completeMultipartUpload(key, uploadId, etags));
+                            .compose(v -> s3.completeMultipartUpload(key, uploadId, etags))
+                            // A start whose answer was lost and asked again (D-098) may have left another upload of
+                            // this key; the key is this blob's alone, so any still open is an orphan.
+                            .compose(v -> abortUnfinished().recover(err -> Future.succeededFuture()));
             return done.recover(err -> Future.failedFuture(unavailable(err)));
         }
 
+        /** Every upload of this blob still open, not only its own: see {@link #finish()}. */
         @Override
         public synchronized Future<Void> abort() {
-            return uploadId == null ? Future.succeededFuture() : s3.abortMultipartUpload(key, uploadId);
+            return uploadId == null ? Future.succeededFuture() : abortUnfinished();
+        }
+
+        private Future<Void> abortUnfinished() {
+            return s3.unfinishedUploads(key).compose(ids -> Future.all(ids.stream().map(id -> s3.abortMultipartUpload(key, id)).toList()))
+                    .mapEmpty();
         }
     }
 }

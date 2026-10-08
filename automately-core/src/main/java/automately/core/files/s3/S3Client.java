@@ -36,6 +36,8 @@ public final class S3Client {
 
     private final S3Settings settings;
     private final HttpClient http;
+    /** For a range asked for again after a connection closed (D-094): a new connection each time, never a pooled one. */
+    private final HttpClient fresh;
     private final boolean ssl;
     private final String connectHost;
     private final int port;
@@ -66,6 +68,12 @@ public final class S3Client {
         this.authority = defaultPort ? connectHost : connectHost + ":" + port;
         this.http = vertx.createHttpClient(new HttpClientOptions().setSsl(ssl).setKeepAlive(true).setConnectTimeout(10_000)
                 .setIdleTimeout(120), new PoolOptions().setHttp1MaxSize(64));
+        this.fresh = vertx.createHttpClient(new HttpClientOptions().setSsl(ssl).setKeepAlive(false).setConnectTimeout(10_000)
+                .setIdleTimeout(120), new PoolOptions().setHttp1MaxSize(16));
+    }
+
+    public Vertx vertx() {
+        return vertx;
     }
 
     public S3Settings settings() {
@@ -101,7 +109,27 @@ public final class S3Client {
     /** Completes with the upload id. */
     public Future<String> createMultipartUpload(String key, String contentType) {
         TreeMap<String, String> query = new TreeMap<>(Map.of("uploads", ""));
-        return send(HttpMethod.POST, key, query, Map.of("content-type", contentType), null).map(r -> text(r.body(), "UploadId"));
+        return createMultipartUpload(key, query, contentType, 0);
+    }
+
+    /**
+     * Starting an upload is a POST, so it isn't repeated blindly; but an answer without a readable upload id is no use,
+     * and is asked for again (D-098). If the lost answer did start an upload, nothing leaks for long: deleting the blob
+     * aborts any unfinished upload of its key.
+     */
+    private Future<String> createMultipartUpload(String key, TreeMap<String, String> query, String contentType, int attempt) {
+        Future<String> id = send(HttpMethod.POST, key, query, Map.of("content-type", contentType), null).map(r -> text(r.body(), "UploadId"));
+        if (attempt >= MAX_RETRIES) {
+            return id;
+        }
+        return id.recover(err -> {
+            if (err instanceof S3Exception e && e.status() != 0) {
+                return Future.failedFuture(err);
+            }
+            io.vertx.core.Promise<Void> waited = io.vertx.core.Promise.promise();
+            vertx.setTimer(ResumingRangeBody.BACKOFF_MS << attempt, t -> waited.complete());
+            return waited.future().compose(v -> createMultipartUpload(key, query, contentType, attempt + 1));
+        });
     }
 
     /** Completes with the part's ETag, needed to complete the upload. */
@@ -146,8 +174,14 @@ public final class S3Client {
 
     /** Bytes {@code start}..{@code endInclusive} as a paused response to stream; 404 fails with an S3Exception. */
     public Future<HttpClientResponse> getRange(String key, long start, long endInclusive) {
+        return getRange(key, start, endInclusive, false);
+    }
+
+    /** As above; {@code freshConnection} for asking again after a connection closed, so it can't land on another closing one. */
+    public Future<HttpClientResponse> getRange(String key, long start, long endInclusive, boolean freshConnection) {
         RequestOptions options = request(HttpMethod.GET, key, new TreeMap<>(), Map.of("range", "bytes=" + start + "-" + endInclusive), null);
-        return pin(options).compose(pinnedOptions -> http.request(pinnedOptions)).compose(request -> request.send()).compose(response -> {
+        HttpClient client = freshConnection ? fresh : http;
+        return pin(options).compose(pinnedOptions -> client.request(pinnedOptions)).compose(request -> request.send()).compose(response -> {
             if (response.statusCode() == 200 || response.statusCode() == 206) {
                 // Paused here, in the callback that delivers it, so no chunk arrives before the reader's handlers.
                 response.pause();
@@ -191,12 +225,56 @@ public final class S3Client {
     private record Answer(MultiMap headers, Buffer body) {
     }
 
+    /**
+     * One request, read in full. A request that's safe to repeat (GET, HEAD, DELETE, and PUT, which sets the same bytes
+     * again) is tried again, up to {@value #MAX_RETRIES} times, if the connection fails or a GET's answer comes back
+     * empty: on a fresh connection, after a short wait (D-098). POST isn't repeated: creating a multipart upload twice
+     * would leave one behind. An answer from S3, a 4xx or 5xx, is never retried here.
+     */
     private Future<Answer> send(HttpMethod method, String key, SortedMap<String, String> query, Map<String, String> extra, Buffer body) {
-        return pin(request(method, key, query, extra, body)).compose(options -> http.request(options))
+        boolean repeatable = method == HttpMethod.GET || method == HttpMethod.HEAD || method == HttpMethod.DELETE || method == HttpMethod.PUT;
+        // The bytes are copied once, and each attempt sends a new Buffer of them: sending consumes a Buffer, so a retry
+        // of the same one sent only what the failed attempt hadn't, and S3 stored a shortened part (D-098).
+        byte[] payload = body == null ? null : body.getBytes();
+        return send(method, key, query, extra, payload, repeatable, 0);
+    }
+
+    static final int MAX_RETRIES = 3;
+
+    private Future<Answer> send(HttpMethod method, String key, SortedMap<String, String> query, Map<String, String> extra, byte[] payload,
+                                boolean repeatable, int attempt) {
+        HttpClient client = attempt == 0 ? http : fresh;
+        Buffer body = payload == null ? null : Buffer.buffer(payload);
+        // Signed afresh each time: the signature includes the time.
+        Future<Answer> answer = pin(request(method, key, query, extra, body)).compose(options -> client.request(options))
                 .compose(request -> body == null ? request.send() : request.send(body))
-                .compose(response -> response.body().compose(data -> response.statusCode() >= 300
-                        ? Future.failedFuture(error(response.statusCode(), data))
-                        : Future.succeededFuture(new Answer(response.headers(), data))));
+                .compose(response -> response.body().compose(data -> {
+                    if (response.statusCode() >= 300) {
+                        return Future.failedFuture(error(response.statusCode(), data));
+                    }
+                    // Under load a body cut short by the server's close can arrive as a complete, shorter one (seen: 0 of
+                    // 287 bytes); the declared length tells (D-098).
+                    String declared = response.getHeader("Content-Length");
+                    if (method != HttpMethod.HEAD && declared != null && !declared.equals(String.valueOf(data.length()))) {
+                        return Future.failedFuture(new IllegalStateException("S3's answer was cut short: " + data.length() + " of "
+                                + declared + " bytes"));
+                    }
+                    if (method == HttpMethod.GET && data.length() == 0) {
+                        return Future.failedFuture(new IllegalStateException("S3 answered " + response.statusCode() + " with an empty body"));
+                    }
+                    return Future.succeededFuture(new Answer(response.headers(), data));
+                }));
+        if (!repeatable || attempt >= MAX_RETRIES) {
+            return answer;
+        }
+        return answer.recover(err -> {
+            if (err instanceof S3Exception e && e.status() != 0) {
+                return Future.failedFuture(err);
+            }
+            io.vertx.core.Promise<Void> waited = io.vertx.core.Promise.promise();
+            vertx.setTimer(ResumingRangeBody.BACKOFF_MS << attempt, id -> waited.complete());
+            return waited.future().compose(v -> send(method, key, query, extra, payload, true, attempt + 1));
+        });
     }
 
     /** Resolved at most once a minute; the checked address is the one connected to. */
@@ -224,6 +302,14 @@ public final class S3Client {
         });
     }
 
+    static String contentMd5(byte[] bytes) {
+        try {
+            return java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("MD5").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /** A signed request. Bucket operations have a null key. */
     private RequestOptions request(HttpMethod method, String key, SortedMap<String, String> query, Map<String, String> extra, Buffer body) {
         String path = (settings.pathStyle() ? "/" + settings.bucket() : "") + "/" + (key == null ? "" : key);
@@ -239,6 +325,10 @@ public final class S3Client {
             signed.put("x-amz-security-token", settings.sessionToken());
         }
         extra.forEach((name, value) -> signed.put(name.toLowerCase(java.util.Locale.ROOT), value));
+        if (body != null && method == HttpMethod.PUT) {
+            // S3 checks the body against this and refuses any other, so bytes that went wrong on the way are never stored (D-098).
+            signed.put("content-md5", contentMd5(body.getBytes()));
+        }
         String authorization = S3Signer.authorization(method.name(), canonicalUri, canonicalQuery, signed, payloadHash, amzDate,
                 settings.region(), settings.accessKeyId(), settings.secretAccessKey());
         RequestOptions options = new RequestOptions().setMethod(method).setHost(connectHost).setPort(port).setSsl(ssl)

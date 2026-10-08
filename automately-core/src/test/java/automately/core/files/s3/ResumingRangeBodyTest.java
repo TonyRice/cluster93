@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Every way an S3 range download can be cut off (D-081, D-094), driven by hand so each one happens every time. */
+/** Every way an S3 range download can be cut off (D-081, D-094, D-098), driven by hand so each one happens every time. */
 class ResumingRangeBodyTest {
 
     /** A response body the test feeds: chunks, an end, or an error, whenever it likes. */
@@ -158,6 +158,46 @@ class ResumingRangeBodyTest {
         Reader reader = read(body);
         assertThat(opens.get()).isEqualTo(1);
         assertThat(reader.failed).hasMessageContaining("Access Denied");
+    }
+
+    @Test
+    void aDownloadThatKeepsMakingProgressNeverRunsOutOfResumes() {
+        List<FakeStream> streams = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            streams.add(new FakeStream());
+        }
+        Reader reader = read(body(8, new ArrayList<>(streams), new ArrayList<>()));
+        // Every connection drops after one byte: eight drops, far more than MAX_RESUMES, but each one got further.
+        for (int i = 0; i < 7; i++) {
+            streams.get(i).send(String.valueOf((char) ('a' + i)));
+            streams.get(i).close();
+        }
+        streams.get(7).send("h");
+        streams.get(7).finish();
+        assertThat(reader.failed).isNull();
+        assertThat(reader.received).hasToString("abcdefgh");
+    }
+
+    @Test
+    void askingAgainIsMarkedAsARetryAndWaitsLongerEachTime() {
+        List<Boolean> retries = new ArrayList<>();
+        List<Long> waits = new ArrayList<>();
+        List<Object> opens = new ArrayList<>(List.of(new HttpClosedException("closed"), new HttpClosedException("closed"), new FakeStream()));
+        FakeStream last = (FakeStream) opens.get(2);
+        ResumingRangeBody body = new ResumingRangeBody((offset, retry) -> {
+            retries.add(retry);
+            Object next = opens.removeFirst();
+            return next instanceof Throwable t ? Future.failedFuture(t) : Future.succeededFuture((FakeStream) next);
+        }, 1, (delayMs, task) -> {
+            waits.add(delayMs);
+            task.run();
+        }, err -> err);
+        Reader reader = read(body);
+        last.send("x");
+        last.finish();
+        assertThat(retries).as("retries get a fresh connection").containsExactly(false, true, true);
+        assertThat(waits).containsExactly(ResumingRangeBody.BACKOFF_MS, ResumingRangeBody.BACKOFF_MS * 2);
+        assertThat(reader.received).hasToString("x");
     }
 
     @Test
