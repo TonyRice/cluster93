@@ -1,6 +1,6 @@
 # Packages: versioned JavaScript code, published to the cluster
 
-**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day, twice (§12, D-085; §13, D-086). Not built yet; one question stays open (§10). Decision: D-083. This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
+**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day, twice (§12, D-085; §13, D-086). Not built yet. Decisions: D-083, D-087 (inline scripts, §10). This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
 
 ## 1. What a package is
 A **package** is an immutable, versioned set of JavaScript files (ES modules) with a manifest:
@@ -105,13 +105,13 @@ An isolate has no libuv and can't load `.node` addons, so `sharp`, `bcrypt`, `ch
 - **The packages job is to detect that and say where it can run.** The bundle shows exactly which native files and packages are pulled in. Publish stops with, for example, "`sharp` (pulled in by `image-tools`) needs native code; set `"runtime": "node"` to run this as a Node service".
 - **Where native code runs:** the Node runtime, as a sandboxed container on the cluster or as unsandboxed Node on the tenant's own device. It's designed separately, because it needs the execution layer: capabilities, placement and the runner protocol.
 
-## 10. Open
-- **Inline scripts importing packages** (Tony isn't sure yet). A job sent as source text might `import` a package, and the node must know which before it starts. The options:
-  - declare them on the job (`"packages": {"strings": "^1.4"}`, filled in by the CLI)
-  - have the server find them in the source
-  - allow imports only from published packages
-
-  It only matters once packages exist, and declaring is easy to add later.
+## 10. Inline scripts, and what's open
+- **Inline scripts can import packages** (Tony, D-087). An inline script is a job sent as source text (`automately run report.js`, `POST /v1/jobs` with a script, an agent over MCP) rather than an entry point of a published package.
+  - **The server finds the imports:** at submission it reads the script's static `import` statements and `import('literal')` calls, resolves each to the newest version that isn't yanked or blocked, and saves the lock on the job (§4). Retries run the same versions.
+  - **Imports it can't see are refused:** `import(someVariable)` fails with a clear error, since everything must be fetched before the script starts (§5).
+  - **Native code is refused at submission,** with the same message as publishing (§9), never halfway through a run.
+  - **A job can turn this off** with `"packages": false`; then any package import is refused at submission.
+  - **Pinning versions** for an inline script (`"packages": {"strings": "^1.4"}`) isn't planned; it can be added if it's needed.
 - **Python packages** sharing this store, with `.py` files and an import hook resolving from the same lock: proposed yes, decided with Python.
 
 ## 11. Building it
@@ -135,4 +135,4 @@ Each was closed in the sections above:
 ## 13. Second review (2026-10-08, D-086)
 - **A version with a security hole kept running,** since yanking only affects new resolutions: **block** stops it everywhere, including running services (Tony) (§7).
 - **A version published with a secret couldn't be removed,** since versions never change and locks reference them: **purge** deletes its files, and whatever was locked to it fails loudly (§7).
-- **Still open on purpose:** inline scripts importing packages (§10).
+- **Inline scripts importing packages:** decided afterwards (§10, D-087).

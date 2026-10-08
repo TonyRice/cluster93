@@ -1287,3 +1287,12 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 - **One running copy per service** (Tony): no replicas or load balancing at first, a short gap on redeploy, and only HTTP and WebSockets inbound. Replicas and zero-downtime deploys come as their own step.
 
 **Still open:** inline scripts importing packages (D-083).
+
+### D-087 — Inline scripts can import packages; the server finds the imports
+**Date:** 2026-10-08 · **Status:** Accepted (Tony). Settles the question D-083 left open; details in `docs/design/packages.md` §10
+
+- **What:** a job sent as source text can `import` the tenant's packages and `@cluster/` ones. At submission the server reads the script's static imports and literal `import('…')` calls, resolves each to the newest version that isn't yanked or blocked, and saves the lock on the job.
+- **Refused at submission:** imports whose name is computed at runtime, and packages that need native code.
+- **Off switch:** a job with `"packages": false` can't import packages at all.
+- **Not planned:** declaring version ranges on an inline job; it can be added if needed.
+- **Why:** quick scripts and agents should just work without declaring anything, and the node must know every package before the script starts.

@@ -26,6 +26,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Design: inline scripts can import packages (2026-10-08)
+
+### Docs
+- **Inline scripts can import packages (D-087, Tony).** The server finds the imports when the job is submitted, picks the newest usable versions and saves them on the job, so retries run the same code. Imports it can't see, and native code, are refused up front, and a job can turn package imports off with `"packages": false`. **Why:** this was the one open question in the packages design.
+
 ## Second design review: packages and the Node runtime (2026-10-08)
 
 ### Docs
