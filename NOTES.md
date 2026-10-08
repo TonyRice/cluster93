@@ -66,7 +66,7 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
 
 *Captured 2026-10-08* (D-089, D-090).
 
-- **Web and Node globals in the isolate:** `URL`, `URLSearchParams`, `atob`/`btoa`, `Buffer`, `structuredClone`, and a minimal `process` (`env` empty, `nextTick`).
+- **Web and Node globals in the isolate:** `URL`, `URLSearchParams`, `atob`/`btoa`, `structuredClone`, and Web Crypto. (`Buffer` and `process` are settled by D-093: the bundler imports them where bundled code uses them.)
   - **Why it matters:** bundled npm code often uses these without importing them, and fails at run time today.
   - **What's ready:** the stand-ins (D-090) already implement most of them, so the open question is only whether every isolate should pay to load them, or whether a bundler-inserted import is better.
 - **A disk tier for the package cache:** design §5 says "then from the data directory". It's memory-only for now (`AUTOMATELY_PACKAGE_CACHE_MB`). Worth it once packages are big or nodes restart often.

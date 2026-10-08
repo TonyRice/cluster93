@@ -316,6 +316,15 @@ Javet's native library is included for linux-x86_64 only for now.
 3b. ~~**The cluster is the database, streaming, files**~~ ✅ Embedded Ignite (durable, replicated), streamed HTTP, a `files` API with ranges, storage admission control ([design](docs/design/durability-and-streaming.md))
 4. ~~**API, auth, CLI and MCP**~~ ✅ Scoped tokens, an OpenAPI contract that validates every request, rate limits, a native CLI with a one-line install, and an MCP server for AI agents ([plan](docs/design/phase-4-plan.md), [CLI](docs/guides/cli.md), [MCP](docs/guides/mcp.md))
 5. **Observability and polish.** ✅ Metrics, readiness, JSON logs, a Grafana dashboard ([plan](docs/design/phase-5-plan.md)), [benchmarks](docs/benchmarks.md), [SECURITY.md](SECURITY.md). ✅ The demo ([scripts/demo.sh](scripts/demo.sh))
+6. ~~**Security groundwork**~~ ✅ Closed ports, mutual TLS between nodes, tenant secrets, signed releases, users, roles and a tamper-evident audit log (D-065 to D-074)
+7. ~~**The file system**~~ ✅ Folders, moves and copies, mounts, Node-style `fs` with `/tmp`, handles, locks and public links ([design](docs/design/vfs.md))
+8. ~~**Packages**~~ ✅ Versioned JavaScript published once and imported by name, locked per job; deploy a version as a service; yank, block, purge; stand-ins for Node's `path`, `events`, `buffer`, `url`, `util` and `process`; real npm libraries tested against Node ([design](docs/design/packages.md), [guide](docs/guides/packages.md))
+9. **Next:**
+   - **The Node runtime:** native code and the rest of Node, in sandboxed containers ([design](docs/design/node-runtime.md); accepted, not built). Then tests that run real native packages (`bcrypt`, `sharp`) there, as the isolate's are tested today.
+   - **The S3 download gap under load** (D-081 misses a timing of a closed connection).
+   - **`automately packages check <npm package>`:** install a package in a scratch folder and report whether it runs in the isolate, needs Node built-ins (which), or needs native code, before anyone writes code against it.
+   - **More of Node in the isolate, reviewed for security first:** which further polyfills (Web Crypto backed by the host, `stream`, `string_decoder`, `querystring`, …) can be added without weakening the sandbox.
+   - **Streaming output in the CLI:** follow a service across restarts and redeploys, and stream a job's or service's output and events as they happen, not only one run's logs.
 
 Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES.md](NOTES.md).
 

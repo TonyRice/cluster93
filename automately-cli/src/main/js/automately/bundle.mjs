@@ -3,7 +3,7 @@
 // modules a package can hold. It prints one JSON object: what it wrote, and what stops or warns about a publish.
 //
 // argv[2] is a JSON object: {root, outdir, entries: {"<export>": "<source file>"}, packages: ["<Automately package>"]}.
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { isBuiltin } from 'node:module';
 import path from 'node:path';
 
@@ -23,12 +23,14 @@ try {
 
 // The isolate provides these itself (D-079, and stand-ins for Node's, D-090), so they stay imports.
 const PROVIDED = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises', 'path', 'node:path', 'path/posix', 'node:path/posix',
-  'events', 'node:events', 'buffer', 'node:buffer', 'url', 'node:url', 'util', 'node:util']);
+  'events', 'node:events', 'buffer', 'node:buffer', 'url', 'node:url', 'util', 'node:util', 'process', 'node:process']);
 // Native extras some packages use only if they're there (ws uses the first two); left out, with a warning.
 const OPTIONAL = new Set(['bufferutil', 'utf-8-validate', 'fsevents']);
 // What gives a package away as needing a native build.
 const NATIVE_HELPERS = ['node-gyp-build', 'bindings', 'prebuild-install', '@mapbox/node-pre-gyp', 'node-pre-gyp', 'node-addon-api', 'nan'];
 
+// How a required built-in reaches its ES module form inside the bundle; never a real module name.
+const REQUIRED_PREFIX = 'automately-required-esm:';
 const rel = (file) => (file ? path.relative(root, file) || file : 'your code');
 const automatelyPackage = (name) => options.packages.some((p) => name === p || name.startsWith(p + '/'));
 
@@ -40,6 +42,15 @@ const plugin = {
         return undefined;
       }
       const name = args.path;
+      if (name.startsWith(REQUIRED_PREFIX)) {
+        return { path: name.slice(REQUIRED_PREFIX.length), namespace: 'automately-esm' };
+      }
+      // CommonJS code's require() of a module the isolate provides: an external require() can't work in an ES module
+      // ("Dynamic require of … is not supported"), so it becomes a static import, and require() returns that module's
+      // default export, which is what Node's module.exports is (D-093).
+      if (args.kind === 'require-call' && (name.startsWith('automately:') || PROVIDED.has(name))) {
+        return { path: name, namespace: 'automately-require' };
+      }
       if (name.startsWith('automately:') || PROVIDED.has(name) || automatelyPackage(name)) {
         return { path: name, external: true };
       }
@@ -58,6 +69,10 @@ const plugin = {
       return undefined;
     });
     build.onLoad({ filter: /.*/, namespace: 'automately-stub' }, () => ({ contents: 'export default undefined;', loader: 'js' }));
+    build.onLoad({ filter: /.*/, namespace: 'automately-require' }, (args) => ({
+      contents: 'module.exports = require(' + JSON.stringify(REQUIRED_PREFIX + args.path) + ').default;', loader: 'js' }));
+    build.onLoad({ filter: /.*/, namespace: 'automately-esm' }, (args) => ({
+      contents: 'export { default } from ' + JSON.stringify(args.path) + ';', loader: 'js' }));
   },
 };
 
@@ -82,10 +97,45 @@ function needsNativeBuild(dir) {
       return true;
     }
     const deps = { ...(manifest.dependencies || {}) };
-    return NATIVE_HELPERS.some((helper) => helper in deps);
+    if (NATIVE_HELPERS.some((helper) => helper in deps)) {
+      return true;
+    }
+    // Prebuilt binaries shipped as optional per-platform packages (sharp's @img/sharp-linux-x64, and the like), loaded
+    // through a computed path the bundler can't see: an installed optional dependency holding a .node file.
+    return Object.keys(manifest.optionalDependencies || {}).some((dep) => hasNodeFile(installed(dir, dep), 4));
   } catch {
     return false;
   }
+}
+
+/** Where a dependency of the package in {@code dir} is installed: beside it, or in the project's node_modules. */
+function installed(dir, dep) {
+  for (const candidate of [path.join(root, dir, 'node_modules', dep), path.join(root, 'node_modules', dep)]) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function hasNodeFile(dir, depth) {
+  if (!dir || depth < 0) {
+    return false;
+  }
+  try {
+    for (const name of readdirSync(dir)) {
+      const full = path.join(dir, name);
+      if (name.endsWith('.node')) {
+        return true;
+      }
+      if (name !== 'node_modules' && statSync(full).isDirectory() && hasNodeFile(full, depth - 1)) {
+        return true;
+      }
+    }
+  } catch {
+    // Unreadable: not evidence either way.
+  }
+  return false;
 }
 
 function list(dir, prefix = '') {
@@ -106,6 +156,11 @@ for (const [subpath, source] of Object.entries(options.entries)) {
   entryPoints[subpath === '.' ? 'index' : subpath.slice(2)] = path.resolve(root, source);
 }
 
+// Node's globals that npm code uses without importing them (D-093). esbuild turns each use into an import of the
+// isolate's stand-in, and only where it's used; the isolate itself gets no new globals.
+const globalsShim = path.join(root, 'node_modules', '.automately', 'globals.mjs');
+writeFileSync(globalsShim, "export { Buffer } from 'node:buffer';\nexport { default as process } from 'node:process';\n");
+
 let result;
 try {
   result = await esbuild.build({
@@ -121,6 +176,10 @@ try {
     conditions: ['import', 'module'],
     sourcemap: 'linked',
     loader: { '.wasm': 'file' },
+    inject: [globalsShim],
+    // What bundlers do for npm code: the production branch of `if (process.env.NODE_ENV !== 'production')`, and
+    // Node's `global` as the standard globalThis.
+    define: { 'process.env.NODE_ENV': '"production"', global: 'globalThis' },
     metafile: true,
     logLevel: 'silent',
     plugins: [plugin],

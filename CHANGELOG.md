@@ -26,7 +26,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
-## Packages, step 4: yank, block, purge (2026-10-08)
+## Packages: tested with real npm libraries (2026-10-08)
+
+### Added
+- **`RealNpmPackagesTest` (D-093).** 20 popular npm libraries are installed from a pinned lockfile, bundled with real esbuild, published, imported from jobs and run in the isolate. Each must give exactly the same output as under Node, and those needing what the isolate lacks must be refused with the reason. It runs when `AUTOMATELY_TEST_REAL_NPM` names a work folder (it needs node, npm and, once, the network). **Why:** the isolate's Node compatibility should be measured against real code, not guessed.
+- **A `process` stand-in,** with or without `node:`. It doesn't claim to be Node (`process.versions.node` is undefined), and `env` holds only `NODE_ENV`.
+
+### Fixed (found by that test)
+- **Unicode regular expressions (`\p{L}`) and `Intl` didn't work:** the isolate ran V8 built without ICU. It now runs Javet's i18n build with ICU 78's data, which the build downloads from the official ICU release and checks against its SHA-256. This had broken marked, ajv and validator.
+- **npm code using `Buffer`, `process` or `global` without importing them** failed at run time. Publishing now turns those uses into imports of the stand-ins, and defines `process.env.NODE_ENV` as `"production"`. This had broken immer.
+- **CommonJS code calling `require('util')`** or another module the isolate provides failed with "Dynamic require … is not supported". Publishing now turns those calls into static imports. This had broken yaml and validator.
+- **Native code that ships as prebuilt per-platform packages (sharp) wasn't detected,** so publishing refused it for its Node built-ins instead of pointing at the Node runtime. An installed optional dependency holding a `.node` file now counts as native.
+
+
 
 ### Added
 - **When a version goes wrong (D-092):** `packages yank`, `block` and `purge`, with `unyank` and `unblock`, and `POST /v1/packages/{name}/versions/{version}/…`.

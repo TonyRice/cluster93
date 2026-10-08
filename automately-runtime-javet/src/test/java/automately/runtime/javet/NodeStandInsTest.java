@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The stand-ins for Node's path, events, buffer, url and util (D-090), run in the isolate. Their results were checked
+ * The stand-ins for Node's path, events, buffer, url, util and process (D-090, D-093), run in the isolate, and ICU. Their results were checked
  * against Node's own modules when they were written; these tests make sure they load and behave in V8 without Node.
  */
 class NodeStandInsTest {
@@ -90,6 +90,16 @@ class NodeStandInsTest {
                 + "export default async () => [format('%s=%d %j', 'n', 4, { a: 1 }), util.inspect({ a: [1, { b: 'c' }] }),"
                 + " await promisify(later)(21), isDeepStrictEqual(new Map([[1, { a: 2 }]]), new Map([[1, { a: 2 }]])), util.types.isDate(new Date())];"))
                 .containsExactly("n=4 {\"a\":1}", "{ a: [ 1, { b: 'c' } ] }", 42, true, true);
+    }
+
+    @Test
+    void unicodeRegularExpressionsAndIntlWork() throws Exception {
+        // V8's i18n build with ICU's data (D-093): without it, \\p{…} doesn't compile and Intl is missing.
+        assertThat(output("export default () => [/^\\p{Lu}\\p{Ll}+$/u.test('Élan'), 'ﬁ'.normalize('NFKC'),"
+                + " new Intl.NumberFormat('de-DE').format(1234567.891), new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'long' })"
+                + ".format(new Date(Date.UTC(2026, 9, 8))), ['b', 'ä', 'a'].sort(new Intl.Collator('de').compare).join(''),"
+                + " (1234.5).toLocaleString('en-US', { style: 'currency', currency: 'USD' })];"))
+                .containsExactly(true, "fi", "1.234.567,891", "October", "aäb", "$1,234.50");
     }
 
     @Test

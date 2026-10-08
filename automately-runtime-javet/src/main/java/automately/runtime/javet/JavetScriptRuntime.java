@@ -79,6 +79,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("buffer", "node:buffer"), java.util.Map.entry("node:buffer", "node:buffer"),
             java.util.Map.entry("url", "node:url"), java.util.Map.entry("node:url", "node:url"),
             java.util.Map.entry("util", "node:util"), java.util.Map.entry("node:util", "node:util"),
+            java.util.Map.entry("process", "node:process"), java.util.Map.entry("node:process", "node:process"),
             // The host APIs as modules (D-091), so packages can import them rather than rely on globals.
             java.util.Map.entry("automately:kv", "automately:kv"), java.util.Map.entry("automately:bus", "automately:bus"),
             java.util.Map.entry("automately:jobs", "automately:jobs"), java.util.Map.entry("automately:files", "automately:files"),
@@ -95,6 +96,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:buffer", resource("node/buffer.js")),
             java.util.Map.entry("node:url", resource("node/url.js")),
             java.util.Map.entry("node:util", resource("node/util.js")),
+            java.util.Map.entry("node:process", resource("node/process.js")),
             java.util.Map.entry("automately:kv", hostModule("kv")),
             java.util.Map.entry("automately:bus", hostModule("bus")),
             java.util.Map.entry("automately:jobs", hostModule("jobs")),
@@ -157,6 +159,28 @@ public final class JavetScriptRuntime implements ScriptRuntime {
         V8Flags flags = V8RuntimeOptions.V8_FLAGS;
         if (!flags.isSealed()) {
             flags.setMaxHeapSize(maxHeapMb);
+            flags.setIcuDataFile(icuDataFile());
+        }
+    }
+
+    /** ICU's data, which V8's i18n build needs for Intl and Unicode regular expressions (D-093): the runtime's version. */
+    static final String ICU_DATA = "icudt78l.dat";
+
+    /**
+     * Writes the ICU data shipped with the runtime to a file V8 can map, once per process. V8 needs a path, and the
+     * data is in the jar, so it goes to a temporary file that's removed when the JVM exits.
+     */
+    private static String icuDataFile() {
+        try (java.io.InputStream in = JavetScriptRuntime.class.getResourceAsStream("icu/" + ICU_DATA)) {
+            if (in == null) {
+                throw new IllegalStateException("Missing ICU data (icu/" + ICU_DATA + "): the build downloads it; run ./mvnw package");
+            }
+            java.nio.file.Path file = java.nio.file.Files.createTempFile("automately-" + ICU_DATA.replace(".dat", "-"), ".dat");
+            file.toFile().deleteOnExit();
+            java.nio.file.Files.copy(in, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return file.toString();
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
         }
     }
 
@@ -239,7 +263,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             return control.killedWith();
         }
         long creating = System.nanoTime();
-        try (V8Runtime v8 = V8Host.getV8Instance().createV8Runtime()) {
+        try (V8Runtime v8 = V8Host.getV8I18nInstance().createV8Runtime()) {
             automately.core.metrics.Metrics.of(vertx).isolateStarted(java.time.Duration.ofNanos(System.nanoTime() - creating));
             control.attach(v8);
             long timer = execution.hasTimeout()
