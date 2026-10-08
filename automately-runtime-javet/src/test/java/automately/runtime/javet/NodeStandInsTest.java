@@ -115,6 +115,44 @@ class NodeStandInsTest {
     }
 
     @Test
+    void webCryptoIsAGlobal() throws Exception {
+        assertThat(output("export default async () => { const a = crypto.getRandomValues(new Uint32Array(4));"
+                + " const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('abc')));"
+                + " let quota; try { crypto.getRandomValues(new Uint8Array(65537)); } catch (e) { quota = e.name; }"
+                + " let mismatch; try { crypto.getRandomValues(new Float32Array(2)); } catch (e) { mismatch = e.name; }"
+                + " return [a.length, a.some(n => n !== 0), /^[0-9a-f-]{36}$/.test(crypto.randomUUID()),"
+                + " Array.from(digest.slice(0, 4)).map(b => b.toString(16).padStart(2, '0')).join(''), quota, mismatch,"
+                + " Object.isFrozen(crypto)]; };"))
+                .containsExactly(4, true, true, "ba7816bf", "QuotaExceededError", "TypeMismatchError", true);
+    }
+
+    @Test
+    void nodeCryptoHashesHmacsAndRandomness() throws Exception {
+        assertThat(output("import crypto, { createHash, createHmac, hash, randomBytes, randomInt, timingSafeEqual, createSecretKey } from 'node:crypto';"
+                + " import { Buffer } from 'node:buffer';"
+                + " export default () => {"
+                + "   const h = createHash('sha256').update('ab'); const copy = h.copy(); h.update('c');"
+                + "   let finished; try { h.digest(); h.digest(); } catch (e) { finished = e.code; }"
+                + "   const ints = Array.from({ length: 200 }, () => randomInt(3, 6));"
+                + "   return [createHash('sha256').update('abc').digest('hex').slice(0, 8), copy.digest('base64'),"
+                + "     createHmac('sha256', 'Jefe').update('what do ya want for nothing?').digest('hex').slice(0, 8),"
+                + "     createHmac('sha256', createSecretKey(Buffer.from('Jefe'))).update('what do ya want for nothing?').digest('hex').slice(0, 8),"
+                + "     hash('md5', 'abc'), randomBytes(100000).length, Math.min(...ints), Math.max(...ints),"
+                + "     timingSafeEqual(Buffer.from('ab'), Buffer.from('ab')), finished, crypto.webcrypto === globalThis.crypto,"
+                + "     crypto.getHashes().includes('sha3-256')];"
+                + " };"))
+                .containsExactly("ba7816bf", "+44g/C5MPySMYMOb1lLzwTRymLuXe4tNWQO4UFViBgM=", "5bdcc146", "5bdcc146",
+                        "900150983cd24fb0d6963f7d28e17f72", 100000, 3, 5, true, "ERR_CRYPTO_HASH_FINALIZED", true, true);
+    }
+
+    @Test
+    void whatCryptoCantDoYetSaysSo() throws Exception {
+        assertThat(output("import { createCipheriv } from 'crypto'; import { Buffer } from 'buffer';"
+                + " export default () => { try { createCipheriv('aes-256-gcm', Buffer.alloc(32), Buffer.alloc(12)); } catch (e) { return [e.code]; } };"))
+                .containsExactly("ERR_FEATURE_UNAVAILABLE_ON_PLATFORM");
+    }
+
+    @Test
     void unicodeRegularExpressionsAndIntlWork() throws Exception {
         // V8's i18n build with ICU's data (D-093): without it, \\p{…} doesn't compile and Intl is missing.
         assertThat(output("export default () => [/^\\p{Lu}\\p{Ll}+$/u.test('Élan'), 'ﬁ'.normalize('NFKC'),"

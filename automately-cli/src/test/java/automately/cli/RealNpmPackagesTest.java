@@ -44,7 +44,7 @@ class RealNpmPackagesTest {
 
     /** Libraries that run in the isolate, one module each in src/; the parameterized test below names the same. */
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
-            "rxjs", "mustache", "events", "validator");
+            "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto");
 
     private RunningNode node;
     private Path project;
@@ -115,7 +115,7 @@ class RealNpmPackagesTest {
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
         JsonNode expected = Json.parse(underNode(lib));
         Path script = project.resolve("job-" + lib + ".mjs");
@@ -137,8 +137,7 @@ class RealNpmPackagesTest {
 
     @ParameterizedTest(name = "{0} is refused at publish: it needs {1}")
     @org.junit.jupiter.params.provider.CsvSource({
-            "uuid, crypto (imported by",
-            "jwt, crypto (imported by",
+            "jwt, stream (imported by",
             "papaparse, stream (imported by",
             "bcrypt, bcrypt needs native code",
             "sharp, sharp needs native code"})
@@ -150,18 +149,6 @@ class RealNpmPackagesTest {
         if (reason.contains("native")) {
             assertThat(refused.err()).as("points at the Node runtime").contains("\"runtime\": \"node\"");
         }
-    }
-
-    @Test
-    void aLibraryUsingWebCryptoPublishesButFailsClearlyWhenItRuns() throws Exception {
-        Path variant = variant("nanoid");
-        Result published = cli("packages", "publish", variant.toString());
-        assertThat(published.code()).as(published.err()).isZero();
-        Path script = project.resolve("job-nanoid.mjs");
-        Files.writeString(script, "import { run } from 'realworld-nanoid'; export default () => run();\n");
-        Result ran = cli("run", script.toString());
-        assertThat(ran.code()).isEqualTo(1);
-        assertThat(ran.err()).contains("crypto is not defined");
     }
 
     // --- helpers ---

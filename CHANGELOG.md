@@ -26,7 +26,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
-## `process.env`, declared per job (2026-10-08)
+## `crypto` in the isolate: randomness, hashing, HMAC (2026-10-08)
+
+### Added
+- **The global `crypto` (Web Crypto) and `node:crypto` (D-097),** on the JVM's `SecureRandom`, `MessageDigest` and `Mac`.
+  - **Web Crypto:** `getRandomValues`, `randomUUID` and `subtle.digest`.
+  - **Node:** `randomBytes`, `randomFill`, `randomInt`, `randomUUID`; `createHash` and `createHmac` (incremental, with `copy()`), `hash()`, `timingSafeEqual` and secret `KeyObject`s.
+  - **Caps:** at most 64 KiB of random bytes per host call and 1,000 open hashes per execution, and nothing is shared between jobs.
+  - **Checked:** against the standards' test vectors and real Node's output.
+  - **uuid and nanoid** now run in the isolate.
+  - **Why:** step 1 of D-095.
+- **Coming next:** ciphers, key derivation and signatures say "not available in the isolate yet" until they arrive.
+
+
 
 ### Added
 - **`env` on jobs and services (D-096).** `{"API_URL": "https://…", "KEY": {"secret": "name"}}` becomes the script's `process.env`, plus `NODE_ENV`, and never the node's environment.

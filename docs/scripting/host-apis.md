@@ -140,6 +140,22 @@ export default async () => fetch(process.env.API_URL, { headers: { authorization
   - `jobs.run(script, input, { env: {...}, inheritEnv: true })`: a started job gets its parent's env only with `inheritEnv`.
 - **`process`** is a global, as in Node, and `node:process` gives the same object. It doesn't claim to be Node (`process.versions.node` is undefined); `exit`, `chdir` and `binding` throw.
 
+## `crypto`: randomness and hashing
+
+The global `crypto` is Web Crypto, and `node:crypto` is Node's; both use the JVM's secure random generator and digests (D-097):
+```js
+crypto.getRandomValues(new Uint8Array(16));        // secure random bytes (at most 65,536 per call)
+crypto.randomUUID();
+await crypto.subtle.digest('SHA-256', bytes);      // SHA-1, SHA-256, SHA-384, SHA-512
+
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+createHash('sha256').update('abc').digest('hex');  // md5, sha1, sha2, sha3
+createHmac('sha256', key).update(body).digest('base64');
+```
+- **What's there:** randomness (`randomBytes`, `randomFill`, `randomInt`, `randomUUID`), hashing and HMAC (incremental, with `copy()`), one-shot `hash()`, `timingSafeEqual`, and secret `KeyObject`s.
+- **Coming next:** ciphers, key derivation (PBKDF2, HKDF, scrypt) and signatures. Until then those functions throw `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.
+- **Nothing reaches outside the job:** it's computation and randomness only, an execution can have at most 1,000 hashes open, and nothing is shared between jobs.
+
 ## Streams and text encoding
 
 Bodies are **streams of `Uint8Array` chunks** that you read with `for await`. Reading is backpressured: while you're not reading, the sender is paused.

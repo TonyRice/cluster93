@@ -27,7 +27,7 @@ public final class Imports {
     public static final Set<String> BUILT_INS = Set.of("fs", "node:fs", "fs/promises", "node:fs/promises", "automately:fs",
             // Stand-ins for Node's own (D-090).
             "path", "node:path", "path/posix", "node:path/posix", "events", "node:events", "buffer", "node:buffer", "url", "node:url",
-            "util", "node:util", "process", "node:process",
+            "util", "node:util", "process", "node:process", "crypto", "node:crypto",
             // The host APIs as modules (D-091).
             "automately:kv", "automately:bus", "automately:jobs", "automately:files", "automately:secrets", "automately:fetch", "automately:log");
 
@@ -87,7 +87,7 @@ public final class Imports {
         String bare = specifier.startsWith("node:") ? specifier.substring(5) : specifier;
         String module = bare.contains("/") ? bare.substring(0, bare.indexOf('/')) : bare;
         if (specifier.startsWith("node:") || NODE_MODULES.contains(module)) {
-            return "Node's \"" + module + "\" module isn't available in the isolate (fs, path, events, buffer, url, util and process are); run code that needs it with \"runtime\": \"node\"";
+            return "Node's \"" + module + "\" module isn't available in the isolate (fs, path, events, buffer, url, util, process and crypto are); run code that needs it with \"runtime\": \"node\"";
         }
         if (specifier.startsWith("automately:")) {
             return "There's no built-in module named \"" + specifier + "\"";

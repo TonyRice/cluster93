@@ -37,6 +37,11 @@ public interface HostApis {
         return Unavailable.SECRETS;
     }
 
+    /** Cryptography (D-095): computation and secure randomness, nothing that reaches out. A new one per execution. */
+    default CryptoApi crypto() {
+        return new automately.core.host.JvmCrypto();
+    }
+
     /** Stops every listener this execution registered and discards unfinished uploads. Called once the script has ended. */
     Future<Void> close();
 

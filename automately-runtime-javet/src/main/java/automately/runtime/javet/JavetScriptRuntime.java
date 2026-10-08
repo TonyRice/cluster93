@@ -49,7 +49,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     /** The prelude's files (src/main/resources/automately/runtime/javet/js), in order; each sees what the earlier ones define. */
     static final List<String> PRELUDE_FILES = List.of("prelude.js", "console.js", "timers.js", "listeners.js", "kv.js", "bus.js", "jobs.js", "secrets.js",
-            "encoding.js", "streams.js", "fetch.js", "files.js", "fs.js", "serve.js", "context.js", "entry.js");
+            "encoding.js", "streams.js", "crypto.js", "fetch.js", "files.js", "fs.js", "serve.js", "context.js", "entry.js");
 
     /**
      * Runs before the job's module: the prelude's files in one closure. It captures the host object, removes it from the
@@ -80,6 +80,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("url", "node:url"), java.util.Map.entry("node:url", "node:url"),
             java.util.Map.entry("util", "node:util"), java.util.Map.entry("node:util", "node:util"),
             java.util.Map.entry("process", "node:process"), java.util.Map.entry("node:process", "node:process"),
+            java.util.Map.entry("crypto", "node:crypto"), java.util.Map.entry("node:crypto", "node:crypto"),
             // The host APIs as modules (D-091), so packages can import them rather than rely on globals.
             java.util.Map.entry("automately:kv", "automately:kv"), java.util.Map.entry("automately:bus", "automately:bus"),
             java.util.Map.entry("automately:jobs", "automately:jobs"), java.util.Map.entry("automately:files", "automately:files"),
@@ -97,6 +98,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:url", resource("node/url.js")),
             java.util.Map.entry("node:util", resource("node/util.js")),
             java.util.Map.entry("node:process", resource("node/process.js")),
+            java.util.Map.entry("node:crypto", resource("node/crypto.js")),
             java.util.Map.entry("automately:kv", hostModule("kv")),
             java.util.Map.entry("automately:bus", hostModule("bus")),
             java.util.Map.entry("automately:jobs", hostModule("jobs")),
@@ -327,6 +329,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 bindApi(v8, hostObject, "http", new HttpBinding(bridge), callbacks);
                 bindApi(v8, hostObject, "secrets", new SecretsBinding(bridge, host.secrets()), callbacks);
                 bindApi(v8, hostObject, "fs", new FsBinding(bridge, host.fs()), callbacks);
+                bindApi(v8, hostObject, "crypto", new CryptoBinding(bridge, host.crypto()), callbacks);
                 v8.getGlobalObject().set("__automately", hostObject);
             }
             try {

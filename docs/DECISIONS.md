@@ -1482,3 +1482,24 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - **Why:** an inline job script isn't bundled, so `process.env.X` would otherwise be a ReferenceError. Node, Deno and Workers' compatibility mode all have it.
   - **What it is:** the same object `node:process` exports, writable as Node's is (browser shims assign to it). It still doesn't claim to be Node.
   - **No new reach:** it reaches nothing. `exit`, `chdir` and `binding` throw.
+
+### D-097 — `crypto` step 1: randomness, hashing and HMAC from the JVM
+**Date:** 2026-10-08 · **Status:** Accepted. Step 1 (and the first part of step 2) of D-095
+
+- **Shape:**
+  - **The host API:** `CryptoApi` in core, one per execution (`HostApis.crypto()`), implemented by `JvmCrypto` on `SecureRandom` (one per node, thread-safe), `MessageDigest` and `Mac`.
+  - **The binding:** `CryptoBinding` exposes it synchronously, and failures come back as `Error` values, as `fs`'s sync calls do.
+  - **JavaScript:** the prelude's `crypto.js` defines the frozen Web Crypto global. `node:crypto` builds Node's API on the same calls, which it finds under a symbol on that object. They offer nothing a script couldn't do with the public functions.
+- **What's in:**
+  - **Web Crypto:** `getRandomValues` (integer typed arrays, Node's `Buffer` included; at most 65,536 bytes, as the standard says), `randomUUID`, `subtle.digest` (SHA-1/256/384/512).
+  - **Node:** `randomBytes`, `randomFill(Sync)`, `randomInt` (rejection sampling, unbiased), `randomUUID`, `getRandomValues`; `createHash` and `createHmac` for md5, sha1, sha2 and sha3, incremental, with `copy()`; `hash()`, `getHashes()`, `timingSafeEqual` (`MessageDigest.isEqual`), and secret `KeyObject`s.
+- **Bounds:**
+  - **64 KiB per host call:** `randomBytes(n)` for bigger `n` loops in JavaScript, so a huge request is bounded by the isolate's own heap.
+  - **At most 1,000 open hashes** per execution.
+  - **Per execution only:** handles are dropped with it, so nothing is shared between jobs.
+  - **Cheap enough to stay synchronous:** each call works on bytes the script already holds.
+- **Not yet:** ciphers, KDFs, signatures and asymmetric keys throw `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` rather than half-work. `Hash` isn't a stream until `stream` arrives.
+- **Checked:**
+  - **The standards' vectors:** FIPS 180-4, RFC 1321 and RFC 4231, including an empty HMAC key.
+  - **Real Node:** a `RealNpmPackagesTest` module's output matches Node's byte for byte.
+  - **Real libraries:** uuid (v4 and v7) and nanoid now run.

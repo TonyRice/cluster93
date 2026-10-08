@@ -76,7 +76,7 @@ Each is new reach, so each gets its threat model: SSRF, egress rules, connection
 
 ## 5. Building it, in order
 0. ~~**`env` on jobs and services**~~ ✅ with secrets by name and masking in logs, and `process` as a global (D-096).
-1. **Randomness and the `crypto` global:** the smallest host API, and it unblocks uuid and nanoid.
+1. ~~**Randomness and the `crypto` global:**~~ ✅ with `node:crypto`'s hashing, HMAC and `timingSafeEqual` from step 2 (D-097). the smallest host API, and it unblocks uuid and nanoid.
 2. **`node:crypto`:** hashing, HMAC, `timingSafeEqual`, then KDFs, then ciphers, then keys and signatures. That unblocks jsonwebtoken (HS256 first, then RS256 and ES256).
 3. **`stream`, `string_decoder`, `stream/promises`:** unblocks papaparse in Node mode and csv-parse.
 4. **`zlib`, `assert`, `querystring`, `timers/promises`, `os`.**
