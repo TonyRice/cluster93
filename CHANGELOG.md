@@ -26,6 +26,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Design review: packages and the Node runtime (2026-10-08)
+
+### Docs
+- **Both designs were reviewed for holes (D-085), and the fixes are folded in.** The most important ones:
+  - **Packages:** cluster-wide packages now live under a reserved `@cluster/` prefix, so a tenant's package can't impersonate one (dependency confusion). Package storage counts against the quota.
+  - **Node containers have no network at all:** the runner tunnels their connections through the cluster's egress rules. Without this, database traffic couldn't have been policed.
+  - **The Node runtime is off until the operator enables it,** per tenant, with limits.
+  - **WebSockets** will work through the ingress, for both runtimes.
+  - **The fixes needing no decision:** orphaned containers, capacity, image pinning, readiness, and how services, child jobs and packages' own files resolve.
+
 ## Design: the Node runtime (2026-10-08)
 
 ### Docs

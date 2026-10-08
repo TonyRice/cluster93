@@ -1,6 +1,6 @@
 # Packages: versioned JavaScript code, published to the cluster
 
-**Status:** accepted (Tony, 2026-10-08) and not built yet; one question stays open (§10). Decision: D-083. This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
+**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day (§12, D-085). Not built yet; one question stays open (§10). Decision: D-083. This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
 
 ## 1. What a package is
 A **package** is an immutable, versioned set of JavaScript files (ES modules) with a manifest:
@@ -32,17 +32,22 @@ Automately never fetches code from npm or the internet. Developers publish packa
 
 - **Not in the tenant's file tree:** package files aren't stored under paths (the first draft used `.packages/blobs/…`), so they never show up in listings and no naming rule is needed to hide them.
 - **Apps share this:** app deployments, later, are content-addressed and immutable in the same way, so they reuse the table.
-- **Visibility** (Tony): a tenant's packages are visible to that tenant only. Operators can publish packages with `visibility: cluster`, which every tenant can import. Sharing with chosen tenants can come later if there's a need.
+- **Visibility** (Tony): a tenant's packages are visible to that tenant only. Operators publish cluster-wide packages under the reserved **`@cluster/`** prefix (`import { slugify } from '@cluster/strings'`). Every tenant can import those, and no tenant can publish under that prefix. A bare name only ever finds the tenant's own package, so the two can't be confused (D-085). Sharing with chosen tenants can come later if there's a need.
+- **Quota:** package files count against the tenant's storage quota, once per unique file. Deduplication is per tenant, never across tenants: a shared store would let anyone test whether another tenant holds a given file.
 
 ## 3. Publishing
 ```bash
 cd my-lib && npm install          # as usual
 automately packages publish       # reads automately.json, or package.json
 ```
-1. **Bundling, on the developer's machine** (Tony): the CLI runs the project's own esbuild (`npx esbuild`, `--format=esm --platform=neutral`), turning the code and the npm dependencies it uses into plain ES modules. If esbuild isn't there, the CLI explains how to add it (`npm i -D esbuild`).
+1. **Bundling, on the developer's machine** (Tony): the CLI runs the project's own esbuild (`npx esbuild`, `--format=esm --platform=node`), turning the code and the npm dependencies it uses into plain ES modules.
+   - **Source maps** come along, so errors point at the original files.
+   - **If esbuild isn't there,** the CLI explains how to add it (`npm i -D esbuild`).
    - **Our own `fs` stays ours:** `fs`, `node:fs` and `fs/promises` are left for the isolate to provide (D-079).
    - **Other Node built-ins:** pure-JavaScript stand-ins are bundled in: `path`, `events`, `buffer`, `url`, `util`. `crypto` and `timers/promises` map to the host API.
-   - **Native code stops the publish** (§9). It names the `.node` file, or the package that needs a native build and the dependency that pulled it in.
+   - **Required native code stops the publish** (§9). It names the `.node` file, or the package that needs a native build and the dependency that pulled it in.
+   - **Optional native extras** (`bufferutil`, `utf-8-validate`, `fsevents`, which packages like `ws` use if present) are stubbed out with a warning. They don't block a package that works without them.
+   - **WebAssembly is fine:** `.wasm` files are package files like any other. It's often how a library avoids native code.
 2. **Uploading only what's new:** the CLI hashes every file and asks which hashes the cluster lacks (`POST /v1/packages/blobs/missing`), then uploads only those (`PUT /v1/packages/blobs/{sha256}`). The server re-hashes what arrives and refuses a mismatch.
 3. **Committing the version** (`POST /v1/packages/{name}/versions`): it's refused if that version exists or a file is missing.
    - **Who and when:** it records who published (the user, D-070) and when.
@@ -50,21 +55,24 @@ automately packages publish       # reads automately.json, or package.json
 
 **Also:** the same API for CI; an MCP tool for agents to publish small packages inline; later, a link publishing a watched folder.
 
-**Scopes:** `packages:read` and `packages:write`. Only operators publish `cluster` packages.
+**Scopes:** `packages:read` and `packages:write`. Only operators publish under `@cluster/`. Agents can publish their tenant's packages with `packages:write`, never cluster-wide ones.
 
 ## 4. Resolving: once, when a job is submitted
 - **The lock:** the server resolves the job's package and every dependency range to exact versions (`^`, `~`, exact and `x` ranges; no npm-style peer dependencies), giving a **lock**: name → version → manifest hash.
 - **The lock is saved on the job:** retries and resumes (D-009 to D-012) run identical code, even if a newer version is published meanwhile. "What code ran for job X" always has an answer.
-- **Services run from a package version,** which is their revision (D-021). Publishing and redeploying rolls a service.
+- **Services run from a package version,** which is their revision (D-021). **The lock is made when the service is deployed and stored on the revision**, so every run and restart of that revision uses identical code. Publishing and redeploying rolls a service.
+- **Jobs started from scripts** (`jobs.run`, D-063) inherit their parent's lock, and can import exactly what the parent could.
 - **At most 500 packages in one job's lock,** to keep job records small.
 
 ## 5. Loading: everything before the script runs
 Javet's module resolver runs synchronously on the isolate's thread, so the node fetches everything first:
 1. **Prefetch:** the node fetches every file in the lock, verifies each against its hash (dropping and refetching on a mismatch), and caches it by hash. Limits are 10 MB and 1 000 files per job. A fetch failure fails the attempt before an isolate is made.
+   - **The cache is bounded:** least-recently-used files go first, from memory and then from the data directory, within `AUTOMATELY_MIN_FREE_DISK_MB`. The Node runtime's artifacts share it.
 2. **Resolve:** inside the isolate, the resolver only maps names, with no I/O:
    - **Relative paths** stay inside the same package. Escaping its root is refused.
    - **Bare names** come from the lock and the package's `exports`.
    - **Built-ins:** `fs`, `node:fs`, `fs/promises` (D-079), and `automately:*` names for the host APIs (`automately:kv` and so on).
+   - **A package's own files:** `import.meta.url` is `file:///packages/<name>/<version>/<file>`. Reading a path under `/packages` with `fs` or `fetch(new URL('./data.json', import.meta.url))` is answered from the job's lock, read-only. So packages that ship templates, JSON or `.wasm` work.
    - **Refused with a clear error:** URLs, absolute paths, and names not in the lock.
 3. **Later:** V8's code cache, keyed by file hash, measured before it's adopted (as isolate pooling was, D-024).
 
@@ -77,6 +85,7 @@ Javet's module resolver runs synchronously on the isolate's thread, so the node 
 ## 7. Lifecycle
 - **Yank:** a yanked version is skipped by new resolutions, while existing locks still load it (Cargo's model). Deleting is only for versions no lock references.
 - **Garbage:** package files that no manifest references are collected, as file garbage is.
+- **Deleting a tenant** deletes its packages and their files.
 - **Listing:** `GET /v1/packages`, `GET /v1/packages/{name}`, and `automately packages ls · info · yank`.
 
 ## 8. One deploy command, two runtimes
@@ -105,3 +114,15 @@ An isolate has no libuv and can't load `.node` addons, so `sharp`, `bcrypt`, `ch
 2. **Resolve and load:** a short spike first (import cycles, and how a failed import surfaces in Javet). Then the lock on jobs, prefetch and the node cache, and the resolver. Tests cover imports, refused names, an integrity failure, and the lock surviving a retry.
 3. **Services from packages:** a version is a revision; `automately:*` built-ins; `/packages` in `fs`; MCP tools; docs.
 4. **Lifecycle:** yank, garbage collection, metrics (cache hits, prefetch time).
+
+## 12. Review for holes (2026-10-08, D-085)
+Each was closed in the sections above:
+- **Dependency confusion** between tenant and cluster packages: the reserved `@cluster/` prefix (§2).
+- **Storage without a quota:** package files count, deduplicated per tenant only (§2).
+- **Child jobs** inherit their parent's lock (§4).
+- **Packages reading their own files** (templates, JSON, `.wasm`): `import.meta.url` and `/packages` reads answered from the lock (§5).
+- **Optional native extras** blocking a publish: they're stubbed with a warning (§3).
+- **When services are pinned:** at deploy, on the revision (§4).
+- **An unbounded node cache:** it's bounded and shared with Node artifacts (§5).
+- **Tenant deletion** removes packages (§7).
+- **`--platform=neutral`** breaking npm packages: `node`, with source maps (§3).

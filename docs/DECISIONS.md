@@ -1230,3 +1230,43 @@ The existing file tests all pass through the wrapper.
 5. Links.
 
 Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and artifact sizes first.
+
+### D-085 — Holes found reviewing the packages and Node runtime designs, and how they're closed
+**Date:** 2026-10-08 · **Status:** Accepted (Tony chose the four marked). Amends D-083 and D-084; details in `docs/design/packages.md` §12 and `docs/design/node-runtime.md` §11
+
+**Packages (D-083):**
+- **Dependency confusion** (Tony): cluster-wide packages live under the reserved `@cluster/` prefix, which tenants can't publish to. A bare name only finds the tenant's own package.
+- **Quota:** package files count against the tenant's quota, deduplicated per tenant only. Sharing across tenants would let anyone test whether another tenant holds a file.
+- **Pinning:**
+  - Child jobs from `jobs.run` inherit their parent's lock.
+  - Services are pinned at deploy, on the revision.
+- **Packages reading their own files:** `import.meta.url` and `/packages` reads are answered from the job's lock. WebAssembly is allowed.
+- **Native detection:** optional native extras (`bufferutil`, `fsevents`) are stubbed with a warning. Only required native code blocks a publish.
+- **Bundling:** for `--platform=node`, with source maps.
+- **Housekeeping:**
+  - The node's package cache is bounded (least-recently-used first, within the free-disk minimum).
+  - Deleting a tenant removes its packages.
+
+**Node runtime (D-084):**
+- **Network** (Tony): containers get none. The runner tunnels Node's `net`, `tls`, `dns` and `http` through its socket, and the cluster opens each connection under the egress rules (D-026). Pure-JavaScript drivers (`pg`, `mysql2`, `ioredis`) work; networking inside native code and UDP don't.
+  - **Why:** an HTTP proxy can't police database traffic, and filtering a real network needs privileges rootless Podman doesn't have.
+- **WebSockets** (Tony): the ingress proxies `Upgrade` requests, for both runtimes, and the isolate's `ctx.serve` gains WebSocket handlers.
+- **Off by default** (Tony): the operator enables the Node runtime per tenant, in a runtime policy that also sets the isolation tier and the limits on containers and memory.
+- **Orphans:**
+  - Containers are labelled with their node's process id, and removed when a node starts.
+  - The runner exits when its socket goes.
+  - Calls carry the attempt number, so a stale container can't write.
+- **Placement:**
+  - Container capacity is separate from isolate slots, with a memory budget.
+  - Artifacts record their CPU, C library and Node major version, and placement matches them.
+  - Work no node can run is refused with the reason.
+- **Supply chain:** runtime and builder images are pinned by digest in the signed release (D-069), and can come from an operator's mirror or be preloaded.
+- **Smaller fixes:**
+  - **Serving:** readiness and health checks for app servers.
+  - **Builds:** a lockfile is required; our packages can be copied into `node_modules` at build.
+  - **Child jobs** inherit the runtime and artifact.
+  - **Secrets:** environment secrets need `secrets:use`, are audited, and are documented as visible to every dependency.
+  - **Containers:** `/tmp` counts against container memory; artifacts are evicted when disk runs low; stopping is SIGTERM, then grace, then kill.
+  - **Testing:** the shared conformance suite is built with the execution layer.
+  - **The docs:** the claim that switching runtimes is "one line" is qualified for `fs`.
+- **Checked in spikes:** gVisor's host-socket setting (`--host-uds`), and the tunnelled networking's throughput.
