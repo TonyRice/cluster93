@@ -1,6 +1,6 @@
 # The Node runtime: npm, native addons and Node APIs, sandboxed
 
-**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day (§11, D-085). Not built yet; it comes after packages. Decisions: D-084, D-085. It brings together the earlier notes on Node services, containers, unsandboxed links and link capabilities, and sits next to [packages](packages.md) (D-083).
+**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day, twice (§11, D-085; §12, D-086). Not built yet; it comes after packages. Decisions: D-084, D-085, D-086. It brings together the earlier notes on Node services, containers, unsandboxed links and link capabilities, and sits next to [packages](packages.md) (D-083).
 
 ## 1. What it's for
 Packages cover pure JavaScript in the isolate. The Node runtime covers what an isolate can't run:
@@ -53,11 +53,13 @@ Native addons are compiled for one Node ABI, CPU and C library, so the build mus
 ```
 automately deploy            # automately.json: { "runtime": "node", "node": "22" }
   └─ docker run automately/node-builder:22  npm ci --omit=dev   (matching Linux, CPU and libc)
-  └─ hash every file of the app (source + node_modules)
-  └─ upload only what the cluster lacks (the package store, D-083), then commit a "node artifact" manifest
+  └─ pack the app into layers: node_modules, then source (D-086)
+  └─ upload only the layers the cluster lacks (the package store, D-083), then commit a "node artifact" manifest
 ```
 - **No registry,** and nothing on the cluster runs npm's install scripts.
-- **Deduplicated:** the content-addressed store means a redeploy that changed one source file uploads one file, even with 300 MB of `node_modules`.
+- **Layers, not files** (D-086): a typical `node_modules` is 20 000 to 40 000 files, too many to upload or fetch one by one. A Node artifact is a few content-addressed layers (tar archives, hashed like any package file), like a container image: dependencies, then source.
+  - **Deduplicated:** a redeploy that changed only source uploads only the small source layer, even with 300 MB of `node_modules`. A lockfile change rebuilds the dependency layer.
+  - **Packages stay file by file,** since they're small. How big layers should be (one dependency layer, or split by size) is settled in the artifact-size spike.
 - **Dependencies are vetted where they're built:** on the developer's machine, under their eyes, with their own npm audit.
 - **It needs Docker locally** for native builds. Pure-JavaScript `node_modules` could skip Docker (`npm ci` on any OS gives the same files), and the CLI tells the two apart.
 - **A lockfile is required:** `npm ci` builds exactly what `package-lock.json` says, and deploy refuses without one.
@@ -76,14 +78,19 @@ This is the step the review put before containers and links. Everything below ne
   - **Cluster → runner:** "run this", "stop", and incoming HTTP requests for services, streamed.
   - **On the cluster side,** the node holding the runner's connection builds `NodeHostApis` for the job, with the tenant taken from the job record and never from the runner. Calls go through the same objects as the isolate's, so scopes, quotas, rate limits and egress rules are identical.
   - **One protocol for both:** a runner in a container on a core node, and a link on someone's laptop, speak it the same way. The only difference is how the connection is made: a local socket the node hands to the container, or an outbound authenticated WebSocket from the link.
+- **The runner isn't trusted** (D-086): user code runs in the same process and can bypass or rewrite it. **Security never depends on the runner:** the container has no network, and the cluster checks every call against the job's tenant and attempt, so a script talking to the socket directly gains nothing it couldn't do through the globals.
 - **Jobs, orphans and fencing are unchanged:** the runner's job is a job like any other. If the container dies, the attempt ends. If the node dies, the orphan rules apply (D-009 to D-012).
   - **Fenced:** every call carries the job's attempt number, and the node refuses calls from an attempt that has been superseded. A stale container can't write.
   - **No orphaned containers:** each container is labelled with its node's process id (`instanceId`). A node starting up removes any labelled container from an earlier life. The runner exits by itself if its socket closes and doesn't come back within a few seconds.
 - **Stopping:** a stop request sets `ctx.stopRequested`, then sends SIGTERM. After the grace period (D-020) the container is killed. A job's timeout ends it the same way.
 - **Logs:** the runner forwards `console` output, and the container's stdout and stderr go to the job's log too, with the same line limits as scripts.
 - **Capacity:** nodes offering containers advertise container capacity separately from isolate slots, as a number of containers plus a memory budget. Placement checks each job's or service's memory request against it.
+  - **The budget is set explicitly** (D-086), `AUTOMATELY_CONTAINER_MEMORY_MB`, because containers share the machine with the node's own Java process. A node refuses to start if the budget plus its Java heap exceeds the machine's memory.
 - **Serving HTTP:** the ingress already proxies to "the node holding the job" (D-036). That node forwards each request over the runner protocol, either to a `ctx.serve` handler or to the app's own server on its `PORT`.
   - **Readiness:** the runner reports ready once the port accepts connections. Until then the ingress holds requests briefly, then answers 503. A server that stops answering its health check is restarted.
+  - **One running copy per service** (Tony, D-086): no replicas or load balancing at first. If its node dies, it restarts on another node, with a cold start.
+  - **Redeploys have a short gap:** the old version stops before the new one is ready. Zero-downtime switching (start the new one, wait until ready, then switch) comes with replicas.
+  - **Inbound is HTTP and WebSockets only:** no raw TCP or UDP servers.
   - **WebSockets** (Tony, D-085): the ingress learns to proxy `Upgrade` requests, which it strips today. The runner protocol carries the connection as a two-way stream, so Socket.IO and `ws` servers work as they are. The isolate's `ctx.serve` gets a WebSocket handler too, so both runtimes have them.
 
 ## 6. Running containers on a core node
@@ -99,14 +106,17 @@ This is the step the review put before containers and links. Everything below ne
   - **Network: none at all** (Tony, D-085). The container has no network interface beyond loopback.
     - **How code still connects:** the runner reroutes Node's `net`, `tls`, `dns`, `http` and `https` through its socket, and the node opens each outbound connection only if the cluster's egress rules allow it (D-026): no private addresses unless the policy allows them, connecting to the exact address that was checked, and DNS-rebinding-safe. The checks are the same as `fetch`'s.
     - **Database drivers work unchanged:** `pg`, `mysql2`, `ioredis` and most others are pure JavaScript over `net`.
+    - **DNS** (D-086): `dns.lookup` and the `dns.resolve*` calls are both rerouted, so drivers that look up SRV records (`mongodb+srv://`) work, under the same egress rules.
+    - **Programs started from Node code** (D-086): the tunnel lives inside Node, so `child_process.spawn('curl', …)` or a spawned `git` can't use it. The runner also offers a local proxy endpoint, through the same tunnel and egress rules, set as `HTTP_PROXY` and `HTTPS_PROXY` for spawned programs. Programs that ignore proxy settings won't connect, and the guide says so.
     - **What doesn't work:** networking done inside native code, and UDP.
     - **Why not filter a real network:** it's the only approach that needs no privileged networking on the node, which rootless Podman can't give anyway. It behaves the same under runc, under gVisor and on links.
   - **`/tmp`** is a tmpfs, and its size counts against the container's memory limit, so it's set explicitly.
-- **The app's files:** the node materializes the artifact once per version into its data directory (`<data>/node-apps/<artifact hash>`), from the package store and verified by hash, and mounts it read-only into each replica. A second replica or a restart reuses it. Versions nobody has used for a while are removed first when space runs low, within `AUTOMATELY_MIN_FREE_DISK_MB`.
+- **The app's files:** the node materializes the artifact once per version into its data directory (`<data>/node-apps/<artifact hash>`), from the package store and verified by hash, and mounts it read-only into the container. A restart reuses it. Versions nobody has used for a while are removed first when space runs low, within `AUTOMATELY_MIN_FREE_DISK_MB`.
 - **Images** (D-085): `automately/node-runtime` and `automately/node-builder` are pinned by digest in each signed release (D-069). The CLI and nodes pull by digest, from a registry or mirror the operator configures, or use images the operator preloaded, so clusters without internet access work. An image whose digest doesn't match is refused.
 - **gVisor and the mounted socket:** gVisor reaches host Unix sockets only with its `--host-uds` setting. That's checked in the gVisor spike, with a fallback connection method if needed.
+- **Rootless Podman, gVisor and limits together** (D-086) aren't a given: gVisor's rootless mode has limits, and memory and CPU limits under rootless Podman need cgroup delegation set up on the host. Both are in the gVisor spike, the operator guide lists the host setup, and a node only advertises `node:gvisor` once its own start-up check passes (a container started with limits, under `runsc`, reaching its socket).
 - **Cold and warm starts:**
-  - **Services** are long-running replicas, so start time matters little.
+  - **Services** are long-running, so start time matters little.
   - **Jobs** start a container each: about 100 to 300 ms with runc, more with gVisor. A warm pool per version can come later if needed.
 
 ## 7. What scripts see in the Node runtime
@@ -140,9 +150,9 @@ The same runner and artifact, on a link the tenant owns, with no container. It's
 **Spikes first:**
 - **Runner latency:** a plain Node runner answering `kv.get` over the protocol, timed per call.
 - **Rootless Podman from the JVM:** container start time, with `sharp` loading under runc and under gVisor.
-- **gVisor's overhead:** on requests, and on native addons; and whether the mounted runner socket works under `--host-uds`.
+- **gVisor's overhead:** on requests, and on native addons; whether the mounted runner socket works under `--host-uds`; and gVisor under rootless Podman with cgroup limits (D-086).
 - **Tunnelled networking:** `pg` and `ioredis` through the runner's `net` and `tls`, and their throughput.
-- **Artifact sizes:** for real apps (an Express API; Next.js standalone output), and how much deduplication saves across deploys.
+- **Artifact sizes:** for real apps (an Express API; Next.js standalone output), how much layers save across deploys, and how big a layer should be (D-086).
 
 ## 10. Tony's answers (2026-10-08)
 1. **The engine:** plain Node with our runner package.
@@ -170,3 +180,14 @@ Each was closed in the sections above. Tony chose the four marked.
 - **gVisor's host sockets:** checked in the spike (§6).
 - **Smaller gaps:** the lockfile is required; `/tmp` counts against memory; artifacts on disk are evicted; stopping is SIGTERM, then grace, then kill; logs; the conformance suite built in step 1.
 - **Corrected:** the runner connects over a local socket, not a WebSocket; Podman only.
+
+## 12. Second review (2026-10-08, D-086)
+Each was closed in the sections above. Tony chose the one marked.
+- **Too many files per artifact:** Node artifacts are a few layers, dependencies then source (§4b).
+- **Programs spawned from Node had no network:** a local proxy endpoint through the same tunnel (§6).
+- **DNS SRV lookups:** the `dns.resolve*` calls are rerouted too (§6).
+- **The runner isn't trusted:** stated as a rule; security never depends on it (§5).
+- **Rootless Podman with gVisor and cgroup limits:** in the gVisor spike, with a start-up check before a node offers `node:gvisor` (§6).
+- **Containers competing with the JVM for memory:** an explicit container memory budget, checked at start (§5).
+- **Stopping a version with a security hole:** block, which stops running services too (packages §7).
+- **Limits stated plainly** (Tony): one running copy per service, a short gap on redeploy, and HTTP and WebSockets only inbound (§5). Replicas and zero-downtime deploys come later.

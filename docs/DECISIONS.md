@@ -1270,3 +1270,20 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - **Testing:** the shared conformance suite is built with the execution layer.
   - **The docs:** the claim that switching runtimes is "one line" is qualified for `fs`.
 - **Checked in spikes:** gVisor's host-socket setting (`--host-uds`), and the tunnelled networking's throughput.
+
+### D-086 — A second pass for holes in packages and the Node runtime
+**Date:** 2026-10-08 · **Status:** Accepted (Tony chose the two marked). Amends D-083, D-084 and D-085; details in `docs/design/packages.md` §13 and `docs/design/node-runtime.md` §12
+
+**Packages (D-083):**
+- **Block** (Tony): a blocked version refuses to load anywhere, even from an existing lock, and services running it stop with "version blocked". Owners, admins or operators can block; it's audited and can be lifted. **Why:** yanking only stops new resolutions, so a version with a security hole kept running.
+- **Purge:** an owner or operator deletes a version's files outright, and whatever is locked to it fails loudly. Audited and final. **Why:** a version published with a secret in it could otherwise never be removed.
+- Both apply to Node artifacts, which share the store.
+
+**Node runtime (D-084):**
+- **Artifacts are layers** (dependencies, then source), not individual files. **Why:** a `node_modules` of 20 000 to 40 000 files means tens of thousands of uploads and a slow first fetch on each node.
+- **Spawned programs** get a local proxy endpoint (`HTTP(S)_PROXY`) through the same tunnel and egress rules; **`dns.resolve*`** is rerouted as well as `dns.lookup`.
+- **The runner isn't trusted:** security never depends on it, because the container has no network and the cluster checks every call against the job's tenant and attempt.
+- **Host setup:** rootless Podman with gVisor and cgroup limits is checked in the gVisor spike, and a node offers `node:gvisor` only after its own start-up check passes. `AUTOMATELY_CONTAINER_MEMORY_MB` sets the container budget, and a node refuses to start if it plus the Java heap exceeds the machine's memory.
+- **One running copy per service** (Tony): no replicas or load balancing at first, a short gap on redeploy, and only HTTP and WebSockets inbound. Replicas and zero-downtime deploys come as their own step.
+
+**Still open:** inline scripts importing packages (D-083).

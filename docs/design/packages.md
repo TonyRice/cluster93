@@ -1,6 +1,6 @@
 # Packages: versioned JavaScript code, published to the cluster
 
-**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day (§12, D-085). Not built yet; one question stays open (§10). Decision: D-083. This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
+**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day, twice (§12, D-085; §13, D-086). Not built yet; one question stays open (§10). Decision: D-083. This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
 
 ## 1. What a package is
 A **package** is an immutable, versioned set of JavaScript files (ES modules) with a manifest:
@@ -84,9 +84,14 @@ Javet's module resolver runs synchronously on the isolate's thread, so the node 
 
 ## 7. Lifecycle
 - **Yank:** a yanked version is skipped by new resolutions, while existing locks still load it (Cargo's model). Deleting is only for versions no lock references.
+- **Block** (D-086), for a version with a security hole: a blocked version **refuses to load anywhere**, even from an existing lock.
+  - **Running services on it stop** (Tony), with the reason "version blocked"; new and retried jobs fail at load with the same reason. The owner deploys a fixed version.
+  - **Who:** the tenant's owners and admins, or an operator (for any tenant's package, and for `@cluster/` ones). Audited, and it can be lifted.
+- **Purge** (D-086), for a version published with a secret in it: an owner or operator deletes the version's files outright. Anything still locked to it fails loudly ("version purged"), never runs other code in its place. Audited, and final.
+- **The same rules cover Node artifacts,** which share this store.
 - **Garbage:** package files that no manifest references are collected, as file garbage is.
 - **Deleting a tenant** deletes its packages and their files.
-- **Listing:** `GET /v1/packages`, `GET /v1/packages/{name}`, and `automately packages ls · info · yank`.
+- **Listing:** `GET /v1/packages`, `GET /v1/packages/{name}`, and `automately packages ls · info · yank · block · purge`.
 
 ## 8. One deploy command, two runtimes
 `automately deploy` reads `automately.json`, whose **`runtime` field is there from day one**:
@@ -113,7 +118,7 @@ An isolate has no libuv and can't load `.node` addons, so `sharp`, `bcrypt`, `ch
 1. **Store and publish:** `PACKAGES` and `PACKAGE_BLOBS` (contract tests on both stores), the publish API, and the CLI's `publish` and `ls`, with esbuild and native detection.
 2. **Resolve and load:** a short spike first (import cycles, and how a failed import surfaces in Javet). Then the lock on jobs, prefetch and the node cache, and the resolver. Tests cover imports, refused names, an integrity failure, and the lock surviving a retry.
 3. **Services from packages:** a version is a revision; `automately:*` built-ins; `/packages` in `fs`; MCP tools; docs.
-4. **Lifecycle:** yank, garbage collection, metrics (cache hits, prefetch time).
+4. **Lifecycle:** yank, block and purge, garbage collection, metrics (cache hits, prefetch time).
 
 ## 12. Review for holes (2026-10-08, D-085)
 Each was closed in the sections above:
@@ -126,3 +131,8 @@ Each was closed in the sections above:
 - **An unbounded node cache:** it's bounded and shared with Node artifacts (§5).
 - **Tenant deletion** removes packages (§7).
 - **`--platform=neutral`** breaking npm packages: `node`, with source maps (§3).
+
+## 13. Second review (2026-10-08, D-086)
+- **A version with a security hole kept running,** since yanking only affects new resolutions: **block** stops it everywhere, including running services (Tony) (§7).
+- **A version published with a secret couldn't be removed,** since versions never change and locks reference them: **purge** deletes its files, and whatever was locked to it fails loudly (§7).
+- **Still open on purpose:** inline scripts importing packages (§10).

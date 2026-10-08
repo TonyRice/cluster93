@@ -26,6 +26,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Second design review: packages and the Node runtime (2026-10-08)
+
+### Docs
+- **A second pass over both designs (D-086) found eight more holes, now closed:**
+  - **Packages:** a version can be **blocked**, which stops it everywhere including running services (Tony), or **purged** if it was published with a secret in it.
+  - **Node artifacts are layers,** not tens of thousands of files.
+  - **Spawned programs** reach the network through a local proxy, and DNS SRV lookups are rerouted.
+  - **The runner is explicitly untrusted;** the cluster's own checks are the security boundary.
+  - **Host setup** for rootless Podman with gVisor is checked before a node offers it, and the container memory budget is explicit.
+- **Limits stated plainly** (Tony): one running copy per Node service at first, with a short gap on redeploy.
+
 ## Design review: packages and the Node runtime (2026-10-08)
 
 ### Docs
