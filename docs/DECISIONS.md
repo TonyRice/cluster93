@@ -1436,3 +1436,29 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 - **Tests:**
   - **`ResumingRangeBodyTest`** drives each case by hand with a fake stream, so it happens every time: a close after the last byte, a close halfway, a first request and a resume each failing to open, a 403 not retried, and the resumes running out. Three of them fail on D-081's code.
   - **The stress test** passed 20 runs in a row (before: about 1 failure in 7).
+
+### D-095 — More of Node in the isolate, without weakening the sandbox
+**Date:** 2026-10-08 · **Status:** Accepted (Tony). Details in `docs/design/isolate-polyfills.md`
+
+- **The rule:**
+  - **Pure-JavaScript stand-ins** can always be added.
+  - **Host-backed code is computation and randomness only:** no network, files, processes, environment or other tenants' data. Every call is capped, expensive calls run off the isolate's thread, nothing outlives the job or is shared between jobs, and the primitives come from the JVM's reviewed implementations (no home-made crypto).
+  - **Anything that opens network access is a capability with its own review** (phase B).
+  - **Vendored code** is pinned, licence-checked and fetched by checksum at build time.
+- **Phase A:**
+  - **`crypto`, backed by the JVM:** randomness, hashing, HMAC, key derivation, AES and ChaCha20, RSA, ECDSA and Ed25519.
+  - **The Web Crypto global `crypto`:** Tony said yes.
+  - **`stream`:** Node's own, vendored from `readable-stream` 4, with `string_decoder`.
+  - **`zlib`** with an output cap; **`assert`**, **`querystring`**, **`timers/promises`**; **`os`** mapped to the job.
+  - **Web globals** (`URL` and the rest), after a cold-start benchmark.
+- **Caps (as proposed):** PBKDF2 ≤ 10⁶ iterations, `scrypt` ≤ 64 MB, RSA ≤ 4096 bits, random ≤ 64 KiB per call, zlib output ≤ 32 MB.
+- **`process.env` is declared per job** (Tony): `"env": {"K": "value", "S": {"secret": "name"}}`.
+  - **Contents:** only what's declared, plus `NODE_ENV`.
+  - **Secrets** follow D-068's `secrets:use` rule and are resolved on the node at run start. The job record keeps the secret's name, never its value.
+  - **Logs** mask a secret's value as `[secret:<name>]`.
+  - This supersedes `ideas/node-compat.md`'s implicit mapping and extends D-093's empty `env`.
+- **Network access never reaches private things unless explicitly allowed** (Tony):
+  - **Phase B's checks:** `http`, `net` and `dns` go through D-026's egress check.
+  - **The cluster's own nodes are always refused,** by advertised address and internal port, even on public addresses.
+  - **Per-tenant, operator-granted, audited allow-lists** of hosts or CIDRs and ports replace the all-or-nothing `AUTOMATELY_EGRESS_ALLOW_PRIVATE`, which stays for local development only.
+- **Each step comes with:** real libraries added to `RealNpmPackagesTest`, matched against Node; hostile scripts that try to exhaust every cap; and a check that no host object leaks (D-060).

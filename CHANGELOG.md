@@ -26,6 +26,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Design: more of Node in the isolate (2026-10-08)
+
+### Added
+- **`docs/design/isolate-polyfills.md` (D-095),** accepted.
+  - **Phase A:** `crypto` backed by the JVM and a Web Crypto global, Node's own `stream`, `zlib`, `assert`, `os` and web globals, under rules that keep the sandbox as it is (computation and randomness only, capped, per job).
+  - **`process.env` per job:** declared explicitly, with secrets by name and masked in logs.
+  - **Network:** phase B's network modules never reach private addresses or the cluster's own nodes unless an operator allows it per tenant.
+  - **Why:** real libraries (D-093) showed `crypto` and `stream` are what most npm code still lacks.
+
 ## Fixed: the rest of the S3 download gap under load (2026-10-08)
 
 ### Fixed

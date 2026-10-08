@@ -323,7 +323,7 @@ Javet's native library is included for linux-x86_64 only for now.
    - **The Node runtime:** native code and the rest of Node, in sandboxed containers ([design](docs/design/node-runtime.md); accepted, not built). Then tests that run real native packages (`bcrypt`, `sharp`) there, as the isolate's are tested today.
    - **The S3 download gap under load** (D-081 misses a timing of a closed connection).
    - **`automately packages check <npm package>`:** install a package in a scratch folder and report whether it runs in the isolate, needs Node built-ins (which), or needs native code, before anyone writes code against it.
-   - **More of Node in the isolate, reviewed for security first:** which further polyfills (Web Crypto backed by the host, `stream`, `string_decoder`, `querystring`, …) can be added without weakening the sandbox.
+   - **More of Node in the isolate** ([design](docs/design/isolate-polyfills.md), accepted): `crypto` backed by the JVM and Web Crypto, `stream`, `zlib`, `assert`, `os`, web globals, and `process.env` declared per job; network modules later, never reaching private addresses unless allowed.
    - **Streaming output in the CLI:** follow a service across restarts and redeploys, and stream a job's or service's output and events as they happen, not only one run's logs.
 
 Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES.md](NOTES.md).
