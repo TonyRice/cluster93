@@ -1560,3 +1560,45 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - **jsonwebtoken** with HS256: sign, verify, and a tampered token rejected, on D-097's HMAC
   - RS256 and ES256 wait for step 2's signatures.
 - **Also fixed:** `RealNpmPackagesTest` reinstalled its `node_modules` only when there was none, though its javadoc said "unless the same lockfile is already installed". It now records the lockfile it installed and installs again when the fixture's lockfile changes.
+
+### D-101 — `crypto` step 2: key derivation, ciphers, keys and signatures
+**Date:** 2026-10-08 · **Status:** Accepted. Step 2 of D-095, with its caps
+
+**Decision:** `node:crypto` adds:
+- **Key derivation:** PBKDF2, HKDF and scrypt.
+- **Ciphers:** AES-CBC, AES-CTR, AES-GCM and ChaCha20-Poly1305.
+- **Keys:** `KeyObject`s for RSA, EC (P-256, P-384, P-521) and Ed25519 keys, read from and exported to PEM, DER and JWK, and read from X.509 certificates.
+- **Signatures:** sign and verify with RSA (PKCS#1 v1.5 and PSS), ECDSA (DER or IEEE P1363) and Ed25519.
+- **Key generation:** `generateKeyPair`.
+
+Everything is on the JVM's providers.
+- **Two gaps in the JVM, filled in code here:**
+  - The JVM has no scrypt, so RFC 7914 is implemented here.
+  - Its PBKDF2 takes the password as characters, while Node's are bytes, so it's written on `Mac`.
+  - Both are checked against their RFCs' vectors.
+- **Keys stay in the job.** A `KeyObject` holds the key's DER (PKCS#8 or SPKI) and hands it to the host with each call, which parses it and keeps nothing.
+  - Whatever format a key was read from, it's normalised to the DER Node itself writes, so an export gives what Node gives. For EC, that's SEC1 inside PKCS#8 with the public key.
+  - **Deriving public keys:** the JVM has no call to derive an EC or Ed25519 public key from a private one. EC uses k·G computed here; Ed25519 uses the JVM's own key generator, given the seed.
+- **Ciphers** are per-execution state, like open hashes, counting toward the same 1,000.
+  - The JVM cipher is made at the first `update`, so `setAutoPadding` works as in Node.
+  - **Authenticated decryption** collects its input (at most 32 MB) and decrypts at `final`, once the tag is known. Nothing unauthenticated is handed out before.
+  - **String output** (base64, utf8) carries partial groups and characters across `update` calls, as Node's StringDecoder does.
+- **Costly work runs on the node's crypto pool:** a Vert.x shared worker pool named `automately-crypto`, sized at half the cores (at least 2), made once per node. It runs PBKDF2, scrypt and key generation. The pool completes its answers from its own thread, not through the caller's context: a waiting `…Sync` call blocks the isolate's thread, so an answer queued to that context would never arrive.
+  - The `…Sync` forms wait for the pool rather than computing on the isolate's thread. That bounds the node's CPU and scrypt memory (pool size × 64 MB) however many jobs ask at once.
+  - A sync call that waits more than 60 s fails.
+- **Caps** (D-095's, plus what they implied):
+  - **PBKDF2:** ≤ 10⁶ iterations, and ≤ 4·10⁶ HMACs in all, so a long output can't multiply the cost.
+  - **scrypt:** ≤ 64 MB, and parallelization ≤ 16.
+  - **RSA:** generated ≤ 4,096 bits, read ≤ 8,192.
+  - **Sizes:** derived output ≤ 64 KiB, and signed or verified data ≤ 32 MB.
+- **Checked against real Node:**
+  - A new real-npm fixture runs every piece with keys Node generated. Its output equals real Node's:
+    - KDF outputs
+    - ciphertexts, fed in odd-sized pieces with string encodings
+    - RSA and Ed25519 signatures, which are deterministic
+    - PEM, DER and JWK exports in every encoding
+    - ECDSA, which is randomised, verifies.
+  - jsonwebtoken's RS256 tokens equal Node's, and ES256 verifies.
+- **jsonwebtoken's PS256** stays off in the isolate. jsonwebtoken enables it only when semver accepts `process.version`, which D-093 deliberately leaves empty so that libraries don't take their Node-only paths. RSA-PSS itself works through `sign`/`verify`. Claiming a Node version is a separate decision, for Tony.
+- **Not yet:** RSA encryption, ECDH and Diffie-Hellman, encrypted private keys, rsa-pss, x25519 and ed448 keys, and Web Crypto's `subtle` beyond `digest`.
+- **Also fixed: a stopping queue consumer took back what it had just released.** When a script ends, its consumer releases the message it was handling, then used to claim again before it had seen its own stop. Nothing was lost (a claim after stop hands the message straight back), but for a moment no other consumer could have it, and a test caught that. A release now doesn't claim more, since releasing only happens when the consumer is stopping.

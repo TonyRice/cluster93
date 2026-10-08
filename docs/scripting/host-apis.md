@@ -140,9 +140,9 @@ export default async () => fetch(process.env.API_URL, { headers: { authorization
   - `jobs.run(script, input, { env: {...}, inheritEnv: true })`: a started job gets its parent's env only with `inheritEnv`.
 - **`process`** is a global, as in Node, and `node:process` gives the same object. It doesn't claim to be Node (`process.versions.node` is undefined); `exit`, `chdir` and `binding` throw.
 
-## `crypto`: randomness and hashing
+## `crypto`
 
-The global `crypto` is Web Crypto, and `node:crypto` is Node's; both use the JVM's secure random generator and digests (D-097):
+The global `crypto` is Web Crypto, and `node:crypto` is Node's; both run on the JVM's own cryptography (D-097, D-101):
 ```js
 crypto.getRandomValues(new Uint8Array(16));        // secure random bytes (at most 65,536 per call)
 crypto.randomUUID();
@@ -151,10 +151,32 @@ await crypto.subtle.digest('SHA-256', bytes);      // SHA-1, SHA-256, SHA-384, S
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 createHash('sha256').update('abc').digest('hex');  // md5, sha1, sha2, sha3
 createHmac('sha256', key).update(body).digest('base64');
+
+const key = scryptSync(password, salt, 32);                     // or pbkdf2, hkdf
+const cipher = createCipheriv('aes-256-gcm', key, iv);           // aes-*-cbc, -ctr, -gcm; chacha20-poly1305
+const sealed = Buffer.concat([cipher.update(text), cipher.final()]), tag = cipher.getAuthTag();
+
+const privateKey = createPrivateKey(pem);                        // PEM, DER or JWK
+const signature = sign('sha256', data, privateKey);              // RSA (PKCS#1, PSS), ECDSA, Ed25519 (algorithm null)
+verify('sha256', data, createPublicKey(privateKey), signature);
+generateKeyPair('ec', { namedCurve: 'P-256' }, (err, publicKey, privateKey) => { ... });
 ```
-- **What's there:** randomness (`randomBytes`, `randomFill`, `randomInt`, `randomUUID`), hashing and HMAC (incremental, with `copy()`), one-shot `hash()`, `timingSafeEqual`, and secret `KeyObject`s.
-- **Coming next:** ciphers, key derivation (PBKDF2, HKDF, scrypt) and signatures. Until then those functions throw `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.
-- **Nothing reaches outside the job:** it's computation and randomness only, an execution can have at most 1,000 hashes open, and nothing is shared between jobs.
+- **What's there:**
+  - **Randomness:** `randomBytes`, `randomFill`, `randomInt` and `randomUUID`.
+  - **Hashing:** hashing and HMAC (incremental, with `copy()`), one-shot `hash()` and `timingSafeEqual`.
+  - **Key derivation:** `pbkdf2`, `hkdf` and `scrypt`, each with a `…Sync` form.
+  - **Ciphers:** `createCipheriv`/`createDecipheriv` with AES-CBC, AES-CTR, AES-GCM and ChaCha20-Poly1305.
+  - **Keys:** `KeyObject`s (secret, public and private), `createPrivateKey`/`createPublicKey` from PEM, DER, JWK or an X.509 certificate, and `export` to any of them.
+  - **Signatures:** `sign`/`verify` and `createSign`/`createVerify`.
+  - **Key generation:** `generateKeyPair` for rsa, ec (P-256, P-384, P-521) and ed25519, and `generateKey` for hmac and aes keys.
+- **Not yet:** RSA encryption (`publicEncrypt`, …), ECDH and Diffie-Hellman, encrypted private keys, rsa-pss, x25519 and ed448 keys, and Web Crypto's `subtle` beyond `digest`. These throw `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` or say what is supported.
+- **Limits:**
+  - **PBKDF2:** at most 1,000,000 iterations, and 4,000,000 HMACs in all (iterations × output blocks).
+  - **scrypt:** at most 64 MB of memory, whatever `maxmem` says.
+  - **RSA:** keys of up to 4,096 bits generated and 8,192 bits read.
+  - **Data sizes:** 32 MB signed or decrypted (authenticated) at once, and 64 KiB derived.
+- **Heavy work:** PBKDF2, scrypt and key generation run on the node's small crypto pool. The `…Sync` forms wait for it too, so a job can't tie up more than its share of the node.
+- **Nothing reaches outside the job:** it's computation only. A key lives in the job as its bytes, is handed to the host with each call, and is never kept. An execution can have at most 1,000 hashes and ciphers open, and nothing is shared between jobs.
 
 ## Streams and text encoding
 

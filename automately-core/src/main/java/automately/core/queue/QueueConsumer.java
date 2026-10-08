@@ -38,19 +38,22 @@ public final class QueueConsumer {
         }
 
         public void ack() {
-            end(() -> service.ack(message));
+            end(() -> service.ack(message), true);
         }
 
         public void fail(String error) {
-            end(() -> service.fail(message, error, false));
+            end(() -> service.fail(message, error, false), true);
         }
 
-        /** Gives the message back untried (the consumer is stopping); it doesn't count as an attempt. */
+        /**
+         * Gives the message back untried (the consumer is stopping); it doesn't count as an attempt. It doesn't claim
+         * more: a consumer that hadn't seen its own stop yet would take back the message it just released (D-101).
+         */
         public void release() {
-            end(() -> service.fail(message, null, true));
+            end(() -> service.fail(message, null, true), false);
         }
 
-        private void end(java.util.function.Supplier<Future<Boolean>> outcome) {
+        private void end(java.util.function.Supplier<Future<Boolean>> outcome, boolean claimMore) {
             context.runOnContext(v -> {
                 if (done) {
                     return;
@@ -59,7 +62,9 @@ public final class QueueConsumer {
                 service.vertx().cancelTimer(leaseTimer);
                 outcome.get().onComplete(ar -> {
                     inFlight--;
-                    pump();
+                    if (claimMore) {
+                        pump();
+                    }
                 });
             });
         }

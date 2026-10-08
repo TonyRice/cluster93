@@ -166,9 +166,31 @@ class NodeStandInsTest {
 
     @Test
     void whatCryptoCantDoYetSaysSo() throws Exception {
-        assertThat(output("import { createCipheriv } from 'crypto'; import { Buffer } from 'buffer';"
-                + " export default () => { try { createCipheriv('aes-256-gcm', Buffer.alloc(32), Buffer.alloc(12)); } catch (e) { return [e.code]; } };"))
-                .containsExactly("ERR_FEATURE_UNAVAILABLE_ON_PLATFORM");
+        assertThat(output("import { publicEncrypt, generateKeyPairSync } from 'crypto'; import { Buffer } from 'buffer';"
+                + " export default () => { const codes = [];"
+                + "   try { publicEncrypt('x', Buffer.alloc(1)); } catch (e) { codes.push(e.code); }"
+                + "   try { generateKeyPairSync('x25519'); } catch (e) { codes.push(e.message.includes('rsa, ec and ed25519')); }"
+                + "   return codes; };"))
+                .containsExactly("ERR_FEATURE_UNAVAILABLE_ON_PLATFORM", true);
+    }
+
+    @Test
+    void keyDerivationCiphersAndSignaturesWork() throws Exception {
+        assertThat(output("import { pbkdf2, pbkdf2Sync, scryptSync, createCipheriv, createDecipheriv, generateKeyPair, sign, verify } from 'node:crypto';"
+                + " import { Buffer } from 'node:buffer';"
+                + " export default async () => {"
+                + "   const fromPool = await new Promise((ok, no) => pbkdf2('password', 'salt', 1, 20, 'sha1', (e, k) => e ? no(e) : ok(k.toString('hex'))));"
+                + "   let capped; try { pbkdf2Sync('p', 's', 2000000, 32, 'sha256'); } catch (e) { capped = e.name; }"
+                + "   let memory; try { scryptSync('p', 's', 32, { N: 2 ** 20, maxmem: 2 ** 31 }); } catch (e) { memory = e.message.includes(\"node's limit\"); }"
+                + "   const key = Buffer.alloc(32, 1), iv = Buffer.alloc(12, 2);"
+                + "   const c = createCipheriv('aes-256-gcm', key, iv); const sealed = Buffer.concat([c.update('secret'), c.final()]);"
+                + "   const d = createDecipheriv('aes-256-gcm', key, iv); d.setAuthTag(c.getAuthTag());"
+                + "   const opened = Buffer.concat([d.update(sealed), d.final()]).toString();"
+                + "   const [pub, priv] = await new Promise((ok, no) => generateKeyPair('ec', { namedCurve: 'P-256' }, (e, p, q) => e ? no(e) : ok([p, q])));"
+                + "   const signature = sign('sha256', Buffer.from('x'), priv);"
+                + "   return [fromPool, capped, memory, opened, verify('sha256', Buffer.from('x'), pub, signature), verify('sha256', Buffer.from('y'), pub, signature)];"
+                + " };"))
+                .containsExactly("0c60c80f961f0e71f3a9b524af6012062fe037a6", "RangeError", true, "secret", true, false);
     }
 
     @Test

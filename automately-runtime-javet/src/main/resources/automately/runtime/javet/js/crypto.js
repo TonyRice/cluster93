@@ -24,6 +24,26 @@ const cryptoInternals = Object.freeze({
   copy: (handle) => cryptoCall(cryptoHost.copy(handle)),
   timingSafeEqual: (a, b) => cryptoCall(cryptoHost.timingSafeEqual(a, b)),
   hashes: () => cryptoCall(cryptoHost.hashes()),
+  // D-101: key derivation, ciphers, keys and signatures. The *Async ones answer promises from the node's crypto pool.
+  pbkdf2: (password, salt, iterations, length, digest) => cryptoCall(cryptoHost.pbkdf2(password, salt, iterations, length, digest, false)),
+  pbkdf2Async: (password, salt, iterations, length, digest) => cryptoHost.pbkdf2(password, salt, iterations, length, digest, true),
+  hkdf: (digest, key, salt, info, length) => cryptoCall(cryptoHost.hkdf(digest, key, salt, info, length)),
+  scrypt: (password, salt, length, options) => cryptoCall(cryptoHost.scrypt(password, salt, length, options, false)),
+  scryptAsync: (password, salt, length, options) => cryptoHost.scrypt(password, salt, length, options, true),
+  cipher: (algorithm, encrypt, key, iv, tagLength) => cryptoCall(cryptoHost.cipher(algorithm, encrypt, key, iv, tagLength)),
+  cipherPadding: (handle, on) => cryptoCall(cryptoHost.cipherPadding(handle, on)),
+  cipherAad: (handle, aad) => cryptoCall(cryptoHost.cipherAad(handle, aad)),
+  cipherUpdate: (handle, data) => cryptoCall(cryptoHost.cipherUpdate(handle, data)),
+  cipherFinal: (handle, tag) => cryptoCall(cryptoHost.cipherFinal(handle, tag ?? null)),
+  ciphers: () => cryptoCall(cryptoHost.ciphers()),
+  readKey: (wantPrivate, data, format, type) => cryptoCall(cryptoHost.readKey(wantPrivate, data, format, type ?? null)),
+  publicKeyOf: (der) => cryptoCall(cryptoHost.publicKeyOf(der)),
+  exportKey: (isPrivate, der, format, type) => cryptoCall(cryptoHost.exportKey(isPrivate, der, format, type ?? null)),
+  generateKeyPair: (type, options) => cryptoCall(cryptoHost.generateKeyPair(type, options, false)),
+  generateKeyPairAsync: (type, options) => cryptoHost.generateKeyPair(type, options, true),
+  sign: (digest, data, der, options) => cryptoCall(cryptoHost.sign(digest ?? null, data, der, options)),
+  verify: (digest, data, der, isPrivate, signature, options) => cryptoCall(cryptoHost.verify(digest ?? null, data, der, isPrivate, signature, options)),
+  curves: () => cryptoCall(cryptoHost.curves()),
 });
 const subtle = Object.freeze({
   digest: async (algorithm, data) => {

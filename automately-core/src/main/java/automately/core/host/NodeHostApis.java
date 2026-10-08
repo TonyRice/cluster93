@@ -30,6 +30,7 @@ public final class NodeHostApis implements HostApis {
     private final FetchApi fetch;
     private final HttpApi http;
     private final SecretsApi secrets;
+    private final JvmCrypto.Pool cryptoPool;
 
     /** The node's shared stores and clients; one per node. */
     public record Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
@@ -66,6 +67,12 @@ public final class NodeHostApis implements HostApis {
     }
 
     public NodeHostApis(Node node, String tenant, String jobId, boolean service, automately.core.runtime.Packages packages) {
+        this(node, tenant, jobId, service, packages, JvmCrypto.Pool.inline());
+    }
+
+    private NodeHostApis(Node node, String tenant, String jobId, boolean service, automately.core.runtime.Packages packages,
+                         JvmCrypto.Pool cryptoPool) {
+        this.cryptoPool = cryptoPool;
         this.scope = new HostScope(node.vertx(), tenant, jobId, service);
         this.kv = new NodeKvApi(scope, node.kv(), node.capacity(), node.quota());
         this.bus = new NodeBusApi(scope);
@@ -84,17 +91,24 @@ public final class NodeHostApis implements HostApis {
         return fs;
     }
 
+    @Override
+    public automately.core.runtime.api.CryptoApi crypto() {
+        return new JvmCrypto(cryptoPool);
+    }
+
     /** Builds each execution's APIs over one node's stores. */
     public static HostApisFactory factory(Node node) {
+        // The node's one pool for costly crypto (D-101), shared by every execution.
+        JvmCrypto.Pool cryptoPool = JvmCrypto.Pool.of(node.vertx().createSharedWorkerExecutor(JvmCrypto.POOL_NAME, JvmCrypto.POOL_THREADS));
         return new HostApisFactory() {
             @Override
             public automately.core.runtime.api.HostApis create(String tenant, String jobId, boolean service) {
-                return new NodeHostApis(node, tenant, jobId, service);
+                return new NodeHostApis(node, tenant, jobId, service, automately.core.runtime.Packages.NONE, cryptoPool);
             }
 
             @Override
             public automately.core.runtime.api.HostApis create(String tenant, String jobId, boolean service, automately.core.runtime.Packages packages) {
-                return new NodeHostApis(node, tenant, jobId, service, packages);
+                return new NodeHostApis(node, tenant, jobId, service, packages, cryptoPool);
             }
         };
     }

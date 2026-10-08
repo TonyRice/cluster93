@@ -26,6 +26,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## `crypto`: key derivation, ciphers, keys and signatures (2026-10-08)
+
+### Added
+- **The rest of `node:crypto`'s core (D-101),** on the JVM's own cryptography:
+  - **Key derivation:** `pbkdf2`, `hkdf` and `scrypt`, with their `…Sync` forms.
+  - **Ciphers:** AES-CBC, AES-CTR, AES-GCM and ChaCha20-Poly1305 through `createCipheriv`/`createDecipheriv`.
+  - **Keys:** `KeyObject`s, with `createPrivateKey`/`createPublicKey` from PEM, DER, JWK or a certificate, and `export`.
+  - **Signatures:** `sign`/`verify` and `createSign`/`createVerify` for RSA (PKCS#1, PSS), ECDSA and Ed25519.
+  - **Key generation:** `generateKeyPair` and `generateKey`.
+  - **Keys stay in the job,** and the costly calls run on a small crypto pool of the node's.
+  - **Caps:** PBKDF2 iterations, scrypt memory (64 MB), RSA sizes and data sizes.
+  - **Checked:** against the RFCs' vectors and against real Node's output.
+  - **jsonwebtoken** now signs and verifies RS256 and ES256 in the isolate.
+  - **Why:** step 2 of D-095.
+
+### Changed
+- A KeyObject's `equals` compares in constant time for every key type.
+
+### Fixed
+- **A queue consumer that was stopping took back the message it had just released (D-101).** For a moment, no other consumer could have it. A release no longer claims more.
+
 ## `stream` in the isolate (2026-10-08)
 
 ### Added

@@ -1,52 +1,95 @@
 package automately.core.host;
 
+import automately.core.host.crypto.Ciphers;
+import automately.core.host.crypto.Hashes;
+import automately.core.host.crypto.Kdf;
+import automately.core.host.crypto.Keys;
 import automately.core.runtime.HostException;
 import automately.core.runtime.api.CryptoApi;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
+import io.vertx.core.WorkerExecutor;
+import io.vertx.core.json.JsonObject;
 
 import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 
 /**
- * {@link CryptoApi} on the JVM's providers (D-095): {@link SecureRandom}, {@link MessageDigest} and {@link Mac}. One per
- * execution; its open hashes are dropped with it, so nothing is shared between jobs.
+ * {@link CryptoApi} on the JVM's providers (D-095, D-097, D-101). One per execution; its open hashes and ciphers are
+ * dropped with it, so nothing is shared between jobs.
  */
 public final class JvmCrypto implements CryptoApi {
 
     /** One generator for the node: SecureRandom is thread-safe, and seeding is the costly part. */
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    /** Node's names → the JVM's. */
-    private static final Map<String, String> DIGESTS = new LinkedHashMap<>();
+    /** How many threads the node's crypto pool has: half the cores, at least 2. */
+    public static final int POOL_THREADS = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
+    /** The pool's name: a Vert.x shared worker pool, one per node. */
+    public static final String POOL_NAME = "automately-crypto";
 
-    static {
-        DIGESTS.put("md5", "MD5");
-        DIGESTS.put("sha1", "SHA-1");
-        DIGESTS.put("sha224", "SHA-224");
-        DIGESTS.put("sha256", "SHA-256");
-        DIGESTS.put("sha384", "SHA-384");
-        DIGESTS.put("sha512", "SHA-512");
-        DIGESTS.put("sha512-224", "SHA-512/224");
-        DIGESTS.put("sha512-256", "SHA-512/256");
-        DIGESTS.put("sha3-224", "SHA3-224");
-        DIGESTS.put("sha3-256", "SHA3-256");
-        DIGESTS.put("sha3-384", "SHA3-384");
-        DIGESTS.put("sha3-512", "SHA3-512");
+    /**
+     * Where costly crypto (PBKDF2, scrypt, key generation) runs: the node's small pool, so it bounds the CPU and memory
+     * those take (an scrypt may use 64 MB) however many jobs ask at once.
+     */
+    public interface Pool {
+        <T> Future<T> run(Callable<T> work);
+
+        /** The node's pool. */
+        static Pool of(WorkerExecutor executor) {
+            return new Pool() {
+                @Override
+                public <T> Future<T> run(Callable<T> work) {
+                    // Completed from the pool's thread, not through the caller's context: a ...Sync call blocks the
+                    // isolate's thread waiting for this, so an answer queued to that context would never be delivered.
+                    Promise<T> promise = Promise.promise();
+                    executor.executeBlocking(() -> {
+                        try {
+                            promise.complete(work.call());
+                        } catch (Throwable e) {
+                            promise.fail(e);
+                        }
+                        return null;
+                    }, false);
+                    return promise.future();
+                }
+            };
+        }
+
+        /** On the calling thread: for tests and hosts without a node. */
+        static Pool inline() {
+            return new Pool() {
+                @Override
+                public <T> Future<T> run(Callable<T> work) {
+                    try {
+                        return Future.succeededFuture(work.call());
+                    } catch (Exception e) {
+                        return Future.failedFuture(e);
+                    }
+                }
+            };
+        }
     }
 
-    /** Node's spellings that mean the same algorithm. */
-    private static final Map<String, String> ALIASES = Map.of("sha-1", "sha1", "sha-224", "sha224", "sha-256", "sha256", "sha-384", "sha384",
-            "sha-512", "sha512", "rsa-sha256", "sha256", "rsa-sha1", "sha1", "rsa-sha512", "sha512");
+    private final Pool pool;
+
+    /** Costly calls run inline. */
+    public JvmCrypto() {
+        this(Pool.inline());
+    }
+
+    public JvmCrypto(Pool pool) {
+        this.pool = pool;
+    }
 
     /** An open hash: a digest, or a MAC for an HMAC. */
-    private record Open(MessageDigest digest, Mac mac) {
+    private record Hash(MessageDigest digest, Mac mac) {
 
         void update(byte[] data) {
             if (digest != null) {
@@ -60,12 +103,13 @@ public final class JvmCrypto implements CryptoApi {
             return digest != null ? digest.digest() : mac.doFinal();
         }
 
-        Open copy() throws CloneNotSupportedException {
-            return digest != null ? new Open((MessageDigest) digest.clone(), null) : new Open(null, (Mac) mac.clone());
+        Hash copy() throws CloneNotSupportedException {
+            return digest != null ? new Hash((MessageDigest) digest.clone(), null) : new Hash(null, (Mac) mac.clone());
         }
     }
 
-    private final Map<Integer, Open> open = new HashMap<>();
+    private final Map<Integer, Hash> hashes = new HashMap<>();
+    private final Map<Integer, Ciphers.Open> ciphers = new HashMap<>();
     private int next = 1;
 
     @Override
@@ -95,30 +139,21 @@ public final class JvmCrypto implements CryptoApi {
 
     @Override
     public byte[] digest(String algorithm, byte[] data) {
-        return messageDigest(algorithm).digest(data);
+        return Hashes.digest(algorithm).digest(data);
+    }
+
+    private void checkRoom() {
+        if (hashes.size() + ciphers.size() >= MAX_OPEN) {
+            throw HostException.limit("At most " + MAX_OPEN + " hashes and ciphers can be open at once; finish some with digest() or final()");
+        }
     }
 
     @Override
     public synchronized int open(String algorithm, byte[] hmacKey) {
-        if (open.size() >= MAX_OPEN) {
-            throw HostException.limit("At most " + MAX_OPEN + " hashes can be open at once; finish some with digest()");
-        }
-        Open hash;
-        if (hmacKey == null) {
-            hash = new Open(messageDigest(algorithm), null);
-        } else {
-            String jvm = "Hmac" + jvmName(algorithm).replace("-", "").replace("/", "");
-            try {
-                Mac mac = Mac.getInstance(jvm);
-                // An empty key is valid for HMAC, but SecretKeySpec refuses one; a single zero byte is equivalent (RFC 2104 pads keys with zeros).
-                mac.init(new SecretKeySpec(hmacKey.length == 0 ? new byte[1] : hmacKey, jvm));
-                hash = new Open(null, mac);
-            } catch (GeneralSecurityException e) {
-                throw HostException.invalid("HMAC with " + algorithm + " isn't supported");
-            }
-        }
+        checkRoom();
+        Hash hash = hmacKey == null ? new Hash(Hashes.digest(algorithm), null) : new Hash(null, Kdf.hmac(algorithm, hmacKey));
         int handle = next++;
-        open.put(handle, hash);
+        hashes.put(handle, hash);
         return handle;
     }
 
@@ -129,19 +164,17 @@ public final class JvmCrypto implements CryptoApi {
 
     @Override
     public synchronized byte[] finish(int handle) {
-        Open hash = hash(handle);
-        open.remove(handle);
+        Hash hash = hash(handle);
+        hashes.remove(handle);
         return hash.finish();
     }
 
     @Override
     public synchronized int copy(int handle) {
-        if (open.size() >= MAX_OPEN) {
-            throw HostException.limit("At most " + MAX_OPEN + " hashes can be open at once");
-        }
+        checkRoom();
         try {
             int copy = next++;
-            open.put(copy, hash(handle).copy());
+            hashes.put(copy, hash(handle).copy());
             return copy;
         } catch (CloneNotSupportedException e) {
             throw HostException.invalid("This hash can't be copied");
@@ -158,32 +191,118 @@ public final class JvmCrypto implements CryptoApi {
 
     @Override
     public List<String> hashes() {
-        return List.copyOf(DIGESTS.keySet());
+        return Hashes.names();
     }
 
-    private Open hash(int handle) {
-        Open hash = open.get(handle);
+    private Hash hash(int handle) {
+        Hash hash = hashes.get(handle);
         if (hash == null) {
             throw new HostException("Error", "invalid_state", "Digest already called");
         }
         return hash;
     }
 
-    private static String jvmName(String algorithm) {
-        String name = algorithm == null ? "" : algorithm.toLowerCase(java.util.Locale.ROOT);
-        name = ALIASES.getOrDefault(name, name);
-        String jvm = DIGESTS.get(name);
-        if (jvm == null) {
-            throw HostException.invalid("Digest method not supported: " + algorithm);
-        }
-        return jvm;
+    // --- key derivation ---
+
+    @Override
+    public Future<byte[]> pbkdf2(byte[] password, byte[] salt, int iterations, int length, String digest) {
+        return pool.run(() -> Kdf.pbkdf2(password, salt, iterations, length, digest));
     }
 
-    private static MessageDigest messageDigest(String algorithm) {
-        try {
-            return MessageDigest.getInstance(jvmName(algorithm));
-        } catch (GeneralSecurityException e) {
-            throw HostException.invalid("Digest method not supported: " + algorithm);
+    @Override
+    public byte[] hkdf(String digest, byte[] key, byte[] salt, byte[] info, int length) {
+        return Kdf.hkdf(digest, key, salt, info, length);
+    }
+
+    @Override
+    public Future<byte[]> scrypt(byte[] password, byte[] salt, int length, JsonObject options) {
+        long n = options.getLong("N", options.getLong("cost", 16384L));
+        int r = options.getInteger("r", options.getInteger("blockSize", 8));
+        int p = options.getInteger("p", options.getInteger("parallelization", 1));
+        long maxmem = options.getLong("maxmem", 32L * 1024 * 1024);
+        return pool.run(() -> Kdf.scrypt(password, salt, length, n, r, p, maxmem));
+    }
+
+    // --- ciphers ---
+
+    @Override
+    public synchronized int cipher(String algorithm, boolean encrypt, byte[] key, byte[] iv, int authTagLength) {
+        checkRoom();
+        Ciphers.Open open = Ciphers.open(algorithm, encrypt, key, iv, authTagLength);
+        int handle = next++;
+        ciphers.put(handle, open);
+        return handle;
+    }
+
+    private Ciphers.Open cipher(int handle) {
+        Ciphers.Open open = ciphers.get(handle);
+        if (open == null) {
+            throw new HostException("Error", "ERR_CRYPTO_INVALID_STATE", "Unsupported state: final() was already called");
         }
+        return open;
+    }
+
+    @Override
+    public synchronized void cipherPadding(int handle, boolean on) {
+        cipher(handle).padding(on);
+    }
+
+    @Override
+    public synchronized void cipherAad(int handle, byte[] aad) {
+        cipher(handle).aad(aad);
+    }
+
+    @Override
+    public synchronized byte[] cipherUpdate(int handle, byte[] data) {
+        return cipher(handle).update(data);
+    }
+
+    @Override
+    public synchronized byte[] cipherFinal(int handle, byte[] tag) {
+        Ciphers.Open open = cipher(handle);
+        ciphers.remove(handle);
+        return open.finish(tag);
+    }
+
+    @Override
+    public List<String> ciphers() {
+        return Ciphers.names();
+    }
+
+    // --- keys and signatures ---
+
+    @Override
+    public JsonObject readKey(boolean wantPrivate, byte[] data, String format, String type) {
+        return Keys.read(wantPrivate, data, format, type);
+    }
+
+    @Override
+    public JsonObject publicKeyOf(byte[] pkcs8) {
+        return Keys.publicFromPrivate(pkcs8);
+    }
+
+    @Override
+    public Object exportKey(boolean isPrivate, byte[] der, String format, String type) {
+        return Keys.export(isPrivate, der, format, type);
+    }
+
+    @Override
+    public Future<JsonObject> generateKeyPair(String type, JsonObject options) {
+        return pool.run(() -> Keys.generate(type, options));
+    }
+
+    @Override
+    public byte[] sign(String digest, byte[] data, byte[] pkcs8, JsonObject options) {
+        return Keys.sign(digest, data, pkcs8, options);
+    }
+
+    @Override
+    public boolean verify(String digest, byte[] data, byte[] der, boolean isPrivate, byte[] signature, JsonObject options) {
+        return Keys.verify(digest, data, der, isPrivate, signature, options);
+    }
+
+    @Override
+    public List<String> curves() {
+        return Keys.curves();
     }
 }

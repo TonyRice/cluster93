@@ -3,8 +3,8 @@ package automately.core.runtime.api;
 /**
  * Cryptography for scripts (D-095): computation and secure randomness only, from the JVM's own implementations, so a
  * script reaches nothing new. Every call is bounded; state (an incremental hash) lives only as long as the execution.
- * Calls are synchronous: each is cheap and capped. Key derivation and key generation, which aren't cheap, come with
- * their own off-thread calls.
+ * Most calls are synchronous: each is cheap and capped. Key derivation and key generation, which aren't cheap, answer
+ * futures: they run on a small pool of the node's own, so the costly ones can't pile up on every isolate's thread.
  */
 public interface CryptoApi {
 
@@ -39,4 +39,46 @@ public interface CryptoApi {
 
     /** The hash algorithms {@link #digest} and {@link #open} accept, by Node's names. */
     java.util.List<String> hashes();
+
+    // --- key derivation (D-101): the costly ones run on the node's crypto pool, for the sync forms too ---
+
+    io.vertx.core.Future<byte[]> pbkdf2(byte[] password, byte[] salt, int iterations, int length, String digest);
+
+    byte[] hkdf(String digest, byte[] key, byte[] salt, byte[] info, int length);
+
+    /** Options as Node's: {@code N}/{@code cost}, {@code r}/{@code blockSize}, {@code p}/{@code parallelization}, {@code maxmem}. */
+    io.vertx.core.Future<byte[]> scrypt(byte[] password, byte[] salt, int length, io.vertx.core.json.JsonObject options);
+
+    // --- ciphers (D-101): open ones count toward MAX_OPEN with the hashes ---
+
+    int cipher(String algorithm, boolean encrypt, byte[] key, byte[] iv, int authTagLength);
+
+    void cipherPadding(int handle, boolean on);
+
+    void cipherAad(int handle, byte[] aad);
+
+    byte[] cipherUpdate(int handle, byte[] data);
+
+    /** The rest of the output, closing the cipher. Authenticated encryption appends the tag; decryption takes it as {@code tag}. */
+    byte[] cipherFinal(int handle, byte[] tag);
+
+    java.util.List<String> ciphers();
+
+    // --- keys and signatures (D-101): keys are passed as DER on every call and never kept ---
+
+    /** A key's info ({@code type}, {@code asymmetricKeyType}, {@code der} as base64, {@code details}) from pem, der or jwk. */
+    io.vertx.core.json.JsonObject readKey(boolean wantPrivate, byte[] data, String format, String type);
+
+    io.vertx.core.json.JsonObject publicKeyOf(byte[] pkcs8);
+
+    /** A PEM string, DER bytes or a JWK object. */
+    Object exportKey(boolean isPrivate, byte[] der, String format, String type);
+
+    io.vertx.core.Future<io.vertx.core.json.JsonObject> generateKeyPair(String type, io.vertx.core.json.JsonObject options);
+
+    byte[] sign(String digest, byte[] data, byte[] pkcs8, io.vertx.core.json.JsonObject options);
+
+    boolean verify(String digest, byte[] data, byte[] der, boolean isPrivate, byte[] signature, io.vertx.core.json.JsonObject options);
+
+    java.util.List<String> curves();
 }
