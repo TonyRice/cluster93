@@ -415,12 +415,8 @@ public final class ApiVerticle extends VerticleBase {
             error(ctx, 400, "invalid_json", "The request body must be a JSON object");
             return;
         }
-        if (body == null || !(body.getValue("script") instanceof String script) || script.isBlank()) {
-            error(ctx, 400, "invalid_request", "\"script\" must be a non-empty string");
-            return;
-        }
-        if (script.length() > MAX_SCRIPT_BYTES) {
-            error(ctx, 413, "script_too_large", "\"script\" is limited to " + MAX_SCRIPT_BYTES + " bytes");
+        String script = script(ctx, body);
+        if (script == null) {
             return;
         }
         Object input = body.getValue("input");
@@ -485,12 +481,14 @@ public final class ApiVerticle extends VerticleBase {
         int attempts = maxAttempts;
         String tenant = ctx.get("tenant");
         // What the script imports is resolved now, so every attempt runs the same versions (D-087, D-089).
-        packages.lockScript(tenant, script, packagesAllowed).onComplete(locked -> {
+        resolve(packages, tenant, body, script, packagesAllowed).onComplete(locked -> {
             if (locked.failed()) {
                 refuseImports(ctx, locked.cause());
                 return;
             }
-            scheduler.submit(tenant, script, (JsonObject) input, jobTimeout, policy, attempts, job -> prepared.apply(job).withPackages(locked.result()))
+            JsonObject source = locked.result();
+            scheduler.submit(tenant, source.getString("script"), (JsonObject) input, jobTimeout, policy, attempts,
+                            job -> prepared.apply(job).withPackages(source.getJsonObject("packages")))
                     .onSuccess(job -> ctx.response()
                             .setStatusCode(202)
                             .putHeader("Location", "/v1/jobs/" + job.id())
@@ -498,6 +496,45 @@ public final class ApiVerticle extends VerticleBase {
                             .end(job.toSummaryJson().encode()))
                     .onFailure(ctx::fail);
         });
+    }
+
+    /**
+     * What a job or service runs: its {@code "script"}, or a published version as {@code "package": {name, version?,
+     * export?}} (D-091), never both. Returns the script ("" for a package), or null once it has answered a 4xx.
+     */
+    static String script(RoutingContext ctx, JsonObject body) {
+        if (body != null && body.getValue("package") != null) {
+            if (body.getValue("script") != null) {
+                error(ctx, 400, "invalid_request", "Give a \"script\" or a \"package\", not both");
+                return null;
+            }
+            if (!(body.getValue("package") instanceof JsonObject)) {
+                error(ctx, 400, "invalid_request", "\"package\" must be an object: {name, version?, export?}");
+                return null;
+            }
+            return "";
+        }
+        if (body == null || !(body.getValue("script") instanceof String script) || script.isBlank()) {
+            error(ctx, 400, "invalid_request", "\"script\" must be a non-empty string (or give a \"package\")");
+            return null;
+        }
+        if (script.length() > MAX_SCRIPT_BYTES) {
+            error(ctx, 413, "script_too_large", "\"script\" is limited to " + MAX_SCRIPT_BYTES + " bytes");
+            return null;
+        }
+        return script;
+    }
+
+    /** The script to run and its lock, {@code {script, packages}}: from the script's imports, or the package named. */
+    static Future<JsonObject> resolve(automately.core.packages.PackageStore packages, String tenant, JsonObject body, String script,
+                                      boolean packagesAllowed) {
+        if (body.getValue("package") instanceof JsonObject target) {
+            if (!packagesAllowed) {
+                return Future.failedFuture(automately.core.runtime.HostException.invalid("A job that runs a package can't have \"packages\": false"));
+            }
+            return packages.lockPackage(tenant, target);
+        }
+        return packages.lockScript(tenant, script, packagesAllowed).map(lock -> new JsonObject().put("script", script).put("packages", lock));
     }
 
     /** A script whose imports can't be resolved: 400 saying which and why. */

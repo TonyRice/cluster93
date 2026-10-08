@@ -2,7 +2,7 @@
 
 A package is versioned JavaScript you publish to the cluster once, and import from your scripts and services ([design](../design/packages.md), D-083). A published version never changes; a fix is a new version.
 
-> **Status:** publishing (step 1) and importing from jobs and services (step 2), with stand-ins for Node's `path`, `events`, `buffer`, `url` and `util`, are built. Services built from a package version, and reading a package's own files through `/packages`, come with step 3.
+> **Status:** publishing (step 1), importing from jobs and services (step 2, with stand-ins for Node's `path`, `events`, `buffer`, `url` and `util`), and deploying a version as a service, `/packages` in `fs` and the `automately:*` modules (step 3) are built. Yanking, blocking and purging versions come with step 4.
 
 ## Publish
 ```bash
@@ -69,6 +69,43 @@ export default async (input) => {
 - **Limits:** a job can use at most 500 packages, 1,000 files and 10 MB in all.
 
 Before the script runs, its node fetches every file in the lock and checks each against its SHA-256. A file that doesn't match fails the attempt before any code runs. Nodes keep checked files in memory, `AUTOMATELY_PACKAGE_CACHE_MB` (64 MB by default), so the same versions load quickly next time.
+
+## Deploy
+A project folder becomes a running service in one command:
+```bash
+automately deploy                     # publish (or reuse) the version, then run it as a service
+automately deploy --name shop-eu      # another service from the same code
+```
+`automately.json` says what to run:
+```json
+{
+  "name": "shop",
+  "version": "1.4.0",
+  "entry": "src/service.js",
+  "service": { "name": "shop", "config": { "region": "eu" }, "restart": "always" }
+}
+```
+- **The version is the service's revision.** Deploying publishes the version, or reuses it if it's already published with exactly these files. A changed file without a new `version` is refused, since a version never changes. Bump the version, deploy, and the service rolls to the new revision.
+- **The service runs the package's main export's default export,** `(config, ctx)`, like any service script. `"runtime": "node"` is for the Node runtime, which isn't built yet.
+- **The API does the same:** `PUT /v1/services/{name}` and `POST /v1/jobs` take `"package": {"name": "shop", "version": "1.4.0", "export": "./report"}` instead of `"script"`. Without a version, the newest release is used and pinned. The service's `script` then shows what it runs (`export { default } from "shop";`), and its `packages` the versions.
+
+## A package's own files
+Every file in a job's packages is readable, read-only, at `/packages/<name>/<version>/<path>`, the same path as its `import.meta.url`:
+```js
+import { readFileSync } from 'fs';
+import { URL } from 'url';
+
+const config = JSON.parse(readFileSync(new URL('./data/config.json', import.meta.url), 'utf8'));
+const wasm = readFileSync(new URL('./engine.wasm', import.meta.url));
+```
+`fs` takes `file:///` URLs as paths. Writing under `/packages` fails with `EROFS`. `readdirSync('/packages')` lists the job's packages.
+
+## The host APIs as modules
+Packages shouldn't depend on globals, so the host APIs are modules too: `automately:kv`, `automately:bus`, `automately:jobs`, `automately:files`, `automately:secrets`, `automately:fetch` and `automately:log` (with `automately:fs`). Each exports the same object as the global, as its default and by name:
+```js
+import kv from 'automately:kv';
+import { bus } from 'automately:bus';
+```
 
 ## Cluster-wide packages
 Operators publish packages every tenant can import, named `@cluster/<name>` (`automately --token <operator token> packages publish`). No tenant can publish under `@cluster/`, and a bare name only ever finds your own package, so the two can't be confused. Cluster packages may only depend on other cluster packages.

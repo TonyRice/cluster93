@@ -26,7 +26,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
-## Packages: stand-ins for Node's path, events, buffer, url and util (2026-10-08)
+## Packages, step 3: deploying versions (2026-10-08)
+
+### Added
+- **`automately deploy` (D-091).** It publishes the project in a folder, or reuses the version if it's already published with the same files, and runs it as a service whose revision is that version. A changed file without a version bump is refused. **Why:** one command from code to a running service, with every revision traceable to an immutable version.
+- **Running a published version:** `PUT /v1/services/{name}` and `POST /v1/jobs` take `"package": {name, version?, export?}` instead of `"script"`. The version is pinned in the lock, and a new version is a new revision.
+- **`/packages` in `fs`:** a package reads its own files (JSON, templates, `.wasm`) at `/packages/<name>/<version>/…`, read-only. `fs` also accepts `file:///` URLs, so `new URL('./data.json', import.meta.url)` works.
+- **`automately:kv`, `automately:bus`, `automately:jobs`, `automately:files`, `automately:secrets`, `automately:fetch`, `automately:log`:** the host APIs as modules, so packages don't depend on globals.
+- **MCP tools:** `publish_package` (from the files' text), `list_packages` and `package_info`. `run_job` and `deploy_service` take a `package`.
+
+### Changed
+- **Writing under `/packages` in `fs` fails with `EROFS`** (read-only) instead of `EACCES` (reserved), now that `/packages` holds the job's packages.
+
+
 
 ### Added
 - **`path`, `events`, `buffer`, `url` and `util` in the isolate (D-090),** with or without `node:`. **Why:** bundled npm code reaches for these constantly, and they were the reason many packages couldn't be published. Their results match Node's own modules on about 500 checked cases. `events` and `node:events` are one module, so `EventEmitter` is the same class everywhere.

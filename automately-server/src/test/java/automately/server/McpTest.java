@@ -110,7 +110,8 @@ class McpTest {
 
         List<String> names = rpc("tools/list", new JsonObject()).getJsonObject("result").getJsonArray("tools").stream()
                 .map(t -> ((JsonObject) t).getString("name")).toList();
-        assertThat(names).contains("run_job", "deploy_service", "service_logs", "write_file", "read_file", "request", "queue_push", "queue_stats");
+        assertThat(names).contains("run_job", "deploy_service", "service_logs", "write_file", "read_file", "request", "queue_push", "queue_stats",
+                "publish_package", "list_packages", "package_info");
     }
 
     @Test
@@ -138,6 +139,27 @@ class McpTest {
         JsonObject failed = ok("run_job", new JsonObject().put("script", "export default () => { throw new Error('boom'); }"));
         assertThat(failed.getString("status")).isEqualTo("FAILED");
         assertThat(failed.getString("error")).contains("boom");
+    }
+
+    @Test
+    void anAgentPublishesAPackageAndRunsIt() throws Exception {
+        JsonObject published = ok("publish_package", new JsonObject().put("name", "mcp-strings").put("version", "1.0.0")
+                .put("files", new JsonObject()
+                        .put("index.js", "import { up } from './lib/up.js'; export const shout = s => up(s) + '!'; export default (i) => shout(i.word);")
+                        .put("lib/up.js", "export const up = s => s.toUpperCase();")));
+        assertThat(published.getString("version")).isEqualTo("1.0.0");
+        assertThat(ok("list_packages", new JsonObject()).getJsonArray("packages").stream()
+                .map(p -> ((JsonObject) p).getString("name"))).contains("mcp-strings");
+        assertThat(ok("package_info", new JsonObject().put("name", "mcp-strings").put("version", "1.0.0")).getJsonObject("files").fieldNames())
+                .contains("lib/up.js");
+
+        JsonObject imported = ok("run_job", new JsonObject().put("script", "import { shout } from 'mcp-strings'; export default () => shout('hey');"));
+        assertThat(imported.getString("output")).as(imported.encode()).isEqualTo("HEY!");
+        JsonObject direct = ok("run_job", new JsonObject().put("package", new JsonObject().put("name", "mcp-strings"))
+                .put("input", new JsonObject().put("word", "go")));
+        assertThat(direct.getString("output")).isEqualTo("GO!");
+        assertThat(tool("publish_package", new JsonObject().put("name", "mcp-strings").put("version", "1.0.0")
+                .put("files", new JsonObject().put("index.js", "export default 2;"))).getBoolean("isError")).as("versions never change").isTrue();
     }
 
     @Test

@@ -223,7 +223,7 @@ public final class NodeVerticle extends VerticleBase {
             JobContext jobContext = new JobContext(job.id(), attempt, job.onOrphan(), job.previousAttempt(), carried.state(),
                     carried.service());
             RunningExecution execution = runtime.execute(execution(job, jobContext, imports), logSink(job.id(), logs), stateSink(job.id(), attempt),
-                    hostApis.create(job.tenant(), job.id(), job.service() != null));
+                    hostApis.create(job.tenant(), job.id(), job.service() != null, imports));
             slots.put(job.id(), new Slot(attempt, execution));
             if (job.cancelRequested() != null) {
                 execution.stop(job.cancelRequested(), stopGrace);

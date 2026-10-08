@@ -310,6 +310,54 @@ final class McpRoutes {
         return api(call, HttpMethod.POST, path, body == null ? null : body.toBuffer(), body == null ? null : "application/json");
     }
 
+    /** A tool's script, or the package it names instead (D-091). */
+    private static JsonObject source(Call call) {
+        if (call.args().getValue("package") instanceof JsonObject target) {
+            return new JsonObject().put("package", target);
+        }
+        return new JsonObject().put("script", call.text("script"));
+    }
+
+    /** Uploads the files the cluster doesn't have, then commits the version: the CLI's three steps, over loopback. */
+    private Future<JsonObject> publishPackage(Call call) {
+        if (!(call.args().getValue("files") instanceof JsonObject files) || files.isEmpty()) {
+            throw new ToolError("\"files\" must map each file's path to its text");
+        }
+        java.util.Map<String, Buffer> bytes = new java.util.LinkedHashMap<>();
+        JsonObject hashes = new JsonObject();
+        for (String path : files.fieldNames()) {
+            if (!(files.getValue(path) instanceof String text)) {
+                throw new ToolError("The file " + path + " must be given as text");
+            }
+            Buffer content = Buffer.buffer(text);
+            String sha = sha256(content);
+            bytes.put(sha, content);
+            hashes.put(path, "sha256:" + sha);
+        }
+        JsonObject manifest = new JsonObject().put("name", call.text("name")).put("version", call.text("version")).put("files", hashes);
+        for (String optional : List.of("exports", "dependencies")) {
+            if (call.args().getValue(optional) != null) {
+                manifest.put(optional, call.args().getValue(optional));
+            }
+        }
+        return post(call, "/v1/packages/blobs/missing", new JsonObject().put("sha256", new JsonArray(List.copyOf(bytes.keySet()))))
+                .compose(found -> {
+                    List<Future<JsonObject>> uploads = new ArrayList<>();
+                    found.getJsonArray("missing").forEach(sha -> uploads.add(api(call, HttpMethod.PUT, "/v1/packages/blobs/" + sha,
+                            bytes.get(String.valueOf(sha)), "application/octet-stream")));
+                    return Future.all(uploads);
+                })
+                .compose(uploaded -> post(call, "/v1/packages", manifest));
+    }
+
+    private static String sha256(Buffer content) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(content.getBytes()));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private static String seg(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
     }
@@ -409,16 +457,18 @@ final class McpRoutes {
     private List<Tool> tools() {
         JsonObject name = string("The service's name: lowercase letters, digits, '_' and '-'.");
         JsonObject id = string("A job id.");
+        JsonObject target = object("Instead of a script: a published package version to run, {name, version?, export?}. "
+                + "Its export's default export is the script; without a version, the newest release.");
         return List.of(
                 new Tool("run_job", "Run a script once and (by default) wait for it to finish. Returns its status, output, error and logs.",
                         schema(Map.of(
                                 "script", string("An ES module: export default async (input, ctx) => { ... }. Its return value is the output."),
                                 "input", object("The job's input object (the default export's first argument)."),
                                 "timeoutMs", integer("The job's time limit in milliseconds."),
-                                "wait", new JsonObject().put("type", "boolean").put("description", "Wait for the result (default true).")),
-                                "script"),
+                                "wait", new JsonObject().put("type", "boolean").put("description", "Wait for the result (default true)."),
+                                "package", target)),
                         false, false, call -> {
-                            JsonObject body = new JsonObject().put("script", call.text("script"));
+                            JsonObject body = source(call);
                             if (call.args().getValue("input") != null) {
                                 body.put("input", call.args().getValue("input"));
                             }
@@ -445,10 +495,11 @@ final class McpRoutes {
                                 "name", name,
                                 "script", string("An ES module whose default export runs until ctx.stopRequested, e.g. await ctx.serve(req => 'hi'); return ctx.stopRequested;"),
                                 "config", object("Passed to the script as ctx.service.config."),
-                                "restart", new JsonObject().put("type", "string").put("enum", new JsonArray().add("always").add("on-failure"))),
-                                "name", "script"),
+                                "restart", new JsonObject().put("type", "string").put("enum", new JsonArray().add("always").add("on-failure")),
+                                "package", target),
+                                "name"),
                         false, false, call -> {
-                            JsonObject body = new JsonObject().put("script", call.text("script"));
+                            JsonObject body = source(call);
                             if (call.args().getValue("config") != null) {
                                 body.put("config", call.args().getValue("config"));
                             }
@@ -535,6 +586,24 @@ final class McpRoutes {
                             }
                             return api(call, HttpMethod.POST, "/v1/queues/" + seg(call.text("queue")), body.toBuffer(), "application/json");
                         }),
+                new Tool("publish_package", "Publish a small package from its files' text: versioned code that scripts import by name "
+                        + "(import { x } from 'name'). A version never changes; publish a new one to fix it. Scripts' imports are "
+                        + "locked to exact versions when a job is submitted.",
+                        schema(Map.of(
+                                "name", string("Lowercase letters, digits, '.', '_' and '-'."),
+                                "version", string("Like 1.0.0, or 2.0.0-beta.1."),
+                                "files", object("Each file's path → its text, e.g. {\"index.js\": \"export const slug = s => ...\"}. ES modules."),
+                                "exports", object("Optional: \".\" and \"./subpath\" → a file. Defaults to index.js as \".\"."),
+                                "dependencies", object("Optional: other packages it imports → a version range, e.g. {\"strings\": \"^1.2.0\"}.")),
+                                "name", "version", "files"),
+                        false, false, this::publishPackage),
+                new Tool("list_packages", "Your packages and the cluster's, with each one's latest version.", schema(Map.of()), true, false,
+                        call -> get(call, "/v1/packages")),
+                new Tool("package_info", "A package's versions; or, given a version, its files, exports and dependencies.",
+                        schema(Map.of("name", string("The package's name, e.g. strings or @cluster/dates."), "version", string("Optional: one version.")),
+                                "name"), true, false,
+                        call -> get(call, "/v1/packages/" + seg(call.text("name"))
+                                + (call.args().getValue("version") instanceof String v ? "/versions/" + seg(v) : ""))),
                 new Tool("queue_stats", "How many messages a queue has ready, in flight and dead-lettered.",
                         schema(Map.of("queue", string("The queue's name.")), "queue"), true, false,
                         call -> get(call, "/v1/queues/" + seg(call.text("queue")))),

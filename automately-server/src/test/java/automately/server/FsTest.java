@@ -105,7 +105,7 @@ class FsTest {
                 };
                 """);
         assertThat(output.getJsonArray("codes", output.getJsonArray("value")).getList())
-                .containsExactly("ENOENT", "EEXIST", "ENOTEMPTY", "ENOTDIR", "EACCES", "ENOENT:unlink", "false");
+                .containsExactly("ENOENT", "EEXIST", "ENOTEMPTY", "ENOTDIR", "EROFS", "ENOENT:unlink", "false");
     }
 
     @Test

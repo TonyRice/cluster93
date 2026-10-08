@@ -388,6 +388,40 @@ public final class PackageStore {
         }
         Map<String, Semver.Range> roots = new LinkedHashMap<>();
         wanted.keySet().forEach(name -> roots.put(name, Semver.Range.parse("*")));
+        return lock(tenant, wanted, roots);
+    }
+
+    /**
+     * The script and lock for running a published version directly (D-091): a service whose revision is a package
+     * version, or a job. {@code target} is {@code {name, version?, export?}}; without a version, the newest release.
+     * Answers {@code {script, packages}}, where the script re-exports the package's export as its default.
+     */
+    public Future<JsonObject> lockPackage(String tenant, JsonObject target) {
+        String name = target.getValue("name") instanceof String n ? n : null;
+        String invalid = invalidName(name);
+        if (invalid != null) {
+            return Future.failedFuture(HostException.invalid("\"package.name\": " + invalid));
+        }
+        Object versionValue = target.getValue("version");
+        Semver.Range range;
+        if (versionValue == null) {
+            range = Semver.Range.parse("*");
+        } else if (versionValue instanceof String v && Semver.Version.parse(v) != null) {
+            range = Semver.Range.parse(v);
+        } else {
+            return Future.failedFuture(HostException.invalid("\"package.version\" must be an exact version like 1.4.0, or left out for the newest"));
+        }
+        Object exportValue = target.getValue("export", ".");
+        if (!(exportValue instanceof String export) || !(export.equals(".") || export.startsWith("./") && export.length() > 2)) {
+            return Future.failedFuture(HostException.invalid("\"package.export\" is \".\" or \"./<subpath>\""));
+        }
+        String specifier = export.equals(".") ? name : name + export.substring(1);
+        return lock(tenant, Map.of(name, Set.of(export)), Map.of(name, range)).map(lock -> new JsonObject()
+                .put("script", "export { default } from " + io.vertx.core.json.Json.encode(specifier) + ";\n")
+                .put("packages", lock));
+    }
+
+    private Future<JsonObject> lock(String tenant, Map<String, Set<String>> wanted, Map<String, Semver.Range> roots) {
         return settle(tenant, roots, Map.of(), new java.util.HashMap<>(), 0).compose(chosen -> {
             for (Map.Entry<String, Set<String>> want : wanted.entrySet()) {
                 JsonObject version = chosen.get(want.getKey());
@@ -463,7 +497,8 @@ public final class PackageStore {
         }
         // name -> each range on it, with who asked for it
         Map<String, List<Map.Entry<String, Semver.Range>>> ranges = new LinkedHashMap<>();
-        roots.forEach((name, range) -> ranges.computeIfAbsent(name, n -> new ArrayList<>()).add(Map.entry("your script", range)));
+        roots.forEach((name, range) -> ranges.computeIfAbsent(name, n -> new ArrayList<>()).add(Map.entry(
+                range.exact() != null ? "the version asked for" : "your script", range)));
         chosen.forEach((name, version) -> version.getJsonObject("dependencies", new JsonObject()).forEach(dep ->
                 ranges.computeIfAbsent(dep.getKey(), n -> new ArrayList<>())
                         .add(Map.entry(name + "@" + version.getString("version"), Semver.Range.parse(String.valueOf(dep.getValue()))))));
@@ -504,7 +539,7 @@ public final class PackageStore {
     }
 
     private static String asked(List<Map.Entry<String, Semver.Range>> ranges) {
-        List<String> by = ranges.stream().map(Map.Entry::getKey).filter(who -> !who.equals("your script")).toList();
+        List<String> by = ranges.stream().map(Map.Entry::getKey).filter(who -> !who.equals("your script") && !who.equals("the version asked for")).toList();
         return by.isEmpty() ? "" : "; needed by " + String.join(", ", by);
     }
 

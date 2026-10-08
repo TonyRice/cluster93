@@ -57,59 +57,95 @@ final class PackagesCommand extends Base {
 
         @Override
         int execute() throws Exception {
-            Path root = dir.toAbsolutePath().normalize();
-            Project project = Project.read(root);
-            Built built = noBundle ? Built.asIs(root, project) : Built.bundle(root, project, err());
-
-            Map<String, String> hashes = new TreeMap<>();
-            long total = 0;
-            for (Map.Entry<String, Path> file : built.files().entrySet()) {
-                byte[] bytes = Files.readAllBytes(file.getValue());
-                total += bytes.length;
-                hashes.put(file.getKey(), sha256(bytes));
-            }
-            if (hashes.size() > MAX_FILES) {
-                throw new CliException("A package version can have at most " + MAX_FILES + " files; this one has " + hashes.size());
-            }
-            if (total > MAX_BYTES) {
-                throw new CliException("A package version can be at most " + MAX_BYTES / (1024 * 1024) + " MB; this one is " + kb(total));
-            }
-            ObjectNode files = Json.object();
-            hashes.forEach((path, hash) -> files.put(path, "sha256:" + hash));
-            ObjectNode exports = Json.object();
-            built.exports().forEach(exports::put);
-            ObjectNode dependencies = Json.object();
-            project.dependencies().forEach(dependencies::put);
-            ObjectNode manifest = Json.object().put("name", project.name()).put("version", project.version());
-            manifest.set("files", files);
-            manifest.set("exports", exports);
-            manifest.set("dependencies", dependencies);
-
-            if (dryRun) {
-                if (!printedJson(manifest)) {
-                    out().println("Would publish " + project.name() + "@" + project.version() + ": " + hashes.size() + " files, " + kb(total));
-                    hashes.keySet().forEach(path -> out().println("  " + path));
+            Outcome outcome = publish(this, dir.toAbsolutePath().normalize(), noBundle, dryRun, false);
+            if (outcome.dryRun()) {
+                if (!printedJson(outcome.manifest())) {
+                    out().println("Would publish " + outcome.label() + ": " + outcome.files() + " files, " + kb(outcome.bytes()));
+                    outcome.manifest().path("files").fieldNames().forEachRemaining(path -> out().println("  " + path));
                 }
-                return 0;
-            }
-
-            JsonNode missing = api().post("/v1/packages/blobs/missing", Json.object().set("sha256", Json.strings(List.copyOf(new java.util.TreeSet<>(hashes.values())))));
-            List<String> wanted = new ArrayList<>();
-            missing.path("missing").forEach(hash -> wanted.add(hash.asText()));
-            long uploaded = 0;
-            for (String hash : wanted) {
-                String path = hashes.entrySet().stream().filter(e -> e.getValue().equals(hash)).findFirst().orElseThrow().getKey();
-                byte[] bytes = Files.readAllBytes(built.files().get(path));
-                api().putBytes("/v1/packages/blobs/" + hash, bytes, "application/octet-stream");
-                uploaded += bytes.length;
-            }
-            JsonNode published = api().post("/v1/packages", manifest);
-            if (!printedJson(published)) {
-                out().println("Published " + project.name() + "@" + project.version() + ": " + hashes.size() + " files, " + kb(total)
-                        + " (" + wanted.size() + " uploaded, " + kb(uploaded) + ")");
+            } else if (!printedJson(outcome.published())) {
+                out().println("Published " + outcome.label() + ": " + outcome.files() + " files, " + kb(outcome.bytes())
+                        + " (" + outcome.uploadedFiles() + " uploaded, " + kb(outcome.uploadedBytes()) + ")");
             }
             return 0;
         }
+    }
+
+    /** What publishing a project did. {@code published} is the stored version (null on a dry run). */
+    record Outcome(Project project, ObjectNode manifest, JsonNode published, int files, long bytes, int uploadedFiles, long uploadedBytes,
+                   boolean dryRun, boolean unchanged) {
+
+        String label() {
+            return project.name() + "@" + project.version();
+        }
+    }
+
+    /**
+     * Bundles and publishes the project in {@code root}: hashes every file, uploads those the cluster lacks, commits the
+     * version. With {@code reuse}, a version that's already published with exactly these files isn't an error
+     * ({@code automately deploy} runs this every time); with different files it is, since a version never changes.
+     */
+    static Outcome publish(Base cmd, Path root, boolean noBundle, boolean dryRun, boolean reuse) throws Exception {
+        Project project = Project.read(root);
+        Built built = noBundle ? Built.asIs(root, project) : Built.bundle(root, project, cmd.err());
+
+        Map<String, String> hashes = new TreeMap<>();
+        long total = 0;
+        for (Map.Entry<String, Path> file : built.files().entrySet()) {
+            byte[] bytes = Files.readAllBytes(file.getValue());
+            total += bytes.length;
+            hashes.put(file.getKey(), sha256(bytes));
+        }
+        if (hashes.size() > MAX_FILES) {
+            throw new CliException("A package version can have at most " + MAX_FILES + " files; this one has " + hashes.size());
+        }
+        if (total > MAX_BYTES) {
+            throw new CliException("A package version can be at most " + MAX_BYTES / (1024 * 1024) + " MB; this one is " + kb(total));
+        }
+        ObjectNode files = Json.object();
+        hashes.forEach((path, hash) -> files.put(path, "sha256:" + hash));
+        ObjectNode exports = Json.object();
+        built.exports().forEach(exports::put);
+        ObjectNode dependencies = Json.object();
+        project.dependencies().forEach(dependencies::put);
+        ObjectNode manifest = Json.object().put("name", project.name()).put("version", project.version());
+        manifest.set("files", files);
+        manifest.set("exports", exports);
+        manifest.set("dependencies", dependencies);
+
+        if (dryRun) {
+            return new Outcome(project, manifest, null, hashes.size(), total, 0, 0, true, false);
+        }
+        if (reuse) {
+            JsonNode existing = null;
+            try {
+                existing = cmd.api().get(path(project.name()) + "/versions/" + Api.segment(project.version()));
+            } catch (ApiException e) {
+                if (e.status() != 404) {
+                    throw e;
+                }
+            }
+            if (existing != null) {
+                if (!existing.path("files").equals(files)) {
+                    throw new CliException(project.name() + "@" + project.version() + " is already published with different files; "
+                            + "a version never changes, so bump \"version\" and deploy again");
+                }
+                return new Outcome(project, manifest, existing, hashes.size(), total, 0, 0, false, true);
+            }
+        }
+
+        JsonNode missing = cmd.api().post("/v1/packages/blobs/missing", Json.object().set("sha256", Json.strings(List.copyOf(new java.util.TreeSet<>(hashes.values())))));
+        List<String> wanted = new ArrayList<>();
+        missing.path("missing").forEach(hash -> wanted.add(hash.asText()));
+        long uploaded = 0;
+        for (String hash : wanted) {
+            String path = hashes.entrySet().stream().filter(e -> e.getValue().equals(hash)).findFirst().orElseThrow().getKey();
+            byte[] bytes = Files.readAllBytes(built.files().get(path));
+            cmd.api().putBytes("/v1/packages/blobs/" + hash, bytes, "application/octet-stream");
+            uploaded += bytes.length;
+        }
+        JsonNode published = cmd.api().post("/v1/packages", manifest);
+        return new Outcome(project, manifest, published, hashes.size(), total, wanted.size(), uploaded, false, false);
     }
 
     @Command(name = "ls", description = "Packages you can import: yours, and the cluster's (@cluster/).")

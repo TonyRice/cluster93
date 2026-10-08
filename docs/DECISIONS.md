@@ -1361,3 +1361,22 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 - **Not globals:** `Buffer`, `URL`, `process` and the rest aren't defined globally. Bundled npm code that uses them without importing them still fails. Adding web and Node globals is a separate decision (NOTES.md).
 - **Everything else** of Node's (`crypto`, `stream`, `http`, `child_process`, …) is still refused at publish and at submission, pointing at `"runtime": "node"`.
 - **Why stand-ins and not a Node layer:** these five are pure JavaScript, cover most of what bundled npm libraries reach for, and stay inside the sandbox. Anything needing I/O or native code belongs in the Node runtime (D-084).
+
+### D-091 — Packages step 3: a version is a revision, /packages in fs, automately:* modules
+**Date:** 2026-10-08 · **Status:** Accepted. Builds step 3 of D-083; details in `docs/guides/packages.md`
+
+- **Running a version:** a job or service names `"package": {name, version?, export?}` instead of a `"script"`.
+  - **How:** the server makes the script `export { default } from "<name>[/subpath]";` and locks the package at that exact version (the newest release if none is given; a range isn't accepted, since a revision is one version). Everything else is step 2's machinery.
+  - **What the API shows:** the service's `script` shows the one line it runs, and its `packages` the versions.
+  - **Rolling:** a new version is a new revision, so the service rolls.
+  - **Why no separate "package" field on services:** the lock already records exactly what runs.
+- **`automately deploy`:** publish, or reuse an identical published version, then `PUT` the service.
+  - **Refused:** a changed file under an unchanged version, rather than silently running old code.
+  - **The service's name** is `service.name` in `automately.json`, else the package's name with `.` turned into `-`; `config` and `restart` come from there too.
+  - **`"runtime": "node"`** is refused until the Node runtime exists.
+- **`/packages` in `fs`:** answered from the files fetched before the job started, with no I/O.
+  - **Read-only:** writes fail with `read_only` (`EROFS`). A move or copy out of `/packages` copies the bytes.
+  - **Listing:** the root listing shows `packages` when the job has any.
+  - **`file:///` URLs** are accepted as paths everywhere in `fs`, so `import.meta.url`-relative reads work.
+- **`automately:*` modules:** each re-exports its global, as the default export and by name. **Why not only globals:** a package that imports what it uses says so, and the bundler keeps `automately:*` as imports.
+- **MCP:** `publish_package` takes files as text and runs the same three steps as the CLI, over loopback with the caller's token, so scopes and limits apply.

@@ -55,6 +55,10 @@ Each tool calls the REST API with the agent's token, so a missing scope comes ba
 | `queue_push` | `queues:write` | Push onto a durable queue your services consume |
 | `queue_stats`, `queue_dead` | `queues:read` | Counts, and dead letters with their last error |
 | `queue_retry` | `queues:write` | Put a dead letter back |
+| `publish_package` | `packages:write` | Publish a small package from its files' text; scripts then import it by name |
+| `list_packages`, `package_info` | `packages:read` | Yours and the cluster's; one package's versions, or one version's files |
+
+`run_job` and `deploy_service` take a `package` (`{name, version?, export?}`) instead of a `script` to run a published version.
 
 Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`), so clients can ask before destructive ones.
 

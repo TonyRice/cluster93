@@ -245,6 +245,69 @@ class PackagesTest {
         assertThat(redeployed.getInteger("revision")).as("new versions are a new revision").isEqualTo(2);
     }
 
+    @Test
+    void aPublishedVersionRunsAsAJobOrAServiceRevision() throws Exception {
+        String bearer = TestAuth.bearer("pk-deploy");
+        Map<String, String> v1 = Map.of("index.js", "export default (input) => 'v1:' + input.n;", "extra.js", "export default () => 'extra';");
+        publish(bearer, manifest("calc", "1.0.0", v1).put("exports", new JsonObject().put(".", "index.js").put("./extra", "extra.js")), v1);
+
+        JsonObject job = awaitJob(bearer, submit(bearer, new JsonObject().put("package", new JsonObject().put("name", "calc"))
+                .put("input", new JsonObject().put("n", 7))).getString("id"));
+        assertThat(job.getString("status")).as(job.encodePrettily()).isEqualTo("SUCCEEDED");
+        assertThat(job.getString("output")).isEqualTo("v1:7");
+        assertThat(job.getJsonObject("packages")).isEqualTo(new JsonObject().put("calc", "1.0.0"));
+        JsonObject extra = awaitJob(bearer, submit(bearer, new JsonObject().put("package", new JsonObject().put("name", "calc")
+                .put("version", "1.0.0").put("export", "./extra"))).getString("id"));
+        assertThat(extra.getString("output")).isEqualTo("extra");
+
+        HttpResponse<Buffer> both = post(bearer, "/v1/jobs", new JsonObject().put("script", "export default () => 1;")
+                .put("package", new JsonObject().put("name", "calc")));
+        assertThat(both.statusCode()).isEqualTo(400);
+        assertThat(post(bearer, "/v1/jobs", new JsonObject().put("package", new JsonObject().put("name", "calc").put("version", "^1")))
+                .statusCode()).as("a revision is an exact version").isEqualTo(400);
+        assertThat(post(bearer, "/v1/jobs", new JsonObject().put("package", new JsonObject().put("name", "calc").put("version", "9.0.0")))
+                .bodyAsString()).contains("No version of calc meets 9.0.0");
+
+        JsonObject service = new JsonObject().put("package", new JsonObject().put("name", "calc").put("version", "1.0.0")).put("enabled", false);
+        JsonObject deployed = await(client.put(node.httpPort(), "localhost", "/v1/services/calc-svc").putHeader("Authorization", bearer)
+                .sendJsonObject(service)).bodyAsJsonObject();
+        assertThat(deployed.getJsonObject("packages")).isEqualTo(new JsonObject().put("calc", "1.0.0"));
+        assertThat(deployed.getString("script")).isEqualTo("export { default } from \"calc\";\n");
+        Map<String, String> v2 = Map.of("index.js", "export default (input) => 'v2';");
+        publish(bearer, manifest("calc", "1.1.0", v2), v2);
+        JsonObject rolled = await(client.put(node.httpPort(), "localhost", "/v1/services/calc-svc").putHeader("Authorization", bearer)
+                .sendJsonObject(service.copy().put("package", new JsonObject().put("name", "calc").put("version", "1.1.0")))).bodyAsJsonObject();
+        assertThat(rolled.getJsonObject("packages").getString("calc")).isEqualTo("1.1.0");
+        assertThat(rolled.getInteger("revision")).as("a new version is a new revision").isEqualTo(2);
+    }
+
+    @Test
+    void aPackageReadsItsOwnFilesAndImportsTheHostApis() throws Exception {
+        String bearer = TestAuth.bearer("pk-assets");
+        Map<String, String> files = Map.of(
+                "index.js", "import { readFileSync, readdirSync, writeFileSync } from 'fs'; import { URL } from 'url';"
+                        + " import { kv } from 'automately:kv'; import bus from 'automately:bus';"
+                        + " export default async () => {"
+                        + "   const data = JSON.parse(readFileSync(new URL('./data/config.json', import.meta.url), 'utf8'));"
+                        + "   let refused; try { writeFileSync('/packages/assets/1.0.0/x.txt', 'no'); } catch (e) { refused = e.code; }"
+                        + "   await kv.set('greeting', data.greeting);"
+                        + "   return [data.greeting, readdirSync('/packages'), readdirSync('/packages/assets/1.0.0'), refused,"
+                        + "     await kv.get('greeting'), typeof bus.publish, readdirSync('/').includes('packages')];"
+                        + " };",
+                "data/config.json", "{\"greeting\": \"hello from a package\"}");
+        publish(bearer, manifest("assets", "1.0.0", files), files);
+        JsonObject done = awaitJob(bearer, submit(bearer, new JsonObject().put("package", new JsonObject().put("name", "assets"))).getString("id"));
+        assertThat(done.getString("status")).as(done.encodePrettily()).isEqualTo("SUCCEEDED");
+        JsonArray out = done.getJsonArray("output");
+        assertThat(out.getString(0)).isEqualTo("hello from a package");
+        assertThat(out.getJsonArray(1)).containsExactly("assets");
+        assertThat(out.getJsonArray(2)).containsExactly("data", "index.js");
+        assertThat(out.getString(3)).isEqualTo("EROFS");
+        assertThat(out.getString(4)).isEqualTo("hello from a package");
+        assertThat(out.getString(5)).isEqualTo("function");
+        assertThat(out.getBoolean(6)).isTrue();
+    }
+
     // --- helpers ---
 
     private static JsonObject manifest(String name, String version, Map<String, String> files) throws Exception {

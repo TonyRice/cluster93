@@ -62,6 +62,10 @@ public final class NodeHostApis implements HostApis {
     }
 
     public NodeHostApis(Node node, String tenant, String jobId, boolean service) {
+        this(node, tenant, jobId, service, automately.core.runtime.Packages.NONE);
+    }
+
+    public NodeHostApis(Node node, String tenant, String jobId, boolean service, automately.core.runtime.Packages packages) {
         this.scope = new HostScope(node.vertx(), tenant, jobId, service);
         this.kv = new NodeKvApi(scope, node.kv(), node.capacity(), node.quota());
         this.bus = new NodeBusApi(scope);
@@ -72,7 +76,7 @@ public final class NodeHostApis implements HostApis {
         this.http = new NodeHttpApi(scope, node.serve());
         this.secrets = new NodeSecretsApi(scope, node.secrets(), node.jobs());
         this.fs = new NodeFsApi(scope, node.files(), node.tree(), node.capacity(), node.quota(), node.room(),
-                node.tmp() == null ? automately.core.files.TmpSettings.memoryOnly() : node.tmp(), node.locks());
+                node.tmp() == null ? automately.core.files.TmpSettings.memoryOnly() : node.tmp(), node.locks(), packages);
     }
 
     @Override
@@ -82,7 +86,17 @@ public final class NodeHostApis implements HostApis {
 
     /** Builds each execution's APIs over one node's stores. */
     public static HostApisFactory factory(Node node) {
-        return (tenant, jobId, service) -> new NodeHostApis(node, tenant, jobId, service);
+        return new HostApisFactory() {
+            @Override
+            public automately.core.runtime.api.HostApis create(String tenant, String jobId, boolean service) {
+                return new NodeHostApis(node, tenant, jobId, service);
+            }
+
+            @Override
+            public automately.core.runtime.api.HostApis create(String tenant, String jobId, boolean service, automately.core.runtime.Packages packages) {
+                return new NodeHostApis(node, tenant, jobId, service, packages);
+            }
+        };
     }
 
     @Override

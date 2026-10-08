@@ -22,8 +22,9 @@ import io.vertx.core.json.JsonObject;
 
 /**
  * The file system for one job (D-079): the tenant's files ({@link FileStore}, folders, moves and copies through
- * {@link FileTree}) as one tree, with the job's own {@code /tmp} ({@link TmpStore}) inside it. Writes to the tenant's
- * files are counted against its quota as they finish, like {@code files.write}.
+ * {@link FileTree}) as one tree, with the job's own {@code /tmp} ({@link TmpStore}) inside it, and its packages'
+ * files read-only at {@code /packages} (D-091). Writes to the tenant's files are counted against its quota as they
+ * finish, like {@code files.write}. A {@code file:///} URL names the same path, so {@code import.meta.url} works.
  */
 final class NodeFsApi implements FsApi {
 
@@ -39,10 +40,12 @@ final class NodeFsApi implements FsApi {
     private final automately.core.files.FileLocks locks;
     /** Locks this job holds (path → token), released when it ends. */
     private final java.util.Map<String, String> held = new java.util.concurrent.ConcurrentHashMap<>();
+    private final PackageFiles packages;
     private TmpStore tmp;
 
     NodeFsApi(HostScope scope, FileStore files, FileTree tree, StorageCapacity capacity, TenantQuota quota, Room room, TmpSettings tmpSettings,
-              automately.core.files.FileLocks locks) {
+              automately.core.files.FileLocks locks, automately.core.runtime.Packages packages) {
+        this.packages = new PackageFiles(packages == null ? automately.core.runtime.Packages.NONE : packages);
         this.locks = locks;
         scope.onClose(() -> held.forEach((path, token) -> locks.release(scope.tenant(), path, token)));
         this.scope = scope;
@@ -54,15 +57,29 @@ final class NodeFsApi implements FsApi {
         this.tmpSettings = tmpSettings;
     }
 
-    /** A path in the tree: {@code tmp} says it's in {@code /tmp}, and {@code rel} is the path within it (or the store). */
-    private record Where(boolean tmp, String rel, String shown) {
+    /**
+     * A path in the tree: {@code tmp} says it's in {@code /tmp}, {@code pkg} that it's under {@code /packages}, and
+     * {@code rel} is the path within that (or the store).
+     */
+    private record Where(boolean tmp, boolean pkg, String rel, String shown) {
+
+        Where(boolean tmp, String rel, String shown) {
+            this(tmp, false, rel, shown);
+        }
     }
 
     private static Where where(String raw) {
         if (raw == null) {
             throw HostException.invalid("A path is required");
         }
-        String path = Paths.directory(raw);
+        String path = Paths.directory(fromUrl(raw));
+        if (path.equals(PackageFiles.ROOT) || path.startsWith(PackageFiles.ROOT + "/")) {
+            String rel = path.equals(PackageFiles.ROOT) ? "" : path.substring(PackageFiles.ROOT.length() + 1);
+            if (java.util.Arrays.asList(rel.split("/")).contains("..")) {
+                throw HostException.invalid("A path can't have '..' parts: " + raw);
+            }
+            return new Where(false, true, rel, "/" + path);
+        }
         String invalid = path.isEmpty() ? null : FileStore.invalidPath(path);
         if (invalid != null) {
             throw HostException.invalid(invalid);
@@ -71,6 +88,44 @@ final class NodeFsApi implements FsApi {
             return new Where(true, path.equals(TMP) ? "" : path.substring(TMP.length() + 1), "/" + path);
         }
         return new Where(false, path, "/" + path);
+    }
+
+    /** {@code file:///a/b} is {@code /a/b}, percent-decoded; anything else is as given. */
+    static String fromUrl(String raw) {
+        if (!raw.startsWith("file:")) {
+            return raw;
+        }
+        String rest = raw.substring("file:".length());
+        if (rest.startsWith("//")) {
+            rest = rest.substring(2);
+            if (!rest.startsWith("/") && !rest.startsWith("localhost/")) {
+                throw HostException.invalid("A file URL can't name a host: " + raw);
+            }
+            rest = rest.startsWith("localhost/") ? rest.substring("localhost".length()) : rest;
+        }
+        int end = rest.length();
+        for (char stop : new char[]{'?', '#'}) {
+            int at = rest.indexOf(stop);
+            end = at >= 0 ? Math.min(end, at) : end;
+        }
+        try {
+            return java.net.URLDecoder.decode(rest.substring(0, end).replace("+", "%2B"), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            throw HostException.invalid("Not a valid file URL: " + raw);
+        }
+    }
+
+    private static HostException readOnly(Where at) {
+        return new HostException("Error", "read_only", at.shown() + " is read-only: /packages holds the job's packages");
+    }
+
+    /** Fails for a change under {@code /packages}. */
+    private static void writable(Where... places) {
+        for (Where at : places) {
+            if (at.pkg()) {
+                throw readOnly(at);
+            }
+        }
     }
 
     /** The job's {@code /tmp}, made on first use and dropped when the job ends. */
@@ -97,6 +152,9 @@ final class NodeFsApi implements FsApi {
             if (at.tmp()) {
                 return Future.succeededFuture(tmp().stat(at.rel()));
             }
+            if (at.pkg()) {
+                return Future.succeededFuture(packages.stat(at.rel()));
+            }
             return store().statEntry(scope.tenant(), at.rel()).map(entry -> entry == null ? null : new JsonObject()
                     .put("kind", entry.getString("kind")).put("size", entry.getLong("size", 0L))
                     .put("modifiedAt", entry.getLong("createdAt", 0L)).put("contentType", entry.getString("contentType"))
@@ -111,11 +169,18 @@ final class NodeFsApi implements FsApi {
             if (at.tmp()) {
                 return Future.succeededFuture(tmp().list(at.rel()));
             }
+            if (at.pkg()) {
+                JsonArray listed = packages.list(at.rel());
+                return listed != null ? Future.succeededFuture(listed) : Future.failedFuture(missing(at));
+            }
             JsonArray entries = new JsonArray();
             return page(at.rel(), null, entries).map(v -> {
                 if (at.rel().isEmpty() && entries.stream().noneMatch(e -> TMP.equals(((JsonObject) e).getString("name")))) {
-                    // /tmp is always there, though it isn't in the store.
+                    // /tmp is always there, though it isn't in the store; so is /packages when the job has some.
                     entries.add(new JsonObject().put("name", TMP).put("kind", "dir").put("size", 0L));
+                    if (!packages.isEmpty()) {
+                        entries.add(new JsonObject().put("name", PackageFiles.ROOT).put("kind", "dir").put("size", 0L));
+                    }
                     entries.getList().sort(java.util.Comparator.comparing(e -> e instanceof JsonObject json ? json.getString("name")
                             : String.valueOf(((java.util.Map<?, ?>) e).get("name"))));
                 }
@@ -139,6 +204,7 @@ final class NodeFsApi implements FsApi {
     public Future<Void> mkdir(String path, boolean recursive) {
         return Names.guarded(() -> {
             Where at = where(path);
+            writable(at);
             if (at.tmp()) {
                 tmp().mkdir(at.rel(), recursive);
                 return Future.succeededFuture();
@@ -151,6 +217,7 @@ final class NodeFsApi implements FsApi {
     public Future<Void> rmdir(String path, boolean recursive) {
         return Names.guarded(() -> {
             Where at = where(path);
+            writable(at);
             if (at.tmp()) {
                 if (!tmp().rmdir(at.rel(), recursive)) {
                     throw missing(at);
@@ -168,6 +235,7 @@ final class NodeFsApi implements FsApi {
     public Future<Void> unlink(String path) {
         return Names.guarded(() -> {
             Where at = where(path);
+            writable(at);
             if (at.tmp()) {
                 if (!tmp().delete(at.rel())) {
                     throw missing(at);
@@ -186,6 +254,7 @@ final class NodeFsApi implements FsApi {
         return Names.guarded(() -> {
             Where source = where(from);
             Where target = where(to);
+            writable(source, target);
             if (source.tmp() && target.tmp()) {
                 tmp().rename(source.rel(), target.rel(), true);
                 return Future.succeededFuture();
@@ -203,7 +272,8 @@ final class NodeFsApi implements FsApi {
         return Names.guarded(() -> {
             Where source = where(from);
             Where target = where(to);
-            if (!source.tmp() && !target.tmp()) {
+            writable(target);
+            if (!source.tmp() && !target.tmp() && !source.pkg()) {
                 return store().copy(scope.tenant(), source.rel(), target.rel(), overwrite).mapEmpty();
             }
             Future<Void> free = overwrite ? Future.succeededFuture() : stat(to).compose(there -> there == null ? Future.succeededFuture()
@@ -218,6 +288,13 @@ final class NodeFsApi implements FsApi {
             Where at = where(path);
             if (at.tmp()) {
                 return Future.succeededFuture(Buffer.buffer(tmp().read(at.rel())));
+            }
+            if (at.pkg()) {
+                byte[] bytes = packages.read(at.rel());
+                if (bytes == null) {
+                    throw packages.isDir(at.rel()) ? new HostException("Error", "is_a_directory", at.shown() + " is a directory") : missing(at);
+                }
+                return Future.succeededFuture(Buffer.buffer(bytes));
             }
             return store().stat(scope.tenant(), at.rel()).compose(info -> {
                 if (info == null) {
@@ -238,6 +315,7 @@ final class NodeFsApi implements FsApi {
     public Future<Void> writeFile(String path, Buffer data, String contentType) {
         return Names.guarded(() -> {
             Where at = where(path);
+            writable(at);
             if (at.tmp()) {
                 tmp().write(at.rel(), data.getBytes());
                 return Future.succeededFuture();
@@ -295,7 +373,7 @@ final class NodeFsApi implements FsApi {
     /** Any path can be locked, whether or not a file is there: it names the work, not the bytes. */
     private static String lockPath(String path) {
         Where at = where(path);
-        return at.tmp() ? "tmp/" + at.rel() : at.rel();
+        return at.tmp() ? "tmp/" + at.rel() : at.pkg() ? PackageFiles.ROOT + "/" + at.rel() : at.rel();
     }
 
     private automately.core.files.FileLocks requireLocks() {

@@ -454,6 +454,39 @@ class CliTest {
     }
 
     @Test
+    void deployPublishesAndRunsTheVersionAsAService() throws Exception {
+        loginAsNewTenant("deploy-cli");
+        Path site = Files.createDirectories(home.resolve("site"));
+        Files.writeString(site.resolve("automately.json"), "{\"name\": \"site.app\", \"version\": \"1.0.0\", \"entry\": \"index.js\","
+                + " \"service\": {\"config\": {\"greeting\": \"hi\"}, \"restart\": \"on-failure\"}}");
+        Files.writeString(site.resolve("index.js"), "export default async (config, ctx) => config.greeting;\n");
+
+        Result first = cli("deploy", site.toString(), "--no-bundle", "--disabled");
+        assertThat(first.code()).as(first.err()).isZero();
+        assertThat(first.out()).contains("Published site.app@1.0.0").contains("as service site-app, revision 1").contains("not started");
+        Result again = cli("deploy", site.toString(), "--no-bundle", "--disabled");
+        assertThat(again.code()).as(again.err()).isZero();
+        assertThat(again.out()).contains("Using site.app@1.0.0 (already published)").contains("revision 1");
+
+        Files.writeString(site.resolve("index.js"), "export default async (config) => config.greeting + '!';\n");
+        Result unbumped = cli("deploy", site.toString(), "--no-bundle", "--disabled");
+        assertThat(unbumped.code()).isEqualTo(1);
+        assertThat(unbumped.err()).contains("already published with different files").contains("bump");
+
+        Files.writeString(site.resolve("automately.json"), "{\"name\": \"site.app\", \"version\": \"1.0.1\", \"entry\": \"index.js\","
+                + " \"service\": {\"config\": {\"greeting\": \"hi\"}, \"restart\": \"on-failure\"}}");
+        Result bumped = cli("deploy", site.toString(), "--no-bundle", "--disabled", "--name", "renamed");
+        assertThat(bumped.code()).as(bumped.err()).isZero();
+        assertThat(bumped.out()).contains("as service renamed, revision 1");
+        assertThat(cli("services", "ls").out()).contains("site-app").contains("renamed");
+
+        Files.writeString(site.resolve("automately.json"), "{\"name\": \"site.app\", \"version\": \"2.0.0\", \"runtime\": \"node\"}");
+        Result node = cli("deploy", site.toString(), "--no-bundle");
+        assertThat(node.code()).isEqualTo(1);
+        assertThat(node.err()).contains("Node runtime isn't built yet");
+    }
+
+    @Test
     void packagesArePublishedFromAFolderAndListed() throws Exception {
         loginAsNewTenant("pkg-cli");
         Path lib = Files.createDirectories(home.resolve("strings"));

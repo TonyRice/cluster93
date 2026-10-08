@@ -548,12 +548,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [script]
+              description: A `script`, or a published `package` version to run (D-091); not both.
               properties:
                 script:
                   type: string
                   minLength: 1
                   description: An ES module whose default export receives `(input, ctx)`. At most 256 KB.
+                package: { $ref: '#/components/schemas/PackageTarget' }
                 input: { type: object }
                 timeoutMs: { type: integer, minimum: 1 }
                 onOrphan: { type: string, enum: [fail, retry, resume] }
@@ -712,9 +713,10 @@ paths:
           application/json:
             schema:
               type: object
-              required: [script]
+              description: A `script`, or a published `package` version to run (D-091); not both.
               properties:
                 script: { type: string, minLength: 1 }
+                package: { $ref: '#/components/schemas/PackageTarget' }
                 config: { type: object }
                 restart: { type: string, enum: [always, on-failure] }
                 enabled: { type: boolean }
@@ -2707,6 +2709,14 @@ components:
         depth: { type: integer, description: '0 for jobs submitted from outside; one more than the parent otherwise.' }
         secrets: { type: boolean, description: 'Whether its script may read your secrets: submitted with secrets:use, or started by a job or service that may.' }
         packages: { $ref: '#/components/schemas/PackageLock' }
+    PackageTarget:
+      type: object
+      description: A published package to run; its export's default export is the script. The version is pinned in the lock.
+      required: [name]
+      properties:
+        name: { type: string, description: 'A package name, or @cluster/<name>.' }
+        version: { type: string, description: 'An exact version; the newest release if left out.' }
+        export: { type: string, default: '.', description: '"." or "./<subpath>": which export to run.' }
     PackageLock:
       type: [object, 'null']
       description: The exact package versions the script imports, decided when it was submitted (or the service defined), so every attempt runs the same code. Null if it imports none.

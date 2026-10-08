@@ -27,7 +27,9 @@ public final class Imports {
     public static final Set<String> BUILT_INS = Set.of("fs", "node:fs", "fs/promises", "node:fs/promises", "automately:fs",
             // Stand-ins for Node's own (D-090).
             "path", "node:path", "path/posix", "node:path/posix", "events", "node:events", "buffer", "node:buffer", "url", "node:url",
-            "util", "node:util");
+            "util", "node:util",
+            // The host APIs as modules (D-091).
+            "automately:kv", "automately:bus", "automately:jobs", "automately:files", "automately:secrets", "automately:fetch", "automately:log");
 
     /** Node's own modules, to say why one can't be imported instead of "no package named path". */
     private static final Set<String> NODE_MODULES = Set.of("assert", "async_hooks", "buffer", "child_process", "cluster", "console", "constants",

@@ -1,6 +1,6 @@
 # Packages: versioned JavaScript code, published to the cluster
 
-**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day, twice (§12, D-085; §13, D-086). Step 1 (the store and publishing) is built (D-088, [guide](../guides/packages.md)), and so is step 2, importing from jobs (D-089, D-090); steps 3 and 4 aren't yet. Decisions: D-083, D-087 (inline scripts, §10), D-088, D-089, D-090. This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
+**Status:** accepted (Tony, 2026-10-08) and reviewed for holes the same day, twice (§12, D-085; §13, D-086). Step 1 (the store and publishing) is built (D-088, [guide](../guides/packages.md)), and so are step 2, importing from jobs (D-089, D-090), and step 3, deploying versions (D-091); step 4 isn't yet. Decisions: D-083, D-087 (inline scripts, §10), D-088 to D-091. This is the "modules" step from the roadmap. Native code and Node APIs are a separate design, the Node runtime (§9).
 
 ## 1. What a package is
 A **package** is an immutable, versioned set of JavaScript files (ES modules) with a manifest:
@@ -118,7 +118,7 @@ An isolate has no libuv and can't load `.node` addons, so `sharp`, `bcrypt`, `ch
 ## 11. Building it
 1. ~~**Store and publish:**~~ ✅ `PACKAGE_VERSIONS` and `PACKAGE_BLOBS` (a contract test on both stores), the publish API, and the CLI's `publish`, `ls` and `info`, with esbuild and native detection (D-088).
 2. ~~**Resolve and load:**~~ ✅ the spike (cycles need the resolver's own module cache; Javet supports neither `import()` nor `import.meta`, so sources are rewritten), the lock on jobs, child jobs and service revisions, scanning at submission, prefetch with a memory cache, and the resolver (D-089). Stand-ins for Node's `path`, `events`, `buffer`, `url` and `util` (D-090). **Still to do:** the cache's disk tier.
-3. **Services from packages:** a version is a revision; `automately:*` built-ins; `/packages` in `fs`; MCP tools; docs.
+3. ~~**Services from packages:**~~ ✅ a version is a revision (`"package"` in place of `"script"`, and `automately deploy`); `automately:*` built-ins; `/packages` in `fs`; MCP tools (`publish_package`, `list_packages`, `package_info`); docs (D-091).
 4. **Lifecycle:** yank, block and purge, garbage collection, metrics (cache hits, prefetch time).
 
 ## 12. Review for holes (2026-10-08, D-085)

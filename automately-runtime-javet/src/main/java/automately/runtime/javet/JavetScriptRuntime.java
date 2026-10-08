@@ -78,17 +78,35 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("events", "node:events"), java.util.Map.entry("node:events", "node:events"),
             java.util.Map.entry("buffer", "node:buffer"), java.util.Map.entry("node:buffer", "node:buffer"),
             java.util.Map.entry("url", "node:url"), java.util.Map.entry("node:url", "node:url"),
-            java.util.Map.entry("util", "node:util"), java.util.Map.entry("node:util", "node:util"));
+            java.util.Map.entry("util", "node:util"), java.util.Map.entry("node:util", "node:util"),
+            // The host APIs as modules (D-091), so packages can import them rather than rely on globals.
+            java.util.Map.entry("automately:kv", "automately:kv"), java.util.Map.entry("automately:bus", "automately:bus"),
+            java.util.Map.entry("automately:jobs", "automately:jobs"), java.util.Map.entry("automately:files", "automately:files"),
+            java.util.Map.entry("automately:secrets", "automately:secrets"), java.util.Map.entry("automately:fetch", "automately:fetch"),
+            java.util.Map.entry("automately:log", "automately:log"));
 
     /** Each built-in module's source: fs re-exports the global; the others are stand-ins for Node's (js/node/). */
-    static final java.util.Map<String, String> BUILT_IN_SOURCES = java.util.Map.of(
-            "node:fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;",
-            "node:fs/promises", "export default globalThis.fs.promises; export const { " + FS_PROMISES_NAMES + " } = globalThis.fs.promises;",
-            "node:path", resource("node/path.js"),
-            "node:events", resource("node/events.js"),
-            "node:buffer", resource("node/buffer.js"),
-            "node:url", resource("node/url.js"),
-            "node:util", resource("node/util.js"));
+    static final java.util.Map<String, String> BUILT_IN_SOURCES = java.util.Map.ofEntries(
+            java.util.Map.entry("node:fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;"),
+            java.util.Map.entry("node:fs/promises", "export default globalThis.fs.promises; export const { " + FS_PROMISES_NAMES
+                    + " } = globalThis.fs.promises;"),
+            java.util.Map.entry("node:path", resource("node/path.js")),
+            java.util.Map.entry("node:events", resource("node/events.js")),
+            java.util.Map.entry("node:buffer", resource("node/buffer.js")),
+            java.util.Map.entry("node:url", resource("node/url.js")),
+            java.util.Map.entry("node:util", resource("node/util.js")),
+            java.util.Map.entry("automately:kv", hostModule("kv")),
+            java.util.Map.entry("automately:bus", hostModule("bus")),
+            java.util.Map.entry("automately:jobs", hostModule("jobs")),
+            java.util.Map.entry("automately:files", hostModule("files")),
+            java.util.Map.entry("automately:secrets", hostModule("secrets")),
+            java.util.Map.entry("automately:fetch", hostModule("fetch")),
+            java.util.Map.entry("automately:log", hostModule("log")));
+
+    /** {@code import kv from 'automately:kv'} or {@code import { kv } from 'automately:kv'}: the same object as the global. */
+    private static String hostModule(String name) {
+        return "const api = globalThis." + name + "; export default api; export { api as " + name + " };";
+    }
 
     private static String resource(String file) {
         try (java.io.InputStream in = JavetScriptRuntime.class.getResourceAsStream("js/" + file)) {

@@ -140,12 +140,8 @@ final class ServiceRoutes {
             error(ctx, 400, "invalid_json", "The request body must be a JSON object");
             return;
         }
-        if (body == null || !(body.getValue("script") instanceof String script) || script.isBlank()) {
-            error(ctx, 400, "invalid_request", "\"script\" must be a non-empty string");
-            return;
-        }
-        if (script.length() > ApiVerticle.MAX_SCRIPT_BYTES) {
-            error(ctx, 413, "script_too_large", "\"script\" is limited to " + ApiVerticle.MAX_SCRIPT_BYTES + " bytes");
+        String script = ApiVerticle.script(ctx, body);
+        if (script == null) {
             return;
         }
         Object configValue = body.getValue("config");
@@ -166,11 +162,13 @@ final class ServiceRoutes {
         JsonObject serviceConfig = configValue == null ? new JsonObject() : (JsonObject) configValue;
 
         // What its script imports is resolved now and kept on the revision; a redeploy resolves again (D-089).
-        packages.lockScript(tenant, script, true).onComplete(locked -> {
+        // A package version is its revision (D-091): the script re-exports it, and the lock pins it.
+        ApiVerticle.resolve(packages, tenant, body, script, true).onComplete(locked -> {
             if (locked.failed()) {
                 ApiVerticle.refuseImports(ctx, locked.cause());
             } else {
-                define(ctx, tenant, name, script, serviceConfig, restart, enabled, locked.result());
+                define(ctx, tenant, name, locked.result().getString("script"), serviceConfig, restart, enabled,
+                        locked.result().getJsonObject("packages"));
             }
         });
     }
