@@ -26,6 +26,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Fixed: the rest of the S3 download gap under load (2026-10-08)
+
+### Fixed
+- **S3 downloads could still fail with "Connection was closed" under load (D-094).** It happened in about 1 of 7 runs of the stress test. D-081 covered a close partway through, but two more cases slipped past:
+  - **A close reported as an error just after the last byte:** the download was already complete, but it was failed.
+  - **A request (first or resumed) that failed to open,** because it went out on a pooled connection the server was closing. It wasn't retried.
+
+  Both now resume or end correctly. Client errors (4xx) are never retried, and the reader sees the store's message only if it finally gives up. **Why:** a node serving files from S3 shouldn't drop downloads when it's busy.
+
 ## Packages: tested with real npm libraries (2026-10-08)
 
 ### Added

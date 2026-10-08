@@ -1424,3 +1424,15 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - **`require()` of provided modules:** esbuild leaves an external `require('util')` in an ES module as a call that throws. Publishing now makes it a static import, and `require()` returns the module's default export, Node's `module.exports`.
   - **Native detection:** a package whose installed optional dependency holds a `.node` file is native. That covers sharp's `@img/sharp-<platform>` prebuilt binaries, which it loads through a computed path.
 - **Still not covered, by design or for later:** Node's `crypto`, `stream`, `http` and the rest; Web Crypto (`crypto.getRandomValues`, which would need the host's secure random); and native code. The Node runtime (D-084) is where those run; whether more polyfills belong in the isolate gets a security review first.
+
+### D-094 — S3 downloads: two more ways a busy node cut them off
+**Date:** 2026-10-08 · **Status:** Accepted. Completes D-081
+
+- **Evidence:** `S3BlobStoreTest.aReaderThatPausesEveryChunkGetsTheWholeFile` still failed in about 1 of 7 runs, with a raw `HttpClosedException` ("Connection was closed") reaching the reader. A raw exception means it came from a path D-081 didn't wrap: the stream's own error, or a request that never opened.
+- **Two gaps:**
+  1. **A close after the last byte.** The gateway closes as soon as it has sent everything. With the reader paused, Vert.x can report that close as an error instead of the end. Every byte had been delivered, so there was nothing to resume, and `resumeOrFail` failed a finished download. **Now:** a download that has delivered every byte has ended, whatever the connection says afterwards.
+  2. **A request that fails to open.** With several downloads at once, a range request (the first, or a resume) can go out on a pooled keep-alive connection the server is just closing, and fail before any byte. That failed the download outright. **Now:** an open that fails is retried like a resume, within the same 3 attempts.
+- **What isn't retried:** an answer that won't change. A 4xx from S3 (no such key, access denied) fails at once. To tell, `ResumingRangeBody` now gets the raw error, and the store's wording ("File data is missing", "The file storage backend failed") is applied only when it gives up.
+- **Tests:**
+  - **`ResumingRangeBodyTest`** drives each case by hand with a fake stream, so it happens every time: a close after the last byte, a close halfway, a first request and a resume each failing to open, a 403 not retried, and the resumes running out. Three of them fail on D-081's code.
+  - **The stress test** passed 20 runs in a row (before: about 1 failure in 7).

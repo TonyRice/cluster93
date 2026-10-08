@@ -14,6 +14,10 @@ import java.util.function.LongFunction;
  * paused (backpressure), Vert.x reports that close as a failure and drops what it hadn't delivered yet. A range request
  * can be repeated safely, and we know how much we've passed on, so the rest is asked for again, up to
  * {@link #MAX_RESUMES} times. Nothing already delivered is sent twice.
+ *
+ * <p>Two more ways it was cut off under load (D-094): a close reported as an error just after the last byte (the
+ * download was complete, so that's its end), and a request that failed to open because it went out on a pooled
+ * connection the server was closing (retried like a resume). An answer that won't change, a 4xx, isn't retried.
  */
 final class ResumingRangeBody implements BodyStream {
 
@@ -22,6 +26,8 @@ final class ResumingRangeBody implements BodyStream {
     /** Opens the range from {@code offset} bytes into it to its end. */
     private final LongFunction<Future<? extends ReadStream<Buffer>>> openFrom;
     private final long length;
+    /** What the reader is told when it finally fails: the store's own wording for the cause. */
+    private final java.util.function.UnaryOperator<Throwable> describe;
     private Consumer<Buffer> chunk;
     private Runnable end;
     private Consumer<Throwable> error;
@@ -33,8 +39,13 @@ final class ResumingRangeBody implements BodyStream {
     private int resumes;
 
     ResumingRangeBody(LongFunction<Future<? extends ReadStream<Buffer>>> openFrom, long length) {
+        this(openFrom, length, java.util.function.UnaryOperator.identity());
+    }
+
+    ResumingRangeBody(LongFunction<Future<? extends ReadStream<Buffer>>> openFrom, long length, java.util.function.UnaryOperator<Throwable> describe) {
         this.openFrom = openFrom;
         this.length = length;
+        this.describe = describe;
     }
 
     @Override
@@ -91,7 +102,7 @@ final class ResumingRangeBody implements BodyStream {
         }
         openFrom.apply(from).onComplete(ar -> {
             if (ar.failed()) {
-                fail(ar.cause());
+                resumeOrFail(ar.cause());
                 return;
             }
             ReadStream<Buffer> opened = ar.result();
@@ -141,25 +152,38 @@ final class ResumingRangeBody implements BodyStream {
         });
     }
 
-    /** Asks for the rest again if it can, keeping whether the reader wants data now. */
+    /**
+     * Asks for the rest again if it can, keeping whether the reader wants data now. A download that already delivered
+     * every byte has simply ended, whatever the connection said afterwards.
+     */
     private void resumeOrFail(Throwable cause) {
         boolean again;
+        boolean complete;
         synchronized (this) {
             if (finished) {
                 return;
             }
             current = null;
-            again = resumes < MAX_RESUMES && delivered < length;
+            opening = false;
+            complete = delivered >= length;
+            again = !complete && resumes < MAX_RESUMES && retryable(cause);
             if (again) {
                 resumes++;
                 opening = true;
             }
         }
-        if (again) {
+        if (complete) {
+            done();
+        } else if (again) {
             open();
         } else {
             fail(cause);
         }
+    }
+
+    /** Whether asking again could help: not when S3 answered with a client error (no such key, access denied, …). */
+    static boolean retryable(Throwable cause) {
+        return !(cause instanceof S3Client.S3Exception e && e.status() >= 400 && e.status() < 500);
     }
 
     private void done() {
@@ -180,6 +204,6 @@ final class ResumingRangeBody implements BodyStream {
             finished = true;
             opening = false;
         }
-        error.accept(cause);
+        error.accept(describe.apply(cause));
     }
 }
