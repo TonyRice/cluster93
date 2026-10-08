@@ -44,7 +44,7 @@ class RealNpmPackagesTest {
 
     /** Libraries that run in the isolate, one module each in src/; the parameterized test below names the same. */
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
-            "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto");
+            "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals");
 
     private RunningNode node;
     private Path project;
@@ -118,7 +118,7 @@ class RealNpmPackagesTest {
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
         JsonNode expected = Json.parse(underNode(lib));
         Path script = project.resolve("job-" + lib + ".mjs");

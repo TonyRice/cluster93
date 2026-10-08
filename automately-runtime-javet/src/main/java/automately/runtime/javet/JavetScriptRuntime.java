@@ -49,7 +49,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     /** The prelude's files (src/main/resources/automately/runtime/javet/js), in order; each sees what the earlier ones define. */
     static final List<String> PRELUDE_FILES = List.of("prelude.js", "console.js", "timers.js", "listeners.js", "kv.js", "bus.js", "jobs.js", "secrets.js",
-            "encoding.js", "streams.js", "crypto.js", "subtle.js", "zlib.js", "fetch.js", "files.js", "fs.js", "serve.js", "context.js", "entry.js");
+            "encoding.js", "url.js", "globals.js", "streams.js", "crypto.js", "subtle.js", "zlib.js", "fetch.js", "files.js", "fs.js", "serve.js", "context.js", "entry.js");
 
     /**
      * Runs before the job's module: the prelude's files in one closure. It captures the host object, removes it from the
@@ -188,6 +188,10 @@ public final class JavetScriptRuntime implements ScriptRuntime {
     private final Vertx vertx;
     /** The heap limit each isolate gets, as os.totalmem() reports it. */
     private final long heapBytes;
+    /** V8's compiled prelude, from the first isolate that ran it (D-106); null until then. */
+    private volatile byte[] preludeCache;
+    /** V8's compiled built-in modules, by module name (D-106). */
+    private final java.util.Map<String, byte[]> moduleCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final WorkerExecutor isolates;
 
     /**
@@ -386,11 +390,30 @@ public final class JavetScriptRuntime implements ScriptRuntime {
         }
     }
 
+    /**
+     * Runs the prelude, from V8's code cache once there is one (D-106). Parsing the prelude is most of what an isolate
+     * costs to start, and it's the same source every time; the first isolate compiles it, and its compiled code, taken
+     * after it ran so the functions it used are in it, is handed to every later one. V8 checks the cache against the
+     * source, its flags and its version, and compiles afresh if anything differs. The cache only ever comes from this
+     * process, from our own prelude.
+     */
+    private V8ValueObject runPrelude(V8Runtime v8) throws JavetException {
+        byte[] cache = preludeCache;
+        try (com.caoccao.javet.values.reference.V8Script script = (cache == null ? v8.getExecutor(PRELUDE) : v8.getExecutor(PRELUDE, cache))
+                .setResourceName("automately:prelude").compileV8Script()) {
+            V8ValueObject prelude = script.execute(true);
+            if (cache == null) {
+                preludeCache = script.getCachedData();
+            }
+            return prelude;
+        }
+    }
+
     private ExecutionResult invokeModule(V8Runtime v8, Execution execution, Control control) throws JavetException {
         // Built-ins (D-079) and the job's packages (D-089), all already in memory.
-        ModuleResolver resolver = new ModuleResolver(execution.packages(), BUILT_IN_MODULES, forJob(execution.env(), heapBytes));
+        ModuleResolver resolver = new ModuleResolver(execution.packages(), BUILT_IN_MODULES, forJob(execution.env(), heapBytes), moduleCache);
         v8.setV8ModuleResolver(resolver);
-        try (V8ValueObject prelude = v8.getExecutor(PRELUDE).setResourceName("automately:prelude").execute();
+        try (V8ValueObject prelude = runPrelude(v8);
              ScriptEntryPoints js = new ScriptEntryPoints(v8, prelude);
              V8Module module = v8.getExecutor(automately.core.packages.Imports.rewrite(execution.script(), ModuleResolver.JOB_URL))
                      .setResourceName(ModuleResolver.JOB).compileV8Module()) {

@@ -5,7 +5,8 @@ const cryptoCall = (result) => {
   if (result instanceof Error) throw result;
   return result;
 };
-const domError = (name, message) => Object.assign(new Error(message), { name });
+// Web Crypto's errors are DOMExceptions (js/globals.js, D-106), as in Node.
+const domError = (name, message) => new DOMException(message, name);
 // By instanceof, not by name: Node's Buffer (a Uint8Array subclass) is accepted, as in Node.
 const INTEGER_ARRAYS = [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, BigInt64Array, BigUint64Array];
 const viewBytes = (data) => {

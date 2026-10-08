@@ -16,6 +16,19 @@ driven from the same machine through Docker's port mapping. Rerun it on your har
 | Files (cluster backend, replicated) | 256 MB, one stream each way, median of 3 | upload 60 MB/s, download 338 MB/s |
 | Isolate density | 96 idle services on 3 nodes | 1.6 MB per isolate (all three nodes: 5637 MB -> 5786 MB) |
 
+## Isolate start-up
+
+`IsolateStartupBenchmark` (in `automately-runtime-javet`, run with `AUTOMATELY_BENCH=1`) times one job's isolate in-process, with no HTTP or cluster: a fresh isolate, the prelude and the script, on one thread after 100 warm-up runs, 500 measured. Measured 2026-10-08 on the machine above (D-106):
+
+| Script | p50 | p90 | p99 |
+|---|---|---|---|
+| `export default () => 1` | 3.5 ms | 3.8 ms | 4.8 ms |
+| imports `node:crypto` | 4.7 ms | 5.2 ms | 7.3 ms |
+| imports `node:stream` | 6.7 ms | 7.1 ms | 7.9 ms |
+| imports `node:zlib` | 7.6 ms | 7.9 ms | 8.4 ms |
+
+Before V8's code cache was used for the prelude and built-ins, these were 4.9, 7.7, 12.0 and 13.1 ms, without the globals D-106 added.
+
 ## Reading these numbers
 
 - **One laptop runs everything.** The client and all three nodes share the same CPUs, so they compete. On the same

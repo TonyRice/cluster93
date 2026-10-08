@@ -199,6 +199,18 @@ class NodeStandInsTest {
     }
 
     @Test
+    void theWebAndNodeGlobalsAreThere() throws Exception {
+        assertThat(output("export default async () => {"
+                + "  const c = new AbortController(); const seen = []; c.signal.addEventListener('abort', () => seen.push('aborted')); c.abort();"
+                + "  const clone = structuredClone({ m: new Map([[1, 2]]), d: new Date(3) });"
+                + "  await new Promise((resolve) => setImmediate(resolve)); queueMicrotask(() => seen.push('micro')); await null;"
+                + "  return [new URL('/p?q=1', 'https://Example.com').href, new URLSearchParams({ a: '1 2' }).toString(), btoa(atob('aGk=')),"
+                + "    seen.join(), c.signal.reason instanceof DOMException, clone.m.get(1), clone.d.getTime(), typeof performance.now(),"
+                + "    new CustomEvent('e', { detail: 4 }).detail, URL.canParse('nope')]; };"))
+                .containsExactly("https://example.com/p?q=1", "a=1+2", "aGk=", "aborted,micro", true, 2, 3, "number", 4, false);
+    }
+
+    @Test
     void whatCryptoCantDoYetSaysSo() throws Exception {
         assertThat(output("import { createDiffieHellman, generateKeyPairSync } from 'crypto';"
                 + " export default () => { const codes = [];"

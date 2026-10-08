@@ -37,6 +37,8 @@ final class ModuleResolver implements IV8ModuleResolver {
     /** Every name a built-in is imported as → its module name; and each module's source. */
     private final Map<String, String> builtIns;
     private final Map<String, String> builtInSources;
+    /** The runtime's compiled built-ins (D-106), shared by every isolate; only for sources the same in every job. */
+    private final Map<String, byte[]> codeCache;
     private final Map<String, IV8Module> modules = new HashMap<>();
     /** Which package file each compiled module is, so its own imports resolve against it. */
     private final Map<String, Location> locations = new HashMap<>();
@@ -49,9 +51,14 @@ final class ModuleResolver implements IV8ModuleResolver {
     }
 
     ModuleResolver(Packages packages, Map<String, String> builtIns, Map<String, String> builtInSources) {
+        this(packages, builtIns, builtInSources, null);
+    }
+
+    ModuleResolver(Packages packages, Map<String, String> builtIns, Map<String, String> builtInSources, Map<String, byte[]> codeCache) {
         this.packages = packages;
         this.builtIns = builtIns;
         this.builtInSources = builtInSources;
+        this.codeCache = codeCache;
     }
 
     @Override
@@ -75,7 +82,15 @@ final class ModuleResolver implements IV8ModuleResolver {
         String source = target.builtIn != null
                 ? target.builtIn
                 : Imports.rewrite(new String(target.file.pkg.files().get(target.file.path), StandardCharsets.UTF_8), target.url);
-        IV8Module module = runtime.getExecutor(source).setResourceName(target.url).compileV8Module();
+        // A built-in whose source is the shared one (not process or os, which carry the job's own values) compiles from
+        // V8's code cache after the first time; V8 checks the cache against the source and compiles afresh if it differs.
+        boolean cacheable = codeCache != null && target.builtIn != null && target.builtIn == JavetScriptRuntime.BUILT_IN_SOURCES.get(target.url);
+        byte[] cached = cacheable ? codeCache.get(target.url) : null;
+        IV8Module module = (cached == null ? runtime.getExecutor(source) : runtime.getExecutor(source, cached))
+                .setResourceName(target.url).compileV8Module();
+        if (cacheable && cached == null && module instanceof com.caoccao.javet.values.reference.V8Module compiled) {
+            codeCache.putIfAbsent(target.url, compiled.getCachedData());
+        }
         modules.put(target.url, module);
         if (target.file != null) {
             locations.put(target.url, target.file);

@@ -1694,3 +1694,36 @@ Everything is on the JVM's providers.
   - all the known differences in one list
 - **Keeping it current:** a change to any stand-in updates this page, as well as the changelog and its decision.
 - **Writing it found a gap:** `console` had only `log`, `info`, `warn` and `error`, so a library calling `console.debug`, `console.time` or `console.group` threw. `console` now has `debug`, `dir`, `table`, `trace`, `assert`, `group`/`groupCollapsed`/`groupEnd` (indenting what follows), `time`/`timeLog`/`timeEnd` and `count`/`countReset`, all writing to the job's log. `table` and `dir` print JSON rather than a table.
+
+### D-106 — The Web and Node globals, paid for by V8's code cache
+**Date:** 2026-10-08 · **Status:** Accepted. Step 5 of D-095 (globals "after a cold-start benchmark")
+
+**Decision:** the isolate defines the globals libraries expect from Node and browsers, all pure JavaScript with no reach:
+- **URLs and text:** `URL` and `URLSearchParams` (with `URL.canParse`/`URL.parse`; `node:url` now re-exports these rather than having its own), `atob` and `btoa`.
+- **Events and cancellation:** `DOMException`, `Event`, `CustomEvent`, `EventTarget`, `AbortController` and `AbortSignal` (with `abort`, `timeout`, `any`, `throwIfAborted`, and `onabort` as an event handler attribute).
+- **The rest:** `structuredClone`, `queueMicrotask`, `setImmediate`/`clearImmediate`, and `performance` (`now`, `timeOrigin`, `mark`/`measure`).
+- **`performance.now()` is coarse:** whole milliseconds, no finer than `Date.now()`, so it adds nothing to timing attacks.
+- **Web Crypto's errors are now real `DOMException`s,** as in Node.
+- **Not added:** `Blob`, `File`, `FormData`, `Headers`/`Request`/`Response`, the Web Streams globals, `MessageChannel` and `WebSocket`. They need their own designs: `fetch` returns the host's response today, and WebSocket is network reach.
+
+**The benchmark, and what paid for it:** a new `IsolateStartupBenchmark` (run with `AUTOMATELY_BENCH=1`) times a fresh isolate, its prelude and a script, on one thread after a warm-up.
+- **The cost of the globals:** they alone added 0.8 ms at p50 to every job (4.9 → 5.7 ms, in three alternating runs each): parsing about 25 KB more prelude.
+- **The fix: compile once.** The prelude is the same source every time, so the first isolate compiles and runs it, and its compiled code goes to every later one through V8's code cache.
+  - **Built-in modules** whose source doesn't vary per job are cached the same way. `process` and `os` carry the job's values, so they aren't.
+  - **V8's own checks:** V8 checks each cache against the source, its flags and its version, and compiles afresh if anything differs.
+  - **Where caches come from:** only from this process and our own sources, never from a script.
+
+**Results** (p50, one machine, same day):
+
+| | Before (no globals) | After (globals, code cache) |
+|---|---|---|
+| Trivial job | 4.9 ms | 3.5 ms |
+| Importing `crypto` | 7.7 ms | 4.7 ms |
+| Importing `stream` | 12.0 ms | 6.7 ms |
+| Importing `zlib` | 13.1 ms | 7.6 ms |
+
+So every job starts about 30% faster than before, with the globals included.
+
+**Checked against real Node:** a real-npm fixture's output equals real Node's. It covers URL parsing and search params, event dispatch (`once`, `handleEvent`, `stopImmediatePropagation`, `preventDefault`), and abort ordering and reasons, including `AbortSignal.timeout`/`any` and `node:stream`'s `pipeline` stopped by a signal. It also covers `structuredClone` of Maps, Sets, typed arrays, errors, cycles and class instances, its `DataCloneError`, `atob`/`btoa` errors, and the order of microtasks, promises, immediates and timers.
+
+**Not done:** user packages' modules could be cached the same way, keyed by package version and file; that's for when packages are large enough to matter.

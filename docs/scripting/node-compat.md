@@ -60,14 +60,22 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `TextEncoder`, `TextDecoder` | UTF-8 only. Decoding follows the WHATWG rules, so a broken sequence gives one U+FFFD (D-103), but a leading byte-order mark isn't removed, and there's no `{ stream: true }` or `fatal` option. |
 | `fetch` | The host's egress-checked fetch, not the WHATWG one: it returns the host's response object, and there are no `Request`/`Response`/`Headers` classes ([host APIs](host-apis.md)). |
 | `fs`, `kv`, `bus`, `jobs`, `files`, `secrets`, `log` | Automately's host APIs ([host APIs](host-apis.md)). |
+| `URL`, `URLSearchParams` | The WHATWG URL for the common cases, with `URL.canParse`/`URL.parse` (D-106). Hostnames aren't converted to punycode, and IPv6 isn't normalised. |
+| `AbortController`, `AbortSignal` | With `AbortSignal.abort`/`timeout`/`any`, `throwIfAborted`, and `onabort` running in the order it was set (D-106). `node:stream` and `timers/promises` use them. |
+| `EventTarget`, `Event`, `CustomEvent` | Listener objects (`handleEvent`), `once`, `signal` (to remove), `stopImmediatePropagation` and `preventDefault`. There's no capture or bubbling: there's no tree. A listener's error is reported, not thrown to the dispatcher. |
+| `DOMException` | With `name`, `code`, the legacy constants (`ABORT_ERR`, …) and `cause`. Web Crypto and aborts use it. |
+| `structuredClone` | Plain objects and arrays, Date, RegExp, Map, Set, ArrayBuffer, typed arrays, DataView, errors (name, message, stack, cause), boxed primitives, BigInt and cycles. Class instances become plain objects. Functions, symbols, promises and weak collections throw a `DataCloneError`. `transfer` detaches ArrayBuffers where V8 can. |
+| `atob`, `btoa` | With the standard's errors (`InvalidCharacterError`). |
+| `queueMicrotask`, `setImmediate`, `clearImmediate` | `setImmediate` is a zero-delay timer, so it runs after microtasks, as in Node. |
+| `performance` | `now()` (whole milliseconds since the job started, deliberately coarse), `timeOrigin`, `mark`/`measure`/`getEntries…`/`clear…` (at most 10,000 entries). |
 | `WebAssembly`, `SharedArrayBuffer`, `Atomics`, `WeakRef`, `FinalizationRegistry`, `Intl` | V8's own. `Intl` has full ICU data (D-093). WebAssembly runs inside the same isolate and limits; there are no threads to share memory with. |
 
 **Absent:**
-- **Waiting for a decision:** `URL`, `URLSearchParams`, `AbortController`, `AbortSignal`, `EventTarget`, `Event`, `structuredClone`, `atob`, `btoa`, `queueMicrotask`, `performance`, `setImmediate`/`clearImmediate`, `Blob`, `File`, `FormData`, `Headers`, `Request`, `Response`, `ReadableStream`/`WritableStream`/`TransformStream`, `MessageChannel` and `WebSocket`. These are D-095's last step: they wait for a cold-start benchmark of the extra prelude each isolate would load.
-  - **Until then, some are importable:** `URL` and `URLSearchParams` from `node:url`, `atob`/`btoa` from `node:buffer`, and `setImmediate` from `node:timers`.
-  - **`Buffer` and `process`** are added to bundled code by the bundler when it uses them.
-  - **`AbortController`:** `stream` carries its own internally. Code that creates one itself fails for now.
+- **Waiting for their own designs:** `Blob`, `File`, `FormData`, `Headers`, `Request`, `Response`, `ReadableStream`/`WritableStream`/`TransformStream`, `MessageChannel` and `WebSocket`. `fetch` returns the host's response today, and WebSocket is network reach (phase B).
+- **`Buffer`:** not a global. The bundler adds an import where bundled code uses it.
 - **Never:** `require`, `module`, `exports`, `__dirname` and `__filename`. Scripts are ES modules, and the bundler converts CommonJS. `window`, `self`, `navigator` and `location` are absent too: this isn't a browser.
+
+**What the globals cost:** nothing, net. They were added after a start-up benchmark (D-106). The prelude and built-in modules are compiled once per node and then come from V8's code cache, so a trivial job starts in about 3.5 ms (p50) with them, against 4.9 ms before. Numbers are in [benchmarks](../benchmarks.md#isolate-start-up).
 
 ---
 
@@ -116,7 +124,7 @@ POSIX paths, following Node's own algorithms: `join`, `resolve`, `normalize`, `r
 
 ## `url`
 
-`URL` and `URLSearchParams`, following the WHATWG rules for the common cases:
+`URL` and `URLSearchParams` (the same as the globals, D-106), following the WHATWG rules for the common cases:
 - special schemes (http, https, ws, wss, ftp, file) with an authority
 - other schemes with opaque paths
 - relative references, dot segments, default ports and percent-encoding
@@ -258,7 +266,7 @@ All of `assert`: `ok`, `equal`/`notEqual`, `strictEqual`/`notStrictEqual`, `deep
 - **Differs:**
   - **`setImmediate`** is a zero-delay timer; there's no separate check phase.
   - **Timers return numbers,** not `Timeout` objects, so `ref`/`unref`/`refresh` don't exist.
-  - **Signals:** any object shaped like an `AbortSignal` works, since the `AbortController` global isn't there yet.
+  - **Signals:** `AbortController`'s, or any object shaped like an `AbortSignal`.
 
 ## `os`
 
@@ -324,7 +332,7 @@ Describes the job, never the machine (D-103):
 - **`os` and `process`** describe the job: `/tmp`, one CPU, the heap limit, no host details.
 
 **Missing for now:**
-- **Globals:** `URL`, `AbortController`, `structuredClone`, `queueMicrotask` and the rest. They wait for D-095's last step.
+- **Globals:** `Blob`, `FormData`, `Headers`/`Request`/`Response`, Web Streams, `MessageChannel` and `WebSocket`.
 - **Crypto:** Brotli compression, AES-KW, classic Diffie-Hellman, and encrypted private keys.
 
 Changes to any stand-in are recorded in the [changelog](../../CHANGELOG.md) and [decisions](../DECISIONS.md).

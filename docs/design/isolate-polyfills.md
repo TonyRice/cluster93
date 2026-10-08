@@ -80,7 +80,7 @@ Each is new reach, so each gets its threat model: SSRF, egress rules, connection
 2. ~~**`node:crypto`:**~~ ✅ KDFs, ciphers, keys and signatures (D-101); RSA encryption, ECDH and `subtle` followed (D-104). hashing, HMAC, `timingSafeEqual`, then KDFs, then ciphers, then keys and signatures. That unblocks jsonwebtoken (HS256 first, then RS256 and ES256).
 3. ~~**`stream`, `string_decoder`, `stream/promises`:**~~ ✅ vendored `readable-stream` 4.8.0 (D-100). papaparse, csv-parse and jsonwebtoken (HS256) now run. unblocks papaparse in Node mode and csv-parse.
 4. ~~**`zlib`, `assert`, `querystring`, `timers/promises`, `os`.**~~ ✅ (D-103; Brotli decompression only). The isolate reports no Node version (D-102).
-5. **Globals** (`URL` and the rest), after a cold-start benchmark.
+5. ~~**Globals** (`URL` and the rest), after a cold-start benchmark.~~ ✅ D-106: the benchmark found the globals cost 0.8 ms per job, and V8's code cache for the prelude and built-ins more than paid it back (jobs start in 3.5 ms instead of 4.9). Phase A is complete.
 
 **Each step comes with:**
 - **real libraries added to `RealNpmPackagesTest`,** matched against Node's output: uuid, nanoid, jsonwebtoken (HS256, RS256, ES256), bcryptjs, crypto-js, papaparse, csv-parse, pako, fflate, through2;

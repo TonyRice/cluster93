@@ -26,6 +26,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Web and Node globals; jobs start 30% faster (2026-10-08)
+
+### Added
+- **The globals libraries expect (D-106):** `URL`, `URLSearchParams`, `AbortController`, `AbortSignal`, `EventTarget`, `Event`, `CustomEvent`, `DOMException`, `structuredClone`, `atob`, `btoa`, `queueMicrotask`, `setImmediate`/`clearImmediate`, and a coarse `performance`. All are compared with real Node.
+- **`IsolateStartupBenchmark`** (`AUTOMATELY_BENCH=1`): what an isolate costs to start, and what importing built-ins adds.
+
+### Changed
+- **The prelude and the built-in modules compile once per node, then come from V8's code cache (D-106).** A trivial job starts in 3.5 ms instead of 4.9 ms (p50), and importing `stream` or `zlib` costs about half what it did, with the new globals included.
+- **Web Crypto's errors are `DOMException`s,** as in Node.
+
 ## Node compatibility reference; `console` completed (2026-10-08)
 
 ### Docs
