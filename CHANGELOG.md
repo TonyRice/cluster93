@@ -26,6 +26,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Security groundwork, part 3 — Signed releases (2026-10-07)
+
+### Added
+- **Releases are signed (D-069).** Each release's `SHA256SUMS`, which now lists the installers too, gets an ECDSA P-256 signature, `SHA256SUMS.sig`. The key that makes it **stays on the maintainer's machine**, encrypted with a passphrase.
+  - **The release workflow only drafts a release.** `scripts/sign-release.sh TAG` checks the draft, signs it locally and publishes it.
+  - **Why:** before this, anyone who could change a release asset (a compromised workflow, a leaked GitHub token, a mirror) could change its checksum too.
+- **`scripts/release-key.sh`** creates the key and copies the public half into the installers. **`docs/guides/releasing.md`** covers releasing, checking by hand and rotating the key.
+- **Tests:**
+  - `InstallScriptTest`: signed, wrongly signed and unsigned releases; `install.ps1`'s check, run under `pwsh`; the key matches everywhere
+  - `UpgradeTest`, including a release signed by `openssl` itself
+
+### Changed
+- **`install.sh` and `install.ps1` check the signature before trusting any checksum.** They use `openssl` and .NET's ECDSA, so nothing extra needs installing. They refuse unsigned or wrongly signed releases.
+  - `AUTOMATELY_RELEASE_PUBLIC_KEY` points them at another key, for a mirror that re-signs.
+  - `AUTOMATELY_INSECURE_SKIP_SIGNATURE=1` trusts HTTPS alone, with a warning.
+- **`automately upgrade` no longer pipes the installer into a shell.** It downloads the release itself, checks the signature against the key built into the binary, checks the checksum, and only then replaces itself. `--to FILE` replaces another binary.
+
+### Fixed
+- **A job that ended within milliseconds could lose its log lines** on the event stream (seen as a flaky `CliTest`).
+  - **The cause:** the stream saw the job running and asked its node for the lines so far. The node had already finished the job and no longer answered, so the stream went live with nothing to replay.
+  - **The fix:** when the node doesn't answer, the stream reads the job again, and replays it from the store if it has ended. The node records the end before it stops answering, so the record is complete by then.
+
 ## Security groundwork, part 2 — Secrets (2026-10-07)
 
 ### Added

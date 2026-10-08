@@ -22,7 +22,7 @@ curl -fsSL https://github.com/adamnlynn/automately-v2/releases/latest/download/i
 irm https://github.com/adamnlynn/automately-v2/releases/latest/download/install.ps1 | iex           # Windows
 ```
 
-These are native binaries that need no Java, and the installer checks each one's checksum. See the [CLI guide](docs/guides/cli.md). To let an AI agent use the cluster, see [MCP](docs/guides/mcp.md).
+These are native binaries that need no Java. The installer checks the release's signature, made with a key that never leaves the maintainer's machine, and then each binary's checksum. See the [CLI guide](docs/guides/cli.md). To let an AI agent use the cluster, see [MCP](docs/guides/mcp.md).
 
 ## The demo
 
@@ -314,6 +314,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/guides/cluster.md](docs/guides/cluster.md): node certificates: creating a cluster, adding, removing and renewing nodes
 - [docs/guides/storage.md](docs/guides/storage.md): file storage, from the cluster's default to tenants' own buckets and folders
 - [docs/guides/secrets.md](docs/guides/secrets.md): secrets: setting them, and which scripts may read them
+- [docs/guides/releasing.md](docs/guides/releasing.md): for maintainers: signing and publishing a release
 
 ## Author
 

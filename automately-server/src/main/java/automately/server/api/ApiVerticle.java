@@ -513,7 +513,17 @@ public final class ApiVerticle extends VerticleBase {
                         }
                         vertx.eventBus().<JsonObject>request(Addresses.jobTail(job.id()), null,
                                         new io.vertx.core.eventbus.DeliveryOptions().setSendTimeout(TAIL_TIMEOUT.toMillis()))
-                                .onComplete(tail -> stream.start(job, tail.succeeded() ? tail.result().body() : null));
+                                .onComplete(tail -> {
+                                    if (tail.succeeded()) {
+                                        stream.start(job, tail.result().body());
+                                        return;
+                                    }
+                                    // No answer: usually the job just ended, and its node records the end before it
+                                    // stops answering, so look again and replay it rather than lose lines logged
+                                    // before this stream subscribed.
+                                    jobs.get(job.id()).onComplete(again ->
+                                            stream.start(again.succeeded() && again.result() != null ? again.result() : job, null));
+                                });
                     })
                     .onFailure(err -> stream.abort());
         });

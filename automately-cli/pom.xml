@@ -51,6 +51,13 @@
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
             </resource>
+            <!-- The release key `upgrade` checks signatures with (D-069): the same file the installers embed. -->
+            <resource>
+                <directory>../install</directory>
+                <includes>
+                    <include>automately-release.pem</include>
+                </includes>
+            </resource>
         </resources>
         <plugins>
             <plugin>

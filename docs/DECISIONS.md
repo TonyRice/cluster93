@@ -748,3 +748,42 @@ Docker didn't publish them to the host, but every container on the network could
   - deleting a tenant deletes its secrets
   - without a key, 409
 - The CLI test, and `ContractTest` (64 operations).
+
+### D-069 — Releases are signed on the maintainer's machine, and every installer checks the signature
+**Date:** 2026-10-07 · **Status:** Accepted
+
+**Context:** Security groundwork, step 0, part 3. The installers checked each binary against `SHA256SUMS`, but the sums came from the same place as the binary: whoever could change one could change the other (a compromised release workflow, a GitHub token with write access, a mirror). And `automately upgrade` piped the installer from the network straight into a shell.
+
+**Decision:**
+- **One signature per release, over `SHA256SUMS`,** which now lists the installers as well as the binaries. It's ECDSA P-256 with SHA-256, in the DER form `openssl dgst -sha256 -sign` writes, and published as `SHA256SUMS.sig`.
+- **The key stays with the maintainer, like the cluster CA (D-066).**
+  - **Creating it:** `scripts/release-key.sh` writes the private key to `~/.config/automately/release-signing.key`, owner-only and encrypted with a passphrase. It also writes the public key to `install/automately-release.pem` and copies it into `install.sh` and `install.ps1`.
+  - **Signing:** the release workflow now only builds a **draft**. `scripts/sign-release.sh TAG` then downloads the draft and checks every asset against `SHA256SUMS`. It also checks that the installers carry this key. It then signs, uploads `SHA256SUMS.sig` and publishes the release.
+  - **What that protects:** the key never reaches GitHub, so neither the workflow nor anyone with a GitHub token can publish a release the installers accept, and `releases/latest` never serves an unsigned build.
+- **Everything that installs checks the signature first,** and refuses an unsigned or wrongly signed release:
+  - **`install.sh` uses `openssl`.** That works with OpenSSL and with macOS's LibreSSL.
+  - **`install.ps1` uses .NET's own ECDSA.** This works on Windows PowerShell 5.1 and on PowerShell 7.
+  - **`automately upgrade` does it in-process** with the key built into the binary (the same `.pem`, bundled at build time), then swaps the file. It no longer runs a downloaded script.
+- **Why ECDSA P-256 and not minisign or cosign:** the stock tools on all three systems can check a P-256 signature (`openssl`, .NET, Java), so a one-line install needs nothing extra. Ed25519 would need OpenSSL 3, which macOS doesn't ship, and Windows PowerShell can't check it. Minisign and cosign need their own tool on the user's machine. Anyone can check by hand with `openssl dgst -sha256 -verify automately-release.pem -signature SHA256SUMS.sig SHA256SUMS`.
+- **Escape hatches, both explicit:**
+  - `AUTOMATELY_RELEASE_PUBLIC_KEY=FILE`: for a mirror that re-signs with its own key, and for the tests.
+  - `AUTOMATELY_INSECURE_SKIP_SIGNATURE=1`: trusts HTTPS alone, with a warning. It's for a machine without `openssl`, which the installer otherwise refuses with that advice.
+
+**Not covered:**
+- **Freeze and rollback:** an attacker who can serve files could offer an older, validly signed release in place of the latest. TUF-style signed metadata with expiry would cover that; it can come when there's an update channel worth it.
+- **The first `curl | sh`:** that one still trusts HTTPS and GitHub for the installer itself. To check before running, download `install.sh`, `SHA256SUMS` and `SHA256SUMS.sig` and verify them with the published key first.
+- **Server images and jars:** these aren't published yet. When they are, they go in the same `SHA256SUMS`.
+
+**Rotating the key:** move the old key away, run `scripts/release-key.sh`, and commit the new public key before the next release. Installers and CLIs from before the rotation won't accept newer releases. Install those with the new installer.
+
+**Tests:**
+- **`InstallScriptTest`:**
+  - `install.sh` installs a release signed with a test key
+  - it refuses one signed by another key, an unsigned one (unless skipping is asked for), and a checksum mismatch
+  - `install.ps1`'s check, run under `pwsh`, accepts 20 signatures of every length and refuses another key's
+  - the key in `install.sh`, `install.ps1` and the CLI matches `install/automately-release.pem`
+- **`UpgradeTest`:**
+  - `upgrade` replaces the binary only when the signature and checksum hold
+  - it accepts what `openssl` itself signs, as the maintainer's script does
+  - it asks for `--to` on a JVM
+- **Checked by hand:** the static native binary refuses a release signed by any key but the built-in one, and with a test key it replaced itself.

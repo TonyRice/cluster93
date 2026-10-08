@@ -1,4 +1,6 @@
-# Builds the native `automately` CLI for every platform and publishes a GitHub release (D-049).
+# Builds the native `automately` CLI for every platform and leaves it as a draft GitHub release (D-049, D-069).
+# The maintainer then signs SHA256SUMS on their own machine and publishes it: scripts/sign-release.sh TAG. The signing
+# key never comes near GitHub, so this workflow can't publish anything the installers will accept.
 #
 # Runs ONLY when a version tag is pushed (git tag v2.1.0 && git push origin v2.1.0); it is not CI, so D-017
 # stands. native-image can't cross-compile, which is why each platform builds on its own runner.
@@ -75,8 +77,8 @@ jobs:
       - name: Checksums and installers
         run: |
           cp install/install.sh install/install.ps1 dist/
-          cd dist && sha256sum automately-* > SHA256SUMS && cat SHA256SUMS
-      - name: Publish the release
+          cd dist && sha256sum automately-* install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS
+      - name: Draft the release, for scripts/sign-release.sh to sign and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/* --draft --title "$GITHUB_REF_NAME" --generate-notes

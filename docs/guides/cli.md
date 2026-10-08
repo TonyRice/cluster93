@@ -15,7 +15,7 @@ irm https://github.com/adamnlynn/automately-v2/releases/latest/download/install.
 
 The installer:
 - picks the binary for your platform (Linux x64, a static build that runs on any distro including Alpine; Linux arm64; macOS Apple silicon and Intel; Windows x64)
-- **verifies its SHA-256** against the release's `SHA256SUMS`, and installs nothing if it doesn't match
+- **checks the release's signature** (`SHA256SUMS.sig`, made with the project's release key, which is built into the installers), then the binary's SHA-256 against the signed `SHA256SUMS`. It installs nothing unless both hold (D-069). On Linux and macOS this uses `openssl`.
 - installs to `~/.local/bin`, or `/usr/local/bin` as root, or `%LOCALAPPDATA%\Programs\automately` on Windows
 - tells you if that directory isn't on your `PATH`
 
@@ -28,9 +28,13 @@ Options, as environment variables:
 | `AUTOMATELY_VERSION=v2.1.0` | Pin a release |
 | `AUTOMATELY_INSTALL_DIR` | Install somewhere else |
 | `AUTOMATELY_RELEASES=owner/repo` | Releases from another GitHub repository |
-| `AUTOMATELY_INSTALL_URL` | Download from your own mirror |
+| `AUTOMATELY_INSTALL_URL` | Download from your own mirror. It's still checked against the release key |
+| `AUTOMATELY_RELEASE_PUBLIC_KEY=FILE` | Check signatures with another key, for a mirror that re-signs |
+| `AUTOMATELY_INSECURE_SKIP_SIGNATURE=1` | Don't check the signature, trusting HTTPS alone (for a machine without `openssl`) |
 
-`automately upgrade` reruns the installer.
+`automately upgrade [--version TAG]` does the same checks itself, with the key built into the CLI, and then replaces its own binary. It doesn't run a downloaded script.
+
+To check a download by hand: `openssl dgst -sha256 -verify automately-release.pem -signature SHA256SUMS.sig SHA256SUMS`. The key is [`install/automately-release.pem`](../../install/automately-release.pem). Maintainers: see [releasing](releasing.md).
 
 > Releases are built by GitHub Actions when a version tag is pushed, and served from this repository's GitHub Releases (D-055). Until the repository is public, its assets need a GitHub login (`gh release download`).
 

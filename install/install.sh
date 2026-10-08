@@ -7,10 +7,21 @@
 #   AUTOMATELY_INSTALL_DIR  where to put the binary (default: ~/.local/bin, or /usr/local/bin as root)
 #   AUTOMATELY_RELEASES     the GitHub repository publishing releases (default: adamnlynn/automately-v2)
 #   AUTOMATELY_INSTALL_URL  a base URL serving the release assets instead of GitHub
+#   AUTOMATELY_RELEASE_PUBLIC_KEY  a PEM file to check signatures with, instead of the key below (a re-signing mirror)
+#   AUTOMATELY_INSECURE_SKIP_SIGNATURE=1  install without checking the signature, trusting HTTPS alone
+#
+# Every release's SHA256SUMS is signed with the project's release key (D-069), and this checks that signature with
+# openssl before trusting any checksum in it. A mirror can't change a binary without the private key, which never
+# leaves the maintainer's machine.
 #
 # Everything happens inside main(), called on the last line, so a download cut off halfway runs nothing.
 
 set -eu
+
+RELEASE_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEx6p8qv79K2ltKawkKzbs1xYZ1QyR
+hD6NugZBZL+S2K5MijsmPijVZJI3y+kVcyioFmPTDdzKdSnWJj3916QN/Q==
+-----END PUBLIC KEY-----'
 
 main() {
     repo="${AUTOMATELY_RELEASES:-adamnlynn/automately-v2}"
@@ -59,6 +70,7 @@ main() {
         || fail "Download failed: ${base}/${asset}"
     curl -fsSL $secure "${base}/SHA256SUMS" -o "${tmp}/SHA256SUMS" \
         || fail "Download failed: ${base}/SHA256SUMS"
+    check_signature
 
     expected="$(awk -v f="$asset" '$2 == f || $2 == "*"f { print $1 }' "${tmp}/SHA256SUMS")"
     [ -n "$expected" ] || fail "SHA256SUMS has no entry for ${asset}"
@@ -74,6 +86,26 @@ main() {
         *":${dir}:"*) say "Get started: automately login https://your-cluster" ;;
         *) say "Add ${dir} to your PATH, e.g.:  echo 'export PATH=\"${dir}:\$PATH\"' >> ~/.profile" ;;
     esac
+}
+
+# SHA256SUMS.sig is an ECDSA P-256 signature over SHA256SUMS, in the DER form `openssl dgst -sign` writes.
+check_signature() {
+    if [ "${AUTOMATELY_INSECURE_SKIP_SIGNATURE:-}" = "1" ]; then
+        say "Warning: not checking the release's signature (AUTOMATELY_INSECURE_SKIP_SIGNATURE=1)"
+        return
+    fi
+    command -v openssl >/dev/null 2>&1 \
+        || fail "Need openssl to check the release's signature. Install it, or set AUTOMATELY_INSECURE_SKIP_SIGNATURE=1 to trust HTTPS alone."
+    curl -fsSL $secure "${base}/SHA256SUMS.sig" -o "${tmp}/SHA256SUMS.sig" \
+        || fail "Download failed: ${base}/SHA256SUMS.sig. Releases are signed; an unsigned one isn't installed."
+    if [ -n "${AUTOMATELY_RELEASE_PUBLIC_KEY:-}" ]; then
+        key="$AUTOMATELY_RELEASE_PUBLIC_KEY"
+    else
+        key="${tmp}/release.pem"
+        printf '%s\n' "$RELEASE_PUBLIC_KEY" > "$key"
+    fi
+    openssl dgst -sha256 -verify "$key" -signature "${tmp}/SHA256SUMS.sig" "${tmp}/SHA256SUMS" >/dev/null 2>&1 \
+        || fail "SHA256SUMS isn't signed by the automately release key. Nothing was installed."
 }
 
 sha256() {

@@ -49,6 +49,13 @@ Automately runs other people's code. This page describes who is trusted, what ea
 **Between nodes** (D-036, D-066):
 - Every connection between core nodes uses TLS with node certificates on both sides. The internal endpoint that carries service traffic accepts only other nodes. D-036's shared secret is retired when certificates are on, and still used with `AUTOMATELY_CLUSTER_TLS=off`.
 
+**Releases** (D-069):
+- Each release's `SHA256SUMS` is signed with an ECDSA P-256 key that stays on the maintainer's machine, encrypted. The release workflow only drafts releases, and they're signed and published by hand.
+- `install.sh`, `install.ps1` and `automately upgrade` check that signature with the built-in public key before trusting any checksum. They refuse unsigned or wrongly signed releases, so neither GitHub nor a mirror can serve a changed binary.
+- Not covered:
+  - an older, validly signed release served in place of the latest
+  - the first `curl | sh`, which trusts HTTPS for the installer itself. To avoid that, download and check it first (see the [CLI guide](docs/guides/cli.md)).
+
 ## What isn't defended, so deploy accordingly
 
 - **Isolates share the node's process.** V8 isolates are memory-safe sandboxes, but they aren't separate processes or VMs. A V8 vulnerability that escapes the isolate would compromise the node, so keep the JVM and Javet up to date. For hostile multi-tenant use at scale, run nodes as unprivileged containers on dedicated hosts.

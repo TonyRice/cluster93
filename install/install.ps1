@@ -2,8 +2,61 @@
 #   irm https://github.com/adamnlynn/automately-v2/releases/latest/download/install.ps1 | iex
 #
 # Environment: AUTOMATELY_VERSION (a tag, default latest), AUTOMATELY_INSTALL_DIR
-# (default %LOCALAPPDATA%\Programs\automately), AUTOMATELY_RELEASES (owner/repo), AUTOMATELY_INSTALL_URL.
+# (default %LOCALAPPDATA%\Programs\automately), AUTOMATELY_RELEASES (owner/repo), AUTOMATELY_INSTALL_URL,
+# AUTOMATELY_RELEASE_PUBLIC_KEY (a PEM file to check signatures with instead of the key below), and
+# AUTOMATELY_INSECURE_SKIP_SIGNATURE=1 (trust HTTPS alone).
+#
+# Every release's SHA256SUMS is signed with the project's release key (D-069); this checks the signature with .NET's
+# own ECDSA before trusting any checksum in it.
 # Everything happens inside Install-Automately, called on the last line, so a cut-off download runs nothing.
+
+$AutomatelyReleaseKey = @'
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEx6p8qv79K2ltKawkKzbs1xYZ1QyR
+hD6NugZBZL+S2K5MijsmPijVZJI3y+kVcyioFmPTDdzKdSnWJj3916QN/Q==
+-----END PUBLIC KEY-----
+'@
+
+# The ECDSA P-256 signature `openssl dgst -sign` writes is DER, SEQUENCE { INTEGER r, INTEGER s }; .NET wants r and s
+# as 32 bytes each.
+function ConvertFrom-DerSignature([byte[]]$Der) {
+    if ($Der.Length -lt 8 -or $Der[0] -ne 0x30) { throw 'SHA256SUMS.sig is not an ECDSA signature' }
+    $i = 2
+    if ($Der[1] -band 0x80) { $i += $Der[1] -band 0x7f }
+    $raw = New-Object byte[] 64
+    foreach ($half in 0, 1) {
+        if ($i + 2 -gt $Der.Length -or $Der[$i] -ne 0x02) { throw 'SHA256SUMS.sig is not an ECDSA signature' }
+        $length = $Der[$i + 1]
+        $start = $i + 2
+        $i = $start + $length
+        if ($i -gt $Der.Length) { throw 'SHA256SUMS.sig is not an ECDSA signature' }
+        while ($length -gt 32 -and $Der[$start] -eq 0) { $start++; $length-- }
+        if ($length -gt 32) { throw 'SHA256SUMS.sig is not a P-256 signature' }
+        [Array]::Copy($Der, $start, $raw, $half * 32 + 32 - $length, $length)
+    }
+    return , $raw
+}
+
+# Throws unless $Signature is the release key's signature over $Sums (both files).
+function Confirm-AutomatelySignature([string]$Sums, [string]$Signature) {
+    $pem = if ($env:AUTOMATELY_RELEASE_PUBLIC_KEY) { Get-Content -Raw $env:AUTOMATELY_RELEASE_PUBLIC_KEY } else { $AutomatelyReleaseKey }
+    $spki = [Convert]::FromBase64String((($pem -split "`r?`n") | Where-Object { $_ -and $_ -notmatch '-----' }) -join '')
+    # A P-256 SubjectPublicKeyInfo is 91 bytes: this fixed 26-byte header, 0x04, then X and Y.
+    $header = '3059301306072a8648ce3d020106082a8648ce3d030107034200'
+    if ($spki.Length -ne 91 -or (-join ($spki[0..26] | ForEach-Object { $_.ToString('x2') })) -ne ($header + '04')) {
+        throw 'The release key is not an uncompressed P-256 public key'
+    }
+    $point = New-Object System.Security.Cryptography.ECPoint
+    $point.X = [byte[]]$spki[27..58]
+    $point.Y = [byte[]]$spki[59..90]
+    $parameters = New-Object System.Security.Cryptography.ECParameters
+    $parameters.Curve = [System.Security.Cryptography.ECCurve+NamedCurves]::nistP256
+    $parameters.Q = $point
+    $ecdsa = [System.Security.Cryptography.ECDsa]::Create($parameters)
+    $signed = $ecdsa.VerifyData([System.IO.File]::ReadAllBytes($Sums), (ConvertFrom-DerSignature ([System.IO.File]::ReadAllBytes($Signature))),
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+    if (-not $signed) { throw "SHA256SUMS isn't signed by the automately release key. Nothing was installed." }
+}
 
 function Install-Automately {
     $ErrorActionPreference = 'Stop'
@@ -26,6 +79,14 @@ function Install-Automately {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile (Join-Path $tmp $asset)
         Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile (Join-Path $tmp 'SHA256SUMS')
+        if ($env:AUTOMATELY_INSECURE_SKIP_SIGNATURE -eq '1') {
+            Write-Warning "Not checking the release's signature (AUTOMATELY_INSECURE_SKIP_SIGNATURE=1)"
+        }
+        else {
+            try { Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS.sig" -OutFile (Join-Path $tmp 'SHA256SUMS.sig') }
+            catch { throw "Download failed: $base/SHA256SUMS.sig. Releases are signed; an unsigned one isn't installed." }
+            Confirm-AutomatelySignature (Join-Path $tmp 'SHA256SUMS') (Join-Path $tmp 'SHA256SUMS.sig')
+        }
 
         $line = Get-Content (Join-Path $tmp 'SHA256SUMS') | Where-Object { ($_ -split '\s+')[1] -replace '^\*', '' -eq $asset } | Select-Object -First 1
         if (-not $line) { throw "SHA256SUMS has no entry for $asset" }
