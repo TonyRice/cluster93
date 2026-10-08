@@ -274,6 +274,7 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_AUDIT_RETENTION_DAYS` | `90` | Audit entries older than this are deleted (D-071), once exported if there's an export |
 | `AUTOMATELY_AUDIT_S3_BUCKET` · `_ENDPOINT` · `_REGION` · `_PREFIX` · `_ACCESS_KEY_ID` · `_SECRET_ACCESS_KEY` | | Export the audit log to this bucket as NDJSON (D-073); each falls back to `AUTOMATELY_S3_*` and `AWS_*` |
 | `AUTOMATELY_AUDIT_EXPORT_INTERVAL_S` | `300` | How often the audit log is exported |
+| `AUTOMATELY_TMP_MEMORY_MB` · `AUTOMATELY_TMP_MB` | `8` · `1024` | A job's `/tmp`: kept in memory up to the first, then spilled to the data directory up to the second (64 MB in memory without a data directory) |
 
 ## Build
 

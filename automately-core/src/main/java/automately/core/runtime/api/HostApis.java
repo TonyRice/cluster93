@@ -28,6 +28,11 @@ public interface HostApis {
     HttpApi http();
 
     /** The tenant's secrets, if this execution may read them (D-068). */
+    /** The file system (D-079), where the node offers it. */
+    default FsApi fs() {
+        return Unavailable.FS;
+    }
+
     default SecretsApi secrets() {
         return Unavailable.SECRETS;
     }

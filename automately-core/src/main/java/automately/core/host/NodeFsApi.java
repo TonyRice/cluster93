@@ -1,0 +1,289 @@
+package automately.core.host;
+
+import automately.core.files.FileInfo;
+import automately.core.files.FileStore;
+import automately.core.files.FileTree;
+import automately.core.files.FileWriter;
+import automately.core.files.Paths;
+import automately.core.files.Room;
+import automately.core.files.StorageCapacity;
+import automately.core.files.TmpSettings;
+import automately.core.files.TmpStore;
+import automately.core.runtime.BodyStream;
+import automately.core.runtime.HostException;
+import automately.core.runtime.api.FsApi;
+import automately.core.storage.StorageRoom;
+import automately.core.storage.TenantQuota;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
+
+/**
+ * The file system for one job (D-079): the tenant's files ({@link FileStore}, folders, moves and copies through
+ * {@link FileTree}) as one tree, with the job's own {@code /tmp} ({@link TmpStore}) inside it. Writes to the tenant's
+ * files are counted against its quota as they finish, like {@code files.write}.
+ */
+final class NodeFsApi implements FsApi {
+
+    private static final String TMP = "tmp";
+
+    private final HostScope scope;
+    private final FileStore files;
+    private final FileTree tree;
+    private final StorageCapacity capacity;
+    private final TenantQuota quota;
+    private final Room room;
+    private final TmpSettings tmpSettings;
+    private TmpStore tmp;
+
+    NodeFsApi(HostScope scope, FileStore files, FileTree tree, StorageCapacity capacity, TenantQuota quota, Room room, TmpSettings tmpSettings) {
+        this.scope = scope;
+        this.files = files;
+        this.tree = tree;
+        this.capacity = capacity;
+        this.quota = quota;
+        this.room = room;
+        this.tmpSettings = tmpSettings;
+    }
+
+    /** A path in the tree: {@code tmp} says it's in {@code /tmp}, and {@code rel} is the path within it (or the store). */
+    private record Where(boolean tmp, String rel, String shown) {
+    }
+
+    private static Where where(String raw) {
+        if (raw == null) {
+            throw HostException.invalid("A path is required");
+        }
+        String path = Paths.directory(raw);
+        String invalid = path.isEmpty() ? null : FileStore.invalidPath(path);
+        if (invalid != null) {
+            throw HostException.invalid(invalid);
+        }
+        if (path.equals(TMP) || path.startsWith(TMP + "/")) {
+            return new Where(true, path.equals(TMP) ? "" : path.substring(TMP.length() + 1), "/" + path);
+        }
+        return new Where(false, path, "/" + path);
+    }
+
+    /** The job's {@code /tmp}, made on first use and dropped when the job ends. */
+    private synchronized TmpStore tmp() {
+        if (tmp == null) {
+            tmp = tmpSettings.open(scope.jobId() == null ? "script" : scope.jobId());
+            TmpStore made = tmp;
+            scope.onClose(made::close);
+        }
+        return tmp;
+    }
+
+    private FileStore store() {
+        if (files == null) {
+            throw new HostException("Error", "unavailable", "Files are not available here");
+        }
+        return files;
+    }
+
+    @Override
+    public Future<JsonObject> stat(String path) {
+        return Names.guarded(() -> {
+            Where at = where(path);
+            if (at.tmp()) {
+                return Future.succeededFuture(tmp().stat(at.rel()));
+            }
+            return store().statEntry(scope.tenant(), at.rel()).map(entry -> entry == null ? null : new JsonObject()
+                    .put("kind", entry.getString("kind")).put("size", entry.getLong("size", 0L))
+                    .put("modifiedAt", entry.getLong("createdAt", 0L)).put("contentType", entry.getString("contentType"))
+                    .put("etag", entry.getString("etag")));
+        });
+    }
+
+    @Override
+    public Future<JsonArray> readdir(String path) {
+        return Names.guarded(() -> {
+            Where at = where(path);
+            if (at.tmp()) {
+                return Future.succeededFuture(tmp().list(at.rel()));
+            }
+            JsonArray entries = new JsonArray();
+            return page(at.rel(), null, entries).map(v -> {
+                if (at.rel().isEmpty() && entries.stream().noneMatch(e -> TMP.equals(((JsonObject) e).getString("name")))) {
+                    // /tmp is always there, though it isn't in the store.
+                    entries.add(new JsonObject().put("name", TMP).put("kind", "dir").put("size", 0L));
+                    entries.getList().sort(java.util.Comparator.comparing(e -> e instanceof JsonObject json ? json.getString("name")
+                            : String.valueOf(((java.util.Map<?, ?>) e).get("name"))));
+                }
+                return entries;
+            });
+        });
+    }
+
+    private Future<Void> page(String dir, String cursor, JsonArray into) {
+        return store().listDir(scope.tenant(), dir, 1000, cursor).compose(page -> {
+            page.getJsonArray("entries").forEach(e -> {
+                JsonObject entry = (JsonObject) e;
+                into.add(new JsonObject().put("name", entry.getString("name")).put("kind", entry.getString("kind")).put("size", entry.getLong("size", 0L)));
+            });
+            String next = page.getString("cursor");
+            return next == null ? Future.succeededFuture() : page(dir, next, into);
+        });
+    }
+
+    @Override
+    public Future<Void> mkdir(String path, boolean recursive) {
+        return Names.guarded(() -> {
+            Where at = where(path);
+            if (at.tmp()) {
+                tmp().mkdir(at.rel(), recursive);
+                return Future.succeededFuture();
+            }
+            return store().mkdir(scope.tenant(), at.rel(), recursive).mapEmpty();
+        });
+    }
+
+    @Override
+    public Future<Void> rmdir(String path, boolean recursive) {
+        return Names.guarded(() -> {
+            Where at = where(path);
+            if (at.tmp()) {
+                if (!tmp().rmdir(at.rel(), recursive)) {
+                    throw missing(at);
+                }
+                return Future.succeededFuture();
+            }
+            if (recursive) {
+                return requireTree().delete(scope.tenant(), at.rel()).mapEmpty();
+            }
+            return store().rmdir(scope.tenant(), at.rel()).compose(removed -> removed ? Future.succeededFuture() : Future.failedFuture(missing(at)));
+        });
+    }
+
+    @Override
+    public Future<Void> unlink(String path) {
+        return Names.guarded(() -> {
+            Where at = where(path);
+            if (at.tmp()) {
+                if (!tmp().delete(at.rel())) {
+                    throw missing(at);
+                }
+                return Future.succeededFuture();
+            }
+            return store().delete(scope.tenant(), at.rel()).compose(deleted -> deleted ? Future.succeededFuture()
+                    : store().statEntry(scope.tenant(), at.rel()).compose(entry -> Future.failedFuture(entry != null
+                            ? new HostException("Error", "is_a_directory", at.shown() + " is a directory")
+                            : missing(at))));
+        });
+    }
+
+    @Override
+    public Future<Void> rename(String from, String to) {
+        return Names.guarded(() -> {
+            Where source = where(from);
+            Where target = where(to);
+            if (source.tmp() && target.tmp()) {
+                tmp().rename(source.rel(), target.rel(), true);
+                return Future.succeededFuture();
+            }
+            if (!source.tmp() && !target.tmp()) {
+                return requireTree().move(scope.tenant(), source.rel(), target.rel(), true).mapEmpty();
+            }
+            // Between /tmp and the tenant's files the bytes have to move: files only.
+            return readFile(from).compose(bytes -> writeFile(to, bytes, null)).compose(v -> unlink(from));
+        });
+    }
+
+    @Override
+    public Future<Void> copyFile(String from, String to, boolean overwrite) {
+        return Names.guarded(() -> {
+            Where source = where(from);
+            Where target = where(to);
+            if (!source.tmp() && !target.tmp()) {
+                return store().copy(scope.tenant(), source.rel(), target.rel(), overwrite).mapEmpty();
+            }
+            Future<Void> free = overwrite ? Future.succeededFuture() : stat(to).compose(there -> there == null ? Future.succeededFuture()
+                    : Future.failedFuture(new HostException("Error", "already_exists", target.shown() + " already exists")));
+            return free.compose(v -> readFile(from)).compose(bytes -> writeFile(to, bytes, null));
+        });
+    }
+
+    @Override
+    public Future<Buffer> readFile(String path) {
+        return Names.guarded(() -> {
+            Where at = where(path);
+            if (at.tmp()) {
+                return Future.succeededFuture(Buffer.buffer(tmp().read(at.rel())));
+            }
+            return store().stat(scope.tenant(), at.rel()).compose(info -> {
+                if (info == null) {
+                    return store().statEntry(scope.tenant(), at.rel()).compose(entry -> Future.failedFuture(entry != null
+                            ? new HostException("Error", "is_a_directory", at.shown() + " is a directory")
+                            : missing(at)));
+                }
+                if (info.size() > MAX_READ_BYTES) {
+                    return Future.failedFuture(HostException.limit(at.shown() + " is " + info.size() + " bytes; read files over "
+                            + MAX_READ_BYTES / (1024 * 1024) + " MB as a stream (files.stream)"));
+                }
+                return info.size() == 0 ? Future.succeededFuture(Buffer.buffer()) : collect(store().open(info, 0, info.size() - 1));
+            });
+        });
+    }
+
+    @Override
+    public Future<Void> writeFile(String path, Buffer data, String contentType) {
+        return Names.guarded(() -> {
+            Where at = where(path);
+            if (at.tmp()) {
+                tmp().write(at.rel(), data.getBytes());
+                return Future.succeededFuture();
+            }
+            String tenant = scope.tenant();
+            return capacity.ensureRoom()
+                    .compose(ok -> store().create(tenant, at.rel(), contentType, room))
+                    .compose(writer -> write(writer, data))
+                    .onSuccess(info -> {
+                        if (StorageRoom.countsAgainstQuota(info.backend())) {
+                            quota.added(tenant, info.size());
+                        }
+                    })
+                    .mapEmpty();
+        });
+    }
+
+    @Override
+    public Future<Void> appendFile(String path, Buffer data) {
+        // A new version with the old bytes then the new, published at once: readers never see half an append.
+        return stat(path).compose(existing -> {
+            if (existing == null) {
+                return writeFile(path, data, null);
+            }
+            if (existing.getLong("size", 0L) + data.length() > MAX_EDIT_BYTES) {
+                return Future.failedFuture(HostException.limit("Appending makes " + path + " bigger than "
+                        + MAX_EDIT_BYTES / (1024 * 1024) + " MB; write big files as a stream (files.write)"));
+            }
+            return readFile(path).compose(old -> writeFile(path, old.appendBuffer(data), existing.getString("contentType")));
+        });
+    }
+
+    private static Future<FileInfo> write(FileWriter writer, Buffer data) {
+        return writer.write(data).compose(v -> writer.finish()).recover(err -> writer.abort().compose(v -> Future.failedFuture(err)));
+    }
+
+    private static Future<Buffer> collect(BodyStream stream) {
+        Promise<Buffer> done = Promise.promise();
+        Buffer all = Buffer.buffer();
+        stream.handler(all::appendBuffer, () -> done.tryComplete(all), done::tryFail);
+        stream.resume();
+        return done.future();
+    }
+
+    private FileTree requireTree() {
+        if (tree == null) {
+            throw new HostException("Error", "unavailable", "Moving folders isn't available here");
+        }
+        return tree;
+    }
+
+    private static HostException missing(Where at) {
+        return new HostException("Error", "not_found", "No such file or directory: " + at.shown());
+    }
+}

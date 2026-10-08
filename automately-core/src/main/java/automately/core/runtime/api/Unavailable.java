@@ -22,6 +22,58 @@ final class Unavailable {
 
     static final SecretsApi SECRETS = name -> fail("Secrets");
 
+    static final FsApi FS = new FsApi() {
+        @Override
+        public Future<io.vertx.core.json.JsonObject> stat(String path) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<io.vertx.core.json.JsonArray> readdir(String path) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<Void> mkdir(String path, boolean recursive) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<Void> rmdir(String path, boolean recursive) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<Void> unlink(String path) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<Void> rename(String from, String to) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<Void> copyFile(String from, String to, boolean overwrite) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<io.vertx.core.buffer.Buffer> readFile(String path) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<Void> writeFile(String path, io.vertx.core.buffer.Buffer data, String contentType) {
+            return fail("The file system");
+        }
+
+        @Override
+        public Future<Void> appendFile(String path, io.vertx.core.buffer.Buffer data) {
+            return fail("The file system");
+        }
+    };
+
     static final KvApi KV = new KvApi() {
         @Override
         public Future<Object> get(String namespace, String key) {

@@ -26,6 +26,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## The file system, part 4 — `fs` and `/tmp` (2026-10-07)
+
+### Added
+- **`fs` for scripts (D-079):** your files as one tree, Node-shaped.
+  - **Importing:** `import { readFileSync } from 'fs'` (or `node:fs`, `fs/promises`, `automately:fs`); `fs` is also a global.
+  - **Styles:** promises, callbacks and **synchronous calls**.
+  - **Errors** have Node's codes.
+  - **Why:** much npm and Node code uses `fs`, and the synchronous calls are the hard part of Node compatibility.
+- **`/tmp` per job:** private, deleted when the job ends.
+  - **Size:** in memory first, then on the node's disk up to 1 GB (`AUTOMATELY_TMP_MEMORY_MB`, `AUTOMATELY_TMP_MB`).
+  - **At node start,** whatever a crash left behind is cleared.
+- **Tests:** `TmpStoreTest`, and `FsTest`, which runs scripts on a node.
+
 ## The file system, part 3 — Mounts (2026-10-07)
 
 ### Added

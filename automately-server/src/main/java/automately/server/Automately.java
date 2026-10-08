@@ -252,6 +252,20 @@ public final class Automately {
         };
     }
 
+    /**
+     * Jobs' {@code /tmp} (D-079): in memory, spilling to {@code <data dir>/tmp/<job>} on durable nodes. Whatever a crash
+     * left there is cleared here, at start.
+     */
+    static automately.core.files.TmpSettings tmpSettings(ServerConfig config) {
+        long mb = automately.core.files.TmpSettings.MB;
+        if (config.dataDirectory() == null) {
+            return new automately.core.files.TmpSettings(null, config.tmpMemoryMb() * mb, config.tmpMemoryMb() * mb, 0);
+        }
+        java.nio.file.Path root = config.dataDirectory().resolve("tmp");
+        automately.core.files.TmpStore.deleteTree(root);
+        return new automately.core.files.TmpSettings(root, config.tmpMemoryMb() * mb, config.tmpMb() * mb, config.minFreeDiskBytes());
+    }
+
     /** Where durable data lives: Ignite when clustered, in-memory maps for a single development node. */
     record Stores(JobStore jobs, JobStateStore state, ServiceStore services, DomainStore domains, KvStore kv, FileStore files,
                   BlobStore blobs, StorageCapacity capacity, AuthStore auth, StorageConfigStore storage, TenantBlobStores routed,
@@ -297,14 +311,14 @@ public final class Automately {
         ServeRegistry serving = new ServeRegistry();
         StorageRoom room = new StorageRoom(quota, stores.storage(), stores.files());
         automately.core.auth.RateLimiter limiter = new automately.core.auth.RateLimiter(config.rateLimitPerMinute());
-        HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(), fetch, serving, stores.files(), stores.capacity(),
-                quota, room, queues, new automately.core.host.JobsWiring(jobs, scheduler, config.defaultTimeout(), config.maxTimeout(), limiter),
-                tenantSecrets));
-        HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         // Folder moves, copies and deletes, journaled so another node can finish one (D-077).
         automately.core.files.FileTree fileTree = new automately.core.files.FileTree(vertx, stores.files(),
                 stores.records().open(automately.core.files.FileTree.OPS), instanceId);
         fileTree.start();
+        HostApisFactory hostApis = NodeHostApis.factory(new NodeHostApis.Node(vertx, stores.kv(), fetch, serving, stores.files(), stores.capacity(),
+                quota, room, queues, new automately.core.host.JobsWiring(jobs, scheduler, config.defaultTimeout(), config.maxTimeout(), limiter),
+                tenantSecrets, fileTree, tmpSettings(config)));
+        HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
         // Personal tokens act as their user, with what the user's roles give them now (D-070).
         automately.core.identity.Identity identity = new automately.core.identity.Identity(stores.records(), stores.auth());
         Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken(), identity::resolve);

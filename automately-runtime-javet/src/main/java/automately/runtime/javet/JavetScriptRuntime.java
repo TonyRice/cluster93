@@ -49,7 +49,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     /** The prelude's files (src/main/resources/automately/runtime/javet/js), in order; each sees what the earlier ones define. */
     static final List<String> PRELUDE_FILES = List.of("prelude.js", "console.js", "timers.js", "listeners.js", "kv.js", "bus.js", "jobs.js", "secrets.js",
-            "encoding.js", "streams.js", "fetch.js", "files.js", "serve.js", "context.js", "entry.js");
+            "encoding.js", "streams.js", "fetch.js", "files.js", "fs.js", "serve.js", "context.js", "entry.js");
 
     /**
      * Runs before the job's module: the prelude's files in one closure. It captures the host object, removes it from the
@@ -57,6 +57,20 @@ public final class JavetScriptRuntime implements ScriptRuntime {
      * None of those become visible to the script.
      */
     static final String PRELUDE = loadPrelude();
+
+    /** What {@code fs} exports by name, for {@code import { readFile } from 'fs'}. */
+    private static final String FS_NAMES = "readFile, writeFile, appendFile, mkdir, readdir, stat, lstat, access, rename, copyFile, rm, rmdir, unlink, "
+            + "readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, statSync, lstatSync, accessSync, existsSync, renameSync, "
+            + "copyFileSync, rmSync, rmdirSync, unlinkSync, promises, constants";
+    private static final String FS_PROMISES_NAMES = "readFile, writeFile, appendFile, mkdir, readdir, stat, lstat, access, rename, copyFile, rm, rmdir, unlink";
+
+    /** Modules a script can import (D-079); everything else is refused until packages exist. */
+    static final java.util.Map<String, String> BUILT_IN_MODULES = java.util.Map.of(
+            "automately:fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;",
+            "fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;",
+            "node:fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;",
+            "fs/promises", "export default globalThis.fs.promises; export const { " + FS_PROMISES_NAMES + " } = globalThis.fs.promises;",
+            "node:fs/promises", "export default globalThis.fs.promises; export const { " + FS_PROMISES_NAMES + " } = globalThis.fs.promises;");
 
     private static String loadPrelude() {
         StringBuilder prelude = new StringBuilder("(() => {\n");
@@ -229,6 +243,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 bindApi(v8, hostObject, "fetch", new FetchBinding(bridge, host.fetch()), callbacks);
                 bindApi(v8, hostObject, "http", new HttpBinding(bridge), callbacks);
                 bindApi(v8, hostObject, "secrets", new SecretsBinding(bridge, host.secrets()), callbacks);
+                bindApi(v8, hostObject, "fs", new FsBinding(bridge, host.fs()), callbacks);
                 v8.getGlobalObject().set("__automately", hostObject);
             }
             try {
@@ -251,6 +266,10 @@ public final class JavetScriptRuntime implements ScriptRuntime {
     }
 
     private ExecutionResult invokeModule(V8Runtime v8, Execution execution, Control control) throws JavetException {
+        // The few modules a script may import so far: the file system, under its own name and Node's (D-079).
+        v8.setV8ModuleResolver((runtime, name, referrer) -> BUILT_IN_MODULES.containsKey(name)
+                ? runtime.getExecutor(BUILT_IN_MODULES.get(name)).setResourceName(name).compileV8Module()
+                : null);
         try (V8ValueObject prelude = v8.getExecutor(PRELUDE).setResourceName("automately:prelude").execute();
              ScriptEntryPoints js = new ScriptEntryPoints(v8, prelude);
              V8Module module = v8.getExecutor(execution.script()).setResourceName("job.mjs").compileV8Module()) {

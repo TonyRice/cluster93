@@ -20,6 +20,7 @@ import io.vertx.core.Vertx;
 /** The host APIs of one execution on this node, all sharing one {@link HostScope} (docs/design/host-apis.md). */
 public final class NodeHostApis implements HostApis {
 
+    private final automately.core.runtime.api.FsApi fs;
     private final HostScope scope;
     private final KvApi kv;
     private final BusApi bus;
@@ -32,7 +33,14 @@ public final class NodeHostApis implements HostApis {
 
     /** The node's shared stores and clients; one per node. */
     public record Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
-                       TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs, TenantSecrets secrets) {
+                       TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs, TenantSecrets secrets,
+                       automately.core.files.FileTree tree, automately.core.files.TmpSettings tmp) {
+
+        /** Without the file system's folder operations, and with an in-memory /tmp. */
+        public Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
+                    TenantQuota quota, Room room, automately.core.queue.QueueService queues, JobsWiring jobs, TenantSecrets secrets) {
+            this(vertx, kv, fetch, serve, files, capacity, quota, room, queues, jobs, secrets, null, automately.core.files.TmpSettings.memoryOnly());
+        }
 
         /** Without secrets. */
         public Node(Vertx vertx, KvStore kv, FetchClient fetch, ServeRegistry serve, FileStore files, StorageCapacity capacity,
@@ -56,6 +64,13 @@ public final class NodeHostApis implements HostApis {
         this.fetch = new NodeFetchApi(node.fetch());
         this.http = new NodeHttpApi(scope, node.serve());
         this.secrets = new NodeSecretsApi(scope, node.secrets(), node.jobs());
+        this.fs = new NodeFsApi(scope, node.files(), node.tree(), node.capacity(), node.quota(), node.room(),
+                node.tmp() == null ? automately.core.files.TmpSettings.memoryOnly() : node.tmp());
+    }
+
+    @Override
+    public automately.core.runtime.api.FsApi fs() {
+        return fs;
     }
 
     /** Builds each execution's APIs over one node's stores. */

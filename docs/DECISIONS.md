@@ -1046,3 +1046,38 @@ Also the CLI flow.
   - after unmounting, the file is still readable
 - `FileStoreContract` checks reserved names on all four stores.
 - `ContractTest` (three operations), and the CLI.
+
+
+### D-079 — `fs` for scripts, synchronous calls included, and each job's `/tmp`
+**Date:** 2026-10-07 · **Status:** Accepted. Part 4 of D-075
+
+**Decision:**
+- **One tree:** a new host API, `FsApi`, presents the tenant's files as one tree from `/`, with the job's `/tmp` inside it.
+  - **Backed by:** the store (folders, D-076), single-file moves and copies through the store, and folder moves through tree operations (D-077). The quota is counted as uploads finish, as `files.write` does.
+  - **Moving between `/tmp` and stored files** copies the bytes, since `/tmp` can't share blobs.
+- **The `fs` module** is Node-shaped:
+  - **Calls:** `readFile`, `writeFile`, `appendFile`, `mkdir`, `readdir`, `stat`/`lstat`, `access`, `rename`, `copyFile`, `rm`, `rmdir`, `unlink`, `existsSync`.
+  - **Styles:** promises (`fs.promises`), callbacks and `…Sync` forms.
+  - **Errors** carry Node's codes, with the cluster's code in `reason`.
+  - **Where it lives:** it's a global, and importable as `automately:fs`, `fs`, `node:fs`, `fs/promises` and `node:fs/promises`. A small module resolver serves just these until packages exist (modules step).
+- **Synchronous calls block the isolate's own thread,** with a 30 s limit. Isolates run on dedicated worker threads, so only that script waits. A failure is returned as an Error value and thrown in JavaScript, so Javet's exception path isn't involved.
+  - **The cost, documented:** timers and other requests in the same isolate wait.
+  - **Not interruptible:** a stop request takes effect when the blocked call returns, at most 30 s later.
+- **`/tmp` (Tony: memory, spilling to disk):**
+  - **Memory first:** up to `AUTOMATELY_TMP_MEMORY_MB` (8 MB) per job, refused when the heap passes 85%.
+  - **Then disk:** `<data dir>/tmp/<job>/`, up to `AUTOMATELY_TMP_MB` (1 GB), within `AUTOMATELY_MIN_FREE_DISK_MB`.
+  - **Nodes without a data directory:** memory only, 64 MB.
+  - **Cleanup:** it's deleted when the job ends, and the whole folder is cleared at node start. It's never replicated or counted against the quota.
+- **Append and limits:**
+  - `appendFile` writes a new version (old bytes plus new), up to 64 MB.
+  - `readFile` reads up to 32 MB; bigger files stream with `files.stream`.
+  - Positional writes come with part 5.
+
+**Tests:**
+- `TmpStoreTest`: folders, renames, the memory limit, spilling to disk, cleanup.
+- `FsTest` (scripts on a node):
+  - imports by Node's names
+  - sync and promise calls, appending, folder rename
+  - the file seen through the REST API
+  - Node error codes, including a reserved name
+  - `/tmp` private per job and gone afterwards, and never in the store

@@ -80,7 +80,9 @@ public record ServerConfig(
         Duration clusterJoinTimeout,
         Duration auditRetention,
         automately.core.files.s3.S3Settings auditS3,
-        Duration auditExportInterval) {
+        Duration auditExportInterval,
+        long tmpMemoryMb,
+        long tmpMb) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
 
@@ -157,7 +159,10 @@ public record ServerConfig(
                 Duration.ofDays(Long.parseLong(env.getOrDefault("AUTOMATELY_AUDIT_RETENTION_DAYS", "90").trim())),
                 // Where the audit log is copied, outside the cluster (D-073); null keeps it in the cluster only.
                 automately.core.files.s3.S3Settings.auditFromEnv(env),
-                Duration.ofSeconds(Long.parseLong(env.getOrDefault("AUTOMATELY_AUDIT_EXPORT_INTERVAL_S", "300").trim())));
+                Duration.ofSeconds(Long.parseLong(env.getOrDefault("AUTOMATELY_AUDIT_EXPORT_INTERVAL_S", "300").trim())),
+                // A job's /tmp (D-079): this much in memory (all of it without a data directory), then spilled up to the total.
+                Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MEMORY_MB", env.get("AUTOMATELY_DATA_DIR") == null ? "64" : "8").trim()),
+                Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MB", "1024").trim()));
     }
 
     private static boolean clusterTlsRequired(String value) {

@@ -203,6 +203,36 @@ Authorization: Bearer atly_…
 ```
 Uploads over the quota get **413** (straight away when `Content-Length` is sent), and uploads when the cluster is out of room get **507**.
 
+## `fs`: the file system
+
+Your files as one tree from `/`, Node-shaped, with your job's own `/tmp` inside it (D-079). It's the same files as `files` and the REST API, so a script, the CLI and the console all see the same folders.
+
+```js
+import { readFileSync, writeFileSync, existsSync } from 'fs';     // or 'node:fs', or 'automately:fs'; fs is also a global
+import { mkdir, readdir, rename } from 'fs/promises';
+
+await mkdir('/reports/2026', { recursive: true });
+writeFileSync('/reports/2026/q1.csv', 'a,b\n1,2');
+fs.appendFileSync('/reports/2026/q1.csv', '\n3,4');
+const text = readFileSync('/reports/2026/q1.csv', 'utf8');
+for (const d of await readdir('/reports', { withFileTypes: true })) console.log(d.name, d.isDirectory());
+await rename('/reports/2026', '/archive/2026');                   // a whole folder; no bytes move
+fs.writeFileSync('/tmp/scratch.bin', bytes);                        // this job only, gone when it ends
+```
+
+- **Calls:** `readFile`, `writeFile`, `appendFile`, `mkdir`, `readdir`, `stat` (and `lstat`), `access`, `rename`, `copyFile`, `rm`, `rmdir`, `unlink`.
+  - **Three styles each:** `fs.promises.x`, callback-style `fs.x(…, cb)`, and the synchronous `fs.xSync`.
+  - **Also:** `fs.existsSync`.
+- **Errors:** they have Node's codes, so code written for Node handles them. The codes are `ENOENT`, `EEXIST`, `ENOTDIR`, `EISDIR`, `ENOTEMPTY`, `EROFS` (a read-only mount), `EACCES` (a reserved name), `ENOSPC` (quota) and `ETIMEDOUT`. The cluster's own code is in `e.reason`.
+- **Synchronous calls block your script** until the host answers, which takes at most 30 s. Other work in the same script waits meanwhile: its timers, and in a service the other requests it's handling. Use the promise forms in services, and the sync ones where Node code needs them.
+- **`/tmp`:** private to the job, and deleted when it ends.
+  - **Size:** 8 MB is held in memory. Beyond that it spills to the node's disk, up to 1 GB (`AUTOMATELY_TMP_MB`), on nodes with a data directory, or 64 MB in memory on nodes without one.
+  - **Elsewhere:** it isn't part of your stored files. The REST API never sees it, and it doesn't count against your quota.
+- **Limits:**
+  - `readFile` reads at most 32 MB into memory; stream bigger files with `files.stream`.
+  - `appendFile` edits files up to 64 MB. Each append is a new version, published at once, so readers never see half of one.
+- **Paths:** they may start with `/`, and follow the `files` rules. `tmp/`, `packages/` and `.packages/` are reserved, and `mnt/` holds mounts ([storage](../guides/storage.md)).
+
 ## Serving HTTP from a service
 
 ```js

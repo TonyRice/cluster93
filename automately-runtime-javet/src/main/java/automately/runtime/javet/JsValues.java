@@ -76,6 +76,11 @@ final class JsValues implements AutoCloseable {
         if (value instanceof String string) {
             return v8.createV8ValueString(string);
         }
+        if (value instanceof byte[] bytes) {
+            com.caoccao.javet.values.reference.V8ValueTypedArray array = v8.createV8ValueTypedArray(com.caoccao.javet.enums.V8ValueType.Uint8Array, bytes.length);
+            array.fromBytes(bytes);
+            return array;
+        }
         return parse.call(json, Json.encode(value));
     }
 

@@ -111,9 +111,9 @@ class QueueScriptTest {
                 export default async () => {
                   const q = bus.queue('doomed');
                   const id = await q.push({ order: 7 }, { maxAttempts: 1 });
-                  await new Promise(async (resolve) => {
-                    const stop = await q.consume(async () => { setTimeout(resolve, 100); throw new Error('card declined'); });
-                  });
+                  await q.consume(async () => { throw new Error('card declined'); });
+                  // Dead-lettering happens after the handler fails; wait for it rather than for a fixed time.
+                  for (let i = 0; i < 100 && (await q.stats()).dead < 1; i++) await new Promise((r) => setTimeout(r, 50));
                   const dead = await q.dead();
                   const stats = await q.stats();
                   const retried = await q.retry(id);
