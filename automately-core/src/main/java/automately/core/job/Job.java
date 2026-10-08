@@ -34,6 +34,7 @@ import java.util.Optional;
  *                        {@code secrets:use}, or by a service or job whose script may (D-068)
  * @param packages        the packages its script may import, as exact versions ({@code {name: version}}), decided when
  *                        it was submitted so every attempt runs the same code (D-089); null if it imports none
+ * @param env             its {@code process.env}, as declared (D-095): values, and secrets by name only; null if none
  */
 public record Job(
         String id,
@@ -61,7 +62,8 @@ public record Job(
         String parent,
         int depth,
         boolean secrets,
-        JsonObject packages) {
+        JsonObject packages,
+        JsonObject env) {
 
     public Job {
         Objects.requireNonNull(id, "id");
@@ -71,6 +73,7 @@ public record Job(
         Objects.requireNonNull(status, "status");
         input = input == null ? new JsonObject() : input;
         packages = packages == null || packages.isEmpty() ? null : packages;
+        env = env == null || env.isEmpty() ? null : env;
         logs = logs == null ? List.of() : List.copyOf(logs);
         attempts = attempts == null ? List.of() : List.copyOf(attempts);
     }
@@ -83,7 +86,7 @@ public record Job(
     public static Job queued(String id, String tenant, String script, JsonObject input, long timeoutMs,
                              OrphanPolicy onOrphan, int maxAttempts, ServiceRef service, long now) {
         return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, JobStatus.QUEUED, 1,
-                null, null, null, service, null, null, List.of(), List.of(), now, now, null, null, null, null, 0, false, null);
+                null, null, null, service, null, null, List.of(), List.of(), now, now, null, null, null, null, 0, false, null, null);
     }
 
     /** True when {@code attempt} on {@code nodeInstance} is still the one that owns this job. */
@@ -187,19 +190,25 @@ public record Job(
     /** A job started by another job's script (D-063). Only before it's saved. */
     public Job startedBy(String parentId, int parentDepth) {
         return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, status, attempt, node, nodeInstance, cancelRequested, service,
-                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parentId, parentDepth + 1, secrets, packages);
+                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parentId, parentDepth + 1, secrets, packages, env);
     }
 
     /** Whether the script may read the tenant's secrets (D-068). Only before it's saved. */
     public Job withSecrets(boolean allowed) {
         return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, status, attempt, node, nodeInstance, cancelRequested, service,
-                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parent, depth, allowed, packages);
+                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parent, depth, allowed, packages, env);
     }
 
     /** The exact versions its script imports (D-089). Only before it's saved. */
     public Job withPackages(JsonObject lock) {
         return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, status, attempt, node, nodeInstance, cancelRequested, service,
-                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parent, depth, secrets, lock);
+                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parent, depth, secrets, lock, env);
+    }
+
+    /** Its {@code process.env} declaration (D-095). Only before it's saved. */
+    public Job withEnv(JsonObject declared) {
+        return new Job(id, tenant, script, input, timeoutMs, onOrphan, maxAttempts, status, attempt, node, nodeInstance, cancelRequested, service,
+                output, error, logs, attempts, createdAt, queuedAt, startedAt, finishedAt, callback, parent, depth, secrets, packages, declared);
     }
 
     /** Records an attempt to deliver the callback. */
@@ -244,7 +253,8 @@ public record Job(
                 .put("parent", parent)
                 .put("depth", depth)
                 .put("secrets", secrets)
-                .put("packages", packages);
+                .put("packages", packages)
+                .put("env", env);
     }
 
     /** The public view of a job, without the script source or internal node instance ids. */
@@ -283,7 +293,8 @@ public record Job(
                 json.getString("parent"),
                 json.getInteger("depth", 0),
                 json.getBoolean("secrets", false),
-                json.getJsonObject("packages"));
+                json.getJsonObject("packages"),
+                json.getJsonObject("env"));
     }
 
     /** Starts a modified copy; used by transitions and tests. */
@@ -342,7 +353,7 @@ public record Job(
         Job build() {
             return new Job(base.id, base.tenant, base.script, base.input, base.timeoutMs, base.onOrphan, base.maxAttempts, status,
                     attempt, node, nodeInstance, cancelRequested, base.service, output, error, logs, attempts, base.createdAt,
-                    queuedAt, startedAt, finishedAt, callback, base.parent, base.depth, base.secrets, base.packages);
+                    queuedAt, startedAt, finishedAt, callback, base.parent, base.depth, base.secrets, base.packages, base.env);
         }
     }
 }

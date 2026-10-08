@@ -105,6 +105,18 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("automately:fetch", hostModule("fetch")),
             java.util.Map.entry("automately:log", hostModule("log")));
 
+    /** The built-ins with this job's {@code process.env} in the process stand-in (D-095): plain JSON, so nothing runs. */
+    static java.util.Map<String, String> withEnv(java.util.Map<String, String> env) {
+        java.util.Map<String, String> sources = new java.util.HashMap<>(BUILT_IN_SOURCES);
+        String marker = "/* automately:env */ { NODE_ENV: 'production' }";
+        String process = sources.get("node:process");
+        if (!process.contains(marker)) {
+            throw new IllegalStateException("process.js has lost its env marker");
+        }
+        sources.put("node:process", process.replace(marker, new JsonObject(new java.util.TreeMap<>(env)).encode()));
+        return sources;
+    }
+
     /** {@code import kv from 'automately:kv'} or {@code import { kv } from 'automately:kv'}: the same object as the global. */
     private static String hostModule(String name) {
         return "const api = globalThis." + name + "; export default api; export { api as " + name + " };";
@@ -338,11 +350,13 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     private ExecutionResult invokeModule(V8Runtime v8, Execution execution, Control control) throws JavetException {
         // Built-ins (D-079) and the job's packages (D-089), all already in memory.
-        v8.setV8ModuleResolver(new ModuleResolver(execution.packages(), BUILT_IN_MODULES, BUILT_IN_SOURCES));
+        ModuleResolver resolver = new ModuleResolver(execution.packages(), BUILT_IN_MODULES, withEnv(execution.env()));
+        v8.setV8ModuleResolver(resolver);
         try (V8ValueObject prelude = v8.getExecutor(PRELUDE).setResourceName("automately:prelude").execute();
              ScriptEntryPoints js = new ScriptEntryPoints(v8, prelude);
              V8Module module = v8.getExecutor(automately.core.packages.Imports.rewrite(execution.script(), ModuleResolver.JOB_URL))
                      .setResourceName(ModuleResolver.JOB).compileV8Module()) {
+            defineProcess(v8, resolver);
             // Evaluating a module answers a promise: it rejects if the module (or one it imports) throws, and settles
             // later if one awaits at the top level.
             try (V8Value evaluated = module.execute(true)) {
@@ -375,6 +389,19 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                             : ExecutionResult.failed(envelope.getString("error"));
                 }
             }
+        }
+    }
+
+    /**
+     * {@code process} as a global (D-096), as in Node: the same object {@code import process from 'node:process'} gives,
+     * with the job's declared env. Writable, like Node's, since browser shims assign to it.
+     */
+    private static void defineProcess(V8Runtime v8, ModuleResolver resolver) throws JavetException {
+        com.caoccao.javet.values.reference.IV8Module module = resolver.resolve(v8, "node:process", null);
+        try (V8Value evaluated = module.execute(true);
+             V8ValueObject namespace = (V8ValueObject) module.getNamespace();
+             V8Value process = namespace.get("default")) {
+            v8.getGlobalObject().set("process", process);
         }
     }
 

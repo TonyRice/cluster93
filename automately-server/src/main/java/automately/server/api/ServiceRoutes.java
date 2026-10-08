@@ -160,6 +160,18 @@ final class ServiceRoutes {
             return;
         }
         JsonObject serviceConfig = configValue == null ? new JsonObject() : (JsonObject) configValue;
+        // Its runs' process.env (D-095); naming a secret needs secrets:use, as reading one does (D-068).
+        String badEnv = automately.core.job.JobEnv.invalid(body.getValue("env"));
+        if (badEnv != null) {
+            error(ctx, 400, "invalid_request", badEnv);
+            return;
+        }
+        JsonObject env = body.getJsonObject("env");
+        if (automately.core.job.JobEnv.usesSecrets(env)
+                && !ctx.<automately.core.auth.Principal>get("principal").allows(automately.core.auth.Scopes.SECRETS_USE)) {
+            error(ctx, 403, "forbidden", "env names secrets, which needs a token with secrets:use");
+            return;
+        }
 
         // What its script imports is resolved now and kept on the revision; a redeploy resolves again (D-089).
         // A package version is its revision (D-091): the script re-exports it, and the lock pins it.
@@ -168,13 +180,13 @@ final class ServiceRoutes {
                 ApiVerticle.refuseImports(ctx, locked.cause());
             } else {
                 define(ctx, tenant, name, locked.result().getString("script"), serviceConfig, restart, enabled,
-                        locked.result().getJsonObject("packages"));
+                        locked.result().getJsonObject("packages"), env);
             }
         });
     }
 
     private void define(RoutingContext ctx, String tenant, String name, String script, JsonObject serviceConfig, RestartPolicy restart,
-                        boolean enabled, JsonObject lock) {
+                        boolean enabled, JsonObject lock, JsonObject env) {
         services.get(tenant, name).compose(existing -> withinLimit(tenant, name, enabled && (existing == null || !existing.enabled()))
                         .compose(allowed -> {
                             if (!allowed) {
@@ -185,13 +197,13 @@ final class ServiceRoutes {
                             boolean secrets = ctx.<automately.core.auth.Principal>get("principal").allows(automately.core.auth.Scopes.SECRETS_USE);
                             if (existing == null) {
                                 ServiceDefinition created = ServiceDefinition.create(tenant, name, script, serviceConfig, restart, enabled, secrets, now)
-                                        .withPackages(lock);
+                                        .withPackages(lock).withEnv(env);
                                 return services.create(created).map(ok -> ok
                                         ? () -> respond(ctx, 201, created)
                                         : () -> error(ctx, 409, "conflict", "The service was created concurrently; retry"));
                             }
                             return services.update(tenant, name, current -> Optional.of(
-                                            current.redefined(script, serviceConfig, restart, secrets, lock, now).withEnabled(enabled, now)))
+                                            current.redefined(script, serviceConfig, restart, secrets, lock, env, now).withEnabled(enabled, now)))
                                     .map(updated -> updated.<Runnable>map(s -> () -> respond(ctx, 200, s))
                                             .orElse(() -> error(ctx, 404, "not_found", "No such service")));
                         }))

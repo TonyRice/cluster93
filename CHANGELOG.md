@@ -26,7 +26,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
-## Design: more of Node in the isolate (2026-10-08)
+## `process.env`, declared per job (2026-10-08)
+
+### Added
+- **`env` on jobs and services (D-096).** `{"API_URL": "https://…", "KEY": {"secret": "name"}}` becomes the script's `process.env`, plus `NODE_ENV`, and never the node's environment.
+  - **Secrets by reference:** read when the run starts, by `secrets.get`'s rule (`secrets:use`). The job record keeps only the name, and the value is masked in the job's log as `[secret:name]`.
+  - **Revisions:** for services, `env` is part of the revision.
+  - **Where to set it:** the CLI's `run` and `services deploy` take `--env` and `--env-secret`, `automately deploy` reads `service.env`, and `jobs.run` takes `env` and `inheritEnv`.
+  - **Why:** configuration should be explicit and per job (Tony), and secrets shouldn't leak through records or logs.
+- **`process` is a global,** as in Node, and the same object as `node:process`.
+
+
 
 ### Added
 - **`docs/design/isolate-polyfills.md` (D-095),** accepted.

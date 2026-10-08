@@ -93,6 +93,28 @@ class NodeStandInsTest {
     }
 
     @Test
+    void processIsAGlobalWithExactlyTheDeclaredEnv() throws Exception {
+        Execution execution = new Execution("job-1", "tenant-a",
+                "import imported, { env } from 'node:process';"
+                        + "export default () => [process.env.API_URL, process.env.NODE_ENV, Object.keys(process.env).sort().join(','),"
+                        + " imported === process, env === process.env, process.versions.node === undefined, typeof process.nextTick,"
+                        + " 'PATH' in process.env, 'HOME' in process.env];",
+                new JsonObject(), Duration.ofSeconds(5), JobContext.firstAttempt("job-1", OrphanPolicy.FAIL), false,
+                automately.core.runtime.Packages.NONE, java.util.Map.of("API_URL", "https://api.example.com", "NODE_ENV", "production",
+                        "QUOTE", "it's \"quoted\" </script>\u2028"));
+        ExecutionResult result = runtime.execute(execution, (level, line) -> { }, StateSink.DISCARD)
+                .result().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);
+        assertThat(result.error()).isNull();
+        assertThat((JsonArray) result.output()).containsExactly("https://api.example.com", "production", "API_URL,NODE_ENV,QUOTE",
+                true, true, true, "function", false, false);
+
+        assertThat(output("export default () => [Object.keys(process.env), typeof globalThis.process];"))
+                .as("nothing declared: only NODE_ENV").containsExactly(new JsonArray().add("NODE_ENV"), "object");
+        assertThat(output("export default () => { globalThis.process = { shim: true }; return [process.shim]; };"))
+                .as("writable, as browser shims expect").containsExactly(true);
+    }
+
+    @Test
     void unicodeRegularExpressionsAndIntlWork() throws Exception {
         // V8's i18n build with ICU's data (D-093): without it, \\p{…} doesn't compile and Intl is missing.
         assertThat(output("export default () => [/^\\p{Lu}\\p{Ll}+$/u.test('Élan'), 'ﬁ'.normalize('NFKC'),"

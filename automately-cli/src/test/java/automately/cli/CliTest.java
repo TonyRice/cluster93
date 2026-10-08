@@ -136,6 +136,13 @@ class CliTest {
         assertThat(Json.parse(success.out()).get("hello").asText()).isEqualTo("tony");
         assertThat(success.err()).contains("working on tony");
 
+        Path envScript = home.resolve("env.js");
+        Files.writeString(envScript, "export default () => ({ region: process.env.REGION, mode: process.env.MODE });");
+        Result withEnv = cli("run", envScript.toString(), "--env", "REGION=eu", "-e", "MODE=fast");
+        assertThat(withEnv.code()).as(withEnv.err()).isZero();
+        assertThat(Json.parse(withEnv.out()).get("region").asText()).isEqualTo("eu");
+        assertThat(Json.parse(withEnv.out()).get("mode").asText()).isEqualTo("fast");
+
         Result failure = cli("run", broken.toString());
         assertThat(failure.code()).isEqualTo(1);
         assertThat(failure.err()).contains("FAILED").contains("nope");

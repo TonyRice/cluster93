@@ -40,6 +40,12 @@ final class RunCommand extends Base {
     @Option(names = {"-d", "--detach"}, description = "Print the job id and return without following it.")
     boolean detach;
 
+    @Option(names = {"-e", "--env"}, paramLabel = "NAME=VALUE", description = "Set process.env.NAME for the script; repeat for more.")
+    java.util.Map<String, String> env = new java.util.LinkedHashMap<>();
+
+    @Option(names = "--env-secret", paramLabel = "NAME=SECRET", description = "Set process.env.NAME to one of your secrets, read when it runs.")
+    java.util.Map<String, String> envSecrets = new java.util.LinkedHashMap<>();
+
     @Override
     int execute() throws Exception {
         ObjectNode body = Json.object().put("script", Files.readString(script));
@@ -49,6 +55,12 @@ final class RunCommand extends Base {
                 throw new CliException("The input must be a JSON object", 2);
             }
             body.set("input", parsed);
+        }
+        if (!env.isEmpty() || !envSecrets.isEmpty()) {
+            ObjectNode declared = Json.object();
+            env.forEach(declared::put);
+            envSecrets.forEach((name, secret) -> declared.set(name, Json.object().put("secret", secret)));
+            body.set("env", declared);
         }
         if (timeoutMs != null) {
             body.put("timeoutMs", timeoutMs);

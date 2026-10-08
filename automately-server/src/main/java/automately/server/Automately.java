@@ -387,7 +387,7 @@ public final class Automately {
                     .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes,
                             runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port(),
                             new automately.core.packages.PackageLoader(packages, config.packageCacheBytes(),
-                                    automately.core.metrics.Metrics.of(vertx)))))
+                                    automately.core.metrics.Metrics.of(vertx)), tenantSecrets)))
                     .compose(id -> vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, config.heartbeat(),
                             config.orphanGrace(), config.requeueAfter())))
                     .compose(id -> vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler,

@@ -197,6 +197,79 @@ class SecretsTest {
         }
     }
 
+    @Test
+    void aJobsEnvHoldsWhatItDeclaresWithSecretsReadAtRunTimeAndMaskedInLogs() throws Exception {
+        String all = TestAuth.bearer("env-acme");
+        assertThat(put(all, "/v1/secrets/stripe-live", new JsonObject().put("value", "sk_live_0123456789")).statusCode()).isIn(200, 201);
+        JsonObject declared = new JsonObject().put("API_URL", "https://api.example.com").put("STRIPE", new JsonObject().put("secret", "stripe-live"));
+
+        JsonObject job = submitAndWait(all, new JsonObject().put("env", declared).put("script",
+                "export default () => { console.log('using key', process.env.STRIPE); return [process.env.API_URL, process.env.STRIPE.length,"
+                        + " Object.keys(process.env).sort().join(',')]; }"));
+        assertThat(job.getString("status")).as(job.encodePrettily()).isEqualTo("SUCCEEDED");
+        assertThat(job.getJsonArray("output")).containsExactly("https://api.example.com", 18, "API_URL,NODE_ENV,STRIPE");
+        assertThat(job.getJsonArray("logs").encode()).contains("using key [secret:stripe-live]");
+        assertThat(job.getJsonObject("env")).as("the record keeps the name, not the value").isEqualTo(declared);
+        assertThat(job.encode()).doesNotContain("sk_live_0123456789");
+
+        String narrow = token(all, "jobs:read", "jobs:write");
+        HttpResponse<Buffer> refused = post(narrow, "/v1/jobs", new JsonObject().put("env", declared).put("script", "export default () => 1;"));
+        assertThat(refused.statusCode()).as("naming a secret needs secrets:use").isEqualTo(403);
+        assertThat(post(narrow, "/v1/jobs", new JsonObject().put("env", new JsonObject().put("A", "1")).put("script", "export default () => 1;"))
+                .statusCode()).as("plain values don't").isEqualTo(202);
+        assertThat(post(all, "/v1/jobs", new JsonObject().put("env", new JsonObject().put("bad-name", "1")).put("script", "export default () => 1;"))
+                .statusCode()).isEqualTo(400);
+
+        JsonObject missing = submitAndWait(all, new JsonObject().put("env", new JsonObject().put("K", new JsonObject().put("secret", "nope")))
+                .put("script", "export default () => 1;"));
+        assertThat(missing.getString("status")).isEqualTo("FAILED");
+        assertThat(missing.getString("error")).contains("env.K names the secret \"nope\", which doesn't exist");
+    }
+
+    @Test
+    void aStartedJobGetsItsParentsEnvOnlyIfItAsks() throws Exception {
+        String all = TestAuth.bearer("env-parent");
+        JsonObject job = submitAndWait(all, new JsonObject().put("env", new JsonObject().put("REGION", "eu")).put("script",
+                "export default async () => {"
+                        + " const read = 'export default () => [process.env.REGION ?? null, process.env.OWN ?? null];';"
+                        + " const plain = await (await jobs.run(read)).result();"
+                        + " const inherited = await (await jobs.run(read, {}, { inheritEnv: true, env: { OWN: 'x' } })).result();"
+                        + " return [plain.output, inherited.output]; };"));
+        assertThat(job.getString("status")).as(job.encodePrettily()).isEqualTo("SUCCEEDED");
+        assertThat(job.getJsonArray("output").getJsonArray(0)).containsExactly(null, null);
+        assertThat(job.getJsonArray("output").getJsonArray(1)).containsExactly("eu", "x");
+    }
+
+    @Test
+    void aServicesEnvIsPartOfItsRevision() throws Exception {
+        String all = TestAuth.bearer("env-service");
+        JsonObject body = new JsonObject().put("script", "export default async (config, ctx) => process.env.MODE;")
+                .put("restart", "on-failure").put("env", new JsonObject().put("MODE", "first"));
+        JsonObject created = put(all, "/v1/services/moded", body).bodyAsJsonObject();
+        assertThat(created.getJsonObject("env").getString("MODE")).isEqualTo("first");
+        assertThat(serviceOutput(all, "moded", 1)).isEqualTo("first");
+        JsonObject changed = put(all, "/v1/services/moded", body.copy().put("env", new JsonObject().put("MODE", "second"))).bodyAsJsonObject();
+        assertThat(changed.getInteger("revision")).as("a new env is a new revision").isEqualTo(2);
+        assertThat(serviceOutput(all, "moded", 2)).isEqualTo("second");
+    }
+
+    private static JsonObject submitAndWait(String bearer, JsonObject body) throws Exception {
+        HttpResponse<Buffer> submitted = post(bearer, "/v1/jobs", body.copy().put("timeoutMs", 20_000));
+        assertThat(submitted.statusCode()).as(submitted.bodyAsString()).isEqualTo(202);
+        String id = submitted.bodyAsJsonObject().getString("id");
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        JsonObject job;
+        do {
+            Thread.sleep(50);
+            job = get(bearer, "/v1/jobs/" + id).bodyAsJsonObject();
+        } while (List.of("QUEUED", "RUNNING").contains(job.getString("status")) && System.nanoTime() < deadline);
+        return job;
+    }
+
+    private static HttpResponse<Buffer> post(String bearer, String path, JsonObject body) throws Exception {
+        return await(client.post(node.httpPort(), "localhost", path).putHeader("Authorization", bearer).sendJsonObject(body));
+    }
+
     /** A token for the tenant with only {@code scopes}, minted with {@code bearer}. */
     private static String token(String bearer, String... scopes) throws Exception {
         HttpResponse<Buffer> minted = await(client.post(node.httpPort(), "localhost", "/v1/tokens").putHeader("Authorization", bearer)

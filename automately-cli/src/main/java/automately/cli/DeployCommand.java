@@ -16,7 +16,7 @@ import java.nio.file.Path;
  */
 @Command(name = "deploy", description = {
         "Publish the project in DIR and run it as a service: the version in automately.json becomes the service's revision.",
-        "The service is named by \"service\": {\"name\"} in automately.json, else the package's name; its \"config\" and \"restart\" come from there too."})
+        "The service is named by \"service\": {\"name\"} in automately.json, else the package's name; its \"config\", \"restart\" and \"env\" come from there too."})
 final class DeployCommand extends Base {
 
     @Parameters(paramLabel = "DIR", arity = "0..1", defaultValue = ".", description = "The project folder (default: the current one).")
@@ -55,6 +55,9 @@ final class DeployCommand extends Base {
         }
         if (service.has("restart")) {
             body.set("restart", service.get("restart"));
+        }
+        if (service.has("env")) {
+            body.set("env", service.get("env"));
         }
         JsonNode deployed = api().put("/v1/services/" + Api.segment(serviceName), body);
         if (!printedJson(deployed)) {

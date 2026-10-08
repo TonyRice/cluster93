@@ -1,11 +1,12 @@
 // A stand-in for Node's `process` (D-093): enough for npm code that checks its environment or defers work. It doesn't
 // claim to be Node: `process.versions.node` is undefined, so libraries that look for it take their non-Node path.
-// There's no real environment: `env` holds only NODE_ENV, and nothing of the node's or the tenant's leaks into it.
+// `env` is exactly what the job declared (D-095), secrets already read, plus NODE_ENV; never the node's environment.
+// The runtime puts it here when the module loads, in place of the marker below.
 
 const listeners = new Map();
 
 const process = {
-  env: { NODE_ENV: 'production' },
+  env: /* automately:env */ { NODE_ENV: 'production' },
   argv: [],
   execArgv: [],
   platform: 'linux',

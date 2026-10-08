@@ -460,6 +460,17 @@ public final class ApiVerticle extends VerticleBase {
 
         // The job's script may read the tenant's secrets only if the submitting token may (D-068).
         boolean secretsAllowed = ctx.<automately.core.auth.Principal>get("principal").allows(automately.core.auth.Scopes.SECRETS_USE);
+        // Its process.env, declared (D-095); naming a secret needs the same right as reading one.
+        String badEnv = automately.core.job.JobEnv.invalid(body.getValue("env"));
+        if (badEnv != null) {
+            error(ctx, 400, "invalid_request", badEnv);
+            return;
+        }
+        JsonObject env = body.getJsonObject("env");
+        if (automately.core.job.JobEnv.usesSecrets(env) && !secretsAllowed) {
+            error(ctx, 403, "forbidden", "env names secrets, which needs a token with secrets:use");
+            return;
+        }
         java.util.function.UnaryOperator<Job> prepare = job -> job.withSecrets(secretsAllowed);
         if (body.getValue("callback") != null) {
             if (!(body.getValue("callback") instanceof JsonObject callback) || !(callback.getValue("url") instanceof String url)) {
@@ -488,7 +499,7 @@ public final class ApiVerticle extends VerticleBase {
             }
             JsonObject source = locked.result();
             scheduler.submit(tenant, source.getString("script"), (JsonObject) input, jobTimeout, policy, attempts,
-                            job -> prepared.apply(job).withPackages(source.getJsonObject("packages")))
+                            job -> prepared.apply(job).withPackages(source.getJsonObject("packages")).withEnv(env))
                     .onSuccess(job -> ctx.response()
                             .setStatusCode(202)
                             .putHeader("Location", "/v1/jobs/" + job.id())

@@ -49,9 +49,21 @@ final class ServicesCommand extends Base {
         @Option(names = "--disabled", description = "Define it without starting it.")
         boolean disabled;
 
+        @Option(names = {"-e", "--env"}, paramLabel = "NAME=VALUE", description = "Set process.env.NAME for its runs; repeat for more.")
+        java.util.Map<String, String> env = new java.util.LinkedHashMap<>();
+
+        @Option(names = "--env-secret", paramLabel = "NAME=SECRET", description = "Set process.env.NAME to one of your secrets, read when each run starts.")
+        java.util.Map<String, String> envSecrets = new java.util.LinkedHashMap<>();
+
         @Override
         int execute() throws Exception {
             ObjectNode body = Json.object().put("script", Files.readString(script));
+            if (!env.isEmpty() || !envSecrets.isEmpty()) {
+                ObjectNode declared = Json.object();
+                env.forEach(declared::put);
+                envSecrets.forEach((key, secret) -> declared.set(key, Json.object().put("secret", secret)));
+                body.set("env", declared);
+            }
             if (config != null) {
                 body.set("config", Json.parse(config));
             }

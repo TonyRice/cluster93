@@ -81,9 +81,15 @@ public final class JobScheduler {
     /** As above, with the revision's package versions (D-089). */
     public Future<Job> submitServiceRun(String jobId, String tenant, String script, JsonObject config, ServiceRef service, boolean secrets,
                                         JsonObject packages) {
+        return submitServiceRun(jobId, tenant, script, config, service, secrets, packages, null);
+    }
+
+    /** As above, with the revision's {@code process.env} declaration (D-095). */
+    public Future<Job> submitServiceRun(String jobId, String tenant, String script, JsonObject config, ServiceRef service, boolean secrets,
+                                        JsonObject packages, JsonObject env) {
         automately.core.metrics.Metrics.of(vertx).jobSubmitted(true);
         Job job = Job.queued(jobId, tenant, script, config, 0, OrphanPolicy.FAIL, 1, service, System.currentTimeMillis()).withSecrets(secrets)
-                .withPackages(packages);
+                .withPackages(packages).withEnv(env);
         // If no node can take it now, it stays QUEUED and the reaper re-dispatches it later.
         return jobs.save(job).compose(v -> dispatch(job).otherwise(job));
     }

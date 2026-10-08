@@ -240,12 +240,13 @@ class JavetScriptRuntimeTest {
                       typeof globalThis.__automately,
                       typeof globalThis.Java,
                       typeof globalThis.require,
-                      typeof globalThis.process,
+                      // process is a global (D-096), but plain JavaScript: no host object behind it, and it doesn't claim to be Node.
+                      Object.getPrototypeOf(process) === Object.prototype && process.versions.node === undefined,
                       Object.isFrozen(console),
                     ]
                     """);
 
-            assertThat(result.output()).hasToString("[\"undefined\",\"undefined\",\"undefined\",\"undefined\",true]");
+            assertThat(result.output()).hasToString("[\"undefined\",\"undefined\",\"undefined\",true,true]");
         }
     }
 

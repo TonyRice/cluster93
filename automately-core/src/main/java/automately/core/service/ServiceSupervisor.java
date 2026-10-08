@@ -155,7 +155,7 @@ public final class ServiceSupervisor extends VerticleBase {
                     LOG.info("Starting service {} run {} (revision {}) as job {}", run.key(), run.runs(), run.revision(), jobId);
                     automately.core.metrics.Metrics.of(vertx).serviceRunStarted(run.runs() > 1);
                     return scheduler.submitServiceRun(jobId, run.tenant(), run.script(), run.config(),
-                            new ServiceRef(run.name(), run.revision(), run.runs(), previousJobId), run.secrets(), run.packages()).mapEmpty();
+                            new ServiceRef(run.name(), run.revision(), run.runs(), previousJobId), run.secrets(), run.packages(), run.env()).mapEmpty();
                 });
     }
 

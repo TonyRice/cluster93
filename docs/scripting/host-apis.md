@@ -122,6 +122,24 @@ const key = await secrets.get('STRIPE_KEY');   // the value, or null if there's 
 - **Only scripts allowed to read them:** jobs submitted with a token that has `secrets:use`, services last defined with one, and jobs those start. Other scripts get `forbidden`.
 - **Needs `AUTOMATELY_SECRETS_KEY`** on the cluster; without it, calls fail with `unavailable`.
 
+## `process.env`: configuration you declare
+
+A job or service declares its environment; the script sees exactly that, plus `NODE_ENV` (`"production"`), and never the node's own environment:
+```json
+POST /v1/jobs
+{ "script": "...", "env": { "API_URL": "https://api.example.com", "STRIPE_KEY": { "secret": "stripe-live" } } }
+```
+```js
+export default async () => fetch(process.env.API_URL, { headers: { authorization: `Bearer ${process.env.STRIPE_KEY}` } });
+```
+- **Secrets by name.** `{"secret": "name"}` is read when the run starts, by the same rule as `secrets.get`: the submitting token needs `secrets:use`. The job record keeps the name, never the value, and **the value is masked in the job's log** as `[secret:name]`, since libraries print their configuration.
+- **Where to set it:**
+  - `POST /v1/jobs` and `PUT /v1/services/{name}`, where it's part of the revision, so changing it rolls the service
+  - `service.env` in `automately.json` for `automately deploy`
+  - `automately run … --env NAME=value --env-secret NAME=secret`
+  - `jobs.run(script, input, { env: {...}, inheritEnv: true })`: a started job gets its parent's env only with `inheritEnv`.
+- **`process`** is a global, as in Node, and `node:process` gives the same object. It doesn't claim to be Node (`process.versions.node` is undefined); `exit`, `chdir` and `binding` throw.
+
 ## Streams and text encoding
 
 Bodies are **streams of `Uint8Array` chunks** that you read with `for await`. Reading is backpressured: while you're not reading, the sender is paused.

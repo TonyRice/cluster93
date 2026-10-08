@@ -82,6 +82,13 @@ final class NodeJobsApi implements JobsApi {
             if (o.getValue("maxAttempts") != null) {
                 maxAttempts = HostArgs.intBetween(o.getValue("maxAttempts"), "maxAttempts", 1, onOrphan == OrphanPolicy.FAIL ? 1 : OrphanPolicy.MAX_ATTEMPTS_LIMIT);
             }
+            // Its own process.env (D-095); the parent's only if it asks for it with inheritEnv.
+            String badEnv = automately.core.job.JobEnv.invalid(o.getValue("env"));
+            if (badEnv != null) {
+                throw HostException.invalid(badEnv);
+            }
+            JsonObject ownEnv = o.getJsonObject("env");
+            boolean inheritEnv = Boolean.TRUE.equals(o.getValue("inheritEnv"));
             UnaryOperator<Job> callback = UnaryOperator.identity();
             if (o.getValue("callback") != null) {
                 if (!(o.getValue("callback") instanceof JsonObject hook) || !(hook.getValue("url") instanceof String url)) {
@@ -105,6 +112,17 @@ final class NodeJobsApi implements JobsApi {
                 if (depth + 1 > MAX_DEPTH) {
                     return Future.failedFuture(HostException.limit("Jobs can start jobs at most " + MAX_DEPTH + " levels deep"));
                 }
+                JsonObject env = inheritEnv && self != null && self.env() != null ? self.env().copy() : new JsonObject();
+                if (ownEnv != null) {
+                    env.mergeIn(ownEnv);
+                }
+                if (automately.core.job.JobEnv.invalid(env) != null) {
+                    return Future.failedFuture(HostException.invalid(automately.core.job.JobEnv.invalid(env)));
+                }
+                if (automately.core.job.JobEnv.usesSecrets(env) && (self == null || !self.secrets())) {
+                    return Future.failedFuture(new HostException("Error", "forbidden",
+                            "env names secrets, but this job may not read them, so the job it starts can't either"));
+                }
                 JsonObject lock;
                 try {
                     // It can import what the job starting it could (D-089).
@@ -114,7 +132,7 @@ final class NodeJobsApi implements JobsApi {
                 }
                 return wiring.scheduler().submit(scope.tenant(), script, input == null ? new JsonObject() : input, jobTimeout, onOrphan, attempts,
                         // A started job may read secrets only if the job starting it may (D-068).
-                        job -> withCallback.apply(job.startedBy(scope.jobId(), depth).withSecrets(self != null && self.secrets()).withPackages(lock)));
+                        job -> withCallback.apply(job.startedBy(scope.jobId(), depth).withSecrets(self != null && self.secrets()).withPackages(lock).withEnv(env)));
             }).map(Job::toSummaryJson);
         });
     }

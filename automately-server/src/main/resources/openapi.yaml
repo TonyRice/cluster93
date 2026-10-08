@@ -559,6 +559,7 @@ paths:
                 timeoutMs: { type: integer, minimum: 1 }
                 onOrphan: { type: string, enum: [fail, retry, resume] }
                 maxAttempts: { type: integer, minimum: 1, maximum: 10 }
+                env: { $ref: '#/components/schemas/EnvDeclaration' }
                 packages:
                   type: boolean
                   default: true
@@ -717,6 +718,7 @@ paths:
               properties:
                 script: { type: string, minLength: 1 }
                 package: { $ref: '#/components/schemas/PackageTarget' }
+                env: { $ref: '#/components/schemas/EnvDeclaration' }
                 config: { type: object }
                 restart: { type: string, enum: [always, on-failure] }
                 enabled: { type: boolean }
@@ -2866,6 +2868,20 @@ components:
         depth: { type: integer, description: '0 for jobs submitted from outside; one more than the parent otherwise.' }
         secrets: { type: boolean, description: 'Whether its script may read your secrets: submitted with secrets:use, or started by a job or service that may.' }
         packages: { $ref: '#/components/schemas/PackageLock' }
+        env: { $ref: '#/components/schemas/EnvDeclaration' }
+    EnvDeclaration:
+      type: [object, 'null']
+      description: >-
+        The script's process.env (D-095): exactly these, plus NODE_ENV. A value is a string, or {"secret": "name"} to read one of
+        your secrets when the run starts (needs secrets:use); the record keeps only the name, and its value is masked in logs.
+      maxProperties: 100
+      additionalProperties:
+        oneOf:
+          - { type: string, maxLength: 32768 }
+          - type: object
+            required: [secret]
+            additionalProperties: false
+            properties: { secret: { type: string } }
     PackageTarget:
       type: object
       description: A published package to run; its export's default export is the script. The version is pinned in the lock.
@@ -2903,6 +2919,7 @@ components:
         updatedAt: { type: integer }
         secrets: { type: boolean, description: 'Whether its runs may read your secrets: whether the token that last defined it had secrets:use.' }
         packages: { $ref: '#/components/schemas/PackageLock' }
+        env: { $ref: '#/components/schemas/EnvDeclaration' }
     Domain:
       type: object
       required: [domain, service, verified, createdAt]

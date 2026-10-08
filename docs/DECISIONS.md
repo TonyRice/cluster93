@@ -1462,3 +1462,23 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - **The cluster's own nodes are always refused,** by advertised address and internal port, even on public addresses.
   - **Per-tenant, operator-granted, audited allow-lists** of hosts or CIDRs and ports replace the all-or-nothing `AUTOMATELY_EGRESS_ALLOW_PRIVATE`, which stays for local development only.
 - **Each step comes with:** real libraries added to `RealNpmPackagesTest`, matched against Node; hostile scripts that try to exhaust every cap; and a check that no host object leaks (D-060).
+
+### D-096 — `process.env` declared per job; `process` is a global
+**Date:** 2026-10-08 · **Status:** Accepted (Tony: "an ENV flag for the job, with a secrets get"). Step 0 of D-095; supersedes D-093's "no new globals" for `process` only
+
+- **The declaration:** `env` on `POST /v1/jobs`, `PUT /v1/services/{name}` and `jobs.run`. A value is a string, or `{"secret": "name"}`.
+  - **Limits:** at most 100 entries, values up to 32 KB, and names like a shell's (a letter or `_`, then letters, digits or `_`).
+  - **What the script sees:** exactly that, plus `NODE_ENV=production`.
+- **Secrets:**
+  - **Naming one needs `secrets:use`** at submission (403 otherwise), and the run reads it on the node with the job's own right, as `secrets.get` does (D-068).
+  - **Only the name is stored:** the job record, the API, job lists and the MCP tools never see the value.
+  - **A missing secret** fails the run before any code runs, naming it.
+  - **Masking:** values of 4 characters or more are replaced in the job's log lines and fields by `[secret:<name>]`, longest first.
+  - **Not covered yet:** values read with `secrets.get` aren't masked; the script asked for them explicitly.
+- **Inheritance:** a job started with `jobs.run` gets its parent's env only with `inheritEnv: true` (merged under its own `env`). It may name secrets only if its parent may read them.
+- **Services:** `env` is part of the revision, so changing it rolls the service, and every run reads its secrets fresh.
+- **How the isolate gets it:** the resolved values are written as a JSON literal into the `process` stand-in's source when it loads, so no host call is involved and nothing is executed from them.
+- **`process` as a global:**
+  - **Why:** an inline job script isn't bundled, so `process.env.X` would otherwise be a ReferenceError. Node, Deno and Workers' compatibility mode all have it.
+  - **What it is:** the same object `node:process` exports, writable as Node's is (browser shims assign to it). It still doesn't claim to be Node.
+  - **No new reach:** it reaches nothing. `exit`, `chdir` and `binding` throw.

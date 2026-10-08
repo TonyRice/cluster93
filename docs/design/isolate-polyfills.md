@@ -75,7 +75,7 @@ Each is new reach, so each gets its threat model: SSRF, egress rules, connection
    - **Explicit allow-lists replace the all-or-nothing switch:** an operator grants a tenant specific hosts or CIDRs and ports (for example `10.0.5.20:5432`), audited. It never covers the cluster's own nodes. `AUTOMATELY_EGRESS_ALLOW_PRIVATE` stays for local development only. A tenant's own private network is reached through a link.
 
 ## 5. Building it, in order
-0. **`env` on jobs and services**, with secrets by name and masking in logs.
+0. ~~**`env` on jobs and services**~~ ✅ with secrets by name and masking in logs, and `process` as a global (D-096).
 1. **Randomness and the `crypto` global:** the smallest host API, and it unblocks uuid and nanoid.
 2. **`node:crypto`:** hashing, HMAC, `timingSafeEqual`, then KDFs, then ciphers, then keys and signatures. That unblocks jsonwebtoken (HS256 first, then RS256 and ES256).
 3. **`stream`, `string_decoder`, `stream/promises`:** unblocks papaparse in Node mode and csv-parse.

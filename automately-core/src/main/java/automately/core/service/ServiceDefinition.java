@@ -24,6 +24,7 @@ import java.util.Optional;
  *                           {@code secrets:use} (D-068)
  * @param packages           the exact versions its script imports, resolved when it was defined, so every run of a
  *                           revision runs the same code (D-089); null if it imports none
+ * @param env                its runs' {@code process.env} declaration (D-095); null if none
  */
 public record ServiceDefinition(
         String tenant,
@@ -44,7 +45,8 @@ public record ServiceDefinition(
         long createdAt,
         long updatedAt,
         boolean secrets,
-        JsonObject packages) {
+        JsonObject packages,
+        JsonObject env) {
 
     public ServiceDefinition {
         Objects.requireNonNull(tenant, "tenant");
@@ -53,6 +55,7 @@ public record ServiceDefinition(
         Objects.requireNonNull(restart, "restart");
         config = config == null ? new JsonObject() : config;
         packages = packages == null || packages.isEmpty() ? null : packages;
+        env = env == null || env.isEmpty() ? null : env;
     }
 
     public static ServiceDefinition create(String tenant, String name, String script, JsonObject config, RestartPolicy restart,
@@ -62,7 +65,7 @@ public record ServiceDefinition(
 
     public static ServiceDefinition create(String tenant, String name, String script, JsonObject config, RestartPolicy restart,
                                            boolean enabled, boolean secrets, long now) {
-        return new ServiceDefinition(tenant, name, script, config, restart, enabled, false, 1, null, 0, 0, 0, 0, 0, null, now, now, secrets, null);
+        return new ServiceDefinition(tenant, name, script, config, restart, enabled, false, 1, null, 0, 0, 0, 0, 0, null, now, now, secrets, null, null);
     }
 
     public String key() {
@@ -85,25 +88,38 @@ public record ServiceDefinition(
 
     /** As above; so is a change of the package versions it imports, such as a redeploy after a new one is published (D-089). */
     public ServiceDefinition redefined(String script, JsonObject config, RestartPolicy restart, boolean secrets, JsonObject packages, long now) {
+        return redefined(script, config, restart, secrets, packages, env, now);
+    }
+
+    /** As above; a change of its {@code process.env} declaration (D-095) is a new revision too. */
+    public ServiceDefinition redefined(String script, JsonObject config, RestartPolicy restart, boolean secrets, JsonObject packages,
+                                       JsonObject env, long now) {
         JsonObject lock = packages == null || packages.isEmpty() ? null : packages;
+        JsonObject declared = env == null || env.isEmpty() ? null : env;
         boolean changed = !this.script.equals(script) || !this.config.equals(config) || this.restart != restart || this.secrets != secrets
-                || !Objects.equals(this.packages, lock);
+                || !Objects.equals(this.packages, lock) || !Objects.equals(this.env, declared);
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, changed ? false : completed,
                 changed ? revision + 1 : revision, currentJobId, currentRevision, currentSince, runs,
-                changed ? 0 : consecutiveFailures, changed ? 0 : nextStartAt, lastExit, createdAt, now, secrets, lock);
+                changed ? 0 : consecutiveFailures, changed ? 0 : nextStartAt, lastExit, createdAt, now, secrets, lock, declared);
     }
 
     /** The exact versions its script imports (D-089). Only before it's first saved. */
     public ServiceDefinition withPackages(JsonObject lock) {
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision, currentJobId, currentRevision,
-                currentSince, runs, consecutiveFailures, nextStartAt, lastExit, createdAt, updatedAt, secrets, lock);
+                currentSince, runs, consecutiveFailures, nextStartAt, lastExit, createdAt, updatedAt, secrets, lock, env);
+    }
+
+    /** Its runs' {@code process.env} declaration (D-095). Only before it's first saved. */
+    public ServiceDefinition withEnv(JsonObject declared) {
+        return new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision, currentJobId, currentRevision,
+                currentSince, runs, consecutiveFailures, nextStartAt, lastExit, createdAt, updatedAt, secrets, packages, declared);
     }
 
     /** Desired state: running or not. Enabling clears completion and backoff. */
     public ServiceDefinition withEnabled(boolean enabled, long now) {
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, enabled ? false : completed, revision,
                 currentJobId, currentRevision, currentSince, runs, enabled ? 0 : consecutiveFailures, enabled ? 0 : nextStartAt,
-                lastExit, createdAt, now, secrets, packages);
+                lastExit, createdAt, now, secrets, packages, env);
     }
 
     /** Claims a new run. Only applies when no run is current and a start is due. */
@@ -112,7 +128,7 @@ public record ServiceDefinition(
             return Optional.empty();
         }
         return Optional.of(new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision,
-                jobId, revision, now, runs + 1, consecutiveFailures, nextStartAt, lastExit, createdAt, now, secrets, packages));
+                jobId, revision, now, runs + 1, consecutiveFailures, nextStartAt, lastExit, createdAt, now, secrets, packages, env));
     }
 
     /**
@@ -151,7 +167,7 @@ public record ServiceDefinition(
             next = now + Math.min(delay, maxBackoff.toMillis());
         }
         return Optional.of(new ServiceDefinition(tenant, name, script, config, restart, enabled, done, revision,
-                null, 0, 0, runs, failures, next, exit, createdAt, now, secrets, packages));
+                null, 0, 0, runs, failures, next, exit, createdAt, now, secrets, packages, env));
     }
 
     /** The state the API shows, given the current run's job (null if none or not found). */
@@ -191,7 +207,8 @@ public record ServiceDefinition(
                 .put("createdAt", createdAt)
                 .put("updatedAt", updatedAt)
                 .put("secrets", secrets)
-                .put("packages", packages);
+                .put("packages", packages)
+                .put("env", env);
     }
 
     public static ServiceDefinition fromJson(JsonObject json) {
@@ -214,6 +231,7 @@ public record ServiceDefinition(
                 json.getLong("createdAt", 0L),
                 json.getLong("updatedAt", 0L),
                 json.getBoolean("secrets", false),
-                json.getJsonObject("packages"));
+                json.getJsonObject("packages"),
+                json.getJsonObject("env"));
     }
 }

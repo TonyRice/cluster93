@@ -67,6 +67,8 @@ public final class NodeVerticle extends VerticleBase {
     private final HostApisFactory hostApis;
     private final String endpoint;
     private final automately.core.packages.PackageLoader packages;
+    /** Reads the secrets a job's env names (D-095); null if this node has none. */
+    private final automately.core.secrets.TenantSecrets secrets;
 
     /** Jobs this node has accepted, by job id. The execution is null until the script has started. */
     private final Map<String, Slot> slots = new HashMap<>();
@@ -78,14 +80,15 @@ public final class NodeVerticle extends VerticleBase {
 
     public NodeVerticle(String nodeId, String instanceId, int capacity, JobStore jobs, JobStateStore state, NodeRegistry nodes,
                         ScriptRuntime runtime, Duration heartbeat, Duration stopGrace, HostApisFactory hostApis, String endpoint) {
-        this(nodeId, instanceId, capacity, jobs, state, nodes, runtime, heartbeat, stopGrace, hostApis, endpoint, null);
+        this(nodeId, instanceId, capacity, jobs, state, nodes, runtime, heartbeat, stopGrace, hostApis, endpoint, null, null);
     }
 
     /** @param packages fetches what a job imports before it runs (D-089); null if this node has no package store */
     public NodeVerticle(String nodeId, String instanceId, int capacity, JobStore jobs, JobStateStore state, NodeRegistry nodes,
                         ScriptRuntime runtime, Duration heartbeat, Duration stopGrace, HostApisFactory hostApis, String endpoint,
-                        automately.core.packages.PackageLoader packages) {
+                        automately.core.packages.PackageLoader packages, automately.core.secrets.TenantSecrets secrets) {
         this.packages = packages;
+        this.secrets = secrets;
         this.hostApis = hostApis;
         this.endpoint = endpoint;
         this.nodeId = nodeId;
@@ -188,9 +191,15 @@ public final class NodeVerticle extends VerticleBase {
 
     private Future<Void> run(Job job) {
         int attempt = job.attempt();
-        return loadPackages(job).compose(loaded -> loaded.failed()
-                ? finish(job.id(), attempt, ExecutionResult.failed("Couldn't load the job's packages: " + loaded.cause().getMessage()), List.of())
-                : run(job, loaded.result()));
+        return loadPackages(job).compose(loaded -> {
+            if (loaded.failed()) {
+                return finish(job.id(), attempt, ExecutionResult.failed("Couldn't load the job's packages: " + loaded.cause().getMessage()), List.of());
+            }
+            // Its process.env, with the secrets it names read now, on this node (D-095).
+            return automately.core.job.JobEnv.resolve(job.env(), job.tenant(), job.secrets(), secrets).transform(env -> env.failed()
+                    ? finish(job.id(), attempt, ExecutionResult.failed("Couldn't set up the job's env: " + env.cause().getMessage()), List.of())
+                    : run(job, loaded.result(), env.result()));
+        });
     }
 
     /** Everything the job's lock names, fetched and checked before an isolate is made (D-089). */
@@ -207,7 +216,7 @@ public final class NodeVerticle extends VerticleBase {
                 .transform(Future::succeededFuture);
     }
 
-    private Future<Void> run(Job job, automately.core.runtime.Packages imports) {
+    private Future<Void> run(Job job, automately.core.runtime.Packages imports, automately.core.job.JobEnv.Resolved env) {
         int attempt = job.attempt();
         return carriedState(job).compose(carried -> {
             if (stopping) {
@@ -222,7 +231,7 @@ public final class NodeVerticle extends VerticleBase {
             io.vertx.core.eventbus.MessageConsumer<Object> tail = vertx.eventBus().consumer(Addresses.jobTail(job.id()), msg -> msg.reply(logs.tail()));
             JobContext jobContext = new JobContext(job.id(), attempt, job.onOrphan(), job.previousAttempt(), carried.state(),
                     carried.service());
-            RunningExecution execution = runtime.execute(execution(job, jobContext, imports), logSink(job.id(), logs), stateSink(job.id(), attempt),
+            RunningExecution execution = runtime.execute(execution(job, jobContext, imports, env), logSink(job.id(), logs, env), stateSink(job.id(), attempt),
                     hostApis.create(job.tenant(), job.id(), job.service() != null, imports));
             slots.put(job.id(), new Slot(attempt, execution));
             if (job.cancelRequested() != null) {
@@ -314,7 +323,8 @@ public final class NodeVerticle extends VerticleBase {
         });
     }
 
-    private LogSink logSink(String jobId, LogBook logs) {
+    /** The job's log; a secret value from its env that shows up in a line is masked (D-095). */
+    private LogSink logSink(String jobId, LogBook logs, automately.core.job.JobEnv.Resolved env) {
         return new LogSink() {
             @Override
             public void log(String level, String line) {
@@ -322,7 +332,9 @@ public final class NodeVerticle extends VerticleBase {
             }
 
             @Override
-            public void log(String level, String message, JsonObject fields) {
+            public void log(String level, String unmasked, JsonObject unmaskedFields) {
+                String message = env.mask(unmasked);
+                JsonObject fields = unmaskedFields == null || env.secretsByValue().isEmpty() ? unmaskedFields : new JsonObject(env.mask(unmaskedFields.encode()));
                 String line = fields == null || fields.isEmpty() ? message : message + " " + fields.encode();
                 long seq = logs.add(line);
                 JsonObject event = new JsonObject().put("type", "log").put("level", level).put("line", line).put("seq", seq);
@@ -378,8 +390,9 @@ public final class NodeVerticle extends VerticleBase {
         vertx.eventBus().publish(Addresses.jobEvents(jobId), event);
     }
 
-    private static Execution execution(Job job, JobContext context, automately.core.runtime.Packages imports) {
+    private static Execution execution(Job job, JobContext context, automately.core.runtime.Packages imports,
+                                       automately.core.job.JobEnv.Resolved env) {
         return new Execution(job.id(), job.tenant(), job.script(), job.input(), Duration.ofMillis(job.timeoutMs()), context,
-                job.service() != null, imports);
+                job.service() != null, imports, env.values());
     }
 }
