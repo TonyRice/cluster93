@@ -26,6 +26,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Web Crypto's `subtle`, RSA encryption and ECDH (2026-10-08)
+
+### Added
+- **`crypto.subtle` (D-104):**
+  - **Operations:** generate, import and export, sign and verify, encrypt and decrypt, derive, and wrap and unwrap keys.
+  - **Algorithms:** HMAC, AES-GCM/CBC/CTR, RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP, ECDSA, ECDH, Ed25519, X25519, PBKDF2 and HKDF.
+  - **`CryptoKey`:** the global is defined too.
+  - **Not supported:** AES-KW.
+- **`node:crypto` (D-104):** RSA encryption (`publicEncrypt` and the rest, with OAEP), `createECDH`, `diffieHellman`, and X25519 keys.
+- **`privateDecrypt` with PKCS#1 v1.5 padding is refused (D-104),** against the Marvin timing attack. That's stricter than Node, because the JVM lacks the "implicit rejection" that makes Node allow it.
+
 ## `zlib`, `assert`, `querystring`, `timers`, `os`; wrong bytes from JavaScript fixed (2026-10-08)
 
 ### Added

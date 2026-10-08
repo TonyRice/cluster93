@@ -232,4 +232,31 @@ public final class CryptoBinding {
     public V8Value curves() throws JavetException {
         return answer(crypto::curves);
     }
+
+    // --- RSA encryption and key agreement (D-104) ---
+
+    @V8Function(name = "rsa")
+    public V8Value rsa(V8Value operation, V8Value der, V8Value isPrivate, V8Value data, V8Value options) throws JavetException {
+        return answer(() -> crypto.rsa(js.string(operation), HostBridge.bytes(der), isPrivate.asBoolean(), HostBridge.bytes(data), js.options(options)));
+    }
+
+    @V8Function(name = "agree")
+    public V8Value agree(V8Value pkcs8, V8Value spki) throws JavetException {
+        return answer(() -> crypto.agree(HostBridge.bytes(pkcs8), HostBridge.bytes(spki)));
+    }
+
+    @V8Function(name = "ecdhKeys")
+    public V8Value ecdhKeys(V8Value curve, V8Value privateValue) throws JavetException {
+        return answer(() -> crypto.ecdhKeys(js.string(curve), optionalBytes(privateValue)));
+    }
+
+    @V8Function(name = "ecdhPoint")
+    public V8Value ecdhPoint(V8Value curve, V8Value encoded) throws JavetException {
+        return answer(() -> crypto.ecdhPoint(js.string(curve), HostBridge.bytes(encoded)));
+    }
+
+    @V8Function(name = "ecdhCompute")
+    public V8Value ecdhCompute(V8Value curve, V8Value privateValue, V8Value otherPublic) throws JavetException {
+        return answer(() -> crypto.ecdhCompute(js.string(curve), HostBridge.bytes(privateValue), HostBridge.bytes(otherPublic)));
+    }
 }

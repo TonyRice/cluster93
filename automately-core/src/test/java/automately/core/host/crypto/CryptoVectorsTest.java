@@ -185,8 +185,55 @@ class CryptoVectorsTest {
     }
 
     @Test
+    void x25519MatchesRfc7748() {
+        java.util.function.Function<String, String> b64 = h -> Base64.getUrlEncoder().withoutPadding().encodeToString(hex(h));
+        JsonObject alice = Keys.read(true, utf8(new JsonObject().put("kty", "OKP").put("crv", "X25519")
+                .put("d", b64.apply("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"))
+                .put("x", b64.apply("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")).encode()), "jwk", null);
+        JsonObject bobPublic = Keys.read(false, utf8(new JsonObject().put("kty", "OKP").put("crv", "X25519")
+                .put("x", b64.apply("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")).encode()), "jwk", null);
+        assertThat(hex(Keys.agree(der(alice), der(bobPublic)))).isEqualTo("4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742");
+        JsonObject derived = (JsonObject) Keys.export(false, der(Keys.publicFromPrivate(der(alice))), "jwk", null);
+        assertThat(derived.getString("x")).as("Alice's public key, derived").isEqualTo(b64.apply("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"));
+        assertThatThrownBy(() -> Keys.sign(null, new byte[1], der(alice), new JsonObject())).hasMessageContaining("key agreement");
+    }
+
+    @Test
+    void rsaEncryptionRoundTripsAndPkcs1DecryptionIsRefused() {
+        JsonObject pair = Keys.generate("rsa", new JsonObject().put("modulusLength", 2048));
+        byte[] pkcs8 = der(pair.getJsonObject("privateKey"));
+        byte[] spki = der(pair.getJsonObject("publicKey"));
+        JsonObject sha256 = new JsonObject().put("oaepHash", "sha256").put("oaepLabel", Base64.getEncoder().encodeToString(utf8("label")));
+        byte[] sealed = Keys.rsa("publicEncrypt", spki, false, utf8("secret"), sha256);
+        assertThat(Keys.rsa("privateDecrypt", pkcs8, true, sealed, sha256)).isEqualTo(utf8("secret"));
+        assertThatThrownBy(() -> Keys.rsa("privateDecrypt", pkcs8, true, sealed, new JsonObject().put("oaepHash", "sha256")))
+                .as("the wrong label").hasMessageContaining("decoding");
+        byte[] signed = Keys.rsa("privateEncrypt", pkcs8, true, utf8("hello"), new JsonObject());
+        assertThat(Keys.rsa("publicDecrypt", spki, false, signed, new JsonObject())).isEqualTo(utf8("hello"));
+        assertThatThrownBy(() -> Keys.rsa("privateDecrypt", pkcs8, true, signed, new JsonObject().put("padding", Keys.RSA_PKCS1_PADDING)))
+                .hasMessageContaining("CVE-2023-46809");
+    }
+
+    @Test
+    void ecdhAcceptsEveryPointEncodingAndRefusesPointsOffTheCurve() {
+        JsonObject alice = Keys.ecdhKeys("prime256v1", null);
+        JsonObject bob = Keys.ecdhKeys("P-256", null);
+        byte[] alicePrivate = Base64.getDecoder().decode(alice.getString("privateKey"));
+        byte[] bobPrivate = Base64.getDecoder().decode(bob.getString("privateKey"));
+        byte[] bobPublic = Base64.getDecoder().decode(bob.getString("publicKey"));
+        byte[] compressed = Der.concat(new byte[] {(byte) ((bobPublic[64] & 1) == 1 ? 3 : 2)}, java.util.Arrays.copyOfRange(bobPublic, 1, 33));
+        assertThat(Keys.ecdhPoint("prime256v1", compressed)).as("the y coordinate is recovered").isEqualTo(bobPublic);
+        byte[] secret = Keys.ecdhCompute("prime256v1", alicePrivate, compressed);
+        assertThat(Keys.ecdhCompute("prime256v1", bobPrivate, Base64.getDecoder().decode(alice.getString("publicKey")))).isEqualTo(secret);
+        byte[] offCurve = bobPublic.clone();
+        offCurve[64] ^= 1;
+        assertThatThrownBy(() -> Keys.ecdhCompute("prime256v1", alicePrivate, offCurve)).hasMessageContaining("not valid for specified curve");
+        assertThat(Keys.ecdhKeys("prime256v1", alicePrivate).getString("publicKey")).as("the public key of a set private key").isEqualTo(alice.getString("publicKey"));
+    }
+
+    @Test
     void whatTheIsolateDoesntSupportSaysSo() {
-        assertThatThrownBy(() -> Keys.generate("x25519", new JsonObject())).hasMessageContaining("rsa, ec and ed25519");
+        assertThatThrownBy(() -> Keys.generate("ed448", new JsonObject())).hasMessageContaining("rsa, ec, ed25519 and x25519");
         assertThatThrownBy(() -> Keys.read(true, utf8("-----BEGIN ENCRYPTED PRIVATE KEY-----\nAA==\n-----END ENCRYPTED PRIVATE KEY-----\n"), "pem", null))
                 .hasMessageContaining("Encrypted private keys");
         assertThatThrownBy(() -> Keys.read(true, utf8("not a key"), "pem", null)).hasMessageContaining("no PEM block");

@@ -81,4 +81,20 @@ public interface CryptoApi {
     boolean verify(String digest, byte[] data, byte[] der, boolean isPrivate, byte[] signature, io.vertx.core.json.JsonObject options);
 
     java.util.List<String> curves();
+
+    // --- RSA encryption and key agreement (D-104) ---
+
+    /** publicEncrypt, privateDecrypt, privateEncrypt or publicDecrypt, with Node's padding options. */
+    byte[] rsa(String operation, byte[] der, boolean isPrivate, byte[] data, io.vertx.core.json.JsonObject options);
+
+    /** The shared secret of a private key (PKCS#8) and a public key (SPKI): ECDH or X25519. */
+    byte[] agree(byte[] pkcs8, byte[] spki);
+
+    /** createECDH's raw keys: {@code privateKey}, {@code publicKey} (uncompressed), base64; new when {@code privateValue} is null. */
+    io.vertx.core.json.JsonObject ecdhKeys(String curve, byte[] privateValue);
+
+    /** A public point in any SEC1 encoding, checked to be on the curve, uncompressed. */
+    byte[] ecdhPoint(String curve, byte[] encoded);
+
+    byte[] ecdhCompute(String curve, byte[] privateValue, byte[] otherPublic);
 }

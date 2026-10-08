@@ -146,7 +146,7 @@ The global `crypto` is Web Crypto, and `node:crypto` is Node's; both run on the 
 ```js
 crypto.getRandomValues(new Uint8Array(16));        // secure random bytes (at most 65,536 per call)
 crypto.randomUUID();
-await crypto.subtle.digest('SHA-256', bytes);      // SHA-1, SHA-256, SHA-384, SHA-512
+await crypto.subtle.digest('SHA-256', bytes);      // and sign, encrypt, deriveBits, importKey, … (D-104)
 
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 createHash('sha256').update('abc').digest('hex');  // md5, sha1, sha2, sha3
@@ -169,7 +169,12 @@ generateKeyPair('ec', { namedCurve: 'P-256' }, (err, publicKey, privateKey) => {
   - **Keys:** `KeyObject`s (secret, public and private), `createPrivateKey`/`createPublicKey` from PEM, DER, JWK or an X.509 certificate, and `export` to any of them.
   - **Signatures:** `sign`/`verify` and `createSign`/`createVerify`.
   - **Key generation:** `generateKeyPair` for rsa, ec (P-256, P-384, P-521) and ed25519, and `generateKey` for hmac and aes keys.
-- **Not yet:** RSA encryption (`publicEncrypt`, …), ECDH and Diffie-Hellman, encrypted private keys, rsa-pss, x25519 and ed448 keys, and Web Crypto's `subtle` beyond `digest`. These throw `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` or say what is supported.
+- **Also there (D-104):**
+  - **RSA encryption:** `publicEncrypt`/`privateDecrypt`/`privateEncrypt`/`publicDecrypt`, OAEP by default.
+  - **Key agreement:** `createECDH`, and `diffieHellman` for ec and x25519 keys.
+  - **Web Crypto:** `crypto.subtle` with HMAC, AES-GCM/CBC/CTR, RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP, ECDSA, ECDH, Ed25519, X25519, PBKDF2 and HKDF, plus `CryptoKey`.
+  - **Refused:** `privateDecrypt` with PKCS#1 v1.5 padding, since the JVM's is open to the Marvin timing attack. Use OAEP.
+- **Not yet:** classic Diffie-Hellman (`createDiffieHellman`), encrypted private keys, rsa-pss and Ed448/X448 keys, and AES-KW. These throw `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` or say what is supported.
 - **Limits:**
   - **PBKDF2:** at most 1,000,000 iterations, and 4,000,000 HMACs in all (iterations × output blocks).
   - **scrypt:** at most 64 MB of memory, whatever `maxmem` says.

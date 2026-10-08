@@ -305,4 +305,29 @@ public final class JvmCrypto implements CryptoApi {
     public List<String> curves() {
         return Keys.curves();
     }
+
+    @Override
+    public byte[] rsa(String operation, byte[] der, boolean isPrivate, byte[] data, JsonObject options) {
+        return Keys.rsa(operation, der, isPrivate, data, options);
+    }
+
+    @Override
+    public byte[] agree(byte[] pkcs8, byte[] spki) {
+        return Keys.agree(pkcs8, spki);
+    }
+
+    @Override
+    public JsonObject ecdhKeys(String curve, byte[] privateValue) {
+        return Keys.ecdhKeys(curve, privateValue);
+    }
+
+    @Override
+    public byte[] ecdhPoint(String curve, byte[] encoded) {
+        return Keys.ecdhPoint(curve, encoded);
+    }
+
+    @Override
+    public byte[] ecdhCompute(String curve, byte[] privateValue, byte[] otherPublic) {
+        return Keys.ecdhCompute(curve, privateValue, otherPublic);
+    }
 }

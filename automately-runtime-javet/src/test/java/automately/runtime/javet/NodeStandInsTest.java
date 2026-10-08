@@ -186,11 +186,24 @@ class NodeStandInsTest {
     }
 
     @Test
+    void rsaPkcs1DecryptionIsRefusedAndEcdhWorks() throws Exception {
+        assertThat(output("import { generateKeyPairSync, publicEncrypt, privateDecrypt, constants, createECDH } from 'node:crypto'; import { Buffer } from 'node:buffer';"
+                + " export default () => { const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });"
+                + "   const sealed = publicEncrypt({ key: publicKey, padding: constants.RSA_PKCS1_PADDING }, Buffer.from('x'));"
+                + "   let refused; try { privateDecrypt({ key: privateKey, padding: constants.RSA_PKCS1_PADDING }, sealed); } catch (e) { refused = e.message.includes('CVE-2023-46809'); }"
+                + "   const a = createECDH('prime256v1'), b = createECDH('prime256v1'); a.generateKeys(); b.generateKeys();"
+                + "   return [refused, privateDecrypt(privateKey, publicEncrypt(publicKey, Buffer.from('oaep'))).toString(),"
+                + "     a.computeSecret(b.getPublicKey()).equals(b.computeSecret(a.getPublicKey(null, 'compressed')))]; };"))
+                .as("the JVM has no implicit rejection, so PKCS#1 v1.5 decryption stays refused (D-104)")
+                .containsExactly(true, "oaep", true);
+    }
+
+    @Test
     void whatCryptoCantDoYetSaysSo() throws Exception {
-        assertThat(output("import { publicEncrypt, generateKeyPairSync } from 'crypto'; import { Buffer } from 'buffer';"
+        assertThat(output("import { createDiffieHellman, generateKeyPairSync } from 'crypto';"
                 + " export default () => { const codes = [];"
-                + "   try { publicEncrypt('x', Buffer.alloc(1)); } catch (e) { codes.push(e.code); }"
-                + "   try { generateKeyPairSync('x25519'); } catch (e) { codes.push(e.message.includes('rsa, ec and ed25519')); }"
+                + "   try { createDiffieHellman(2048); } catch (e) { codes.push(e.code); }"
+                + "   try { generateKeyPairSync('ed448'); } catch (e) { codes.push(e.message.includes('rsa, ec, ed25519 and x25519')); }"
                 + "   return codes; };"))
                 .containsExactly("ERR_FEATURE_UNAVAILABLE_ON_PLATFORM", true);
     }

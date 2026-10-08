@@ -49,7 +49,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
 
     /** The prelude's files (src/main/resources/automately/runtime/javet/js), in order; each sees what the earlier ones define. */
     static final List<String> PRELUDE_FILES = List.of("prelude.js", "console.js", "timers.js", "listeners.js", "kv.js", "bus.js", "jobs.js", "secrets.js",
-            "encoding.js", "streams.js", "crypto.js", "zlib.js", "fetch.js", "files.js", "fs.js", "serve.js", "context.js", "entry.js");
+            "encoding.js", "streams.js", "crypto.js", "subtle.js", "zlib.js", "fetch.js", "files.js", "fs.js", "serve.js", "context.js", "entry.js");
 
     /**
      * Runs before the job's module: the prelude's files in one closure. It captures the host object, removes it from the

@@ -1646,3 +1646,35 @@ Everything is on the JVM's providers.
 - **The UTF-8 decoder didn't check continuation bytes.** It's behind `TextDecoder`, `Buffer#toString`, `fetch`'s `text()` and `fs` reads.
   - **Effect:** a broken sequence swallowed the next character; for example, `E0 A4 25` became "थ" instead of "�%".
   - **Fix:** it's now the WHATWG decoder that Node and browsers use, checked against Node's on edge cases and 200 KB of random bytes. It also builds strings in chunks, not one character at a time.
+
+### D-104 — Web Crypto's `subtle`, RSA encryption and key agreement
+**Date:** 2026-10-08 · **Status:** Accepted. Completes step 2 of D-095 (D-101 left these)
+
+**Decision:**
+- **`crypto.subtle`:**
+  - **Operations:** `generateKey`, `importKey`/`exportKey` (raw, pkcs8, spki, jwk), `sign`/`verify`, `encrypt`/`decrypt`, `deriveBits`/`deriveKey` and `wrapKey`/`unwrapKey`.
+  - **Algorithms:** HMAC, AES-GCM/CBC/CTR, RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP, ECDSA, ECDH, Ed25519, X25519, PBKDF2 and HKDF.
+  - **Web Crypto's rules:** usages, extractability, DOMException names, and the spec's order of checks.
+  - **Same host calls as `node:crypto`,** so keys stay in the job (D-101).
+  - **The `CryptoKey` global** is defined with it: it's part of the Web Crypto global that D-095 accepted, and libraries such as jose check `instanceof CryptoKey`.
+  - **Not supported:** AES-KW (`NotSupportedError`), and an AES-CTR counter that would wrap within a `length` under 128 bits. The JVM counts with all 128 bits, which agrees with Web Crypto unless the counter wraps.
+- **`node:crypto`** adds:
+  - `publicEncrypt`, `privateDecrypt`, `privateEncrypt` and `publicDecrypt`, with OAEP (any hash, with a label), PKCS#1 v1.5 and no padding.
+  - `createECDH`, with uncompressed, compressed and hybrid points, plus `ECDH.convertKey`.
+  - `diffieHellman()` for ECDH and X25519.
+  - X25519 as a key type: generate, import and export, and derive the public key.
+  - **Point checks:** a public point is checked to be on the curve before use, and compressed points are decompressed here.
+- **`privateDecrypt` with PKCS#1 v1.5 padding is refused, deliberately stricter than Node.**
+  - **The risk:** that decryption leaks through its timing (the Marvin attack, CVE-2023-46809).
+  - **Why Node differs:** Node 22 refused it at first, and allows it again where OpenSSL 3.2+ does "implicit rejection", which removes the leak.
+  - **Why the isolate doesn't follow:** the JVM's PKCS#1 decryption has no implicit rejection and has been shown vulnerable.
+  - **What still works:** OAEP (the default), and PKCS#1 v1.5 for `publicEncrypt`, `privateEncrypt` and `publicDecrypt`.
+- **Classic (MODP) Diffie-Hellman** (`createDiffieHellman`) stays unavailable, as does Ed448/X448.
+- **Checked:**
+  - **Against real Node:** a real-npm fixture's output equals real Node's, which covers:
+    - every deterministic Web Crypto result: HMAC, RSASSA-PKCS1 and Ed25519 signatures, AES-GCM/CBC/CTR ciphertexts, PBKDF2/HKDF/ECDH/X25519 bits, derived and wrapped keys, and JWK exports
+    - round trips for ECDSA, RSA-PSS, RSA-OAEP (with a label) and generated keys
+    - the error names
+    - `createECDH` with fixed private keys in every point format
+    - `diffieHellman`
+  - **Standards:** RFC 7748's X25519 vectors.

@@ -44,8 +44,15 @@ const cryptoInternals = Object.freeze({
   sign: (digest, data, der, options) => cryptoCall(cryptoHost.sign(digest ?? null, data, der, options)),
   verify: (digest, data, der, isPrivate, signature, options) => cryptoCall(cryptoHost.verify(digest ?? null, data, der, isPrivate, signature, options)),
   curves: () => cryptoCall(cryptoHost.curves()),
+  // D-104: RSA encryption and key agreement.
+  rsa: (operation, der, isPrivate, data, options) => cryptoCall(cryptoHost.rsa(operation, der, isPrivate, data, options)),
+  agree: (pkcs8, spki) => cryptoCall(cryptoHost.agree(pkcs8, spki)),
+  ecdhKeys: (curve, privateValue) => cryptoCall(cryptoHost.ecdhKeys(curve, privateValue ?? null)),
+  ecdhPoint: (curve, encoded) => cryptoCall(cryptoHost.ecdhPoint(curve, encoded)),
+  ecdhCompute: (curve, privateValue, otherPublic) => cryptoCall(cryptoHost.ecdhCompute(curve, privateValue, otherPublic)),
 });
-const subtle = Object.freeze({
+// subtle.js, next in the prelude, adds the rest of SubtleCrypto (D-104) and freezes it.
+const subtle = {
   digest: async (algorithm, data) => {
     const name = (typeof algorithm === 'string' ? algorithm : algorithm?.name ?? '').toUpperCase();
     const node = SUBTLE_DIGESTS[name];
@@ -53,7 +60,7 @@ const subtle = Object.freeze({
     const bytes = cryptoInternals.digest(node, viewBytes(data).slice());
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   },
-});
+};
 const webCrypto = {
   getRandomValues(array) {
     if (!INTEGER_ARRAYS.some((type) => array instanceof type)) {

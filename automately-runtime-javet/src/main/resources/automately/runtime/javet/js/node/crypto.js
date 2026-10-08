@@ -631,13 +631,100 @@ export const getCurves = () => internals.curves().slice();
 const notYet = (name) => () => {
   throw Object.assign(new Error('crypto.' + name + ' is not available in the isolate yet'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' });
 };
-export const publicEncrypt = notYet('publicEncrypt');
-export const privateDecrypt = notYet('privateDecrypt');
-export const privateEncrypt = notYet('privateEncrypt');
-export const publicDecrypt = notYet('publicDecrypt');
-export const createECDH = notYet('createECDH');
+// --- RSA encryption ---
+
+function rsaWith(operation, key, buffer) {
+  const object = operation === 'privateDecrypt' || operation === 'privateEncrypt' ? createPrivateKey(key) : readAsymmetric(key, false);
+  const options = {};
+  if (key && typeof key === 'object' && !(key instanceof KeyObject) && !ArrayBuffer.isView(key)) {
+    if (key.padding !== undefined) options.padding = key.padding;
+    if (key.oaepHash !== undefined) options.oaepHash = key.oaepHash;
+    if (key.oaepLabel !== undefined) options.oaepLabel = Buffer.from(bytesOf(key.oaepLabel)).toString('base64');
+  }
+  return toBuffer(internals.rsa(operation, object[KEY_INFO].der, object.type === 'private', bytesOf(buffer), options));
+}
+
+export const publicEncrypt = (key, buffer) => rsaWith('publicEncrypt', key, buffer);
+export const privateDecrypt = (key, buffer) => rsaWith('privateDecrypt', key, buffer);
+export const privateEncrypt = (key, buffer) => rsaWith('privateEncrypt', key, buffer);
+export const publicDecrypt = (key, buffer) => rsaWith('publicDecrypt', key, buffer);
+
+// --- key agreement ---
+
+/** Node's diffieHellman({ privateKey, publicKey }): ECDH on one curve, or X25519. */
+export function diffieHellman(options) {
+  const privateKey = options?.privateKey;
+  const publicKey = options?.publicKey;
+  if (!(privateKey instanceof KeyObject) || !(publicKey instanceof KeyObject)) {
+    throw invalidArg('The "options.privateKey" and "options.publicKey" properties must be KeyObjects');
+  }
+  if (privateKey.type !== 'private') throw invalidArg('Invalid key object type ' + privateKey.type + ', expected private.');
+  const pub = publicKey.type === 'private' ? createPublicKey(publicKey) : publicKey;
+  return toBuffer(internals.agree(privateKey[KEY_INFO].der, pub[KEY_INFO].der));
+}
+
+/** SEC1's point encodings from an uncompressed point. */
+function pointAs(uncompressed, format) {
+  if (format === undefined || format === 'uncompressed') return Buffer.from(uncompressed);
+  const size = (uncompressed.length - 1) / 2;
+  const odd = uncompressed[uncompressed.length - 1] & 1;
+  if (format === 'compressed') return Buffer.concat([Buffer.from([odd ? 3 : 2]), Buffer.from(uncompressed.subarray(1, 1 + size))]);
+  if (format === 'hybrid') return Buffer.concat([Buffer.from([odd ? 7 : 6]), Buffer.from(uncompressed.subarray(1))]);
+  throw Object.assign(new TypeError('Invalid ECDH format: ' + format), { code: 'ERR_CRYPTO_ECDH_INVALID_FORMAT' });
+}
+
+const asBytes = (value, encoding) => (typeof value === 'string' ? Buffer.from(value, encoding ?? 'utf8') : bytesOf(value));
+const asOutput = (buffer, encoding) => (encoding === undefined || encoding === null || encoding === 'buffer' ? buffer : buffer.toString(encoding));
+
+export class ECDH {
+  #curve;
+  #private;
+  #public;
+
+  constructor(curve) {
+    this.#curve = String(curve);
+    if (!['prime256v1', 'secp256r1', 'P-256', 'secp384r1', 'P-384', 'secp521r1', 'P-521'].includes(this.#curve)) {
+      throw Object.assign(new TypeError('Invalid EC curve name'), { code: 'ERR_CRYPTO_INVALID_CURVE' });
+    }
+  }
+
+  #set(keys) {
+    this.#private = Buffer.from(keys.privateKey, 'base64');
+    this.#public = Buffer.from(keys.publicKey, 'base64');
+  }
+
+  generateKeys(encoding, format) {
+    this.#set(internals.ecdhKeys(this.#curve, null));
+    return this.getPublicKey(encoding, format);
+  }
+
+  setPrivateKey(key, encoding) {
+    this.#set(internals.ecdhKeys(this.#curve, asBytes(key, encoding)));
+  }
+
+  getPrivateKey(encoding) {
+    if (!this.#private) throw Object.assign(new Error('Failed to get ECDH private key'), { code: 'ERR_CRYPTO_ECDH_INVALID_PUBLIC_KEY' });
+    return asOutput(Buffer.from(this.#private), encoding);
+  }
+
+  getPublicKey(encoding, format) {
+    if (!this.#public) throw Object.assign(new Error('Failed to get ECDH public key'), { code: 'ERR_CRYPTO_ECDH_INVALID_PUBLIC_KEY' });
+    return asOutput(pointAs(this.#public, format), encoding);
+  }
+
+  computeSecret(otherPublicKey, inputEncoding, outputEncoding) {
+    if (!this.#private) throw Object.assign(new Error('Failed to compute ECDH key'), { code: 'ERR_CRYPTO_INVALID_STATE' });
+    return asOutput(toBuffer(internals.ecdhCompute(this.#curve, this.#private, asBytes(otherPublicKey, inputEncoding))), outputEncoding);
+  }
+
+  static convertKey(key, curve, inputEncoding, outputEncoding, format) {
+    return asOutput(pointAs(toBuffer(internals.ecdhPoint(String(curve), asBytes(key, inputEncoding))), format), outputEncoding);
+  }
+}
+
+export const createECDH = (curve) => new ECDH(curve);
 export const createDiffieHellman = notYet('createDiffieHellman');
-export const diffieHellman = notYet('diffieHellman');
+export const getDiffieHellman = notYet('getDiffieHellman');
 
 export const constants = Object.freeze({
   RSA_PKCS1_PADDING: 1, RSA_NO_PADDING: 3, RSA_PKCS1_OAEP_PADDING: 4, RSA_PKCS1_PSS_PADDING: 6,
@@ -650,6 +737,6 @@ export default {
   randomBytes, pseudoRandomBytes, randomFillSync, randomFill, randomInt, randomUUID, getRandomValues, createHash, createHmac, hash,
   getHashes, timingSafeEqual, KeyObject, createSecretKey, createPrivateKey, createPublicKey, sign, verify, createSign, createVerify,
   generateKeyPair, generateKeyPairSync, generateKey, generateKeySync, pbkdf2, pbkdf2Sync, hkdf, hkdfSync, scrypt, scryptSync,
-  createCipheriv, createDecipheriv, getCiphers, getCurves, publicEncrypt, privateDecrypt, privateEncrypt, publicDecrypt, createECDH,
-  createDiffieHellman, diffieHellman, constants, subtle, webcrypto,
+  createCipheriv, createDecipheriv, getCiphers, getCurves, publicEncrypt, privateDecrypt, privateEncrypt, publicDecrypt, createECDH, ECDH,
+  createDiffieHellman, getDiffieHellman, diffieHellman, constants, subtle, webcrypto,
 };
