@@ -1,6 +1,7 @@
 package automately.core.state;
 
 import io.vertx.core.Future;
+import automately.core.shared.SharedMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
@@ -18,10 +19,10 @@ public final class SharedDataJobStateStore implements JobStateStore {
 
     static final String MAP_NAME = "automately.job-state";
 
-    private final Future<AsyncMap<String, JsonObject>> map;
+    private final SharedMap<String, JsonObject> map;
 
     public SharedDataJobStateStore(Vertx vertx) {
-        this.map = vertx.sharedData().getAsyncMap(MAP_NAME);
+        this.map = new SharedMap<>(vertx, MAP_NAME);
     }
 
     static String key(String jobId, int attempt) {

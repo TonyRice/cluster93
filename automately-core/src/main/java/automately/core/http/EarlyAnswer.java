@@ -48,14 +48,21 @@ public final class EarlyAnswer {
             linger.start();
         }
         long[] drained = {0};
-        request.handler(chunk -> {
-            drained[0] += chunk.length();
-            if (drained[0] > MAX_DRAIN_BYTES) {
-                linger.start();
-            }
-        });
-        request.endHandler(v -> linger.bodyEnded());
-        request.exceptionHandler(err -> { });
+        try {
+            request.endHandler(v -> linger.bodyEnded());
+            request.handler(chunk -> {
+                drained[0] += chunk.length();
+                if (drained[0] > MAX_DRAIN_BYTES) {
+                    linger.start();
+                }
+            });
+            request.exceptionHandler(err -> { });
+        } catch (IllegalStateException alreadyRead) {
+            // The body ended since isEnded() was asked: nothing left to drain. Throwing here would leave the answer
+            // unsent and the client waiting (D-099).
+            linger.bodyEnded();
+            return tooBig;
+        }
         request.resume();
         return tooBig;
     }

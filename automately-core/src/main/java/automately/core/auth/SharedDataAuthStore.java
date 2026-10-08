@@ -1,6 +1,7 @@
 package automately.core.auth;
 
 import io.vertx.core.Future;
+import automately.core.shared.SharedMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.AsyncMap;
@@ -14,14 +15,14 @@ public final class SharedDataAuthStore implements AuthStore {
 
     private static final String ADMIN = "admin-token-hash";
 
-    private final Future<AsyncMap<String, JsonObject>> tenants;
-    private final Future<AsyncMap<String, JsonObject>> tokens;
-    private final Future<AsyncMap<String, String>> settings;
+    private final SharedMap<String, JsonObject> tenants;
+    private final SharedMap<String, JsonObject> tokens;
+    private final SharedMap<String, String> settings;
 
     public SharedDataAuthStore(Vertx vertx) {
-        this.tenants = vertx.sharedData().getAsyncMap("automately.tenants");
-        this.tokens = vertx.sharedData().getAsyncMap("automately.tokens");
-        this.settings = vertx.sharedData().getAsyncMap("automately.settings");
+        this.tenants = new SharedMap<>(vertx, "automately.tenants");
+        this.tokens = new SharedMap<>(vertx, "automately.tokens");
+        this.settings = new SharedMap<>(vertx, "automately.settings");
     }
 
     @Override

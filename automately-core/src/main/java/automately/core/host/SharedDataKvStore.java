@@ -1,6 +1,7 @@
 package automately.core.host;
 
 import io.vertx.core.Future;
+import automately.core.shared.SharedMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -21,10 +22,10 @@ public final class SharedDataKvStore implements KvStore {
     static final long CLEANUP_SLACK_MS = 5_000;
     static final int MAX_INCREMENT_ATTEMPTS = 20;
 
-    private final Future<AsyncMap<String, JsonObject>> map;
+    private final SharedMap<String, JsonObject> map;
 
     public SharedDataKvStore(Vertx vertx) {
-        this.map = vertx.sharedData().getAsyncMap(MAP_NAME);
+        this.map = new SharedMap<>(vertx, MAP_NAME);
     }
 
     static String mapKey(String tenant, String namespace, String key) {

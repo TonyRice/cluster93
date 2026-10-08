@@ -1,6 +1,7 @@
 package automately.core.node;
 
 import io.vertx.core.Future;
+import automately.core.shared.SharedMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.AsyncMap;
@@ -23,12 +24,12 @@ public final class SharedDataNodeRegistry implements NodeRegistry {
     static final int READ_ATTEMPTS = 5;
 
     private final Vertx vertx;
-    private final Future<AsyncMap<String, JsonObject>> map;
+    private final SharedMap<String, JsonObject> map;
     private final Duration livenessWindow;
 
     public SharedDataNodeRegistry(Vertx vertx, Duration livenessWindow) {
         this.vertx = vertx;
-        this.map = vertx.sharedData().getAsyncMap(MAP_NAME);
+        this.map = new SharedMap<>(vertx, MAP_NAME);
         this.livenessWindow = livenessWindow;
     }
 

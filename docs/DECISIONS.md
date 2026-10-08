@@ -1519,3 +1519,28 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - the bytes are copied once and every attempt sends a new Buffer of them;
   - every PUT carries `Content-MD5` of the intended bytes, so S3 refuses any body that differs, and this class of bug can't store wrong data silently again.
 - **Tests:** `ResumingRangeBodyTest` adds a download that drops after every byte (8 drops) and still completes, and checks that retries are marked as retries and back off. **The stress test** ran 40 times under CPU load from 8 busy processes and passed every time. Before, 1 in 20 failed; an intermediate version failed 3 in 40.
+
+### D-099 — In-memory stores answer on the caller's context
+**Date:** 2026-10-08 · **Status:** Accepted. Fixes a hang found by the CLI tests under load; hardens D-039
+
+**What happened:** a full test run sat for hours on one CLI command, `services get web` right after the service was removed. The server had read the request and never answered, and the CLI, with no request timeout, waited forever.
+
+**Why it happened:**
+- Every in-memory store (the `SharedData*` stores: services, jobs, kv, auth, files and the rest, 13 in all) kept the future of `vertx.sharedData().getAsyncMap(...)` from its constructor.
+- A Vert.x future completes on the context that made it. So everything composed on that map, and every API handler that continued from it, ran on the event loop that built the store, not on the request's own.
+- The 404 for the removed service was therefore written from the wrong thread. `EarlyAnswer.prepare` (D-039) asked `isEnded()`, then registered a drain handler. Meanwhile the request's own event loop delivered the end of the request, which had been queued while authentication paused it. Registering then threw "Request has already been read", before `end()` was called, so no answer ever went out.
+- **When it shows up:** only under load. The CLI test class failed once in five runs while 8 processes kept the CPU busy, and passed every time on an idle machine.
+
+**Decision:**
+- **The stores look the map up on every use,** through a small `SharedMap` wrapper with the same `compose` method, so none of the ~90 call sites changed. Local map operations and `getAsyncMap` bind to the caller's context, so answers now come back on the request's event loop. For a local map, the lookup is a map get.
+- **The Ignite stores were already right:** they call `executeBlocking` per request, which completes on the caller's context.
+- **`EarlyAnswer.prepare` no longer throws** when the body ended between the check and the registration. There's nothing left to drain, and an error answer must always be sent.
+
+**Tests:**
+- `SharedMapTest` builds the service, kv and job stores on one event loop, calls them from another, and checks the answers arrive on the caller's. It fails on the old stores and passes now.
+- `CliTest` ran 5 times under the same load and passed every time.
+- **Two tests had leaned on the old serialization,** and failed once calls stopped all running on one context:
+  - A service helper read a run's job as soon as the service named it. The supervisor names the run before submitting its job (by design: `reconcile` treats a missing job as not there yet). The helper now waits for the job.
+  - A queue test retried a dead letter while its consumer was still running, then expected the message to be waiting. The consumer could take it straight back. The test now stops the consumer first.
+
+**Not done:** the CLI still has no request timeout. A timeout until the response's headers would also count a large upload's sending time, so choosing one is parked in NOTES.md.

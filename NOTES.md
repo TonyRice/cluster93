@@ -71,3 +71,6 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
   - **What's ready:** the stand-ins (D-090) already implement most of them, so the open question is only whether every isolate should pay to load them, or whether a bundler-inserted import is better.
 - **A disk tier for the package cache:** design §5 says "then from the data directory". It's memory-only for now (`AUTOMATELY_PACKAGE_CACHE_MB`). Worth it once packages are big or nodes restart often.
 - **Backtracking version resolution:** D-089 picks the newest version that meets every range, re-picking until nothing changes. Revisit only if real conflicts show up.
+
+## Parked from the request-hang fix (D-099)
+- **A request timeout in the CLI:** a server that never answers leaves the CLI waiting forever. The JDK client's per-request timeout runs until the response's headers, so it would also count a large upload's sending time. Options: a timeout only for requests without a body, or one that starts once the body is sent. Worth doing before the CLI ships widely.

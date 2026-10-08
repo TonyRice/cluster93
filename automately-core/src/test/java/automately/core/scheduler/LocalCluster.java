@@ -110,12 +110,14 @@ final class LocalCluster implements AutoCloseable {
         Job job = job(id);
         while (System.currentTimeMillis() < deadline) {
             job = job(id);
-            if (condition.test(job)) {
+            // A service names its run's job before submitting it, so the job may not exist yet.
+            if (job != null && condition.test(job)) {
                 return job;
             }
             Thread.sleep(20);
         }
-        throw new AssertionError("Job " + id + " never became " + description + "; last seen " + job.toSummaryJson().encodePrettily());
+        throw new AssertionError("Job " + id + " never became " + description + "; last seen "
+                + (job == null ? "nothing (no such job)" : job.toSummaryJson().encodePrettily()));
     }
 
     Job awaitStatus(String id, JobStatus status) throws Exception {

@@ -1,6 +1,7 @@
 package automately.core.identity;
 
 import io.vertx.core.Future;
+import automately.core.shared.SharedMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.AsyncMap;
@@ -14,12 +15,12 @@ public final class SharedDataRecords implements Records {
 
     private static final int MAX_UPDATE_ATTEMPTS = 50;
 
-    private final Future<AsyncMap<String, JsonObject>> map;
+    private final SharedMap<String, JsonObject> map;
     private final Kind kind;
 
     public SharedDataRecords(Vertx vertx, Kind kind) {
         this.kind = kind;
-        this.map = vertx.sharedData().getAsyncMap("automately.records." + kind.name());
+        this.map = new SharedMap<>(vertx, "automately.records." + kind.name());
     }
 
     public static Factory factory(Vertx vertx) {

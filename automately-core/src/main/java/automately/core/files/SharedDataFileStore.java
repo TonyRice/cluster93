@@ -1,6 +1,7 @@
 package automately.core.files;
 
 import io.vertx.core.Future;
+import automately.core.shared.SharedMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.AsyncMap;
@@ -13,10 +14,10 @@ public final class SharedDataFileStore extends ClusterFileStore {
 
     private static final char SEPARATOR = '\u001f';
 
-    private final Future<AsyncMap<String, JsonObject>> meta;
-    private final Future<AsyncMap<String, JsonObject>> garbage;
-    private final Future<AsyncMap<String, JsonObject>> dirs;
-    private final Future<AsyncMap<String, Long>> refs;
+    private final SharedMap<String, JsonObject> meta;
+    private final SharedMap<String, JsonObject> garbage;
+    private final SharedMap<String, JsonObject> dirs;
+    private final SharedMap<String, Long> refs;
 
     /** Bytes in the same shared maps, with the heap as the capacity that's watched (D-038). */
     public SharedDataFileStore(Vertx vertx) {
@@ -33,10 +34,10 @@ public final class SharedDataFileStore extends ClusterFileStore {
 
     public SharedDataFileStore(Vertx vertx, BlobStores stores) {
         super(vertx, stores);
-        this.meta = vertx.sharedData().getAsyncMap("automately.files");
-        this.garbage = vertx.sharedData().getAsyncMap("automately.file-garbage");
-        this.dirs = vertx.sharedData().getAsyncMap("automately.dirs");
-        this.refs = vertx.sharedData().getAsyncMap("automately.blob-refs");
+        this.meta = new SharedMap<>(vertx, "automately.files");
+        this.garbage = new SharedMap<>(vertx, "automately.file-garbage");
+        this.dirs = new SharedMap<>(vertx, "automately.dirs");
+        this.refs = new SharedMap<>(vertx, "automately.blob-refs");
     }
 
     private static String key(String tenant, String path) {
@@ -143,7 +144,7 @@ public final class SharedDataFileStore extends ClusterFileStore {
         return children(meta, tenant, parent, after, limit);
     }
 
-    private static Future<List<JsonObject>> children(Future<AsyncMap<String, JsonObject>> map, String tenant, String parent, String after, int limit) {
+    private static Future<List<JsonObject>> children(SharedMap<String, JsonObject> map, String tenant, String parent, String after, int limit) {
         return map.compose(AsyncMap::values).map(values -> values.stream()
                 .filter(v -> v.getString("tenant").equals(tenant) && Paths.parent(v.getString("path")).equals(parent)
                         && (after == null || Paths.name(v.getString("path")).compareTo(after) > 0))

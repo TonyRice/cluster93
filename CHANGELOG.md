@@ -26,6 +26,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Fixed: a request that could hang forever under load (2026-10-08)
+
+### Fixed
+- **On a single node, an API request could go unanswered under load (D-099),** and the CLI waited forever. The in-memory stores kept a future from their constructor, so handlers continued on the event loop that built the store, not the request's own. An error answer written from there could race the request's thread and throw before it was sent. **Now:** the stores look their map up per use, so answers come back on the request's event loop. `EarlyAnswer.prepare` also no longer throws when the request's body ends mid-check. Clusters on Ignite weren't affected.
+
 ## Fixed: S3 downloads under heavy load (2026-10-08)
 
 ### Fixed

@@ -1,6 +1,7 @@
 package automately.core.storage;
 
 import io.vertx.core.Future;
+import automately.core.shared.SharedMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.AsyncMap;
@@ -13,14 +14,14 @@ public final class SharedDataStorageConfigStore implements StorageConfigStore {
 
     private static final char SEPARATOR = '\u001f';
 
-    private final Future<AsyncMap<String, JsonObject>> policies;
-    private final Future<AsyncMap<String, JsonObject>> providers;
-    private final Future<AsyncMap<String, JsonObject>> routes;
+    private final SharedMap<String, JsonObject> policies;
+    private final SharedMap<String, JsonObject> providers;
+    private final SharedMap<String, JsonObject> routes;
 
     public SharedDataStorageConfigStore(Vertx vertx) {
-        this.policies = vertx.sharedData().getAsyncMap("automately.storage-policies");
-        this.providers = vertx.sharedData().getAsyncMap("automately.storage-providers");
-        this.routes = vertx.sharedData().getAsyncMap("automately.storage-routes");
+        this.policies = new SharedMap<>(vertx, "automately.storage-policies");
+        this.providers = new SharedMap<>(vertx, "automately.storage-providers");
+        this.routes = new SharedMap<>(vertx, "automately.storage-routes");
     }
 
     private static String key(String tenant, String name) {

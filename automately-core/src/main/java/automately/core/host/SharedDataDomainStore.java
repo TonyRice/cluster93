@@ -1,6 +1,7 @@
 package automately.core.host;
 
 import io.vertx.core.Future;
+import automately.core.shared.SharedMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.AsyncMap;
@@ -14,10 +15,10 @@ public final class SharedDataDomainStore implements DomainStore {
 
     static final String MAP_NAME = "automately.domains";
 
-    private final Future<AsyncMap<String, JsonObject>> map;
+    private final SharedMap<String, JsonObject> map;
 
     public SharedDataDomainStore(Vertx vertx) {
-        this.map = vertx.sharedData().getAsyncMap(MAP_NAME);
+        this.map = new SharedMap<>(vertx, MAP_NAME);
     }
 
     @Override

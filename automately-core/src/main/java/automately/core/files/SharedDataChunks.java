@@ -1,6 +1,7 @@
 package automately.core.files;
 
 import io.vertx.core.Future;
+import automately.core.shared.SharedMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.shareddata.AsyncMap;
@@ -8,11 +9,11 @@ import io.vertx.core.shareddata.AsyncMap;
 /** The {@code cluster} backend's chunks in a Vert.x {@link AsyncMap}, for a single in-memory node. */
 public final class SharedDataChunks extends ChunkedBlobStore {
 
-    private final Future<AsyncMap<String, Buffer>> chunks;
+    private final SharedMap<String, Buffer> chunks;
 
     public SharedDataChunks(Vertx vertx, StorageCapacity capacity) {
         super(vertx, capacity);
-        this.chunks = vertx.sharedData().getAsyncMap("automately.file-chunks");
+        this.chunks = new SharedMap<>(vertx, "automately.file-chunks");
     }
 
     @Override
