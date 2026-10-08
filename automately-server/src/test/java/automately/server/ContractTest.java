@@ -80,7 +80,7 @@ class ContractTest {
     @Test
     void everyRouteIsInTheContractAndEveryOperationHasARoute() {
         Set<String> routes = node.apiRoutes().stream()
-                .map(route -> route.replaceAll(":([a-z]+)", "{$1}").replace("/v1/files/.+", "/v1/files/{path}").replace("/v1/dirs/.+", "/v1/dirs/{path}"))
+                .map(route -> route.replaceAll(":([a-z]+)", "{$1}").replace("/v1/files/.+", "/v1/files/{path}").replace("/v1/dirs/.+", "/v1/dirs/{path}").replace("/v1/mounts/.+", "/v1/mounts/{path}"))
                 .collect(Collectors.toCollection(TreeSet::new));
         Set<String> operations = contract.operations().stream()
                 .map(operation -> operation.getHttpMethod().name() + " " + operation.getOpenAPIPath())
@@ -182,6 +182,9 @@ class ContractTest {
                 new JsonObject().put("allow", new JsonArray().add("disk")).put("diskAllotmentMb", 10));
         calls.check("getStoragePolicy", "GET", "/v1/tenants/contract/storage-policy", admin, null);
         calls.check("putStorageProvider", "PUT", "/v1/storage/providers/local", tenant, new JsonObject().put("type", "disk"));
+        calls.check("putMount", "PUT", "/v1/mounts/mnt/local", tenant, new JsonObject().put("provider", "local").put("readOnly", true));
+        calls.check("listMounts", "GET", "/v1/mounts", tenant, null);
+        calls.check("deleteMount", "DELETE", "/v1/mounts/mnt/local", tenant, null);
         calls.check("getStorageProvider", "GET", "/v1/storage/providers/local", tenant, null);
         calls.check("listStorageProviders", "GET", "/v1/storage/providers", tenant, null);
         calls.check("checkStorageProvider", "POST", "/v1/storage/providers/local/check", tenant, null);

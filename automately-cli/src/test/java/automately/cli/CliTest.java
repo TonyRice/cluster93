@@ -369,6 +369,16 @@ class CliTest {
         assertThat(cli("files", "put", file.toString(), "backups/db.gz").code()).isZero();
         assertThat(cli("storage").out()).contains("disk 0.0 MB of 5.0 MB").contains("Allowed providers");
 
+        // A mount: a folder on the provider, shown as such, and read-only when asked.
+        assertThat(cli("storage", "mount", "mnt/vault", "--provider", "local", "--read-only").out()).contains("Mounted local at mnt/vault/ (read-only)");
+        assertThat(cli("storage", "mounts").out()).contains("mnt/vault/").contains("read-only");
+        assertThat(cli("files", "ls", "mnt").out()).contains("vault/").contains("mount: local (read-only)");
+        assertThat(cli("files", "ls", "backups").out()).contains("db.gz").contains("local");
+        Result readOnly = cli("files", "put", file.toString(), "mnt/vault/db.gz");
+        assertThat(readOnly.code()).isEqualTo(1);
+        assertThat(readOnly.err()).contains("read-only mount");
+        assertThat(cli("storage", "unmount", "mnt/vault").code()).isZero();
+
         Result inUse = cli("storage", "providers", "rm", "local");
         assertThat(inUse.code()).isEqualTo(1);
         assertThat(inUse.err()).contains("delete them first");

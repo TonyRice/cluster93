@@ -1016,3 +1016,33 @@ Also the CLI flow.
   - another node finishing a move whose node died midway
 - `FilesTest`, across two nodes: a folder copied counts once against the quota, and moved without moving bytes.
 - `ContractTest`, CLI and MCP.
+
+
+### D-078 — Mounts: folders bound to providers, optionally read-only
+**Date:** 2026-10-07 · **Status:** Accepted. Part 3 of D-075
+
+**Decision:**
+- **What a mount is:** a storage route (D-057) whose prefix is a folder (`photos/`). The routes record stays the one source, and gains a set of read-only mounts.
+  - **The mount API is a view of it:**
+    - `GET /v1/mounts`
+    - `PUT /v1/mounts/{path}` `{provider, readOnly}`, which makes the folder; 201 new, 200 changed
+    - `DELETE /v1/mounts/{path}` (`storage:read` and `storage:write`)
+  - **The routes API works as before,** and keeps read-only flags on mounts it leaves in place.
+- **Unmounting moves nothing.** Files stay readable where their recorded backend is, as when routes change today.
+- **One check for every write.**
+  - **Making something** (uploads, scripts' writes, copy and move targets, `mkdir`) is refused under a reserved name: `tmp`, `packages`, `.packages` (`reserved`). The same goes for anything under `mnt/` that isn't a mount, and anything beneath a read-only mount (`read_only`). Both are 403.
+  - **Removing something** (deletes, move sources, `rmdir`) is refused only beneath a read-only mount. A tenant's existing files under a now-reserved name stay readable and deletable.
+- **Visible:**
+  - folder entries that are mounts carry `mount: {provider, readOnly}`
+  - file entries carry `storage`: `default`, or the provider's name
+  - the CLI's `files ls` shows a STORAGE column
+- **CLI:** `storage mounts`, `storage mount FOLDER --provider NAME [--read-only]`, `storage unmount FOLDER`.
+
+**Tests:**
+- `StorageProvidersTest`:
+  - mount a disk provider; files go there and show it
+  - reserved names
+  - read-only refuses writes, deletes and moves, but allows copying out
+  - after unmounting, the file is still readable
+- `FileStoreContract` checks reserved names on all four stores.
+- `ContractTest` (three operations), and the CLI.

@@ -66,7 +66,7 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
 
 ## Known intermittent: a tenant-S3 download closed mid-stream once
 
-*Seen 2026-10-07, in 1 of 2 full runs; passed 3 of 3 on its own and in the next full run.* `StorageProvidersTest.aTenantStoresFilesInItsOwnBucketAndFolderUnderTheAdminsPolicy` failed at the 6 MB download from the tenant's S3 bucket: `HttpClosedException: Connection was closed`.
+*Seen 2026-10-07, in 1 of 2 full runs; passed 3 of 3 on its own and in the next full run. Seen again the same night in a module run (the file-system part 3 push), at the same 6 MB download; passed 2 of 2 on its own right after. Twice now: worth confirming the hypothesis below before it bites a user.* `StorageProvidersTest.aTenantStoresFilesInItsOwnBucketAndFolderUnderTheAdminsPolicy` failed at the 6 MB download from the tenant's S3 bucket: `HttpClosedException: Connection was closed`.
 
 **Why the test saw a closed connection:** the node closes the response when a body stream fails after the headers have gone out.
 

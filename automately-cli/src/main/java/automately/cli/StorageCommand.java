@@ -15,7 +15,8 @@ import java.util.Map;
 
 /** Your own storage (D-057): providers (an S3 bucket with your keys, or a disk folder) and which paths go where. */
 @Command(name = "storage", description = "Your storage: providers, routes, quota and disk use.",
-        subcommands = {StorageCommand.Providers.class, StorageCommand.Routes.class})
+        subcommands = {StorageCommand.Providers.class, StorageCommand.Routes.class, StorageCommand.Mounts.class, StorageCommand.Mount.class,
+                StorageCommand.Unmount.class})
 final class StorageCommand extends Base {
 
     @Override
@@ -169,6 +170,58 @@ final class StorageCommand extends Base {
         int execute() {
             api().delete("/v1/storage/providers/" + Api.segment(name));
             out().println("Deleted provider " + name + ".");
+            return 0;
+        }
+    }
+
+    @Command(name = "mounts", description = "Your mounts: folders bound to one of your providers (D-078).")
+    static final class Mounts extends Base {
+        @Override
+        int execute() {
+            JsonNode all = api().get("/v1/mounts");
+            if (printedJson(all)) {
+                return 0;
+            }
+            out().println("Everything else: " + Json.text(all, "default"));
+            List<List<String>> rows = new ArrayList<>();
+            all.path("mounts").forEach(m -> rows.add(List.of(Json.text(m, "path") + "/", Json.text(m, "provider"),
+                    m.path("readOnly").asBoolean() ? "read-only" : "")));
+            Output.table(out(), List.of("FOLDER", "PROVIDER", ""), rows);
+            return 0;
+        }
+    }
+
+    @Command(name = "mount", description = "Bind a folder to one of your providers (e.g. mnt/photos), so new files beneath it go there.")
+    static final class Mount extends Base {
+        @Parameters(paramLabel = "FOLDER")
+        String folder;
+
+        @Option(names = "--provider", required = true, paramLabel = "NAME")
+        String provider;
+
+        @Option(names = "--read-only", description = "Refuse new files, deletes and moves beneath it.")
+        boolean readOnly;
+
+        @Override
+        int execute() {
+            JsonNode mount = api().put("/v1/mounts/" + Api.filePath(folder.replaceAll("^/+|/+$", "")),
+                    Json.object().put("provider", provider).put("readOnly", readOnly));
+            if (!printedJson(mount)) {
+                out().println("Mounted " + provider + " at " + Json.text(mount, "path") + "/" + (readOnly ? " (read-only)" : ""));
+            }
+            return 0;
+        }
+    }
+
+    @Command(name = "unmount", description = "Unbind a folder. Its files stay readable; new ones go by your other mounts and routes.")
+    static final class Unmount extends Base {
+        @Parameters(paramLabel = "FOLDER")
+        String folder;
+
+        @Override
+        int execute() {
+            api().delete("/v1/mounts/" + Api.filePath(folder.replaceAll("^/+|/+$", "")));
+            out().println("Unmounted " + folder);
             return 0;
         }
     }

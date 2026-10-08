@@ -138,7 +138,7 @@ public abstract class ClusterFileStore implements FileStore {
         String fileId = UUID.randomUUID().toString();
         String type = contentType == null ? "application/octet-stream" : contentType;
         // A file can't take a directory's place, and its folders are made if they're missing (D-076).
-        Future<Void> place = getDir(tenant, path).compose(dir -> dir != null
+        Future<Void> place = stores.checkWritable(tenant, path).compose(ok -> getDir(tenant, path)).compose(dir -> dir != null
                 ? Future.failedFuture(conflict("is_a_directory", path + " is a directory"))
                 : ensureDirs(tenant, Paths.parent(path)));
         return place.compose(placed -> stores.forWrite(tenant, path)).compose(target -> room.bytes(tenant, target).compose(maxBytes -> {
@@ -167,7 +167,7 @@ public abstract class ClusterFileStore implements FileStore {
 
     @Override
     public Future<Boolean> delete(String tenant, String path) {
-        return removeMeta(tenant, path).compose(previous -> previous == null
+        return stores.checkRemovable(tenant, path).compose(ok -> removeMeta(tenant, path)).compose(previous -> previous == null
                 ? Future.succeededFuture(false)
                 : release(FileInfo.fromJson(previous)).map(true));
     }
@@ -189,7 +189,7 @@ public abstract class ClusterFileStore implements FileStore {
 
     @Override
     public Future<FileInfo> move(String tenant, String from, String to, boolean overwrite) {
-        return place(tenant, from, to, overwrite).compose(source -> publish(tenant, to, source)
+        return stores.checkRemovable(tenant, from).compose(ok -> place(tenant, from, to, overwrite)).compose(source -> publish(tenant, to, source)
                 // Only the version that was moved leaves its old path: if it was replaced meanwhile, the new one stays,
                 // and the moved version is now a copy, so it gains a reference.
                 .compose(moved -> removeMetaIfUnchanged(tenant, from, source.toJson()).compose(removed -> removed
@@ -202,7 +202,7 @@ public abstract class ClusterFileStore implements FileStore {
         if (from.equals(to)) {
             return Future.failedFuture(HostException.invalid("The source and the target are the same: " + from));
         }
-        return getMeta(tenant, from).compose(sourceRow -> {
+        return stores.checkWritable(tenant, to).compose(ok -> getMeta(tenant, from)).compose(sourceRow -> {
             if (sourceRow == null) {
                 return getDir(tenant, from).compose(dir -> Future.failedFuture(dir != null
                         ? conflict("is_a_directory", from + " is a folder; move or copy folders as a tree")
@@ -269,14 +269,26 @@ public abstract class ClusterFileStore implements FileStore {
         if (path.isEmpty()) {
             return Future.succeededFuture(dirView(new JsonObject().put("path", "").put("createdAt", 0L)));
         }
-        return getMeta(tenant, path).compose(file -> file != null
-                ? Future.succeededFuture(fileView(FileInfo.fromJson(file)))
-                : getDir(tenant, path).map(dir -> dir == null ? null : dirView(dir)));
+        return stores.describe(tenant).compose(storage -> getMeta(tenant, path).compose(file -> file != null
+                ? Future.succeededFuture(annotate(fileView(FileInfo.fromJson(file)), FileInfo.fromJson(file).backend(), storage))
+                : getDir(tenant, path).map(dir -> dir == null ? null : annotate(dirView(dir), null, storage))));
+    }
+
+    /** Where an entry's bytes are (files), or which provider a folder is a mount of (D-078). */
+    static JsonObject annotate(JsonObject entry, String backend, JsonObject storage) {
+        if (backend != null) {
+            entry.put("storage", storage.getJsonObject("names").getString(backend, backend.startsWith("provider:") ? "a removed provider" : backend));
+        }
+        JsonObject mount = storage.getJsonObject("mounts").getJsonObject(entry.getString("path"));
+        if (mount != null) {
+            entry.put("mount", mount);
+        }
+        return entry;
     }
 
     @Override
     public Future<Boolean> mkdir(String tenant, String path, boolean parents) {
-        return getMeta(tenant, path).compose(file -> {
+        return stores.checkWritable(tenant, path).compose(ok -> getMeta(tenant, path)).compose(file -> {
             if (file != null) {
                 return Future.failedFuture(conflict("already_exists", "A file already exists at " + path));
             }
@@ -290,7 +302,7 @@ public abstract class ClusterFileStore implements FileStore {
 
     @Override
     public Future<Boolean> rmdir(String tenant, String path) {
-        return getDir(tenant, path).compose(dir -> {
+        return stores.checkRemovable(tenant, path).compose(ok -> getDir(tenant, path)).compose(dir -> {
             if (dir == null) {
                 return getMeta(tenant, path).compose(file -> file != null
                         ? Future.failedFuture(conflict("not_a_directory", path + " is a file"))
@@ -309,17 +321,17 @@ public abstract class ClusterFileStore implements FileStore {
                 : getMeta(tenant, dir).compose(file -> Future.failedFuture(file != null
                         ? conflict("not_a_directory", dir + " is a file")
                         : new HostException("Error", "not_found", "No such directory: " + dir))));
-        return exists.compose(v -> childDirs(tenant, dir, cursor, limit + 1)).compose(dirs -> childFiles(tenant, dir, cursor, limit + 1).map(files -> {
+        return exists.compose(v -> stores.describe(tenant)).compose(storage -> childDirs(tenant, dir, cursor, limit + 1).compose(dirs -> childFiles(tenant, dir, cursor, limit + 1).map(files -> {
             // Directories and files share one set of names, so merging the two sorted pages gives the next page.
             List<JsonObject> entries = new java.util.ArrayList<>();
-            dirs.forEach(row -> entries.add(dirView(row)));
-            files.forEach(row -> entries.add(fileView(FileInfo.fromJson(row))));
+            dirs.forEach(row -> entries.add(annotate(dirView(row), null, storage)));
+            files.forEach(row -> entries.add(annotate(fileView(FileInfo.fromJson(row)), FileInfo.fromJson(row).backend(), storage)));
             entries.sort(java.util.Comparator.comparing(e -> e.getString("name")));
             boolean more = entries.size() > limit;
             List<JsonObject> page = more ? entries.subList(0, limit) : entries;
             return new JsonObject().put("path", dir).put("entries", new io.vertx.core.json.JsonArray(List.copyOf(page)))
                     .put("cursor", more ? page.getLast().getString("name") : null);
-        }));
+        })));
     }
 
     /** Makes {@code path} and any directories above it that are missing; refuses if a file is in the way. */

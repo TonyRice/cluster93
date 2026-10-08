@@ -63,6 +63,9 @@ public final class StorageApi {
         router.get("/v1/storage/routes").handler(ctx -> wiring.config().routes(ctx.get("tenant")).onFailure(ctx::fail)
                 .onSuccess(routes -> ctx.json(view(routes))));
         router.put("/v1/storage/routes").handler(this::putRoutes);
+        router.get("/v1/mounts").handler(this::listMounts);
+        router.putWithRegex("/v1/mounts/.+").handler(this::putMount);
+        router.deleteWithRegex("/v1/mounts/.+").handler(this::deleteMount);
     }
 
     // --- admin ---
@@ -264,7 +267,7 @@ public final class StorageApi {
             prefixes.put(prefix, String.valueOf(entry.getValue()));
         }
         String defaultProvider = body.getString("default", StorageRoutes.DEFAULT);
-        StorageRoutes routes = StorageRoutes.fromJson(new JsonObject().put("tenant", tenant).put("default", defaultProvider)
+        StorageRoutes requested = StorageRoutes.fromJson(new JsonObject().put("tenant", tenant).put("default", defaultProvider)
                 .put("prefixes", new JsonObject(new java.util.HashMap<>(prefixes))));
         Set<String> named = new LinkedHashSet<>(prefixes.values());
         named.add(defaultProvider);
@@ -277,7 +280,94 @@ public final class StorageApi {
                     return;
                 }
             }
-            wiring.config().putRoutes(routes).onFailure(ctx::fail).onSuccess(v -> ctx.json(view(routes)));
+            // Mounts that stay keep their read-only flag (D-078).
+            wiring.config().routes(tenant).map(current -> new StorageRoutes(tenant, requested.defaultProvider(), requested.prefixes(),
+                            current.readOnly().stream().filter(requested.prefixes()::containsKey).collect(java.util.stream.Collectors.toSet())))
+                    .compose(routes -> wiring.config().putRoutes(routes).map(routes))
+                    .onFailure(ctx::fail).onSuccess(routes -> ctx.json(view(routes)));
+        });
+    }
+
+    // --- mounts (D-078): a folder bound to a provider; the routes' prefixes ending in "/" ---
+
+    private void listMounts(RoutingContext ctx) {
+        wiring.config().routes(ctx.get("tenant")).onFailure(ctx::fail).onSuccess(routes -> {
+            io.vertx.core.json.JsonArray mounts = new io.vertx.core.json.JsonArray();
+            routes.mounts().forEach((folder, provider) -> mounts.add(new JsonObject().put("path", folder).put("provider", provider)
+                    .put("readOnly", routes.readOnly().contains(folder + "/"))));
+            ctx.json(new JsonObject().put("default", routes.defaultProvider() == null ? StorageRoutes.DEFAULT : routes.defaultProvider())
+                    .put("mounts", mounts));
+        });
+    }
+
+    /** A folder path from {@code /v1/mounts/…}, slashes around it trimmed; null (after answering 400) if it's not a valid path. */
+    private static String mountPath(RoutingContext ctx) {
+        String raw = ctx.request().path().substring("/v1/mounts/".length());
+        String folder = automately.core.files.Paths.directory(java.net.URLDecoder.decode(raw, java.nio.charset.StandardCharsets.UTF_8));
+        String invalid = folder.isEmpty() ? "The top level is the default storage; set it with PUT /v1/storage/routes" : FileStore.invalidPath(folder);
+        if (invalid != null) {
+            error(ctx, 400, "invalid_path", invalid);
+            return null;
+        }
+        if (automately.core.files.BlobStores.RESERVED.contains(folder.split("/")[0])) {
+            error(ctx, 400, "reserved", folder.split("/")[0] + "/ is reserved");
+            return null;
+        }
+        return folder;
+    }
+
+    /** {@code {provider, readOnly}}: binds the folder to the provider, making the folder if needed. */
+    private void putMount(RoutingContext ctx) {
+        String folder = mountPath(ctx);
+        if (folder == null) {
+            return;
+        }
+        JsonObject body = ctx.body().asJsonObject();
+        String provider = body == null ? null : body.getString("provider");
+        boolean readOnly = body != null && body.getBoolean("readOnly", false);
+        String tenant = ctx.get("tenant");
+        Future.all(wiring.config().provider(tenant, provider == null ? "" : provider), wiring.config().policy(tenant), wiring.config().routes(tenant),
+                files.statEntry(tenant, folder)).onFailure(ctx::fail).onSuccess(all -> {
+            StorageProvider found = all.resultAt(0);
+            StoragePolicy policy = all.resultAt(1);
+            StorageRoutes routes = all.resultAt(2);
+            JsonObject there = all.resultAt(3);
+            if (found == null) {
+                error(ctx, 400, "invalid_request", "No storage provider named \"" + provider + "\"");
+                return;
+            }
+            if (!policy.allows(found.type())) {
+                error(ctx, 403, "storage_disabled", "The admin hasn't enabled " + found.type() + " storage providers for this tenant");
+                return;
+            }
+            if (there != null && "file".equals(there.getString("kind"))) {
+                error(ctx, 409, "not_a_directory", folder + " is a file");
+                return;
+            }
+            boolean created = !routes.mounts().containsKey(folder);
+            wiring.config().putRoutes(routes.withMount(folder, provider, readOnly))
+                    .compose(v -> files.mkdir(tenant, folder, true))
+                    .onFailure(err -> FilesRoutes.fail(ctx, err))
+                    .onSuccess(v -> {
+                        ctx.response().setStatusCode(created ? 201 : 200);
+                        ctx.json(new JsonObject().put("path", folder).put("provider", provider).put("readOnly", readOnly));
+                    });
+        });
+    }
+
+    /** Unbinds the folder. Files written through the mount stay readable where they are; new ones go by the other routes. */
+    private void deleteMount(RoutingContext ctx) {
+        String folder = mountPath(ctx);
+        if (folder == null) {
+            return;
+        }
+        String tenant = ctx.get("tenant");
+        wiring.config().routes(tenant).onFailure(ctx::fail).onSuccess(routes -> {
+            if (!routes.mounts().containsKey(folder)) {
+                error(ctx, 404, "not_found", folder + " isn't a mount");
+                return;
+            }
+            wiring.config().putRoutes(routes.withoutMount(folder)).onFailure(ctx::fail).onSuccess(v -> ctx.response().setStatusCode(204).end());
         });
     }
 

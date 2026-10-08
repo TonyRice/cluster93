@@ -887,6 +887,60 @@ paths:
         '204': { description: 'Removed.' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/mounts:
+    get:
+      operationId: listMounts
+      tags: [storage]
+      summary: Your mounts, folders bound to one of your storage providers (D-078)
+      security:
+        - bearer: ['storage:read']
+      responses:
+        '200':
+          description: The default storage and the mounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [default, mounts]
+                properties:
+                  default: { type: string, description: 'The provider for everything outside a mount; "default" is the cluster.' }
+                  mounts: { type: array, items: { $ref: '#/components/schemas/Mount' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/mounts/{path}:
+    parameters:
+      - $ref: '#/components/parameters/filePath'
+    put:
+      operationId: putMount
+      tags: [storage]
+      summary: Bind a folder to a storage provider (made if needed); 201 if new, 200 if changed
+      description: New files beneath it go to the provider. A read-only mount refuses new files, deletes and moves beneath it.
+      security:
+        - bearer: ['storage:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider]
+              properties:
+                provider: { type: string }
+                readOnly: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/Mount' }
+        '201': { $ref: '#/components/responses/Mount' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteMount
+      tags: [storage]
+      summary: Unbind a folder; its files stay readable where they are
+      security:
+        - bearer: ['storage:write']
+      responses:
+        '204': { description: 'Unmounted.' }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/fs/move:
     post:
       operationId: moveFiles
@@ -1982,6 +2036,11 @@ components:
               expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
 
   responses:
+    Mount:
+      description: A mount.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Mount' }
     Transferred:
       description: Done.
       content:
@@ -2412,10 +2471,24 @@ components:
             type: { type: string, const: TXT }
             name: { type: string }
             value: { type: string }
+    Mount:
+      type: object
+      required: [path, provider, readOnly]
+      properties:
+        path: { type: string }
+        provider: { type: string }
+        readOnly: { type: boolean }
     DirEntry:
       type: object
       required: [name, path, kind]
       properties:
+        storage: { type: string, description: 'Files: where the bytes are; "default" for the cluster, or a provider name.' }
+        mount:
+          type: object
+          description: 'Folders that are mounts: the provider and whether it is read-only.'
+          properties:
+            provider: { type: string }
+            readOnly: { type: boolean }
         name: { type: string }
         path: { type: string }
         kind: { type: string, enum: [dir, file] }

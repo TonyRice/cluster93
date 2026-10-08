@@ -166,10 +166,14 @@ final class FilesCommand extends Base {
             List<List<String>> rows = new ArrayList<>();
             entries.forEach(e -> {
                 boolean folder = Json.text(e, "kind").equals("dir");
+                JsonNode mount = e.path("mount");
+                String storage = folder
+                        ? (mount.isObject() ? "mount: " + Json.text(mount, "provider") + (mount.path("readOnly").asBoolean() ? " (read-only)" : "") : "")
+                        : Json.text(e, "storage");
                 rows.add(List.of(Json.text(e, "name") + (folder ? "/" : ""), folder ? "" : Json.text(e, "size"), Json.text(e, "contentType"),
-                        Output.time(e, "createdAt")));
+                        storage, Output.time(e, "createdAt")));
             });
-            Output.table(out(), List.of("NAME", "SIZE", "TYPE", "UPDATED"), rows);
+            Output.table(out(), List.of("NAME", "SIZE", "TYPE", "STORAGE", "UPDATED"), rows);
             return 0;
         }
     }

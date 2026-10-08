@@ -26,6 +26,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## The file system, part 3 — Mounts (2026-10-07)
+
+### Added
+- **Mounts (D-078):** bind a folder to one of your storage providers, optionally read-only.
+  - **API:** `PUT /v1/mounts/{path}` with `{provider, readOnly}`, plus `GET /v1/mounts` and `DELETE`.
+  - **CLI:** `automately storage mount mnt/photos --provider media`.
+  - **Visible:** listings show which folders are mounts and where each file's bytes are.
+- **Read-only mounts** refuse new files, deletes and moves beneath them, for scripts, the API, the CLI and agents alike.
+- **Tests:** mounts and read-only in `StorageProvidersTest`; reserved names in `FileStoreContract` on all four stores; `ContractTest` and the CLI.
+
+### Changed
+- **Reserved top-level names:** `tmp/`, `packages/` and `.packages/` belong to the cluster, for jobs' scratch space and packages, and `mnt/` holds mounts only. New files there are refused (403); files already there stay readable and deletable.
+- **Storage routes keep a read-only flag** for prefixes that are mounts.
+
 ## The file system, part 2 — Move and copy (2026-10-07)
 
 ### Added

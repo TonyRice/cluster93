@@ -203,6 +203,6 @@ Yes; nothing depends on which node a request lands on.
 ## Build status
 1. **Folders and one-level listing:** done (D-076).
 2. **Move and copy, with shared blobs and journaled folder operations:** done (D-077). The REST calls are `POST /v1/fs/move` and `/v1/fs/copy`. The lease is per tenant rather than per folder, which is simpler and still safe.
-3. Mounts replacing prefix routes.
+3. **Mounts:** done (D-078). A mount is a route on a folder, plus a read-only flag; `/v1/mounts` is a view of the routes. Every write passes one check for reserved names and read-only mounts.
 4. `/tmp` (memory, spilling to disk), `FsApi` and `automately:fs` with sync calls.
 5. Edits in place, locks and public links.

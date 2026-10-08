@@ -83,6 +83,36 @@ public final class TenantBlobStores implements BlobStores {
     }
 
     @Override
+    public Future<Void> checkWritable(String tenant, String path) {
+        return config.routes(tenant).compose(routes -> BlobStores.reserved(path, routes.mounts()).compose(v -> routes.readOnlyAt(path)
+                ? Future.failedFuture(readOnly(path))
+                : Future.succeededFuture()));
+    }
+
+    @Override
+    public Future<Void> checkRemovable(String tenant, String path) {
+        return config.routes(tenant).compose(routes -> routes.readOnlyAt(path) ? Future.failedFuture(readOnly(path)) : Future.succeededFuture());
+    }
+
+    @Override
+    public Future<JsonObject> describe(String tenant) {
+        return Future.all(config.routes(tenant), config.providers(tenant)).map(both -> {
+            StorageRoutes routes = both.resultAt(0);
+            java.util.List<StorageProvider> providers = both.resultAt(1);
+            JsonObject mounts = new JsonObject();
+            routes.mounts().forEach((folder, provider) -> mounts.put(folder, new JsonObject().put("provider", provider)
+                    .put("readOnly", routes.readOnly().contains(folder + "/"))));
+            JsonObject names = new JsonObject().put(primary.name(), "default");
+            providers.forEach(provider -> names.put(provider.backend(), provider.name()));
+            return new JsonObject().put("mounts", mounts).put("names", names);
+        });
+    }
+
+    private static HostException readOnly(String path) {
+        return new HostException("Error", "read_only", path + " is in a read-only mount");
+    }
+
+    @Override
     public Future<BlobStore> forRead(String tenant, String backend) {
         if (backend.equals(primary.name())) {
             return Future.succeededFuture(primary);

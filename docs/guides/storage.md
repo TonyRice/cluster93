@@ -56,6 +56,25 @@ Uploads, scripts (`files.write`), services (`files.stream`) and the CLI all foll
 - **Deleting a provider:** it must hold no files and have no routes pointing at it.
 - **If the admin turns a type off:** new writes there are refused (`403 storage_disabled`), and existing files stay readable.
 
+### Mounts: a folder on a provider (D-078)
+
+A mount binds a folder to one of your providers, so everything written beneath it goes there. It's a route on a folder, shown in listings:
+
+```bash
+automately storage mount mnt/photos --provider media          # makes the folder if needed
+automately storage mount mnt/archive --provider backups --read-only
+automately storage mounts
+automately files ls mnt                                       # photos/  mount: media
+automately files ls mnt/photos                                # each file shows where its bytes are
+automately storage unmount mnt/photos                         # the files stay readable where they are
+```
+
+- **Where they go:** anywhere except the top level and the reserved names. `mnt/` is the conventional place, and holds mounts only.
+- **Read-only mounts** refuse new files, deletes and moves beneath them, for scripts, the API, the CLI and agents alike. Copying a file *out* still works, since that's reading.
+- **Moving a file into or out of a mount** doesn't move its bytes: they stay where they were written, and reads follow them there.
+- **Routes:** `storage routes` still works, and shows mounts as prefixes ending in `/`.
+- **Reserved names:** `tmp/` (jobs' scratch space), `packages/` and `.packages/` belong to the cluster. Files you already have there stay readable and can be deleted.
+
 ## Not exposed to AI agents
 
 The MCP tools don't manage storage providers, so credentials never pass through an agent. Agents' file tools follow your routes like everything else.

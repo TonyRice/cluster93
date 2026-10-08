@@ -102,6 +102,51 @@ class StorageProvidersTest {
     }
 
     @Test
+    void aMountIsAFolderOnAProviderAndCanBeReadOnly() throws Exception {
+        String mine = TestAuth.bearer("mounter");
+        assertThat(call("PUT", "/v1/tenants/mounter/storage-policy", TestAuth.ADMIN, policy(false, false)).statusCode()).isEqualTo(200);
+        assertThat(call("PUT", "/v1/storage/providers/archive", mine, new JsonObject().put("type", "disk")).statusCode()).isEqualTo(201);
+
+        HttpResponse<Buffer> mounted = call("PUT", "/v1/mounts/mnt/archive", mine, new JsonObject().put("provider", "archive"));
+        assertThat(mounted.statusCode()).as(mounted.bodyAsString()).isEqualTo(201);
+        assertThat(call("PUT", "/v1/mounts/mnt/archive", mine, new JsonObject().put("provider", "nope")).statusCode()).isEqualTo(400);
+        assertThat(put(mine, "mnt/archive/2025.csv", "a,b").statusCode()).isEqualTo(201);
+
+        JsonObject mnt = call("GET", "/v1/dirs/mnt", mine, null).bodyAsJsonObject().getJsonArray("entries").getJsonObject(0);
+        assertThat(mnt.getString("name")).isEqualTo("archive");
+        assertThat(mnt.getJsonObject("mount")).isEqualTo(new JsonObject().put("provider", "archive").put("readOnly", false));
+        JsonObject file = call("GET", "/v1/dirs/mnt/archive", mine, null).bodyAsJsonObject().getJsonArray("entries").getJsonObject(0);
+        assertThat(file.getString("storage")).as("where its bytes are").isEqualTo("archive");
+        assertThat(call("GET", "/v1/mounts", mine, null).bodyAsJsonObject().getJsonArray("mounts")).hasSize(1);
+
+        // Reserved names: only their owners write there, and mnt/ holds mounts only.
+        assertThat(put(mine, "tmp/scratch.txt", "x").statusCode()).isEqualTo(403);
+        assertThat(put(mine, "packages/x.js", "x").statusCode()).isEqualTo(403);
+        assertThat(put(mine, "mnt/elsewhere/x.txt", "x").statusCode()).isEqualTo(403);
+
+        // Read-only: nothing new beneath it, and nothing deleted or moved away.
+        assertThat(call("PUT", "/v1/mounts/mnt/archive", mine, new JsonObject().put("provider", "archive").put("readOnly", true)).statusCode())
+                .isEqualTo(200);
+        HttpResponse<Buffer> refused = put(mine, "mnt/archive/2026.csv", "c,d");
+        assertThat(refused.statusCode()).isEqualTo(403);
+        assertThat(refused.bodyAsJsonObject().getJsonObject("error").getString("code")).isEqualTo("read_only");
+        assertThat(call("DELETE", "/v1/files/mnt/archive/2025.csv", mine, null).statusCode()).isEqualTo(403);
+        assertThat(call("POST", "/v1/fs/move", mine, new JsonObject().put("from", "mnt/archive/2025.csv").put("to", "out.csv")).statusCode())
+                .isEqualTo(403);
+        assertThat(call("POST", "/v1/fs/copy", mine, new JsonObject().put("from", "mnt/archive/2025.csv").put("to", "out.csv")).statusCode())
+                .as("copying out is reading").isEqualTo(200);
+
+        // Unmounted: the file stays readable where it is.
+        assertThat(call("DELETE", "/v1/mounts/mnt/archive", mine, null).statusCode()).isEqualTo(204);
+        assertThat(call("GET", "/v1/files/mnt/archive/2025.csv", mine, null).bodyAsString()).isEqualTo("a,b");
+        assertThat(put(mine, "mnt/archive/2026.csv", "c,d").statusCode()).as("no longer a mount").isEqualTo(403);
+    }
+
+    private static HttpResponse<Buffer> put(String auth, String path, String content) throws Exception {
+        return await(client.put(node.httpPort(), "localhost", "/v1/files/" + path).putHeader("Authorization", auth).sendBuffer(Buffer.buffer(content)));
+    }
+
+    @Test
     void aTenantStoresFilesInItsOwnBucketAndFolderUnderTheAdminsPolicy() throws Exception {
         // Nothing until the admin allows it.
         HttpResponse<Buffer> refused = call("PUT", "/v1/storage/providers/bucket", bearer, s3Provider(bucket.secretAccessKey()));

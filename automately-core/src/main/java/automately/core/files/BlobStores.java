@@ -18,6 +18,47 @@ public interface BlobStores {
     /** The store named by a file's recorded backend. */
     Future<BlobStore> forRead(String tenant, String backend);
 
+    /** Top-level names a tenant can't write under: their owners (jobs' scratch space, packages) write there (D-078). */
+    java.util.Set<String> RESERVED = java.util.Set.of("tmp", "packages", ".packages");
+    /** Where mounts go by default; anything else under it must be a mount. */
+    String MOUNTS = "mnt";
+
+    /**
+     * Whether a new file or folder may appear at {@code path} (D-078): not under a reserved name, not under {@code mnt}
+     * unless that's a mount, and not beneath a read-only mount. Files already there stay readable and removable.
+     */
+    default Future<Void> checkWritable(String tenant, String path) {
+        return reserved(path, java.util.Map.of());
+    }
+
+    /** Whether a file or folder may be deleted or moved away from {@code path}: not beneath a read-only mount. */
+    default Future<Void> checkRemovable(String tenant, String path) {
+        return Future.succeededFuture();
+    }
+
+    /**
+     * What a listing shows about storage (D-078): {@code {mounts: {folder: {provider, readOnly}}, names: {backend: name}}},
+     * where a backend's name is "default" for the cluster's own, or the provider's name.
+     */
+    default Future<io.vertx.core.json.JsonObject> describe(String tenant) {
+        return Future.succeededFuture(new io.vertx.core.json.JsonObject().put("mounts", new io.vertx.core.json.JsonObject())
+                .put("names", new io.vertx.core.json.JsonObject().put(primary().name(), "default")));
+    }
+
+    /** The reserved-name rules, given the tenant's mounts (folder → provider). */
+    static Future<Void> reserved(String path, java.util.Map<String, String> mounts) {
+        String[] segments = path.split("/");
+        if (RESERVED.contains(segments[0])) {
+            return Future.failedFuture(new HostException("Error", "reserved", segments[0] + "/ is reserved"
+                    + (segments[0].equals("tmp") ? " for jobs' scratch space" : " for packages")));
+        }
+        if (segments[0].equals(MOUNTS) && segments.length > 1 && !mounts.containsKey(MOUNTS + "/" + segments[1])) {
+            return Future.failedFuture(new HostException("Error", "reserved", MOUNTS + "/" + segments[1]
+                    + " isn't a mount; mnt/ holds mounts only (PUT /v1/mounts/" + MOUNTS + "/" + segments[1] + " makes one)"));
+        }
+        return Future.succeededFuture();
+    }
+
     /** Every file in one store. */
     static BlobStores single(BlobStore store) {
         return new BlobStores() {

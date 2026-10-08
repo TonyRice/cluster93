@@ -93,6 +93,10 @@ final class RouteScopes {
             rule("GET", "/v1/storage/routes", "getStorageRoutes", Who.TENANT, Scopes.STORAGE_READ),
             json("PUT", "/v1/storage/routes", "putStorageRoutes", Who.TENANT, Scopes.STORAGE_WRITE, SMALL),
 
+            rule("GET", "/v1/mounts", "listMounts", Who.TENANT, Scopes.STORAGE_READ),
+            json("PUT", "/v1/mounts/.+", "putMount", Who.TENANT, Scopes.STORAGE_WRITE, SMALL),
+            rule("DELETE", "/v1/mounts/.+", "deleteMount", Who.TENANT, Scopes.STORAGE_WRITE),
+
             rule("GET", "/v1/nodes", "listNodes", Who.ADMIN_OR_TENANT, Scopes.NODES_READ),
 
             rule("GET", "/v1/tokens", "listTokens", Who.TENANT, Scopes.TOKENS_WRITE),

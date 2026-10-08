@@ -122,6 +122,16 @@ public abstract class FileStoreContract {
     }
 
     @Test
+    public void reservedNamesAreForTheirOwners() throws Exception {
+        assertThatThrownBy(() -> write(store, "acme", "tmp/scratch", "x".getBytes(), 4)).satisfies(e -> assertThat(code(e)).isEqualTo("reserved"));
+        assertThatThrownBy(() -> write(store, "acme", "packages/a.js", "x".getBytes(), 4)).satisfies(e -> assertThat(code(e)).isEqualTo("reserved"));
+        assertThatThrownBy(() -> write(store, "acme", "mnt/nothing/x", "x".getBytes(), 4)).satisfies(e -> assertThat(code(e)).isEqualTo("reserved"));
+        assertThatThrownBy(() -> await(store.mkdir("acme", "tmp", true))).satisfies(e -> assertThat(code(e)).isEqualTo("reserved"));
+        write(store, "acme", "templates/a.txt", "x".getBytes(), 4);
+        assertThat(await(store.statEntry("acme", "templates/a.txt")).getString("storage")).as("not reserved, just similar").isEqualTo("default");
+    }
+
+    @Test
     public void bigFoldersListInPages() throws Exception {
         for (int i = 0; i < 7; i++) {
             write(store, "acme", "many/f" + i, "x".getBytes(), 4);

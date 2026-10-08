@@ -244,6 +244,7 @@ final class FilesRoutes {
             }
             switch (host.code()) {
                 case "not_found" -> error(ctx, 404, host.code(), host.getMessage());
+                case "read_only", "reserved" -> error(ctx, 403, host.code(), host.getMessage());
                 case "already_exists", "not_empty", "is_a_directory", "not_a_directory", "busy" -> error(ctx, 409, host.code(), host.getMessage());
                 case "insufficient_storage" -> error(ctx, 507, host.code(), host.getMessage());
                 case "storage_unavailable" -> error(ctx, 503, host.code(), host.getMessage());
