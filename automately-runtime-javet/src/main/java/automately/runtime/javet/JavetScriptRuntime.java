@@ -81,6 +81,9 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("util", "node:util"), java.util.Map.entry("node:util", "node:util"),
             java.util.Map.entry("process", "node:process"), java.util.Map.entry("node:process", "node:process"),
             java.util.Map.entry("crypto", "node:crypto"), java.util.Map.entry("node:crypto", "node:crypto"),
+            java.util.Map.entry("stream", "node:stream"), java.util.Map.entry("node:stream", "node:stream"),
+            java.util.Map.entry("stream/promises", "node:stream/promises"), java.util.Map.entry("node:stream/promises", "node:stream/promises"),
+            java.util.Map.entry("string_decoder", "node:string_decoder"), java.util.Map.entry("node:string_decoder", "node:string_decoder"),
             // The host APIs as modules (D-091), so packages can import them rather than rely on globals.
             java.util.Map.entry("automately:kv", "automately:kv"), java.util.Map.entry("automately:bus", "automately:bus"),
             java.util.Map.entry("automately:jobs", "automately:jobs"), java.util.Map.entry("automately:files", "automately:files"),
@@ -99,6 +102,10 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:util", resource("node/util.js")),
             java.util.Map.entry("node:process", resource("node/process.js")),
             java.util.Map.entry("node:crypto", resource("node/crypto.js")),
+            // Vendored readable-stream and string_decoder (D-100); rebuilt by scripts/vendor-stream.
+            java.util.Map.entry("node:stream", resource("node/stream.js")),
+            java.util.Map.entry("node:stream/promises", resource("node/stream_promises.js")),
+            java.util.Map.entry("node:string_decoder", resource("node/string_decoder.js")),
             java.util.Map.entry("automately:kv", hostModule("kv")),
             java.util.Map.entry("automately:bus", hostModule("bus")),
             java.util.Map.entry("automately:jobs", hostModule("jobs")),

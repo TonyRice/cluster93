@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Real npm libraries, end to end (D-093): installed from a pinned lockfile, bundled by the project's own esbuild,
  * published with the CLI, imported from jobs, and run in the isolate. Each library's output must equal what the same
- * module prints under real Node. Libraries that need what the isolate doesn't have (Node's crypto, stream or process,
+ * module prints under real Node. Libraries that need what the isolate doesn't have (Node modules it lacks, such as http,
  * or native code) must be refused at publish with the reason, or fail clearly when they run.
  *
  * <p>Needs node, npm and (the first time) the network, so it runs only when {@code AUTOMATELY_TEST_REAL_NPM} names a
@@ -44,7 +44,7 @@ class RealNpmPackagesTest {
 
     /** Libraries that run in the isolate, one module each in src/; the parameterized test below names the same. */
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
-            "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto");
+            "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt");
 
     private RunningNode node;
     private Path project;
@@ -96,8 +96,10 @@ class RealNpmPackagesTest {
                 Files.copy(file, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
         }
-        Path stamp = project.resolve("node_modules/.package-lock.json");
-        if (Files.exists(stamp) && Files.exists(project.resolve("node_modules/esbuild"))) {
+        // The lockfile last installed here; a changed fixture lockfile installs again.
+        Path stamp = project.resolve("node_modules/.automately-installed-lock.json");
+        byte[] lock = Files.readAllBytes(project.resolve("package-lock.json"));
+        if (Files.exists(stamp) && java.util.Arrays.equals(Files.readAllBytes(stamp), lock) && Files.exists(project.resolve("node_modules/esbuild"))) {
             return;
         }
         // --ignore-scripts: native packages are only inspected, never built.
@@ -105,6 +107,7 @@ class RealNpmPackagesTest {
                 .redirectErrorStream(true).start();
         String log = new String(npm.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         assertThat(npm.waitFor()).as("npm ci: " + log).isZero();
+        Files.write(stamp, lock);
     }
 
     @AfterAll
@@ -115,7 +118,7 @@ class RealNpmPackagesTest {
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
         JsonNode expected = Json.parse(underNode(lib));
         Path script = project.resolve("job-" + lib + ".mjs");
@@ -137,8 +140,6 @@ class RealNpmPackagesTest {
 
     @ParameterizedTest(name = "{0} is refused at publish: it needs {1}")
     @org.junit.jupiter.params.provider.CsvSource({
-            "jwt, stream (imported by",
-            "papaparse, stream (imported by",
             "bcrypt, bcrypt needs native code",
             "sharp, sharp needs native code"})
     void librariesNeedingWhatTheIsolateLacksAreRefusedWithTheReason(String lib, String reason) throws Exception {

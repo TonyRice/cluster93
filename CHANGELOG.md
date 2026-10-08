@@ -26,6 +26,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## `stream` in the isolate (2026-10-08)
+
+### Added
+- **`stream`, `stream/promises` and `string_decoder` (D-100):** Node's own streams, vendored from `readable-stream` 4.8.0 and `string_decoder` 1.3.0 (MIT). They run on the isolate's `buffer`, `events` and `process`. The bundled output is committed, built by `scripts/vendor-stream` from hash-checked npm packages. **Why:** step 3 of D-095. papaparse, csv-parse (streaming) and jsonwebtoken (HS256) now run in the isolate, giving the same answers as under Node.
+
+### Fixed
+- `RealNpmPackagesTest` installs again when its fixture's lockfile changes, as its javadoc said it would.
+
 ## Fixed: a request that could hang forever under load (2026-10-08)
 
 ### Fixed

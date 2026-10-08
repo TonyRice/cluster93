@@ -146,6 +146,25 @@ class NodeStandInsTest {
     }
 
     @Test
+    void streamsPipeTransformAndDecode() throws Exception {
+        assertThat(output("import { Readable, Transform, Writable, PassThrough } from 'node:stream';"
+                + " import { pipeline } from 'stream/promises'; import { StringDecoder } from 'string_decoder'; import { Buffer } from 'buffer';"
+                + " export default async () => {"
+                + "   const seen = [];"
+                + "   const upper = new Transform({ transform(chunk, enc, done) { done(null, String(chunk).toUpperCase()); } });"
+                + "   const sink = new Writable({ write(chunk, enc, done) { seen.push(String(chunk)); done(); } });"
+                + "   await pipeline(Readable.from(['a', 'b', 'c']), upper, sink);"
+                + "   let collected = ''; for await (const c of Readable.from(['x', 'y']).pipe(new PassThrough())) collected += c;"
+                + "   const failing = new Readable({ read() { this.destroy(new Error('boom')); } });"
+                + "   let error; try { await pipeline(failing, new PassThrough()); } catch (e) { error = e.message; }"
+                + "   const euro = Buffer.from('€'); const d = new StringDecoder('utf8');"
+                + "   const decoded = d.write(euro.subarray(0, 1)) + '|' + d.write(euro.subarray(1)) + d.end();"
+                + "   return [seen.join(''), collected, error, decoded];"
+                + " };"))
+                .containsExactly("ABC", "xy", "boom", "|€");
+    }
+
+    @Test
     void whatCryptoCantDoYetSaysSo() throws Exception {
         assertThat(output("import { createCipheriv } from 'crypto'; import { Buffer } from 'buffer';"
                 + " export default () => { try { createCipheriv('aes-256-gcm', Buffer.alloc(32), Buffer.alloc(12)); } catch (e) { return [e.code]; } };"))

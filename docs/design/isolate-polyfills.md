@@ -16,7 +16,7 @@ The sandbox holds because a script can only do what a host API lets it, scoped t
    - comes from the JVM's own, reviewed implementations. We never write our own crypto.
 3. **Cluster-backed capabilities** (`http`, `net`, `dns`) are new reach. Each maps onto an existing tenant-scoped, egress-checked API (`fetch`, `ctx.serve`) or gets a new one, and has its **own review** (phase B).
 4. **Never in the isolate:** processes, inbound raw sockets, native addons, the host's files or environment (→ the Node runtime, D-084).
-5. **Vendored code** (for example, Node's streams from `readable-stream`) is pinned, licence-checked (MIT/BSD/ISC), built at build time from a checksummed source like ICU's data (D-093), and covered by the same tests.
+5. **Vendored code** (for example, Node's streams from `readable-stream`) is pinned, licence-checked (MIT/BSD/ISC), built at build time from a checksummed source like ICU's data (D-093), and covered by the same tests. (For `stream`, D-100 commits the generated output instead of building it during the Maven build; the packages are still hash-checked by `npm ci`.)
 
 **Threats each part is checked against:**
 - **Escaping:** reaching host objects or Java beyond the bound `@V8Function` methods (D-060).
@@ -69,7 +69,7 @@ Each is new reach, so each gets its threat model: SSRF, egress rules, connection
    - **Masked in logs:** a secret's value appearing in a log line is replaced by `[secret:<name>]`, since libraries print their configuration.
    - **Where it's set:** `POST /v1/jobs`; `jobs.run` (a child inherits it only if it asks); services (`env` beside `config`, and `service.env` in `automately.json`); the CLI (`run --env KEY=value --env-secret KEY=name`).
 3. **Caps: as proposed.** PBKDF2 ≤ 10⁶ iterations, `scrypt` ≤ 64 MB, RSA ≤ 4096 bits, random ≤ 64 KiB per call, zlib output ≤ 32 MB.
-4. **`stream`: vendor `readable-stream` 4**, Node's own streams packaged for outside Node (about 9,000 lines). It's built at build time from a checksummed npm tarball, needs `buffer`, `events`, `process.nextTick`, `string_decoder` and `AbortController`, and has no reach at all. Writing our own would take weeks to match its edge cases, which are where libraries break.
+4. **`stream`: vendor `readable-stream` 4**, Node's own streams packaged for outside Node (about 9,000 lines). It's built from hash-checked npm packages by `scripts/vendor-stream` and the output is committed (D-100), needs `buffer`, `events`, `process.nextTick`, `string_decoder` and `AbortController`, and has no reach at all. Writing our own would take weeks to match its edge cases, which are where libraries break.
 5. **Network access never reaches private things unless explicitly allowed** (Tony). Phase B's `http`, `net` and `dns` go through `fetch`'s egress check (D-026: private and reserved ranges refused, connect to the checked address, no redirects followed), plus two additions:
    - **The cluster's own nodes are always refused,** by advertised address and internal port, even on public addresses.
    - **Explicit allow-lists replace the all-or-nothing switch:** an operator grants a tenant specific hosts or CIDRs and ports (for example `10.0.5.20:5432`), audited. It never covers the cluster's own nodes. `AUTOMATELY_EGRESS_ALLOW_PRIVATE` stays for local development only. A tenant's own private network is reached through a link.
@@ -78,7 +78,7 @@ Each is new reach, so each gets its threat model: SSRF, egress rules, connection
 0. ~~**`env` on jobs and services**~~ ✅ with secrets by name and masking in logs, and `process` as a global (D-096).
 1. ~~**Randomness and the `crypto` global:**~~ ✅ with `node:crypto`'s hashing, HMAC and `timingSafeEqual` from step 2 (D-097). the smallest host API, and it unblocks uuid and nanoid.
 2. **`node:crypto`:** hashing, HMAC, `timingSafeEqual`, then KDFs, then ciphers, then keys and signatures. That unblocks jsonwebtoken (HS256 first, then RS256 and ES256).
-3. **`stream`, `string_decoder`, `stream/promises`:** unblocks papaparse in Node mode and csv-parse.
+3. ~~**`stream`, `string_decoder`, `stream/promises`:**~~ ✅ vendored `readable-stream` 4.8.0 (D-100). papaparse, csv-parse and jsonwebtoken (HS256) now run. unblocks papaparse in Node mode and csv-parse.
 4. **`zlib`, `assert`, `querystring`, `timers/promises`, `os`.**
 5. **Globals** (`URL` and the rest), after a cold-start benchmark.
 

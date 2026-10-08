@@ -1544,3 +1544,19 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - A queue test retried a dead letter while its consumer was still running, then expected the message to be waiting. The consumer could take it straight back. The test now stops the consumer first.
 
 **Not done:** the CLI still has no request timeout. A timeout until the response's headers would also count a large upload's sending time, so choosing one is parked in NOTES.md.
+
+### D-100 — `stream` in the isolate: vendored `readable-stream`, output committed
+**Date:** 2026-10-08 · **Status:** Accepted. Step 3 of D-095
+
+**Decision:** `stream`, `stream/promises` and `string_decoder` (with or without `node:`) are Node's own code: `readable-stream` 4.8.0 and `string_decoder` 1.3.0, both MIT. They run on the isolate's `buffer`, `events` and `process` stand-ins and on its `AbortController`.
+- **How it's built:** `scripts/vendor-stream` bundles them into ES modules with esbuild.
+  - Its `require()`s of `buffer`, `events`, `process` and `string_decoder` become imports of the isolate's own modules, so there's one `Buffer` and one `EventEmitter`.
+  - It installs from a lockfile with `npm ci`, which checks every package's hash, and records each package and its hash in the generated file's header.
+  - Licences go to `js/node/THIRD-PARTY-LICENSES.txt`.
+- **The output is committed** rather than built during the Maven build, unlike ICU's data (D-093). Building Automately then never needs Node or the network. The generated code is also reviewed as a diff like any other, which is the point of vendoring. D-095's rule 5 is otherwise unchanged.
+- **Security:** pure JavaScript, with no `eval`, no `Function` constructor and no dynamic imports. It reads only standard globals (`AbortController`, `Blob`, `AggregateError`), so it adds no reach. Anything a stream does still goes through the isolate's own limits.
+- **What it unblocks,** checked against real Node's output by `RealNpmPackagesTest`:
+  - **papaparse** and **csv-parse** (its streaming parser, fed rows split across chunks, and its sync API)
+  - **jsonwebtoken** with HS256: sign, verify, and a tampered token rejected, on D-097's HMAC
+  - RS256 and ES256 wait for step 2's signatures.
+- **Also fixed:** `RealNpmPackagesTest` reinstalled its `node_modules` only when there was none, though its javadoc said "unless the same lockfile is already installed". It now records the lockfile it installed and installs again when the fixture's lockfile changes.
