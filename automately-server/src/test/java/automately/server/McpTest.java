@@ -181,6 +181,9 @@ class McpTest {
         ok("write_file", new JsonObject().put("path", "notes/todo.md").put("content", "- ship it").put("contentType", "text/markdown"));
         assertThat(ok("read_file", new JsonObject().put("path", "notes/todo.md")).getString("content")).isEqualTo("- ship it");
         assertThat(ok("list_files", new JsonObject().put("prefix", "notes/")).getJsonArray("files")).hasSize(1);
+        ok("make_dir", new JsonObject().put("path", "notes/archive"));
+        assertThat(ok("list_dir", new JsonObject().put("path", "notes")).getJsonArray("entries").stream()
+                .map(e -> ((JsonObject) e).getString("name"))).containsExactly("archive", "todo.md");
         ok("delete_file", new JsonObject().put("path", "notes/todo.md"));
         assertThat(tool("read_file", new JsonObject().put("path", "notes/todo.md")).getBoolean("isError")).isTrue();
 

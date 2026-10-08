@@ -125,6 +125,10 @@ final class RouteScopes {
             rule("POST", "/v1/services/" + SEG + "/domains/" + SEG + "/verify", "verifyDomain", Who.TENANT, Scopes.SERVICES_WRITE),
             rule("DELETE", "/v1/services/" + SEG + "/domains/" + SEG, "releaseDomain", Who.TENANT, Scopes.SERVICES_WRITE),
 
+            rule("GET", "/v1/dirs", "listRootDir", Who.TENANT, Scopes.FILES_READ),
+            rule("GET", "/v1/dirs/.+", "listDir", Who.TENANT, Scopes.FILES_READ),
+            rule("PUT", "/v1/dirs/.+", "makeDir", Who.TENANT, Scopes.FILES_WRITE),
+            rule("DELETE", "/v1/dirs/.+", "removeDir", Who.TENANT, Scopes.FILES_WRITE),
             rule("GET", "/v1/files", "listFiles", Who.TENANT, Scopes.FILES_READ),
             rule("GET", "/v1/files/.+", "getFile", Who.TENANT, Scopes.FILES_READ),
             rule("HEAD", "/v1/files/.+", "headFile", Who.TENANT, Scopes.FILES_READ),

@@ -125,8 +125,15 @@ public final class Automately {
                     BlobStore blobs = fileBackend(vertx, config, () -> durable.chunks(capacity));
                     java.util.concurrent.atomic.AtomicBoolean diskRootShared = new java.util.concurrent.atomic.AtomicBoolean();
                     TenantBlobStores routed = tenantStores(vertx, config, blobs, durable.storage, diskRootShared);
+                    automately.cluster.ignite.store.IgniteFileStore fileStore = durable.files(routed);
+                    // Files written before directories existed join the tree (D-076); a no-op once done.
+                    fileStore.backfillTree().onSuccess(count -> {
+                        if (count > 0) {
+                            LOG.info("Added {} existing files to the directory tree", count);
+                        }
+                    }).onFailure(err -> LOG.warn("Couldn't add existing files to the directory tree: {}", err.getMessage()));
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
-                            durable.files(routed), blobs, capacity, durable.auth, durable.storage, routed, diskRootShared, durable.queues,
+                            fileStore, blobs, capacity, durable.auth, durable.storage, routed, diskRootShared, durable.queues,
                             durable.records, durable.audit);
                     return wire(config, txt, vertx, stores, cluster, security);
                 })

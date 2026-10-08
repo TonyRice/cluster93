@@ -36,6 +36,21 @@ final class FilesRoutes {
     }
 
     void mount(Router router) {
+        router.get("/v1/dirs").handler(ctx -> listDir(ctx, ""));
+        router.getWithRegex("/v1/dirs/.+").handler(ctx -> withDir(ctx, dir -> listDir(ctx, dir)));
+        router.putWithRegex("/v1/dirs/.+").handler(ctx -> withDir(ctx, dir -> files.mkdir(ctx.get("tenant"), dir, true)
+                .compose(created -> files.statEntry(ctx.get("tenant"), dir).map(entry -> {
+                    ctx.response().setStatusCode(created ? 201 : 200);
+                    ctx.json(entry);
+                    return entry;
+                })).onFailure(err -> fail(ctx, err))));
+        router.deleteWithRegex("/v1/dirs/.+").handler(ctx -> withDir(ctx, dir -> files.rmdir(ctx.get("tenant"), dir).onSuccess(removed -> {
+            if (removed) {
+                ctx.response().setStatusCode(204).end();
+            } else {
+                error(ctx, 404, "not_found", "No such directory: " + dir);
+            }
+        }).onFailure(err -> fail(ctx, err))));
         router.get("/v1/files").handler(this::list);
         router.putWithRegex("/v1/files/.+").handler(this::upload);
         router.getWithRegex("/v1/files/.+").handler(this::download);
@@ -52,6 +67,30 @@ final class FilesRoutes {
             return null;
         }
         return path;
+    }
+
+    /** A directory path from {@code /v1/dirs/…}: slashes around it don't matter, and it follows the file path rules (D-076). */
+    private static void withDir(RoutingContext ctx, java.util.function.Consumer<String> then) {
+        String raw = ctx.request().path().substring("/v1/dirs/".length());
+        String dir = automately.core.files.Paths.directory(URLDecoder.decode(raw, StandardCharsets.UTF_8));
+        String invalid = dir.isEmpty() ? null : FileStore.invalidPath(dir);
+        if (invalid != null) {
+            error(ctx, 400, "invalid_path", invalid);
+            return;
+        }
+        then.accept(dir);
+    }
+
+    /** One level of a directory, by name, paged with {@code limit} and {@code cursor}. */
+    private void listDir(RoutingContext ctx, String dir) {
+        int limit;
+        try {
+            limit = Math.min(Math.max(1, Integer.parseInt(ctx.request().getParam("limit", "100"))), 1000);
+        } catch (NumberFormatException e) {
+            error(ctx, 400, "invalid_request", "limit must be a number");
+            return;
+        }
+        files.listDir(ctx.get("tenant"), dir, limit, ctx.request().getParam("cursor")).onSuccess(ctx::json).onFailure(err -> fail(ctx, err));
     }
 
     /** Streams the request body into the store chunk by chunk, pausing the client while each piece is stored. */
@@ -166,6 +205,8 @@ final class FilesRoutes {
                 automately.core.metrics.Metrics.of(ctx.vertx()).storageRefused(reason);
             }
             switch (host.code()) {
+                case "not_found" -> error(ctx, 404, host.code(), host.getMessage());
+                case "already_exists", "not_empty", "is_a_directory", "not_a_directory" -> error(ctx, 409, host.code(), host.getMessage());
                 case "insufficient_storage" -> error(ctx, 507, host.code(), host.getMessage());
                 case "storage_unavailable" -> error(ctx, 503, host.code(), host.getMessage());
                 case "storage_disabled" -> error(ctx, 403, host.code(), host.getMessage());

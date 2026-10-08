@@ -26,6 +26,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## The file system, part 1 — Folders (2026-10-07)
+
+### Added
+- **A design for a file system on top of the file store (D-075, `docs/design/vfs.md`):** folders, move and copy without moving bytes, mounts, `/tmp`, `/packages`, a Node-style `fs`, locks and public links. It's built in five parts. **Why:** the store holds files well but as a flat set of paths, and modules, Node compatibility, apps and the console need a real file tree.
+- **Folders (D-076).** Real folders, empty ones included.
+  - **Making them:** writing a file makes its missing folders. Folders stay when emptied, and `rmdir` removes empty ones.
+  - **Listing:** one level at a time, by name.
+  - **API:** `GET /v1/dirs` · `GET` `PUT` `DELETE /v1/dirs/{path}`.
+  - **CLI:** `files mkdir`, `files rmdir`.
+  - **MCP:** `list_dir`, `make_dir`.
+- **Ignite tables gain new columns when a node starts,** with their indexes, so existing data directories upgrade in place. Files from before folders existed are added to the tree automatically.
+- **Tests:**
+  - folders in `FileStoreContract` on all four stores
+  - `TreeMigrationTest`
+  - folders across two nodes in `FilesTest`
+  - `ContractTest`, CLI and MCP
+
+### Changed
+- **`automately files ls DIR` lists one level,** with folders ending in `/`. `files ls -R` gives the old listing of every file under a path.
+- **A name is a file or a folder, never both.** Writing a file where a folder is, or under a file, is refused with 409.
+
 ## Security groundwork, part 4b — Identity and audit follow-ups (2026-10-07)
 
 ### Added

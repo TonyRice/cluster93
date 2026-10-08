@@ -164,6 +164,7 @@ Every `/v1` call carries `Authorization: Bearer <token>`.
 | `GET` · `HEAD` | `/v1/files/{path}` | Download, with `Range` (206) and `If-None-Match` (304) |
 | `GET` | `/v1/files?prefix=&limit=&cursor=` | List files, sorted by path |
 | `DELETE` | `/v1/files/{path}` | Delete a file |
+| `GET` · `PUT` · `DELETE` | `/v1/dirs/{path}` | One level of a folder (`GET /v1/dirs` for the top) · make one, and any missing above it · remove an empty one ([file system](docs/design/vfs.md)) |
 | `GET` | `/v1/nodes` | Live nodes with capacity and load (`nodes:read`, or the admin) |
 | `GET` | `/health` | Liveness |
 | `GET` | `/ready` | Readiness: 200 once joined and the cluster is active, else 503 with reasons |

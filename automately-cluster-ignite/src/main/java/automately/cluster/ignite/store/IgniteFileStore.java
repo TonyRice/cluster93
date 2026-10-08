@@ -20,19 +20,28 @@ import java.util.Map;
 public final class IgniteFileStore extends ClusterFileStore {
 
     static final Table.Definition FILES = new Table.Definition("FILES",
-            Table.columns("tenant", String.class, "path", String.class, "size", Long.class, "backend", String.class),
-            List.of(Table.index("tenant", "path"), Table.index("backend")));
+            Table.columns("tenant", String.class, "path", String.class, "size", Long.class, "backend", String.class,
+                    "parent", String.class, "name", String.class),
+            List.of(Table.index("tenant", "path"), Table.index("backend"), Table.index("tenant", "parent", "name")));
+    /** Directories (D-076): one row each, so empty ones exist and a level lists from an index. */
+    static final Table.Definition DIRS = new Table.Definition("DIRS",
+            Table.columns("tenant", String.class, "parent", String.class, "name", String.class),
+            List.of(Table.index("tenant", "parent", "name")));
     static final Table.Definition GARBAGE = new Table.Definition("FILE_GARBAGE",
             Table.columns("deleteAfter", Long.class), List.of(Table.index("deleteAfter")));
     private static final char SEPARATOR = '\u001f';
 
     private final Table files;
     private final Table garbage;
+    private final Table dirs;
 
     public IgniteFileStore(Vertx vertx, Ignite ignite, BlobStores stores) {
         super(vertx, stores);
         this.files = new Table(vertx, ignite, FILES, json -> Map.of("tenant", json.getString("tenant"), "path", json.getString("path"),
-                "size", json.getLong("size"), "backend", FileInfo.fromJson(json).backend()));
+                "size", json.getLong("size"), "backend", FileInfo.fromJson(json).backend(),
+                "parent", automately.core.files.Paths.parent(json.getString("path")), "name", automately.core.files.Paths.name(json.getString("path"))));
+        this.dirs = new Table(vertx, ignite, DIRS, json -> Map.of("tenant", json.getString("tenant"),
+                "parent", automately.core.files.Paths.parent(json.getString("path")), "name", automately.core.files.Paths.name(json.getString("path"))));
         this.garbage = new Table(vertx, ignite, GARBAGE, json -> Map.of("deleteAfter", json.getLong("deleteAfter")));
     }
 
@@ -94,6 +103,55 @@ public final class IgniteFileStore extends ClusterFileStore {
 
     private Future<Long> sum(String sql, Object... args) {
         return files.query(sql, args).map(rows -> rows.isEmpty() || rows.getFirst().getFirst() == null ? 0L : ((Number) rows.getFirst().getFirst()).longValue());
+    }
+
+    @Override
+    protected Future<JsonObject> getDir(String tenant, String path) {
+        return dirs.get(key(tenant, path));
+    }
+
+    @Override
+    protected Future<Boolean> putDirIfAbsent(String tenant, String path, JsonObject row) {
+        return dirs.putIfAbsent(key(tenant, path), row);
+    }
+
+    @Override
+    protected Future<JsonObject> removeDir(String tenant, String path) {
+        return dirs.remove(key(tenant, path));
+    }
+
+    @Override
+    protected Future<List<JsonObject>> childDirs(String tenant, String parent, String after, int limit) {
+        return children(dirs, "DIRS", tenant, parent, after, limit);
+    }
+
+    @Override
+    protected Future<List<JsonObject>> childFiles(String tenant, String parent, String after, int limit) {
+        return children(files, "FILES", tenant, parent, after, limit);
+    }
+
+    private static Future<List<JsonObject>> children(Table table, String name, String tenant, String parent, String after, int limit) {
+        return after == null
+                ? table.queryJson("SELECT json FROM " + name + " WHERE tenant = ? AND parent = ? ORDER BY name LIMIT ?", tenant, parent, limit)
+                : table.queryJson("SELECT json FROM " + name + " WHERE tenant = ? AND parent = ? AND name > ? ORDER BY name LIMIT ?",
+                        tenant, parent, after, limit);
+    }
+
+    /**
+     * Brings files written before directories existed into the tree (D-076): fills in their parent and name columns,
+     * and makes their folders. Idempotent and cheap once done, so every node runs it at start.
+     */
+    public Future<Integer> backfillTree() {
+        return files.queryJson("SELECT json FROM FILES WHERE parent IS NULL LIMIT 1000").compose(rows -> {
+            Future<Void> all = Future.succeededFuture();
+            for (JsonObject row : rows) {
+                String tenant = row.getString("tenant");
+                String path = row.getString("path");
+                all = all.compose(v -> files.update(key(tenant, path), json -> java.util.Optional.of(json)).mapEmpty())
+                        .compose(v -> ensureDirs(tenant, automately.core.files.Paths.parent(path)).recover(err -> Future.succeededFuture()));
+            }
+            return all.compose(v -> rows.size() < 1000 ? Future.succeededFuture(rows.size()) : backfillTree().map(more -> more + rows.size()));
+        });
     }
 
     @Override

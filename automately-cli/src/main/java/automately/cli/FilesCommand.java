@@ -24,7 +24,8 @@ import java.util.TreeMap;
 import java.util.stream.Stream;
 
 @Command(name = "files", description = "Your files: upload, download, list, delete, and sync a folder (a static site).",
-        subcommands = {FilesCommand.Put.class, FilesCommand.Get.class, FilesCommand.Ls.class, FilesCommand.Rm.class, FilesCommand.Sync.class})
+        subcommands = {FilesCommand.Put.class, FilesCommand.Get.class, FilesCommand.Ls.class, FilesCommand.Mkdir.class, FilesCommand.Rmdir.class,
+                FilesCommand.Rm.class, FilesCommand.Sync.class})
 final class FilesCommand extends Base {
 
     private static final Map<String, String> TYPES = Map.ofEntries(
@@ -123,13 +124,19 @@ final class FilesCommand extends Base {
         }
     }
 
-    @Command(name = "ls", description = "Your files, by path.")
+    @Command(name = "ls", description = "A folder, one level (folders end in /); -R lists every file under it, by path.")
     static final class Ls extends Base {
-        @Parameters(paramLabel = "PREFIX", arity = "0..1", defaultValue = "")
+        @Parameters(paramLabel = "DIR", arity = "0..1", defaultValue = "")
         String prefix;
+
+        @Option(names = {"-R", "--recursive"}, description = "Every file under DIR (or under a path prefix), at any depth.")
+        boolean recursive;
 
         @Override
         int execute() {
+            if (!recursive) {
+                return listLevel();
+            }
             Map<String, JsonNode> files = listAll(api(), prefix);
             if (json()) {
                 Output.json(out(), Json.array().addAll(files.values()));
@@ -139,6 +146,56 @@ final class FilesCommand extends Base {
             files.values().forEach(f -> rows.add(List.of(Json.text(f, "path"), Json.text(f, "size"), Json.text(f, "contentType"),
                     Output.time(f, "createdAt"))));
             Output.table(out(), List.of("PATH", "SIZE", "TYPE", "UPDATED"), rows);
+            return 0;
+        }
+
+        private int listLevel() {
+            String dir = prefix.replaceAll("^/+|/+$", "");
+            List<JsonNode> entries = new ArrayList<>();
+            String cursor = null;
+            do {
+                JsonNode page = api().get((dir.isEmpty() ? "/v1/dirs" : "/v1/dirs/" + Api.filePath(dir)) + "?limit=1000"
+                        + (cursor == null ? "" : "&cursor=" + URLEncoder.encode(cursor, StandardCharsets.UTF_8)));
+                page.path("entries").forEach(entries::add);
+                cursor = Json.text(page, "cursor").isEmpty() ? null : Json.text(page, "cursor");
+            } while (cursor != null);
+            if (json()) {
+                Output.json(out(), Json.array().addAll(entries));
+                return 0;
+            }
+            List<List<String>> rows = new ArrayList<>();
+            entries.forEach(e -> {
+                boolean folder = Json.text(e, "kind").equals("dir");
+                rows.add(List.of(Json.text(e, "name") + (folder ? "/" : ""), folder ? "" : Json.text(e, "size"), Json.text(e, "contentType"),
+                        Output.time(e, "createdAt")));
+            });
+            Output.table(out(), List.of("NAME", "SIZE", "TYPE", "UPDATED"), rows);
+            return 0;
+        }
+    }
+
+    @Command(name = "mkdir", description = "Make a folder, and any missing above it.")
+    static final class Mkdir extends Base {
+        @Parameters(paramLabel = "DIR")
+        String dir;
+
+        @Override
+        int execute() {
+            api().put("/v1/dirs/" + Api.filePath(dir.replaceAll("^/+|/+$", "")), Json.object());
+            out().println("Made " + dir + "/");
+            return 0;
+        }
+    }
+
+    @Command(name = "rmdir", description = "Remove an empty folder.")
+    static final class Rmdir extends Base {
+        @Parameters(paramLabel = "DIR")
+        String dir;
+
+        @Override
+        int execute() {
+            api().delete("/v1/dirs/" + Api.filePath(dir.replaceAll("^/+|/+$", "")));
+            out().println("Removed " + dir + "/");
             return 0;
         }
     }

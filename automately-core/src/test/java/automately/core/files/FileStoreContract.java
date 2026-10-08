@@ -61,6 +61,82 @@ public abstract class FileStoreContract {
         return "\"" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(data)) + "\"";
     }
 
+    // --- directories (D-076) ---
+
+    private java.util.List<String> names(String tenant, String dir) throws Exception {
+        return await(store.listDir(tenant, dir, 100, null)).getJsonArray("entries").stream()
+                .map(e -> ((JsonObject) e).getString("kind") + ":" + ((JsonObject) e).getString("name")).toList();
+    }
+
+    private static String code(Throwable thrown) {
+        Throwable cause = thrown instanceof ExecutionException ? thrown.getCause() : thrown;
+        return cause instanceof HostException host ? host.code() : String.valueOf(cause);
+    }
+
+    @Test
+    public void writingAFileMakesItsFoldersAndAFolderListsOneLevel() throws Exception {
+        write(store, "acme", "site/index.html", "<h1>".getBytes(), 4);
+        write(store, "acme", "site/css/app.css", "a{}".getBytes(), 4);
+        write(store, "acme", "site/css/deep/x.css", "b{}".getBytes(), 4);
+        write(store, "acme", "readme.md", "#".getBytes(), 4);
+        write(store, "globex", "site/other.html", "x".getBytes(), 4);
+
+        assertThat(names("acme", "")).containsExactly("file:readme.md", "dir:site");
+        assertThat(names("acme", "site")).containsExactly("dir:css", "file:index.html");
+        assertThat(names("acme", "site/css")).containsExactly("file:app.css", "dir:deep");
+        assertThat(await(store.statEntry("acme", "site/css")).getString("kind")).isEqualTo("dir");
+        assertThat(await(store.statEntry("acme", "site/index.html")).getLong("size")).isEqualTo(4);
+        assertThat(await(store.statEntry("acme", "nope"))).isNull();
+
+        // Folders stay after their last file goes, as on a disk.
+        await(store.delete("acme", "site/css/deep/x.css"));
+        assertThat(names("acme", "site/css")).containsExactly("file:app.css", "dir:deep");
+        // The old prefix listing still lists files only.
+        assertThat(await(store.list("acme", "site/", 100, null)).getJsonArray("files")).hasSize(2);
+    }
+
+    @Test
+    public void foldersAreMadeEmptyAndRemovedOnlyWhenEmpty() throws Exception {
+        assertThat(await(store.mkdir("acme", "a/b/c", true))).isTrue();
+        assertThat(await(store.mkdir("acme", "a/b/c", true))).as("-p doesn't mind").isFalse();
+        assertThat(names("acme", "a/b")).containsExactly("dir:c");
+        assertThatThrownBy(() -> await(store.mkdir("acme", "a/b/c", false))).satisfies(e -> assertThat(code(e)).isEqualTo("already_exists"));
+        assertThatThrownBy(() -> await(store.mkdir("acme", "x/y", false))).satisfies(e -> assertThat(code(e)).isEqualTo("not_found"));
+
+        assertThatThrownBy(() -> await(store.rmdir("acme", "a/b"))).satisfies(e -> assertThat(code(e)).isEqualTo("not_empty"));
+        assertThat(await(store.rmdir("acme", "a/b/c"))).isTrue();
+        assertThat(await(store.rmdir("acme", "a/b/c"))).isFalse();
+        assertThat(names("acme", "a/b")).isEmpty();
+    }
+
+    @Test
+    public void aNameIsAFileOrAFolderNeverBoth() throws Exception {
+        write(store, "acme", "notes", "x".getBytes(), 4);
+        await(store.mkdir("acme", "docs", false));
+
+        assertThatThrownBy(() -> write(store, "acme", "docs", "x".getBytes(), 4)).satisfies(e -> assertThat(code(e)).isEqualTo("is_a_directory"));
+        assertThatThrownBy(() -> write(store, "acme", "notes/inside.txt", "x".getBytes(), 4)).satisfies(e -> assertThat(code(e)).isEqualTo("not_a_directory"));
+        assertThatThrownBy(() -> await(store.mkdir("acme", "notes", true))).satisfies(e -> assertThat(code(e)).isEqualTo("already_exists"));
+        assertThatThrownBy(() -> await(store.listDir("acme", "notes", 10, null))).satisfies(e -> assertThat(code(e)).isEqualTo("not_a_directory"));
+        assertThatThrownBy(() -> await(store.listDir("acme", "missing", 10, null))).satisfies(e -> assertThat(code(e)).isEqualTo("not_found"));
+    }
+
+    @Test
+    public void bigFoldersListInPages() throws Exception {
+        for (int i = 0; i < 7; i++) {
+            write(store, "acme", "many/f" + i, "x".getBytes(), 4);
+            await(store.mkdir("acme", "many/d" + i, false));
+        }
+        java.util.List<String> seen = new java.util.ArrayList<>();
+        String cursor = null;
+        do {
+            JsonObject page = await(store.listDir("acme", "many", 5, cursor));
+            page.getJsonArray("entries").forEach(e -> seen.add(((JsonObject) e).getString("name")));
+            cursor = page.getString("cursor");
+        } while (cursor != null);
+        assertThat(seen).hasSize(14).isSorted().doesNotHaveDuplicates();
+    }
+
     @Test
     public void writesAndReadsBackWithItsHash() throws Exception {
         byte[] data = "hello files".getBytes();

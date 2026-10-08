@@ -920,3 +920,62 @@ Also `RecordsContract` (in memory and on Ignite, including a field named `user`)
 - developers setting secrets
 
 Also the CLI flow.
+
+### D-075 — A file system on top of the file store
+**Date:** 2026-10-07 · **Status:** Accepted (Tony). Design: `docs/design/vfs.md`
+
+**Context:** The file store (D-040, D-056, D-057) holds tenants' files well, but as a flat set of paths: no folders, rename, append, scratch space or Node-style `fs`. Modules, Node compatibility, apps and the console's file manager all need those. 2017's Automately had a per-user file system; this brings it back on today's store.
+
+**Decision:** a layer on the existing store, not a new store.
+- **The key fact:** blobs are named by an internal id, never by path. So rename, move and copy only rewrite metadata, on every backend, S3 included.
+- **What it adds:**
+  - folders (D-076)
+  - move and copy, sharing blobs with a reference count; whole-folder operations under a cluster-wide lease and a journal
+  - mounts replacing prefix routes
+  - `/tmp` per job
+  - a read-only `/packages`
+  - an `fs` host API with synchronous calls
+  - append and edits in place, as new versions
+  - advisory locks
+  - expiring signed public links
+- **Tony's answers:**
+  - copies share blobs, counted by a reference count, and the quota counts each blob once
+  - `/tmp` uses memory first, then spills to the data directory
+  - public links stay pinned to the version they were made for
+  - links are revoked all at once, by rotating a per-tenant secret
+  - moving bytes between providers comes later
+  - the name stays "files"
+- **Cluster-friendly:**
+  - Every record (paths, folders, reference counts, journals, locks, mounts) lives in the replicated database.
+  - Public links verify themselves.
+  - Only `/tmp` is local to a node, by design.
+- **Built in five parts,** each tested and committed on its own.
+
+### D-076 — Folders are real rows, made as files are written
+**Date:** 2026-10-07 · **Status:** Accepted. Part 1 of D-075; changes the first draft's "implied" folders
+
+**Decision:**
+- **A `DIRS` table** with one row per folder (tenant, path, parent, name).
+  - **The `FILES` table** gains `parent` and `name` columns, indexed by (tenant, parent, name).
+  - **Listing one level** merges a folder's subfolders and files by name, paged by the last name.
+- **Writing a file makes its missing folders** (as `mkdir -p` does). A folder's ancestors always exist, so the check usually costs one read.
+- **Folders stay when emptied,** and `rmdir` removes an empty one.
+  - **Why not S3-style folders implied by their files:** listing those needs a skip-scan per subfolder, empty folders can't exist, and folders vanish when their last file is deleted, which surprises file-system users.
+- **A name is a file or a folder, never both.** The codes are `is_a_directory`, `not_a_directory`, `already_exists` and `not_empty`, all 409 in the API, and `not_found` is 404.
+- **Upgrading existing data:**
+  - **New columns:** `Table` now adds columns (and the indexes using them) to an existing table with SQL DDL at start, since Ignite keeps an existing cache's old definition.
+  - **The backfill:** every node then backfills, giving older files their `parent` and `name` and making their folders. It's idempotent.
+- **API:**
+  - **REST:** `GET /v1/dirs`, `GET /v1/dirs/{path}`, `PUT /v1/dirs/{path}` (201 made, 200 already there) and `DELETE /v1/dirs/{path}` (`files:read` and `files:write`). The prefix listing `GET /v1/files?prefix=` is unchanged and lists files only.
+  - **CLI:** `files ls DIR` lists one level, with folders ending in `/`. That's a change: `files ls -R` gives the old every-file listing. Also `files mkdir` and `files rmdir`.
+  - **MCP:** `list_dir` and `make_dir`.
+- **Scripts** get folders with the `fs` module in part 4. `files.*` is unchanged.
+
+**Tests:**
+- `FileStoreContract` on the in-memory, Ignite, disk and S3 stores:
+  - writing makes folders, and listing shows one level
+  - empty folders, and `rmdir` only when empty
+  - file/folder conflicts
+  - paging
+- `TreeMigrationTest`: an old table gains columns and an index; old file rows are backfilled into the tree, once.
+- `FilesTest` (two nodes: made on one, listed on the other, plus the conflicts), `ContractTest` (four operations), the CLI and MCP.

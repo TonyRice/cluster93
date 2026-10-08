@@ -279,7 +279,15 @@ class CliTest {
         assertThat(cli("files", "sync", site.toString(), "www", "--delete", "--dry-run").out()).contains("would delete www/css/app.css");
         assertThat(cli("files", "sync", site.toString(), "www", "--delete").out()).contains("delete www/css/app.css");
 
-        assertThat(cli("files", "ls", "www/").out()).contains("www/index.html").doesNotContain("app.css");
+        assertThat(cli("files", "ls", "-R", "www/").out()).contains("www/index.html").doesNotContain("app.css");
+        // One level, with folders: css/ stays after its last file went.
+        assertThat(cli("files", "ls", "www").out()).contains("index.html").contains("css/").doesNotContain("www/index.html");
+        assertThat(cli("files", "mkdir", "www/img/icons").code()).isZero();
+        assertThat(cli("files", "ls", "www/img").out()).contains("icons/");
+        Result notEmpty = cli("files", "rmdir", "www/img");
+        assertThat(notEmpty.code()).isEqualTo(1);
+        assertThat(notEmpty.err()).contains("isn't empty");
+        assertThat(cli("files", "rmdir", "www/img/icons").code()).isZero();
         assertThat(cli("files", "get", "www/index.html", "-").out()).isEqualTo("<h1>v2</h1>");
 
         Path big = home.resolve("big.bin");

@@ -487,6 +487,15 @@ final class McpRoutes {
                         })),
                 new Tool("list_files", "Your files under a prefix.", schema(Map.of("prefix", string("e.g. site/ (default: all)."))), true, false,
                         call -> get(call, "/v1/files?limit=1000&prefix=" + seg(call.args().getString("prefix", "")))),
+                new Tool("list_dir", "One level of a folder: its files and subfolders, by name.",
+                        schema(Map.of("path", string("The folder, e.g. site/assets (default: the top level)."))), true, false,
+                        call -> {
+                            String dir = automately.core.files.Paths.directory(call.args().getString("path", ""));
+                            return get(call, (dir.isEmpty() ? "/v1/dirs" : "/v1/dirs/" + filePath(dir)) + "?limit=1000");
+                        }),
+                new Tool("make_dir", "Make a folder, and any missing above it.", schema(Map.of("path", string("The folder, e.g. site/assets.")), "path"),
+                        false, false, call -> api(call, HttpMethod.PUT, "/v1/dirs/" + filePath(automately.core.files.Paths.directory(call.text("path"))),
+                                null, null)),
                 new Tool("delete_file", "Delete a file.", schema(Map.of("path", string("The file's path.")), "path"), false, true,
                         call -> api(call, HttpMethod.DELETE, "/v1/files/" + filePath(call.text("path")), null, null)
                                 .map(v -> new JsonObject().put("deleted", call.text("path")))),

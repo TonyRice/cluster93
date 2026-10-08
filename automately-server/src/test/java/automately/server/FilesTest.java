@@ -112,6 +112,30 @@ class FilesTest {
     // --- the REST API ---
 
     @Test
+    void foldersMadeOnOneNodeListOnTheOther() throws Exception {
+        assertThat(upload(nodeA, "tree/docs/readme.md", "# hi".getBytes(), "text/markdown").statusCode()).isEqualTo(201);
+        HttpResponse<Buffer> made = await(client.put(nodeA.httpPort(), "localhost", "/v1/dirs/tree/empty/").putHeader("Authorization", TestAuth.bearer(TENANT)).send());
+        assertThat(made.statusCode()).as(made.bodyAsString()).isEqualTo(201);
+        assertThat(made.bodyAsJsonObject().getString("kind")).isEqualTo("dir");
+
+        JsonObject listing = get(nodeB, "/v1/dirs/tree").bodyAsJsonObject();
+        assertThat(listing.getJsonArray("entries").stream().map(e -> ((JsonObject) e).getString("name") + "/" + ((JsonObject) e).getString("kind")))
+                .containsExactly("docs/dir", "empty/dir");
+        assertThat(get(nodeB, "/v1/dirs/tree/docs").bodyAsJsonObject().getJsonArray("entries").getJsonObject(0).getLong("size")).isEqualTo(4);
+        assertThat(get(nodeB, "/v1/dirs").bodyAsJsonObject().getJsonArray("entries").stream().map(e -> ((JsonObject) e).getString("name")))
+                .contains("tree");
+
+        assertThat(upload(nodeB, "tree/empty", "x".getBytes(), "text/plain").statusCode()).as("a folder is in the way").isEqualTo(409);
+        assertThat(upload(nodeB, "tree/docs/readme.md/x", "x".getBytes(), "text/plain").statusCode()).as("a file is in the way").isEqualTo(409);
+        assertThat(await(client.delete(nodeB.httpPort(), "localhost", "/v1/dirs/tree/docs").putHeader("Authorization", TestAuth.bearer(TENANT)).send())
+                .statusCode()).as("not empty").isEqualTo(409);
+        assertThat(await(client.delete(nodeB.httpPort(), "localhost", "/v1/dirs/tree/empty").putHeader("Authorization", TestAuth.bearer(TENANT)).send())
+                .statusCode()).isEqualTo(204);
+        assertThat(get(nodeA, "/v1/dirs/tree/empty").statusCode()).isEqualTo(404);
+        assertThat(get(nodeA, "/v1/dirs/tree/docs/readme.md").statusCode()).isEqualTo(409);
+    }
+
+    @Test
     void uploadsOnOneNodeAndDownloadsOnTheOther() throws Exception {
         byte[] data = bytes(10 * MB + 123, 1);
 

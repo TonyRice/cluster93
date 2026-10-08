@@ -44,7 +44,7 @@ final class TestIgnite {
             stores = IgniteStores.open(vertx, cluster);
         }
         for (Table.Definition table : List.of(IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE,
-                IgniteDomainStore.TABLE, IgniteKvStore.TABLE, IgniteFileStore.FILES, IgniteFileStore.GARBAGE,
+                IgniteDomainStore.TABLE, IgniteKvStore.TABLE, IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteFileStore.DIRS,
                 IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
                 IgniteStorageConfigStore.POLICIES, IgniteStorageConfigStore.PROVIDERS, IgniteStorageConfigStore.ROUTES,
                 IgniteQueueStore.TABLE)) {

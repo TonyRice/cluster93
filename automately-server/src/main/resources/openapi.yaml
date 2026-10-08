@@ -834,6 +834,55 @@ paths:
         '200': { $ref: '#/components/responses/Domain' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/dirs:
+    get:
+      operationId: listRootDir
+      tags: [files]
+      summary: The top level of your files, one level, by name (D-076)
+      security:
+        - bearer: ['files:read']
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200': { $ref: '#/components/responses/DirListing' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/dirs/{path}:
+    parameters:
+      - $ref: '#/components/parameters/filePath'
+    get:
+      operationId: listDir
+      tags: [files]
+      summary: One level of a directory, by name; pass the last name as cursor for the next page
+      security:
+        - bearer: ['files:read']
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200': { $ref: '#/components/responses/DirListing' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: makeDir
+      tags: [files]
+      summary: Make a directory, and any missing above it (201 if made, 200 if it existed)
+      security:
+        - bearer: ['files:write']
+      responses:
+        '200': { $ref: '#/components/responses/DirEntry' }
+        '201': { $ref: '#/components/responses/DirEntry' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: removeDir
+      tags: [files]
+      summary: Remove an empty directory (409 if it isn't empty)
+      security:
+        - bearer: ['files:write']
+      responses:
+        '204': { description: 'Removed.' }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/files:
     get:
       operationId: listFiles
@@ -1894,6 +1943,22 @@ components:
               expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
 
   responses:
+    DirListing:
+      description: One level of a directory.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [path, entries]
+            properties:
+              path: { type: string, description: 'The directory; "" is the top level.' }
+              entries: { type: array, items: { $ref: '#/components/schemas/DirEntry' } }
+              cursor: { type: [string, 'null'], description: 'The last name on this page, to pass for the next; null at the end.' }
+    DirEntry:
+      description: A directory.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DirEntry' }
     Error:
       description: An error.
       content:
@@ -2295,6 +2360,17 @@ components:
             type: { type: string, const: TXT }
             name: { type: string }
             value: { type: string }
+    DirEntry:
+      type: object
+      required: [name, path, kind]
+      properties:
+        name: { type: string }
+        path: { type: string }
+        kind: { type: string, enum: [dir, file] }
+        size: { type: integer, description: 'Files only.' }
+        contentType: { type: string }
+        etag: { type: string }
+        createdAt: { type: integer }
     File:
       type: object
       required: [path, size, contentType, etag, createdAt]

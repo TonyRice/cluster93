@@ -62,7 +62,8 @@ The URL and token are saved in `~/.config/automately/config.json` (`%APPDATA%\au
 | `services deploy NAME FILE [--config JSON] [--restart on-failure]` | Create or update a service; prints its status and hosts |
 | `services ls · get · logs · start · stop · restart · rm` | Manage services. `logs` follows the current run |
 | `domains add · verify · ls · rm` | Your own domain for a service. `add` prints the TXT record to publish |
-| `files put · get · ls · rm` | Files, streamed both ways. `get NAME -` writes to stdout |
+| `files put · get · rm` | Files, streamed both ways. `get NAME -` writes to stdout |
+| `files ls [DIR] [-R] · mkdir DIR · rmdir DIR` | One level of a folder (folders end in `/`), or with `-R` every file under it; make a folder; remove an empty one |
 | `files sync DIR PREFIX [--delete] [--dry-run]` | Mirror a folder, for example a static site. Only new and changed files go up, compared by SHA-256 ETag |
 | `queues push QUEUE JSON [--key K] [--delay-ms MS] [--max-attempts N]` | Queue a message for your services; prints its id. The same `--key` pushes once |
 | `queues stats · dead · retry · discard` | A queue's counts, its dead letters (with their last error), and putting one back or deleting it |

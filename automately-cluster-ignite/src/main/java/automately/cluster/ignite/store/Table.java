@@ -90,6 +90,7 @@ final class Table {
         while (true) {
             try {
                 ignite.getOrCreateCache(config);
+                addMissingColumns(ignite, definition);
                 return;
             } catch (javax.cache.CacheException e) {
                 if (System.currentTimeMillis() > deadline || !String.valueOf(e.getMessage()).contains("state change is in progress")) {
@@ -103,6 +104,55 @@ final class Table {
                 }
             }
         }
+    }
+
+    /**
+     * A table created by an older version keeps the columns it had: Ignite ignores a new definition for an existing
+     * cache. Columns added since are added with SQL DDL, with any index that uses them, so data directories carry over
+     * across upgrades. Rows written before have nulls there until something rewrites them.
+     */
+    private static void addMissingColumns(Ignite ignite, Definition definition) {
+        IgniteCache<String, BinaryObject> cache = ignite.cache(definition.name()).withKeepBinary();
+        @SuppressWarnings("unchecked")
+        CacheConfiguration<String, BinaryObject> current = cache.getConfiguration(CacheConfiguration.class);
+        java.util.Set<String> existing = new java.util.HashSet<>();
+        current.getQueryEntities().forEach(entity -> entity.getFields().keySet().forEach(field -> existing.add(field.toUpperCase(java.util.Locale.ROOT))));
+        java.util.Set<String> added = new java.util.HashSet<>();
+        definition.columns().forEach((column, type) -> {
+            if (!existing.contains(column.toUpperCase(java.util.Locale.ROOT))) {
+                ddl(cache, "ALTER TABLE " + SCHEMA + "." + definition.name() + " ADD COLUMN IF NOT EXISTS " + column + " " + sqlType(type));
+                added.add(column);
+            }
+        });
+        for (QueryIndex index : definition.indexes()) {
+            if (index.getFields().keySet().stream().anyMatch(added::contains)) {
+                String indexName = definition.name() + "_" + String.join("_", index.getFields().keySet()) + "_IDX";
+                ddl(cache, "CREATE INDEX IF NOT EXISTS " + indexName + " ON " + SCHEMA + "." + definition.name()
+                        + " (" + String.join(", ", index.getFields().keySet()) + ")");
+            }
+        }
+    }
+
+    private static void ddl(IgniteCache<String, BinaryObject> cache, String sql) {
+        try (var cursor = cache.query(new SqlFieldsQuery(sql).setSchema(SCHEMA))) {
+            cursor.getAll();
+        }
+    }
+
+    private static String sqlType(Class<?> type) {
+        if (type == String.class) {
+            return "VARCHAR";
+        }
+        if (type == Long.class) {
+            return "BIGINT";
+        }
+        if (type == Integer.class) {
+            return "INT";
+        }
+        if (type == Boolean.class) {
+            return "BOOLEAN";
+        }
+        throw new IllegalArgumentException("No SQL type for " + type);
     }
 
     String name() {

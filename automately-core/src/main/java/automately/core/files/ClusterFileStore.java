@@ -72,6 +72,22 @@ public abstract class ClusterFileStore implements FileStore {
     /** Due garbage rows: {@code {"fileId", "backend", "tenant"}}. */
     protected abstract Future<List<JsonObject>> dueGarbage(long now, int limit);
 
+    // --- directories (D-076) ---
+
+    /** A directory's row ({@code {tenant, path, createdAt}}), or null. */
+    protected abstract Future<JsonObject> getDir(String tenant, String path);
+
+    /** Completes with whether it was stored (false if the directory already existed). */
+    protected abstract Future<Boolean> putDirIfAbsent(String tenant, String path, JsonObject row);
+
+    protected abstract Future<JsonObject> removeDir(String tenant, String path);
+
+    /** Directory rows directly inside {@code parent} ("" is the root), by name, after {@code after} (or from the start). */
+    protected abstract Future<List<JsonObject>> childDirs(String tenant, String parent, String after, int limit);
+
+    /** File rows directly inside {@code parent}, by name, after {@code after}. */
+    protected abstract Future<List<JsonObject>> childFiles(String tenant, String parent, String after, int limit);
+
     // --- FileStore ---
 
     @Override
@@ -104,7 +120,11 @@ public abstract class ClusterFileStore implements FileStore {
     public Future<FileWriter> create(String tenant, String path, String contentType, Room room) {
         String fileId = UUID.randomUUID().toString();
         String type = contentType == null ? "application/octet-stream" : contentType;
-        return stores.forWrite(tenant, path).compose(target -> room.bytes(tenant, target).compose(maxBytes -> {
+        // A file can't take a directory's place, and its folders are made if they're missing (D-076).
+        Future<Void> place = getDir(tenant, path).compose(dir -> dir != null
+                ? Future.failedFuture(conflict("is_a_directory", path + " is a directory"))
+                : ensureDirs(tenant, Paths.parent(path)));
+        return place.compose(placed -> stores.forWrite(tenant, path)).compose(target -> room.bytes(tenant, target).compose(maxBytes -> {
             if (maxBytes <= 0) {
                 return Future.failedFuture(quota());
             }
@@ -166,6 +186,101 @@ public abstract class ClusterFileStore implements FileStore {
             }
             return chain.map(rows.size());
         });
+    }
+
+    // --- directories (D-076) ---
+
+    @Override
+    public Future<JsonObject> statEntry(String tenant, String path) {
+        if (path.isEmpty()) {
+            return Future.succeededFuture(dirView(new JsonObject().put("path", "").put("createdAt", 0L)));
+        }
+        return getMeta(tenant, path).compose(file -> file != null
+                ? Future.succeededFuture(fileView(FileInfo.fromJson(file)))
+                : getDir(tenant, path).map(dir -> dir == null ? null : dirView(dir)));
+    }
+
+    @Override
+    public Future<Boolean> mkdir(String tenant, String path, boolean parents) {
+        return getMeta(tenant, path).compose(file -> {
+            if (file != null) {
+                return Future.failedFuture(conflict("already_exists", "A file already exists at " + path));
+            }
+            String parent = Paths.parent(path);
+            Future<Void> above = parents ? ensureDirs(tenant, parent) : requireDir(tenant, parent);
+            return above.compose(v -> putDirIfAbsent(tenant, path, dirRow(tenant, path))).compose(created -> created || parents
+                    ? Future.succeededFuture(created)
+                    : Future.failedFuture(conflict("already_exists", path + " already exists")));
+        });
+    }
+
+    @Override
+    public Future<Boolean> rmdir(String tenant, String path) {
+        return getDir(tenant, path).compose(dir -> {
+            if (dir == null) {
+                return getMeta(tenant, path).compose(file -> file != null
+                        ? Future.failedFuture(conflict("not_a_directory", path + " is a file"))
+                        : Future.succeededFuture(false));
+            }
+            return childDirs(tenant, path, null, 1).compose(dirs -> childFiles(tenant, path, null, 1).compose(files -> !dirs.isEmpty() || !files.isEmpty()
+                    ? Future.failedFuture(conflict("not_empty", path + " isn't empty"))
+                    : removeDir(tenant, path).map(true)));
+        });
+    }
+
+    @Override
+    public Future<JsonObject> listDir(String tenant, String dir, int limit, String cursor) {
+        Future<Void> exists = dir.isEmpty() ? Future.succeededFuture() : getDir(tenant, dir).compose(row -> row != null
+                ? Future.succeededFuture()
+                : getMeta(tenant, dir).compose(file -> Future.failedFuture(file != null
+                        ? conflict("not_a_directory", dir + " is a file")
+                        : new HostException("Error", "not_found", "No such directory: " + dir))));
+        return exists.compose(v -> childDirs(tenant, dir, cursor, limit + 1)).compose(dirs -> childFiles(tenant, dir, cursor, limit + 1).map(files -> {
+            // Directories and files share one set of names, so merging the two sorted pages gives the next page.
+            List<JsonObject> entries = new java.util.ArrayList<>();
+            dirs.forEach(row -> entries.add(dirView(row)));
+            files.forEach(row -> entries.add(fileView(FileInfo.fromJson(row))));
+            entries.sort(java.util.Comparator.comparing(e -> e.getString("name")));
+            boolean more = entries.size() > limit;
+            List<JsonObject> page = more ? entries.subList(0, limit) : entries;
+            return new JsonObject().put("path", dir).put("entries", new io.vertx.core.json.JsonArray(List.copyOf(page)))
+                    .put("cursor", more ? page.getLast().getString("name") : null);
+        }));
+    }
+
+    /** Makes {@code path} and any directories above it that are missing; refuses if a file is in the way. */
+    protected Future<Void> ensureDirs(String tenant, String path) {
+        if (path.isEmpty()) {
+            return Future.succeededFuture();
+        }
+        // Every directory's ancestors exist (they're made first and removed last), so one found ends the climb.
+        return getDir(tenant, path).compose(dir -> dir != null ? Future.succeededFuture()
+                : getMeta(tenant, path).compose(file -> file != null
+                        ? Future.failedFuture(conflict("not_a_directory", path + " is a file, so it can't hold others"))
+                        : ensureDirs(tenant, Paths.parent(path)).compose(v -> putDirIfAbsent(tenant, path, dirRow(tenant, path))).mapEmpty()));
+    }
+
+    private Future<Void> requireDir(String tenant, String path) {
+        return path.isEmpty() ? Future.succeededFuture() : getDir(tenant, path).compose(dir -> dir != null
+                ? Future.succeededFuture()
+                : Future.failedFuture(new HostException("Error", "not_found", "No such directory: " + path)));
+    }
+
+    static JsonObject dirRow(String tenant, String path) {
+        return new JsonObject().put("tenant", tenant).put("path", path).put("createdAt", System.currentTimeMillis());
+    }
+
+    static JsonObject dirView(JsonObject row) {
+        String path = row.getString("path");
+        return new JsonObject().put("name", Paths.name(path)).put("path", path).put("kind", "dir").put("createdAt", row.getLong("createdAt", 0L));
+    }
+
+    static JsonObject fileView(FileInfo file) {
+        return file.toViewJson().put("name", Paths.name(file.path())).put("kind", "file");
+    }
+
+    static HostException conflict(String code, String message) {
+        return new HostException("Error", code, message);
     }
 
     // --- writing ---

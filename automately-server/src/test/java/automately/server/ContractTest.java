@@ -80,7 +80,7 @@ class ContractTest {
     @Test
     void everyRouteIsInTheContractAndEveryOperationHasARoute() {
         Set<String> routes = node.apiRoutes().stream()
-                .map(route -> route.replaceAll(":([a-z]+)", "{$1}").replace("/v1/files/.+", "/v1/files/{path}"))
+                .map(route -> route.replaceAll(":([a-z]+)", "{$1}").replace("/v1/files/.+", "/v1/files/{path}").replace("/v1/dirs/.+", "/v1/dirs/{path}"))
                 .collect(Collectors.toCollection(TreeSet::new));
         Set<String> operations = contract.operations().stream()
                 .map(operation -> operation.getHttpMethod().name() + " " + operation.getOpenAPIPath())
@@ -145,6 +145,10 @@ class ContractTest {
                 .putHeader("Authorization", tenant).putHeader("Content-Type", "text/html").sendBuffer(Buffer.buffer("<h1>hi</h1>")));
         calls.validate("putFile", stored);
         calls.check("listFiles", "GET", "/v1/files?prefix=site/&limit=5", tenant, null);
+        calls.check("makeDir", "PUT", "/v1/dirs/site/assets", tenant, null);
+        calls.check("listRootDir", "GET", "/v1/dirs?limit=10", tenant, null);
+        calls.check("listDir", "GET", "/v1/dirs/site", tenant, null);
+        calls.check("removeDir", "DELETE", "/v1/dirs/site/assets", tenant, null);
         calls.check("getFile", "GET", "/v1/files/site/index.html", tenant, null);
         calls.check("headFile", "HEAD", "/v1/files/site/index.html", tenant, null);
         calls.check("deleteFile", "DELETE", "/v1/files/site/index.html", tenant, null);

@@ -15,6 +15,7 @@ public final class SharedDataFileStore extends ClusterFileStore {
 
     private final Future<AsyncMap<String, JsonObject>> meta;
     private final Future<AsyncMap<String, JsonObject>> garbage;
+    private final Future<AsyncMap<String, JsonObject>> dirs;
 
     /** Bytes in the same shared maps, with the heap as the capacity that's watched (D-038). */
     public SharedDataFileStore(Vertx vertx) {
@@ -33,6 +34,7 @@ public final class SharedDataFileStore extends ClusterFileStore {
         super(vertx, stores);
         this.meta = vertx.sharedData().getAsyncMap("automately.files");
         this.garbage = vertx.sharedData().getAsyncMap("automately.file-garbage");
+        this.dirs = vertx.sharedData().getAsyncMap("automately.dirs");
     }
 
     private static String key(String tenant, String path) {
@@ -81,6 +83,40 @@ public final class SharedDataFileStore extends ClusterFileStore {
     @Override
     protected Future<Long> countFilesIn(String backend) {
         return meta.compose(AsyncMap::values).map(values -> values.stream().filter(v -> FileInfo.fromJson(v).backend().equals(backend)).count());
+    }
+
+    @Override
+    protected Future<JsonObject> getDir(String tenant, String path) {
+        return dirs.compose(m -> m.get(key(tenant, path)));
+    }
+
+    @Override
+    protected Future<Boolean> putDirIfAbsent(String tenant, String path, JsonObject row) {
+        return dirs.compose(m -> m.putIfAbsent(key(tenant, path), row)).map(previous -> previous == null);
+    }
+
+    @Override
+    protected Future<JsonObject> removeDir(String tenant, String path) {
+        return dirs.compose(m -> m.remove(key(tenant, path)));
+    }
+
+    @Override
+    protected Future<List<JsonObject>> childDirs(String tenant, String parent, String after, int limit) {
+        return children(dirs, tenant, parent, after, limit);
+    }
+
+    @Override
+    protected Future<List<JsonObject>> childFiles(String tenant, String parent, String after, int limit) {
+        return children(meta, tenant, parent, after, limit);
+    }
+
+    private static Future<List<JsonObject>> children(Future<AsyncMap<String, JsonObject>> map, String tenant, String parent, String after, int limit) {
+        return map.compose(AsyncMap::values).map(values -> values.stream()
+                .filter(v -> v.getString("tenant").equals(tenant) && Paths.parent(v.getString("path")).equals(parent)
+                        && (after == null || Paths.name(v.getString("path")).compareTo(after) > 0))
+                .sorted(Comparator.comparing(v -> Paths.name(v.getString("path"))))
+                .limit(limit)
+                .toList());
     }
 
     @Override

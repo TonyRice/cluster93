@@ -17,7 +17,7 @@ public final class IgniteStores {
 
     private static final List<Table.Definition> TABLES = java.util.stream.Stream.concat(java.util.stream.Stream.of(
             IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE, IgniteDomainStore.TABLE, IgniteKvStore.TABLE,
-            IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
+            IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteFileStore.DIRS, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
             IgniteStorageConfigStore.POLICIES, IgniteStorageConfigStore.PROVIDERS, IgniteStorageConfigStore.ROUTES,
             IgniteQueueStore.TABLE, IgniteAuditLog.TABLE),
             java.util.stream.Stream.concat(automately.core.identity.Identity.KINDS.stream(),
@@ -53,12 +53,12 @@ public final class IgniteStores {
     }
 
     /** File metadata in the cluster, bytes in {@code blobs} (D-056). The tenant quota is applied by callers (D-043). */
-    public FileStore files(automately.core.files.BlobStore blobs) {
+    public IgniteFileStore files(automately.core.files.BlobStore blobs) {
         return files(automately.core.files.BlobStores.single(blobs));
     }
 
     /** File metadata in the cluster, bytes routed per tenant (D-057). */
-    public FileStore files(automately.core.files.BlobStores stores) {
+    public IgniteFileStore files(automately.core.files.BlobStores stores) {
         return new IgniteFileStore(vertx, cluster.ignite(), stores);
     }
 

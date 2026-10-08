@@ -58,6 +58,24 @@ public interface FileStore {
     /** Completes with whether a file was removed. Its bytes are deleted after the grace period. */
     Future<Boolean> delete(String tenant, String path);
 
+    /**
+     * A file's view plus {@code kind: "file"}, or a directory's ({@code {name, path, kind: "dir", createdAt}}); null if
+     * neither exists. The root ({@code ""}) is always a directory (D-076).
+     */
+    Future<JsonObject> statEntry(String tenant, String path);
+
+    /**
+     * Makes a directory; with {@code parents}, also any missing ones above it, and no error if it exists. Completes with
+     * whether it was made. Fails ({@code already_exists}, {@code not_a_directory}, {@code not_found}) as the code says.
+     */
+    Future<Boolean> mkdir(String tenant, String path, boolean parents);
+
+    /** Removes an empty directory; completes with whether there was one. Fails {@code not_empty} or {@code not_a_directory}. */
+    Future<Boolean> rmdir(String tenant, String path);
+
+    /** One level of a directory ({@code ""} is the root): {@code {path, entries: [dir and file views, by name], cursor}}. */
+    Future<JsonObject> listDir(String tenant, String dir, int limit, String cursor);
+
     /** Bytes a tenant stores on the cluster's own backend; its own providers don't count (D-057). */
     Future<Long> usage(String tenant);
 
