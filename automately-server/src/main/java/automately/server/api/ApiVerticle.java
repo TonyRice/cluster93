@@ -70,6 +70,7 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.secrets.TenantSecrets secrets;
     private final automately.core.identity.Identity identity;
     private final automately.core.audit.AuditLog audit;
+    private final automately.core.files.FileTree fileTree;
     private final java.security.SecureRandom auditIds = new java.security.SecureRandom();
     /** Revokes a node's certificate (D-066); null when the cluster doesn't use node certificates. */
     private final java.util.function.Function<String, Future<JsonObject>> revokeNode;
@@ -90,7 +91,7 @@ public final class ApiVerticle extends VerticleBase {
                        automately.core.auth.AuthStore authStore, automately.core.files.Room room, StorageApi.Wiring storage,
                        automately.core.queue.QueueService queues, automately.core.callback.CallbackSecrets callbackSecrets,
                        automately.core.secrets.TenantSecrets secrets, automately.core.identity.Identity identity,
-                       automately.core.audit.AuditLog audit, automately.core.auth.RateLimiter limiter, java.util.function.Function<String, Future<JsonObject>> revokeNode,
+                       automately.core.audit.AuditLog audit, automately.core.files.FileTree fileTree, automately.core.auth.RateLimiter limiter, java.util.function.Function<String, Future<JsonObject>> revokeNode,
                        java.util.function.Supplier<Future<List<String>>> notReady) {
         this.revokeNode = revokeNode;
         this.notReady = notReady;
@@ -99,6 +100,7 @@ public final class ApiVerticle extends VerticleBase {
         this.secrets = secrets;
         this.identity = identity;
         this.audit = audit;
+        this.fileTree = fileTree;
         this.room = room;
         this.storage = storage;
         // Shared with the scripts' jobs API, so jobs started from scripts count toward the same limit (D-063).
@@ -164,7 +166,7 @@ public final class ApiVerticle extends VerticleBase {
                 .compose(v -> identity.forgetTenant(tenant))).mount(router);
         new IdentityRoutes(identity, audit, authStore, authenticator, auditIds, config.secretsKey()).mount(router);
         new StorageApi(storage, files, authStore, quota).mount(router);
-        new FilesRoutes(files, quota, room).mount(router);
+        new FilesRoutes(files, quota, room, fileTree).mount(router);
         new BusRoutes(vertx).mount(router);
         new QueueRoutes(queues).mount(router);
         new SecretsRoutes(secrets).mount(router);

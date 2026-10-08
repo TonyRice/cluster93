@@ -76,7 +76,16 @@ public interface FileStore {
     /** One level of a directory ({@code ""} is the root): {@code {path, entries: [dir and file views, by name], cursor}}. */
     Future<JsonObject> listDir(String tenant, String dir, int limit, String cursor);
 
-    /** Bytes a tenant stores on the cluster's own backend; its own providers don't count (D-057). */
+    /**
+     * Copies a file: the copy names the same blob, so no bytes are written and it counts once against the quota (D-077).
+     * Fails {@code already_exists} unless {@code overwrite}; makes the target's folders.
+     */
+    Future<FileInfo> copy(String tenant, String from, String to, boolean overwrite);
+
+    /** Moves a file to another path; only its metadata changes, whatever the backend (D-077). */
+    Future<FileInfo> move(String tenant, String from, String to, boolean overwrite);
+
+    /** Bytes a tenant stores on the cluster's own backend, each blob once; its own providers don't count (D-057). */
     Future<Long> usage(String tenant);
 
     /** Bytes a tenant stores in these backends (a disk allotment's providers). */

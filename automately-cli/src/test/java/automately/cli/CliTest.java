@@ -288,6 +288,11 @@ class CliTest {
         assertThat(notEmpty.code()).isEqualTo(1);
         assertThat(notEmpty.err()).contains("isn't empty");
         assertThat(cli("files", "rmdir", "www/img/icons").code()).isZero();
+        assertThat(cli("files", "cp", "www", "www-backup").out()).contains("Copied www to www-backup");
+        assertThat(cli("files", "mv", "www-backup/index.html", "www-backup/home.html").code()).isZero();
+        assertThat(cli("files", "get", "www-backup/home.html", "-").out()).isEqualTo("<h1>v2</h1>");
+        assertThat(cli("files", "rm", "-r", "www-backup").code()).isZero();
+        assertThat(cli("files", "ls").out()).doesNotContain("www-backup");
         assertThat(cli("files", "get", "www/index.html", "-").out()).isEqualTo("<h1>v2</h1>");
 
         Path big = home.resolve("big.bin");

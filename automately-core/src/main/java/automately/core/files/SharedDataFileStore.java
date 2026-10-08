@@ -16,6 +16,7 @@ public final class SharedDataFileStore extends ClusterFileStore {
     private final Future<AsyncMap<String, JsonObject>> meta;
     private final Future<AsyncMap<String, JsonObject>> garbage;
     private final Future<AsyncMap<String, JsonObject>> dirs;
+    private final Future<AsyncMap<String, Long>> refs;
 
     /** Bytes in the same shared maps, with the heap as the capacity that's watched (D-038). */
     public SharedDataFileStore(Vertx vertx) {
@@ -35,6 +36,7 @@ public final class SharedDataFileStore extends ClusterFileStore {
         this.meta = vertx.sharedData().getAsyncMap("automately.files");
         this.garbage = vertx.sharedData().getAsyncMap("automately.file-garbage");
         this.dirs = vertx.sharedData().getAsyncMap("automately.dirs");
+        this.refs = vertx.sharedData().getAsyncMap("automately.blob-refs");
     }
 
     private static String key(String tenant, String path) {
@@ -68,16 +70,47 @@ public final class SharedDataFileStore extends ClusterFileStore {
 
     @Override
     protected Future<Long> sumOwnBytes(String tenant) {
-        return meta.compose(AsyncMap::values).map(values -> values.stream()
-                .filter(v -> v.getString("tenant").equals(tenant) && !FileInfo.fromJson(v).backend().startsWith("provider:"))
-                .mapToLong(v -> v.getLong("size")).sum());
+        return meta.compose(AsyncMap::values).map(values -> distinctBlobs(values.stream()
+                .filter(v -> v.getString("tenant").equals(tenant) && !FileInfo.fromJson(v).backend().startsWith("provider:"))));
     }
 
     @Override
     protected Future<Long> sumBytesIn(String tenant, List<String> backends) {
-        return meta.compose(AsyncMap::values).map(values -> values.stream()
-                .filter(v -> v.getString("tenant").equals(tenant) && backends.contains(FileInfo.fromJson(v).backend()))
-                .mapToLong(v -> v.getLong("size")).sum());
+        return meta.compose(AsyncMap::values).map(values -> distinctBlobs(values.stream()
+                .filter(v -> v.getString("tenant").equals(tenant) && backends.contains(FileInfo.fromJson(v).backend()))));
+    }
+
+    /** Copies share a blob, so each blob's size counts once (D-077). */
+    private static long distinctBlobs(java.util.stream.Stream<JsonObject> rows) {
+        java.util.Map<String, Long> sizes = new java.util.HashMap<>();
+        rows.forEach(v -> sizes.put(v.getString("fileId", v.getString("path")), v.getLong("size")));
+        return sizes.values().stream().mapToLong(Long::longValue).sum();
+    }
+
+    @Override
+    protected Future<Boolean> removeMetaIfUnchanged(String tenant, String path, JsonObject expected) {
+        return meta.compose(m -> m.removeIfPresent(key(tenant, path), expected));
+    }
+
+    @Override
+    protected Future<Long> addRefs(String fileId, long delta) {
+        return refs.compose(m -> m.get(fileId).compose(current -> {
+            long next = (current == null ? 1 : current) + delta;
+            Future<Boolean> stored = current == null
+                    ? m.putIfAbsent(fileId, next).map(previous -> previous == null)
+                    : m.replaceIfPresent(fileId, current, next);
+            return stored.compose(ok -> ok ? Future.succeededFuture(next) : addRefs(fileId, delta));
+        }));
+    }
+
+    @Override
+    protected Future<Long> refs(String fileId) {
+        return refs.compose(m -> m.get(fileId));
+    }
+
+    @Override
+    protected Future<Void> removeRefs(String fileId) {
+        return refs.compose(m -> m.remove(fileId)).mapEmpty();
     }
 
     @Override

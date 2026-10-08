@@ -44,7 +44,7 @@ final class TestIgnite {
             stores = IgniteStores.open(vertx, cluster);
         }
         for (Table.Definition table : List.of(IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE,
-                IgniteDomainStore.TABLE, IgniteKvStore.TABLE, IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteFileStore.DIRS,
+                IgniteDomainStore.TABLE, IgniteKvStore.TABLE, IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteFileStore.DIRS, IgniteFileStore.REFS,
                 IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
                 IgniteStorageConfigStore.POLICIES, IgniteStorageConfigStore.PROVIDERS, IgniteStorageConfigStore.ROUTES,
                 IgniteQueueStore.TABLE)) {
@@ -53,6 +53,7 @@ final class TestIgnite {
         cluster.ignite().cache(IgniteAuditLog.TABLE.name()).clear();
         automately.core.identity.Identity.KINDS.forEach(kind -> cluster.ignite().cache(kind.name()).clear());
         cluster.ignite().cache(automately.core.audit.AuditExporter.STATE.name()).clear();
+        cluster.ignite().cache(automately.core.files.FileTree.OPS.name()).clear();
         cluster.ignite().cache(IgniteChunks.CACHE).clear();
         return stores;
     }

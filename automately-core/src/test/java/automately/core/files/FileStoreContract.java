@@ -137,6 +137,62 @@ public abstract class FileStoreContract {
         assertThat(seen).hasSize(14).isSorted().doesNotHaveDuplicates();
     }
 
+    // --- move and copy (D-077) ---
+
+    private static long later() {
+        return System.currentTimeMillis() + ClusterFileStore.READER_GRACE.toMillis() + 1;
+    }
+
+    @Test
+    public void aCopySharesItsBytesAndOutlivesTheOriginal() throws Exception {
+        byte[] data = bytes(CHUNK + 100, 7);
+        FileInfo original = write(store, "acme", "a/original.bin", data, 50_000);
+        long before = await(store.usage("acme"));
+
+        FileInfo copy = await(store.copy("acme", "a/original.bin", "b/copy.bin", false));
+        assertThat(copy.fileId()).as("no bytes written").isEqualTo(original.fileId());
+        assertThat(copy.etag()).isEqualTo(original.etag());
+        assertThat(await(store.usage("acme"))).as("counted once").isEqualTo(before);
+        assertThat(await(store.statEntry("acme", "b")).getString("kind")).as("its folder is made").isEqualTo("dir");
+
+        await(store.delete("acme", "a/original.bin"));
+        await(store.collectGarbage(later()));
+        assertThat(readAll("acme", "b/copy.bin")).as("the copy keeps the bytes").isEqualTo(data);
+
+        await(store.delete("acme", "b/copy.bin"));
+        assertThat(await(store.collectGarbage(later()))).isGreaterThanOrEqualTo(1);
+        assertThatThrownBy(() -> read(store.open(copy, 0, 10))).hasMessageContaining("missing");
+    }
+
+    @Test
+    public void aMoveChangesOnlyThePath() throws Exception {
+        byte[] data = "moving day".getBytes();
+        FileInfo original = write(store, "acme", "inbox/note.txt", data, 4);
+
+        FileInfo moved = await(store.move("acme", "inbox/note.txt", "archive/2026/note.txt", false));
+        assertThat(moved.fileId()).isEqualTo(original.fileId());
+        assertThat(await(store.stat("acme", "inbox/note.txt"))).isNull();
+        await(store.collectGarbage(later()));
+        assertThat(readAll("acme", "archive/2026/note.txt")).isEqualTo(data);
+    }
+
+    @Test
+    public void overwritingNeedsAskingAndReleasesWhatWasThere() throws Exception {
+        write(store, "acme", "x.txt", "new".getBytes(), 4);
+        FileInfo old = write(store, "acme", "y.txt", "old".getBytes(), 4);
+        await(store.mkdir("acme", "folder", false));
+
+        assertThatThrownBy(() -> await(store.copy("acme", "x.txt", "y.txt", false))).satisfies(e -> assertThat(code(e)).isEqualTo("already_exists"));
+        assertThatThrownBy(() -> await(store.move("acme", "x.txt", "folder", true))).satisfies(e -> assertThat(code(e)).isEqualTo("is_a_directory"));
+        assertThatThrownBy(() -> await(store.move("acme", "nope.txt", "z.txt", false))).satisfies(e -> assertThat(code(e)).isEqualTo("not_found"));
+        assertThatThrownBy(() -> await(store.copy("acme", "folder", "z", false))).satisfies(e -> assertThat(code(e)).isEqualTo("is_a_directory"));
+
+        await(store.move("acme", "x.txt", "y.txt", true));
+        assertThat(readAll("acme", "y.txt")).isEqualTo("new".getBytes());
+        await(store.collectGarbage(later()));
+        assertThatThrownBy(() -> read(store.open(old, 0, 2))).as("the overwritten version is collected").hasMessageContaining("missing");
+    }
+
     @Test
     public void writesAndReadsBackWithItsHash() throws Exception {
         byte[] data = "hello files".getBytes();

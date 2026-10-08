@@ -26,6 +26,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## The file system, part 2 — Move and copy (2026-10-07)
+
+### Added
+- **Move and copy (D-077),** for files and whole folders.
+  - **API:** `POST /v1/fs/move` and `POST /v1/fs/copy` take `{from, to, overwrite}`.
+  - **CLI:** `automately files mv`, `files cp`, `files rm -r`.
+  - **MCP:** `move`, `copy`.
+  - **No bytes move,** even on S3, because only the paths change. Copies share their bytes, take no extra room, and count once against the quota.
+- **Deleting a folder and everything in it:** `DELETE /v1/dirs/{path}?recursive=true`.
+- **Folder operations are journaled:** one runs per tenant at a time, and if a node dies midway another finishes it.
+- **Tests:**
+  - move and copy in `FileStoreContract` on all four stores
+  - `FileTreeTest`, including a node dying mid-move
+  - folders copied and moved across two nodes in `FilesTest`
+  - `ContractTest`, CLI and MCP
+
+### Changed
+- **Deleting or replacing a file releases its bytes** instead of deleting them outright: they're deleted once no file names them, through a reference count per blob.
+
 ## The file system, part 1 — Folders (2026-10-07)
 
 ### Added

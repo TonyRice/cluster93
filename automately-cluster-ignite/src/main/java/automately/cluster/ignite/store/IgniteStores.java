@@ -17,11 +17,12 @@ public final class IgniteStores {
 
     private static final List<Table.Definition> TABLES = java.util.stream.Stream.concat(java.util.stream.Stream.of(
             IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE, IgniteDomainStore.TABLE, IgniteKvStore.TABLE,
-            IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteFileStore.DIRS, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
+            IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteFileStore.DIRS, IgniteFileStore.REFS, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
             IgniteStorageConfigStore.POLICIES, IgniteStorageConfigStore.PROVIDERS, IgniteStorageConfigStore.ROUTES,
             IgniteQueueStore.TABLE, IgniteAuditLog.TABLE),
             java.util.stream.Stream.concat(automately.core.identity.Identity.KINDS.stream(),
-                    java.util.stream.Stream.of(automately.core.audit.AuditExporter.STATE)).map(IgniteRecords::definition)).toList();
+                    java.util.stream.Stream.of(automately.core.audit.AuditExporter.STATE, automately.core.files.FileTree.OPS))
+                    .map(IgniteRecords::definition)).toList();
 
     public final JobStore jobs;
     public final JobStateStore state;

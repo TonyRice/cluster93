@@ -136,6 +136,31 @@ class FilesTest {
     }
 
     @Test
+    void foldersMoveAndCopyAcrossTheClusterWithoutMovingBytes() throws Exception {
+        byte[] data = bytes(2 * MB, 9);
+        assertThat(upload(nodeA, "albums/2026/a.jpg", data, "image/jpeg").statusCode()).isEqualTo(201);
+        assertThat(upload(nodeA, "albums/2026/b.jpg", data, "image/jpeg").statusCode()).isEqualTo(201);
+        long used = get(nodeA, "/v1/storage").bodyAsJsonObject().getJsonObject("quota").getLong("usedBytes");
+
+        HttpResponse<Buffer> copied = await(client.post(nodeB.httpPort(), "localhost", "/v1/fs/copy").putHeader("Authorization", TestAuth.bearer(TENANT))
+                .sendJsonObject(new JsonObject().put("from", "albums").put("to", "backup/albums")));
+        assertThat(copied.statusCode()).as(copied.bodyAsString()).isEqualTo(200);
+        assertThat(copied.bodyAsJsonObject().getInteger("files")).isEqualTo(2);
+        Thread.sleep(automately.core.storage.TenantQuota.FRESH.toMillis() + 500);
+        assertThat(get(nodeA, "/v1/storage").bodyAsJsonObject().getJsonObject("quota").getLong("usedBytes")).as("copies count once").isEqualTo(used);
+
+        HttpResponse<Buffer> moved = await(client.post(nodeA.httpPort(), "localhost", "/v1/fs/move").putHeader("Authorization", TestAuth.bearer(TENANT))
+                .sendJsonObject(new JsonObject().put("from", "albums/2026").put("to", "albums/summer")));
+        assertThat(moved.statusCode()).as(moved.bodyAsString()).isEqualTo(200);
+        assertThat(get(nodeB, "/v1/files/albums/summer/b.jpg").body().getBytes()).isEqualTo(data);
+        assertThat(get(nodeB, "/v1/dirs/albums/2026").statusCode()).isEqualTo(404);
+
+        assertThat(await(client.delete(nodeB.httpPort(), "localhost", "/v1/dirs/backup?recursive=true").putHeader("Authorization", TestAuth.bearer(TENANT))
+                .send()).statusCode()).isEqualTo(204);
+        assertThat(get(nodeA, "/v1/files/albums/summer/a.jpg").body().getBytes()).as("the original kept its bytes").isEqualTo(data);
+    }
+
+    @Test
     void uploadsOnOneNodeAndDownloadsOnTheOther() throws Exception {
         byte[] data = bytes(10 * MB + 123, 1);
 

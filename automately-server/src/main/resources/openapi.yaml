@@ -876,11 +876,39 @@ paths:
     delete:
       operationId: removeDir
       tags: [files]
-      summary: Remove an empty directory (409 if it isn't empty)
+      summary: Remove an empty directory (409 if it isn't empty), or with recursive=true everything in it
       security:
         - bearer: ['files:write']
+      parameters:
+        - name: recursive
+          in: query
+          schema: { type: string, enum: ['true', 'false'] }
       responses:
         '204': { description: 'Removed.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/fs/move:
+    post:
+      operationId: moveFiles
+      tags: [files]
+      summary: Move a file, or a folder with everything in it; only metadata changes, whatever the storage (D-077)
+      security:
+        - bearer: ['files:write']
+      requestBody: { $ref: '#/components/requestBodies/Transfer' }
+      responses:
+        '200': { $ref: '#/components/responses/Transferred' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/fs/copy:
+    post:
+      operationId: copyFiles
+      tags: [files]
+      summary: Copy a file, or a folder with everything in it; copies share their bytes and count once against the quota
+      security:
+        - bearer: ['files:write']
+      requestBody: { $ref: '#/components/requestBodies/Transfer' }
+      responses:
+        '200': { $ref: '#/components/responses/Transferred' }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/files:
@@ -1910,6 +1938,17 @@ components:
       schema: { type: string }
 
   requestBodies:
+    Transfer:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [from, to]
+            properties:
+              from: { type: string, minLength: 1, maxLength: 1024 }
+              to: { type: string, minLength: 1, maxLength: 1024 }
+              overwrite: { type: boolean, description: 'Replace a file that is there, or merge into a folder that is.' }
     InviteRequest:
       required: true
       content:
@@ -1943,6 +1982,19 @@ components:
               expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
 
   responses:
+    Transferred:
+      description: Done.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [op, from, files, dirs]
+            properties:
+              op: { type: string, enum: [move, copy, delete] }
+              from: { type: string }
+              to: { type: [string, 'null'] }
+              files: { type: integer }
+              dirs: { type: integer }
     DirListing:
       description: One level of a directory.
       content:

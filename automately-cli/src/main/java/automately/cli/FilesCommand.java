@@ -25,7 +25,7 @@ import java.util.stream.Stream;
 
 @Command(name = "files", description = "Your files: upload, download, list, delete, and sync a folder (a static site).",
         subcommands = {FilesCommand.Put.class, FilesCommand.Get.class, FilesCommand.Ls.class, FilesCommand.Mkdir.class, FilesCommand.Rmdir.class,
-                FilesCommand.Rm.class, FilesCommand.Sync.class})
+                FilesCommand.Mv.class, FilesCommand.Cp.class, FilesCommand.Rm.class, FilesCommand.Sync.class})
 final class FilesCommand extends Base {
 
     private static final Map<String, String> TYPES = Map.ofEntries(
@@ -200,14 +200,65 @@ final class FilesCommand extends Base {
         }
     }
 
-    @Command(name = "rm", description = "Delete a file.")
+    /** {@code files mv} and {@code files cp}: a file, or a folder with everything in it; no bytes move (D-077). */
+    static int transfer(Base command, String op, String from, String to, boolean overwrite) {
+        JsonNode done = command.api().post("/v1/fs/" + op, Json.object().put("from", from).put("to", to).put("overwrite", overwrite));
+        if (!command.printedJson(done)) {
+            command.out().println((op.equals("move") ? "Moved " : "Copied ") + from + " to " + to + " (" + Json.text(done, "files") + " files"
+                    + (done.path("dirs").asInt() > 0 ? ", " + Json.text(done, "dirs") + " folders" : "") + ")");
+        }
+        return 0;
+    }
+
+    @Command(name = "mv", description = "Move or rename a file or folder. Nothing is re-uploaded.")
+    static final class Mv extends Base {
+        @Parameters(index = "0", paramLabel = "FROM")
+        String from;
+
+        @Parameters(index = "1", paramLabel = "TO")
+        String to;
+
+        @Option(names = {"-f", "--force"}, description = "Replace a file at TO, or merge into a folder there.")
+        boolean force;
+
+        @Override
+        int execute() {
+            return transfer(this, "move", from, to, force);
+        }
+    }
+
+    @Command(name = "cp", description = "Copy a file or folder. Copies share their bytes, so they take no extra room.")
+    static final class Cp extends Base {
+        @Parameters(index = "0", paramLabel = "FROM")
+        String from;
+
+        @Parameters(index = "1", paramLabel = "TO")
+        String to;
+
+        @Option(names = {"-f", "--force"}, description = "Replace a file at TO, or merge into a folder there.")
+        boolean force;
+
+        @Override
+        int execute() {
+            return transfer(this, "copy", from, to, force);
+        }
+    }
+
+    @Command(name = "rm", description = "Delete a file, or with -r a folder and everything in it.")
     static final class Rm extends Base {
         @Parameters(paramLabel = "REMOTE")
         String remote;
 
+        @Option(names = {"-r", "--recursive"}, description = "A folder and everything in it.")
+        boolean recursive;
+
         @Override
         int execute() {
-            api().delete("/v1/files/" + Api.filePath(remote));
+            if (recursive) {
+                api().delete("/v1/dirs/" + Api.filePath(remote.replaceAll("^/+|/+$", "")) + "?recursive=true");
+            } else {
+                api().delete("/v1/files/" + Api.filePath(remote));
+            }
             out().println("Deleted " + remote + ".");
             return 0;
         }

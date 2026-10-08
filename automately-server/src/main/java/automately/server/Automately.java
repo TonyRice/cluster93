@@ -301,6 +301,10 @@ public final class Automately {
                 quota, room, queues, new automately.core.host.JobsWiring(jobs, scheduler, config.defaultTimeout(), config.maxTimeout(), limiter),
                 tenantSecrets));
         HostRouter hostRouter = new HostRouter(config.ingressDomain(), domains);
+        // Folder moves, copies and deletes, journaled so another node can finish one (D-077).
+        automately.core.files.FileTree fileTree = new automately.core.files.FileTree(vertx, stores.files(),
+                stores.records().open(automately.core.files.FileTree.OPS), instanceId);
+        fileTree.start();
         // Personal tokens act as their user, with what the user's roles give them now (D-070).
         automately.core.identity.Identity identity = new automately.core.identity.Identity(stores.records(), stores.auth());
         Authenticator authenticator = new Authenticator(stores.auth(), config.adminToken(), identity::resolve);
@@ -326,7 +330,7 @@ public final class Automately {
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, stores.files(),
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, tenantSecrets, identity, audit, limiter,
+                queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, limiter,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
                 () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.

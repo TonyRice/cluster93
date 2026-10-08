@@ -21,8 +21,10 @@ public final class IgniteFileStore extends ClusterFileStore {
 
     static final Table.Definition FILES = new Table.Definition("FILES",
             Table.columns("tenant", String.class, "path", String.class, "size", Long.class, "backend", String.class,
-                    "parent", String.class, "name", String.class),
+                    "parent", String.class, "name", String.class, "fileId", String.class),
             List.of(Table.index("tenant", "path"), Table.index("backend"), Table.index("tenant", "parent", "name")));
+    /** How many file rows name each blob, once copies share them (D-077). */
+    static final Table.Definition REFS = new Table.Definition("BLOB_REFS", Table.columns("refCount", Long.class), List.of());
     /** Directories (D-076): one row each, so empty ones exist and a level lists from an index. */
     static final Table.Definition DIRS = new Table.Definition("DIRS",
             Table.columns("tenant", String.class, "parent", String.class, "name", String.class),
@@ -34,12 +36,15 @@ public final class IgniteFileStore extends ClusterFileStore {
     private final Table files;
     private final Table garbage;
     private final Table dirs;
+    private final Table refs;
 
     public IgniteFileStore(Vertx vertx, Ignite ignite, BlobStores stores) {
         super(vertx, stores);
         this.files = new Table(vertx, ignite, FILES, json -> Map.of("tenant", json.getString("tenant"), "path", json.getString("path"),
                 "size", json.getLong("size"), "backend", FileInfo.fromJson(json).backend(),
-                "parent", automately.core.files.Paths.parent(json.getString("path")), "name", automately.core.files.Paths.name(json.getString("path"))));
+                "parent", automately.core.files.Paths.parent(json.getString("path")), "name", automately.core.files.Paths.name(json.getString("path")),
+                "fileId", json.getString("fileId")));
+        this.refs = new Table(vertx, ignite, REFS, json -> Map.of("refCount", json.getLong("count")));
         this.dirs = new Table(vertx, ignite, DIRS, json -> Map.of("tenant", json.getString("tenant"),
                 "parent", automately.core.files.Paths.parent(json.getString("path")), "name", automately.core.files.Paths.name(json.getString("path"))));
         this.garbage = new Table(vertx, ignite, GARBAGE, json -> Map.of("deleteAfter", json.getLong("deleteAfter")));
@@ -85,7 +90,9 @@ public final class IgniteFileStore extends ClusterFileStore {
     @Override
     protected Future<Long> sumOwnBytes(String tenant) {
         // Rows from before backends were recorded have no backend: they're in the cluster.
-        return sum("SELECT SUM(size) FROM FILES WHERE tenant = ? AND (backend IS NULL OR backend NOT LIKE 'provider:%')", tenant);
+        // Copies share a blob, so each blob counts once (D-077).
+        return sum("SELECT SUM(size) FROM (SELECT MAX(size) AS size FROM FILES WHERE tenant = ? AND (backend IS NULL OR backend NOT LIKE 'provider:%')"
+                + " GROUP BY COALESCE(fileId, path))", tenant);
     }
 
     @Override
@@ -93,7 +100,8 @@ public final class IgniteFileStore extends ClusterFileStore {
         String marks = String.join(", ", java.util.Collections.nCopies(backends.size(), "?"));
         List<Object> args = new ArrayList<>(List.of(tenant));
         args.addAll(backends);
-        return sum("SELECT SUM(size) FROM FILES WHERE tenant = ? AND backend IN (" + marks + ")", args.toArray());
+        return sum("SELECT SUM(size) FROM (SELECT MAX(size) AS size FROM FILES WHERE tenant = ? AND backend IN (" + marks + ")"
+                + " GROUP BY COALESCE(fileId, path))", args.toArray());
     }
 
     @Override
@@ -103,6 +111,29 @@ public final class IgniteFileStore extends ClusterFileStore {
 
     private Future<Long> sum(String sql, Object... args) {
         return files.query(sql, args).map(rows -> rows.isEmpty() || rows.getFirst().getFirst() == null ? 0L : ((Number) rows.getFirst().getFirst()).longValue());
+    }
+
+    @Override
+    protected Future<Boolean> removeMetaIfUnchanged(String tenant, String path, JsonObject expected) {
+        return files.removeIfUnchanged(key(tenant, path), expected);
+    }
+
+    @Override
+    protected Future<Long> addRefs(String fileId, long delta) {
+        return refs.putIfAbsent(fileId, new JsonObject().put("count", 1L + delta)).compose(created -> created
+                ? Future.succeededFuture(1L + delta)
+                : refs.update(fileId, json -> java.util.Optional.of(json.put("count", json.getLong("count") + delta)))
+                        .compose(updated -> updated.isPresent() ? Future.succeededFuture(updated.get().getLong("count")) : addRefs(fileId, delta)));
+    }
+
+    @Override
+    protected Future<Long> refs(String fileId) {
+        return refs.get(fileId).map(json -> json == null ? null : json.getLong("count"));
+    }
+
+    @Override
+    protected Future<Void> removeRefs(String fileId) {
+        return refs.remove(fileId).mapEmpty();
     }
 
     @Override
@@ -142,7 +173,7 @@ public final class IgniteFileStore extends ClusterFileStore {
      * and makes their folders. Idempotent and cheap once done, so every node runs it at start.
      */
     public Future<Integer> backfillTree() {
-        return files.queryJson("SELECT json FROM FILES WHERE parent IS NULL LIMIT 1000").compose(rows -> {
+        return files.queryJson("SELECT json FROM FILES WHERE parent IS NULL OR fileId IS NULL LIMIT 1000").compose(rows -> {
             Future<Void> all = Future.succeededFuture();
             for (JsonObject row : rows) {
                 String tenant = row.getString("tenant");

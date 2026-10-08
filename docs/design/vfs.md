@@ -148,7 +148,7 @@ Node code uses `fs.readFileSync`, `existsSync` and friends, so the host API has 
 |---|---|
 | `GET /v1/dirs` · `GET /v1/dirs/{path}` | one level: files and subdirectories, by name, paged |
 | `PUT /v1/dirs/{path}` · `DELETE /v1/dirs/{path}` | make (and any missing above it) · remove an empty one; `?recursive=true` comes with tree operations |
-| `POST /v1/files:move` · `POST /v1/files:copy` | `{from, to, overwrite}` for files and directories |
+| `POST /v1/fs/move` · `POST /v1/fs/copy` | `{from, to, overwrite}` for files and directories |
 | `POST /v1/files/{path}/link` | a public link |
 | `GET /v1/files/{path}` · `PUT` · `HEAD` · `DELETE` · `GET /v1/files?prefix=` | unchanged |
 
@@ -202,7 +202,7 @@ Yes; nothing depends on which node a request lands on.
 
 ## Build status
 1. **Folders and one-level listing:** done (D-076).
-2. Move and copy: shared blobs with reference counts, then tree operations.
+2. **Move and copy, with shared blobs and journaled folder operations:** done (D-077). The REST calls are `POST /v1/fs/move` and `/v1/fs/copy`. The lease is per tenant rather than per folder, which is simpler and still safe.
 3. Mounts replacing prefix routes.
 4. `/tmp` (memory, spilling to disk), `FsApi` and `automately:fs` with sync calls.
 5. Edits in place, locks and public links.

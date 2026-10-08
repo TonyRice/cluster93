@@ -28,8 +28,10 @@ final class FilesRoutes {
     private final FileStore files;
     private final TenantQuota quota;
     private final automately.core.files.Room room;
+    private final automately.core.files.FileTree tree;
 
-    FilesRoutes(FileStore files, TenantQuota quota, automately.core.files.Room room) {
+    FilesRoutes(FileStore files, TenantQuota quota, automately.core.files.Room room, automately.core.files.FileTree tree) {
+        this.tree = tree;
         this.files = files;
         this.quota = quota;
         this.room = room;
@@ -44,13 +46,22 @@ final class FilesRoutes {
                     ctx.json(entry);
                     return entry;
                 })).onFailure(err -> fail(ctx, err))));
-        router.deleteWithRegex("/v1/dirs/.+").handler(ctx -> withDir(ctx, dir -> files.rmdir(ctx.get("tenant"), dir).onSuccess(removed -> {
-            if (removed) {
-                ctx.response().setStatusCode(204).end();
-            } else {
-                error(ctx, 404, "not_found", "No such directory: " + dir);
+        router.deleteWithRegex("/v1/dirs/.+").handler(ctx -> withDir(ctx, dir -> {
+            if ("true".equals(ctx.request().getParam("recursive"))) {
+                // Everything in it, as a journaled tree operation (D-077).
+                tree.delete(ctx.get("tenant"), dir).onSuccess(result -> ctx.response().setStatusCode(204).end()).onFailure(err -> fail(ctx, err));
+                return;
             }
-        }).onFailure(err -> fail(ctx, err))));
+            files.rmdir(ctx.get("tenant"), dir).onSuccess(removed -> {
+                if (removed) {
+                    ctx.response().setStatusCode(204).end();
+                } else {
+                    error(ctx, 404, "not_found", "No such directory: " + dir);
+                }
+            }).onFailure(err -> fail(ctx, err));
+        }));
+        router.post("/v1/fs/move").handler(ctx -> transfer(ctx, true));
+        router.post("/v1/fs/copy").handler(ctx -> transfer(ctx, false));
         router.get("/v1/files").handler(this::list);
         router.putWithRegex("/v1/files/.+").handler(this::upload);
         router.getWithRegex("/v1/files/.+").handler(this::download);
@@ -79,6 +90,33 @@ final class FilesRoutes {
             return;
         }
         then.accept(dir);
+    }
+
+    /**
+     * {@code {from, to, overwrite}}: moves or copies a file, or a folder with everything in it (D-077). Only metadata
+     * changes; copies share their bytes.
+     */
+    private void transfer(RoutingContext ctx, boolean move) {
+        JsonObject body;
+        try {
+            body = ctx.body().asJsonObject();
+        } catch (RuntimeException e) {
+            body = null;
+        }
+        if (body == null) {
+            error(ctx, 400, "invalid_json", "The body must be {from, to, overwrite?}");
+            return;
+        }
+        String from = automately.core.files.Paths.directory(body.getString("from"));
+        String to = automately.core.files.Paths.directory(body.getString("to"));
+        String invalid = FileStore.invalidPath(from) != null ? FileStore.invalidPath(from) : FileStore.invalidPath(to);
+        if (invalid != null) {
+            error(ctx, 400, "invalid_path", invalid);
+            return;
+        }
+        boolean overwrite = body.getBoolean("overwrite", false);
+        String tenant = ctx.get("tenant");
+        (move ? tree.move(tenant, from, to, overwrite) : tree.copy(tenant, from, to, overwrite)).onSuccess(ctx::json).onFailure(err -> fail(ctx, err));
     }
 
     /** One level of a directory, by name, paged with {@code limit} and {@code cursor}. */
@@ -206,7 +244,7 @@ final class FilesRoutes {
             }
             switch (host.code()) {
                 case "not_found" -> error(ctx, 404, host.code(), host.getMessage());
-                case "already_exists", "not_empty", "is_a_directory", "not_a_directory" -> error(ctx, 409, host.code(), host.getMessage());
+                case "already_exists", "not_empty", "is_a_directory", "not_a_directory", "busy" -> error(ctx, 409, host.code(), host.getMessage());
                 case "insufficient_storage" -> error(ctx, 507, host.code(), host.getMessage());
                 case "storage_unavailable" -> error(ctx, 503, host.code(), host.getMessage());
                 case "storage_disabled" -> error(ctx, 403, host.code(), host.getMessage());

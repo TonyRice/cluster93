@@ -129,6 +129,8 @@ final class RouteScopes {
             rule("GET", "/v1/dirs/.+", "listDir", Who.TENANT, Scopes.FILES_READ),
             rule("PUT", "/v1/dirs/.+", "makeDir", Who.TENANT, Scopes.FILES_WRITE),
             rule("DELETE", "/v1/dirs/.+", "removeDir", Who.TENANT, Scopes.FILES_WRITE),
+            json("POST", "/v1/fs/move", "moveFiles", Who.TENANT, Scopes.FILES_WRITE, SMALL),
+            json("POST", "/v1/fs/copy", "copyFiles", Who.TENANT, Scopes.FILES_WRITE, SMALL),
             rule("GET", "/v1/files", "listFiles", Who.TENANT, Scopes.FILES_READ),
             rule("GET", "/v1/files/.+", "getFile", Who.TENANT, Scopes.FILES_READ),
             rule("HEAD", "/v1/files/.+", "headFile", Who.TENANT, Scopes.FILES_READ),

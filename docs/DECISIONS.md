@@ -979,3 +979,40 @@ Also the CLI flow.
   - paging
 - `TreeMigrationTest`: an old table gains columns and an index; old file rows are backfilled into the tree, once.
 - `FilesTest` (two nodes: made on one, listed on the other, plus the conflicts), `ContractTest` (four operations), the CLI and MCP.
+
+### D-077 — Move and copy without moving bytes; folder operations are journaled
+**Date:** 2026-10-07 · **Status:** Accepted. Part 2 of D-075
+
+**Decision:**
+- **Moving a file** writes its row at the new path, naming the same blob, and removes the old row. That happens only if the old row is unchanged. If the file was replaced meanwhile, the new version stays and the moved one counts as a copy.
+  - **No bytes move,** on any backend, because reads follow the backend recorded on the file.
+- **Copying a file** writes a second row naming the same blob, so copies take no room and count once against the quota. The quota sums each blob once, grouping rows by blob id.
+- **Reference counts** (`BLOB_REFS`: blob id → count) decide when bytes are deleted:
+  - **No count yet means one:** its own row. So existing blobs need no migration, and plain writes cost nothing extra.
+  - **Changes:** a copy adds one. Deleting a file, or replacing its version, takes one away; at zero the blob is queued for deletion after the readers' grace.
+  - **A zero count is kept, not removed.** The collector checks the count before deleting, so a copy made just as the last reference went keeps the bytes.
+  - **Uploads that never finished** (no count, a garbage row) are deleted as before.
+- **Folders are moved, copied and deleted as tree operations:**
+  - **Journal and lease:** a journal record (operation, source, target) doubles as a per-tenant lease. One folder operation runs per tenant at a time, and others get 409 `busy`. Single files never wait.
+  - **Order:** folders are made parent first. Files then go one by one, renewing the lease every 200. A move then removes the emptied source folders, deepest first.
+  - **Crash-safe:** every step can be repeated, by skipping a file already moved (source gone, target there) or already copied (target names the same blob). If a node dies, another finds the expired lease and runs the operation again from the start.
+  - **Limits:** at most 100 000 entries per operation. A folder can't go inside itself.
+  - **Folder targets:** a folder target that exists is refused unless `overwrite` is set, which merges into it. A file target is always refused.
+- **API:**
+  - **REST:** `POST /v1/fs/move` and `POST /v1/fs/copy` take `{from, to, overwrite}`, for files and folders alike. `DELETE /v1/dirs/{path}?recursive=true` deletes a folder and everything in it.
+  - **CLI:** `files mv`, `files cp` (`-f` to overwrite or merge) and `files rm -r`.
+  - **MCP:** `move` and `copy`.
+- **Readers during a folder move** may briefly see part of it under each name. Each file is always whole at one of them.
+
+**Tests:**
+- `FileStoreContract` on the in-memory, Ignite, disk and S3 stores:
+  - a copy shares bytes, counts once and outlives its original
+  - a move changes only the path
+  - overwrite rules, and the replaced version is collected
+- `FileTreeTest`:
+  - move, copy and delete a folder
+  - a folder inside itself, merging and file targets
+  - one operation per tenant
+  - another node finishing a move whose node died midway
+- `FilesTest`, across two nodes: a folder copied counts once against the quota, and moved without moving bytes.
+- `ContractTest`, CLI and MCP.

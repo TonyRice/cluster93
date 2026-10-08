@@ -148,7 +148,11 @@ class ContractTest {
         calls.check("makeDir", "PUT", "/v1/dirs/site/assets", tenant, null);
         calls.check("listRootDir", "GET", "/v1/dirs?limit=10", tenant, null);
         calls.check("listDir", "GET", "/v1/dirs/site", tenant, null);
-        calls.check("removeDir", "DELETE", "/v1/dirs/site/assets", tenant, null);
+        calls.check("copyFiles", "POST", "/v1/fs/copy", tenant, new JsonObject().put("from", "site").put("to", "site-copy"));
+        calls.check("moveFiles", "POST", "/v1/fs/move", tenant, new JsonObject().put("from", "site-copy/index.html").put("to", "moved.html"));
+        calls.check("removeDir", "DELETE", "/v1/dirs/site-copy?recursive=true", tenant, null);
+        calls.call("DELETE", "/v1/files/moved.html", tenant, null);
+        calls.call("DELETE", "/v1/dirs/site/assets", tenant, null);
         calls.check("getFile", "GET", "/v1/files/site/index.html", tenant, null);
         calls.check("headFile", "HEAD", "/v1/files/site/index.html", tenant, null);
         calls.check("deleteFile", "DELETE", "/v1/files/site/index.html", tenant, null);

@@ -88,6 +88,23 @@ public abstract class ClusterFileStore implements FileStore {
     /** File rows directly inside {@code parent}, by name, after {@code after}. */
     protected abstract Future<List<JsonObject>> childFiles(String tenant, String parent, String after, int limit);
 
+    /** Removes the metadata only if it's still exactly {@code expected}; completes with whether it did. */
+    protected abstract Future<Boolean> removeMetaIfUnchanged(String tenant, String path, JsonObject expected);
+
+    // --- shared blobs (D-077) ---
+
+    /**
+     * Atomically adds {@code delta} to how many file rows name this blob, and completes with the new count. A blob with
+     * no count yet has one: its own file row. The count is kept at zero rather than removed, so the collector can tell a
+     * blob nobody names (0, or no count and a garbage row) from one a copy just took up again.
+     */
+    protected abstract Future<Long> addRefs(String fileId, long delta);
+
+    /** The count, or null if the blob never had one. */
+    protected abstract Future<Long> refs(String fileId);
+
+    protected abstract Future<Void> removeRefs(String fileId);
+
     // --- FileStore ---
 
     @Override
@@ -152,8 +169,61 @@ public abstract class ClusterFileStore implements FileStore {
     public Future<Boolean> delete(String tenant, String path) {
         return removeMeta(tenant, path).compose(previous -> previous == null
                 ? Future.succeededFuture(false)
-                : putGarbage(previous.getString("fileId"), FileInfo.fromJson(previous).backend(), tenant,
-                        System.currentTimeMillis() + READER_GRACE.toMillis()).map(true));
+                : release(FileInfo.fromJson(previous)).map(true));
+    }
+
+    /** One fewer row names this version's blob; when none does, it's deleted after the readers' grace (D-077). */
+    protected Future<Void> release(FileInfo version) {
+        return addRefs(version.fileId(), -1).compose(left -> left > 0
+                ? Future.succeededFuture()
+                : putGarbage(version.fileId(), version.backend(), version.tenant(), System.currentTimeMillis() + READER_GRACE.toMillis()));
+    }
+
+    // --- move and copy (D-077) ---
+
+    @Override
+    public Future<FileInfo> copy(String tenant, String from, String to, boolean overwrite) {
+        return place(tenant, from, to, overwrite).compose(source -> addRefs(source.fileId(), 1).compose(v -> publish(tenant, to, source)
+                .recover(err -> addRefs(source.fileId(), -1).compose(x -> Future.failedFuture(err)))));
+    }
+
+    @Override
+    public Future<FileInfo> move(String tenant, String from, String to, boolean overwrite) {
+        return place(tenant, from, to, overwrite).compose(source -> publish(tenant, to, source)
+                // Only the version that was moved leaves its old path: if it was replaced meanwhile, the new one stays,
+                // and the moved version is now a copy, so it gains a reference.
+                .compose(moved -> removeMetaIfUnchanged(tenant, from, source.toJson()).compose(removed -> removed
+                        ? Future.succeededFuture(moved)
+                        : addRefs(source.fileId(), 1).map(moved))));
+    }
+
+    /** The source file, once the target is known to be a free name for a file (or one to overwrite) with its folders made. */
+    private Future<FileInfo> place(String tenant, String from, String to, boolean overwrite) {
+        if (from.equals(to)) {
+            return Future.failedFuture(HostException.invalid("The source and the target are the same: " + from));
+        }
+        return getMeta(tenant, from).compose(sourceRow -> {
+            if (sourceRow == null) {
+                return getDir(tenant, from).compose(dir -> Future.failedFuture(dir != null
+                        ? conflict("is_a_directory", from + " is a folder; move or copy folders as a tree")
+                        : new HostException("Error", "not_found", "No such file: " + from)));
+            }
+            return getDir(tenant, to).compose(dir -> dir != null
+                    ? Future.failedFuture(conflict("is_a_directory", to + " is a folder"))
+                    : getMeta(tenant, to).compose(existing -> existing != null && !overwrite
+                            ? Future.failedFuture(conflict("already_exists", to + " already exists; overwrite it to replace it"))
+                            : ensureDirs(tenant, Paths.parent(to))))
+                    .map(FileInfo.fromJson(sourceRow));
+        });
+    }
+
+    /** Puts {@code source}'s blob at {@code to}; whatever was there loses its reference. */
+    private Future<FileInfo> publish(String tenant, String to, FileInfo source) {
+        FileInfo placed = new FileInfo(tenant, to, source.fileId(), source.size(), source.contentType(), source.etag(), source.backend(),
+                System.currentTimeMillis());
+        return putMeta(tenant, to, placed.toJson()).compose(previous -> previous == null || previous.getString("fileId").equals(source.fileId())
+                ? Future.succeededFuture(placed)
+                : release(FileInfo.fromJson(previous)).map(placed));
     }
 
     @Override
@@ -174,15 +244,19 @@ public abstract class ClusterFileStore implements FileStore {
             for (JsonObject row : rows) {
                 String id = row.getString("fileId");
                 String backend = row.getString("backend", stores.primary().name());
-                chain = chain.compose(v -> stores.forRead(row.getString("tenant"), backend)
-                        .compose(store -> store.delete(id))
-                        .recover(err -> {
-                            // A provider that's gone, or a backend no longer configured: the bytes are out of reach, so
-                            // the row goes rather than being retried forever.
-                            LOG.warn("Can't delete blob {} in {}: {}", id, backend, err.getMessage());
-                            return Future.succeededFuture();
-                        }))
-                        .compose(v -> removeGarbage(id));
+                // A copy made after the blob was released took it up again: it stays (D-077).
+                chain = chain.compose(v -> refs(id)).compose(count -> count != null && count > 0
+                        ? removeGarbage(id)
+                        : stores.forRead(row.getString("tenant"), backend)
+                                .compose(store -> store.delete(id))
+                                .recover(err -> {
+                                    // A provider that's gone, or a backend no longer configured: the bytes are out of reach,
+                                    // so the row goes rather than being retried forever.
+                                    LOG.warn("Can't delete blob {} in {}: {}", id, backend, err.getMessage());
+                                    return Future.succeededFuture();
+                                })
+                                .compose(v -> removeGarbage(id))
+                                .compose(v -> removeRefs(id)));
             }
             return chain.map(rows.size());
         });
@@ -348,8 +422,7 @@ public abstract class ClusterFileStore implements FileStore {
                     .compose(v -> putMeta(tenant, path, info.toJson()))
                     .compose(previous -> removeGarbage(fileId).compose(v -> previous == null || previous.getString("fileId").equals(fileId)
                             ? Future.succeededFuture()
-                            : putGarbage(previous.getString("fileId"), FileInfo.fromJson(previous).backend(), tenant,
-                                    System.currentTimeMillis() + READER_GRACE.toMillis())))
+                            : release(FileInfo.fromJson(previous))))
                     .onSuccess(v -> automately.core.metrics.Metrics.of(vertx).fileStored(automately.core.metrics.Metrics.backendKind(target.name()), size))
                     .map(info);
         }
