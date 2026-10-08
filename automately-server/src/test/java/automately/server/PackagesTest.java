@@ -308,6 +308,43 @@ class PackagesTest {
         assertThat(out.getBoolean(6)).isTrue();
     }
 
+    @Test
+    void blockingAVersionStopsTheServicesRunningItAndNeedsAdminRights() throws Exception {
+        String bearer = TestAuth.bearer("pk-blocker");
+        Map<String, String> files = Map.of("index.js", "export default async (config, ctx) => { await ctx.stopRequested; };");
+        publish(bearer, manifest("worker", "1.0.0", files), files);
+        HttpResponse<Buffer> deployed = await(client.put(node.httpPort(), "localhost", "/v1/services/worker").putHeader("Authorization", bearer)
+                .sendJsonObject(new JsonObject().put("package", new JsonObject().put("name", "worker").put("version", "1.0.0"))));
+        assertThat(deployed.statusCode()).as(deployed.bodyAsString()).isEqualTo(201);
+        JsonObject running = awaitService(bearer, "worker", s -> "RUNNING".equals(s.getString("status")));
+        String runId = running.getString("currentJobId");
+
+        JsonObject developer = await(client.post(node.httpPort(), "localhost", "/v1/tenants/pk-blocker/tokens")
+                .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("name", "dev")
+                        .put("scopes", new JsonArray().add("packages:read").add("packages:write")))).bodyAsJsonObject();
+        String dev = "Bearer " + developer.getString("token");
+        String version = "/v1/packages/worker/versions/1.0.0/";
+        assertThat(post(dev, version + "block", new JsonObject().put("reason", "nope")).statusCode()).as("packages:admin is needed").isEqualTo(403);
+        assertThat(post(dev, version + "yank", new JsonObject()).statusCode()).as("yanking is packages:write").isEqualTo(200);
+        assertThat(post(dev, version + "unyank", new JsonObject()).statusCode()).isEqualTo(200);
+        assertThat(post(bearer, version + "block", new JsonObject()).statusCode()).as("a reason is required").isEqualTo(400);
+
+        HttpResponse<Buffer> blocked = post(bearer, version + "block", new JsonObject().put("reason", "CVE-2026-0001"));
+        assertThat(blocked.statusCode()).as(blocked.bodyAsString()).isEqualTo(200);
+        assertThat(blocked.bodyAsJsonObject().getJsonArray("stoppedServices")).containsExactly("pk-blocker/worker");
+        JsonObject stopped = awaitJob(bearer, runId);
+        assertThat(stopped.getString("error")).contains("worker@1.0.0 is blocked (CVE-2026-0001)");
+        assertThat(get(bearer, "/v1/services/worker").bodyAsJsonObject().getBoolean("enabled")).as("it doesn't restart into it").isFalse();
+
+        HttpResponse<Buffer> refused = post(bearer, "/v1/jobs", new JsonObject().put("script", "import 'worker'; export default () => 1;"));
+        assertThat(refused.statusCode()).isEqualTo(400);
+        assertThat(refused.bodyAsString()).contains("No version of worker");
+        assertThat(get(bearer, "/v1/packages/worker/versions/1.0.0").bodyAsJsonObject().getJsonObject("blocked").getString("reason"))
+                .isEqualTo("CVE-2026-0001");
+        JsonArray audited = get(bearer, "/v1/audit?limit=50").bodyAsJsonObject().getJsonArray("entries");
+        assertThat(audited.stream().map(e -> ((JsonObject) e).getString("action"))).contains("blockPackageVersion", "yankPackageVersion");
+    }
+
     // --- helpers ---
 
     private static JsonObject manifest(String name, String version, Map<String, String> files) throws Exception {
@@ -331,6 +368,19 @@ class PackagesTest {
         HttpResponse<Buffer> submitted = post(bearer, "/v1/jobs", job);
         assertThat(submitted.statusCode()).as(submitted.bodyAsString()).isEqualTo(202);
         return submitted.bodyAsJsonObject();
+    }
+
+    private static JsonObject awaitService(String bearer, String name, java.util.function.Predicate<JsonObject> condition) throws Exception {
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(20).toNanos();
+        JsonObject last = null;
+        while (System.nanoTime() < deadline) {
+            last = get(bearer, "/v1/services/" + name).bodyAsJsonObject();
+            if (condition.test(last)) {
+                return last;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("Service " + name + " never got there; last: " + (last == null ? null : last.encodePrettily()));
     }
 
     private static JsonObject awaitJob(String bearer, String id) throws Exception {

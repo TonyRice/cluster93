@@ -176,7 +176,7 @@ public final class ApiVerticle extends VerticleBase {
         new BusRoutes(vertx).mount(router);
         new QueueRoutes(queues).mount(router);
         new SecretsRoutes(secrets).mount(router);
-        new PackagesRoutes(packages, quota).mount(router);
+        new PackagesRoutes(packages, quota, services, scheduler).mount(router);
         router.post("/v1/cluster/nodes/:id/revoke").handler(ctx -> {
             if (revokeNode == null) {
                 error(ctx, 409, "not_available", "This cluster doesn't use node certificates (AUTOMATELY_CLUSTER_TLS=off, or a single node)");

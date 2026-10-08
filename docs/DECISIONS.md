@@ -1380,3 +1380,33 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - **`file:///` URLs** are accepted as paths everywhere in `fs`, so `import.meta.url`-relative reads work.
 - **`automately:*` modules:** each re-exports its global, as the default export and by name. **Why not only globals:** a package that imports what it uses says so, and the bundler keeps `automately:*` as imports.
 - **MCP:** `publish_package` takes files as text and runs the same three steps as the CLI, over loopback with the caller's token, so scopes and limits apply.
+
+### D-092 — Packages step 4: yank, block and purge, as built
+**Date:** 2026-10-08 · **Status:** Accepted. Builds step 4 of D-083, with block and purge as D-086 designed them
+
+- **Effects:**
+
+  | | New resolutions | Existing locks | Files |
+  |---|---|---|---|
+  | **Yank** | skip it | still load it (Cargo's model) | kept |
+  | **Block** | skip it | refuse to load it, saying why | kept |
+  | **Purge** | skip it | refuse to load it, saying why | deleted |
+
+  Yank and block can be undone; a purge can't. The `latest` shown for a package also skips all three.
+- **Stopping services:** blocking or purging a version stops every enabled service whose revision runs it.
+  - **How:** each one is disabled, so it doesn't restart into the same code, and its current run is cancelled with the reason ("shop@1.4.0 is blocked (CVE-…)"). For a cluster package, that's any tenant's services. The answer lists them (`stoppedServices`).
+  - **Purge stops services too,** though D-086 only said "fails loudly". **Why:** a run that's still going would otherwise fail at its next restart, with nobody watching.
+  - **Running jobs aren't cancelled,** as designed. They already loaded the code; retries fail at load.
+- **Purge and shared files:** files are deduplicated per owner, so another version may have the same file. A purge deletes only files no unpurged version of that owner has, and reports how many it kept. **Why:** deleting a shared file would break a version nobody purged. The guide says to purge those versions too, and to rotate the secret regardless.
+- **Who:**
+  - **Yank** is `packages:write`.
+  - **Block, unblock and purge** need the new `packages:admin`, which owners and admins have through `*` and developers don't (D-086: "the tenant's owners and admins").
+  - **Operators** manage `@cluster/` packages, and any tenant's with `?tenant=<id>`.
+  - **Audit:** every change is audited, like any API write.
+- **Garbage:** on the leader every 10 minutes, package files that no unpurged version names are deleted once they're over an hour old. That covers uploads whose publish never came (D-088's "Not yet"). The hour leaves a slow publish time to commit.
+- **Metrics:**
+  - `automately.packages.files`, tagged `source=cache|fetched`, counts cache hits against fetches.
+  - `automately.packages.load` (D-089) times loading.
+- **Not done:**
+  - **Deleting a version outright** (§7: "only for versions no lock references") would need lock reference counting across jobs and services. Purge covers the urgent case.
+  - **Cached copies of a purged file** stay in nodes' memory until they're evicted. They can't be loaded through the refused version, but a node restart is the way to be sure.

@@ -24,10 +24,17 @@ public final class PackageLoader {
 
     private final PackageStore store;
     private final Cache cache;
+    private final automately.core.metrics.Metrics metrics;
 
     public PackageLoader(PackageStore store, long cacheBytes) {
+        this(store, cacheBytes, null);
+    }
+
+    /** @param metrics counts cache hits and fetches (D-092); null for none */
+    public PackageLoader(PackageStore store, long cacheBytes, automately.core.metrics.Metrics metrics) {
         this.store = store;
         this.cache = new Cache(cacheBytes);
+        this.metrics = metrics;
     }
 
     /** Everything {@code lock} names, for a job of {@code tenant}; fails saying what couldn't be loaded. */
@@ -45,6 +52,11 @@ public final class PackageLoader {
                 if (version == null) {
                     return Future.failedFuture(new HostException("Error", "package_missing", "Package " + names.get(i) + "@" + lock.getString(names.get(i))
                             + " in this job's lock no longer exists"));
+                }
+                // A blocked version refuses to load anywhere, even from an existing lock; a purged one has no files (D-086).
+                String refused = PackageStore.unloadable(version);
+                if (refused != null) {
+                    return Future.failedFuture(new HostException("Error", "package_refused", refused));
                 }
                 fileCount += version.getJsonObject("files").size();
                 bytes += version.getLong("size", 0L);
@@ -88,6 +100,9 @@ public final class PackageLoader {
     /** One file, from the cache or the store; checked against its hash, with one retry. */
     private Future<byte[]> file(String owner, String sha256, String what) {
         byte[] cached = cache.get(owner, sha256);
+        if (metrics != null) {
+            metrics.packageFile(cached != null);
+        }
         if (cached != null) {
             return Future.succeededFuture(cached);
         }

@@ -184,6 +184,11 @@ class ContractTest {
         calls.check("listPackages", "GET", "/v1/packages", tenant, null);
         calls.check("getPackage", "GET", "/v1/packages/hello", tenant, null);
         calls.check("getPackageVersion", "GET", "/v1/packages/hello/versions/1.0.0", tenant, null);
+        calls.check("yankPackageVersion", "POST", "/v1/packages/hello/versions/1.0.0/yank", tenant, new JsonObject());
+        calls.check("unyankPackageVersion", "POST", "/v1/packages/hello/versions/1.0.0/unyank", tenant, new JsonObject());
+        calls.check("blockPackageVersion", "POST", "/v1/packages/hello/versions/1.0.0/block", tenant, new JsonObject().put("reason", "testing"));
+        calls.check("unblockPackageVersion", "POST", "/v1/packages/hello/versions/1.0.0/unblock", tenant, new JsonObject());
+        calls.check("purgePackageVersion", "POST", "/v1/packages/hello/versions/1.0.0/purge", tenant, new JsonObject().put("reason", "testing"));
         calls.check("pushQueueMessage", "POST", "/v1/queues/emails", tenant,
                 new JsonObject().put("message", new JsonObject().put("to", "a@example.com")).put("key", "welcome-1").put("maxAttempts", 3));
         calls.check("getQueue", "GET", "/v1/queues/emails", tenant, null);

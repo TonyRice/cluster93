@@ -279,6 +279,79 @@ public abstract class PackageStoreContract {
         assertThat(loader.cachedBytes()).as("nothing unchecked is cached").isZero();
     }
 
+    // --- lifecycle (D-092) ---
+
+    @Test
+    public void aYankedVersionIsSkippedButStillLoadsFromALock() throws Exception {
+        PackageStore store = store();
+        publish(store, "acme", "strings", "1.0.0");
+        publish(store, "acme", "strings", "1.1.0");
+        await(store.yank("acme", "strings", "1.1.0", true, "u"));
+        assertThat(await(store.lock("acme", java.util.Map.of("strings", java.util.Set.of(".")))).getString("strings")).isEqualTo("1.0.0");
+        assertThat(await(new PackageLoader(store, 1 << 20).load("acme", new JsonObject().put("strings", "1.1.0"))).byName())
+                .as("an existing lock still loads it").containsKey("strings");
+        await(store.yank("acme", "strings", "1.1.0", false, "u"));
+        assertThat(await(store.lock("acme", java.util.Map.of("strings", java.util.Set.of(".")))).getString("strings")).isEqualTo("1.1.0");
+        assertThatThrownBy(() -> await(store.yank("acme", "strings", "9.0.0", true, "u"))).hasMessageContaining("No version 9.0.0");
+        assertThatThrownBy(() -> await(store.yank("acme", "@cluster/strings", "1.0.0", true, "u"))).hasMessageContaining("Only operators");
+    }
+
+    @Test
+    public void aBlockedVersionRefusesToLoadAnywhereUntilUnblocked() throws Exception {
+        PackageStore store = store();
+        publish(store, "acme", "strings", "1.0.0");
+        PackageLoader loader = new PackageLoader(store, 1 << 20);
+        JsonObject lock = new JsonObject().put("strings", "1.0.0");
+        assertThatThrownBy(() -> await(store.block("acme", "strings", "1.0.0", " ", "u"))).hasMessageContaining("reason");
+
+        JsonObject blocked = await(store.block("acme", "strings", "1.0.0", "CVE-2026-1234", "u"));
+        assertThat(blocked.getJsonObject("blocked").getString("reason")).isEqualTo("CVE-2026-1234");
+        assertThatThrownBy(() -> await(loader.load("acme", lock))).hasMessageContaining("strings@1.0.0 is blocked (CVE-2026-1234)");
+        assertThatThrownBy(() -> await(store.lock("acme", java.util.Map.of("strings", java.util.Set.of("."))))).hasMessageContaining("No version of strings");
+
+        await(store.unblock("acme", "strings", "1.0.0"));
+        assertThat(await(loader.load("acme", lock)).byName()).containsKey("strings");
+    }
+
+    @Test
+    public void aPurgedVersionLosesItsFilesButNotOnesOtherVersionsShare() throws Exception {
+        PackageStore store = store();
+        String shared = "export const shared = 1;";
+        String secret = "export const key = 'sk_live_oops';";
+        upload(store, "acme", shared);
+        upload(store, "acme", secret);
+        JsonObject leaky = new JsonObject().put("name", "keys").put("version", "1.0.0").put("files", new JsonObject()
+                .put("index.js", "sha256:" + sha(secret)).put("shared.js", "sha256:" + sha(shared)));
+        JsonObject fixed = new JsonObject().put("name", "keys").put("version", "1.0.1").put("files", new JsonObject()
+                .put("index.js", "sha256:" + sha(shared)));
+        await(store.publish("acme", leaky, "u", "user"));
+        await(store.publish("acme", fixed, "u", "user"));
+
+        JsonObject purged = await(store.purge("acme", "keys", "1.0.0", "published an API key", "u"));
+        assertThat(purged.getJsonObject("purged").getInteger("deletedFiles")).isEqualTo(1);
+        assertThat(purged.getJsonObject("purged").getInteger("keptFiles")).isEqualTo(1);
+        assertThat(await(store.missing("acme", List.of(sha(secret), sha(shared))))).containsExactly(sha(secret));
+        assertThatThrownBy(() -> await(new PackageLoader(store, 1 << 20).load("acme", new JsonObject().put("keys", "1.0.0"))))
+                .hasMessageContaining("keys@1.0.0 was purged (published an API key)");
+        assertThat(await(new PackageLoader(store, 1 << 20).load("acme", new JsonObject().put("keys", "1.0.1"))).byName()).containsKey("keys");
+        assertThatThrownBy(() -> await(store.purge("acme", "keys", "1.0.0", "again", "u"))).hasMessageContaining("already purged");
+        assertThatThrownBy(() -> await(store.unblock("acme", "keys", "1.0.0"))).hasMessageContaining("purged");
+    }
+
+    @Test
+    public void filesNoVersionNamesAreCollectedAfterTheGracePeriod() throws Exception {
+        PackageStore store = store();
+        publish(store, "acme", "strings", "1.0.0");
+        String orphan = "export const neverPublished = true;";
+        upload(store, "acme", orphan);
+        long hour = 3_600_000L;
+        assertThat(await(store.collectGarbage(System.currentTimeMillis(), hour))).as("too new to collect").isZero();
+        assertThat(await(store.collectGarbage(System.currentTimeMillis() + 2 * hour, hour))).isEqualTo(1);
+        assertThat(await(store.missing("acme", List.of(sha(orphan))))).hasSize(1);
+        assertThat(await(new PackageLoader(store, 1 << 20).load("acme", new JsonObject().put("strings", "1.0.0"))).byName())
+                .as("files a version names are kept").containsKey("strings");
+    }
+
     // --- helpers ---
 
     private static JsonObject manifest(String name, String version, String index) throws Exception {

@@ -35,11 +35,14 @@ public final class Scopes {
     /** Packages: seeing and importing them, and publishing them (D-083). */
     public static final String PACKAGES_READ = "packages:read";
     public static final String PACKAGES_WRITE = "packages:write";
+    /** Blocking, unblocking and purging versions (D-092): owners and admins, not developers. */
+    public static final String PACKAGES_ADMIN = "packages:admin";
 
     /** Every scope a tenant token can hold, besides {@link #ALL}. */
     public static final List<String> KNOWN = List.of(JOBS_READ, JOBS_WRITE, SERVICES_READ, SERVICES_WRITE, FILES_READ, FILES_WRITE,
             BUS_PUBLISH, BUS_REQUEST, QUEUES_READ, QUEUES_WRITE, TOKENS_WRITE, NODES_READ, STORAGE_READ, STORAGE_WRITE,
-            SECRETS_READ, SECRETS_WRITE, SECRETS_USE, MEMBERS_READ, MEMBERS_WRITE, AUDIT_READ, PACKAGES_READ, PACKAGES_WRITE);
+            SECRETS_READ, SECRETS_WRITE, SECRETS_USE, MEMBERS_READ, MEMBERS_WRITE, AUDIT_READ, PACKAGES_READ, PACKAGES_WRITE,
+            PACKAGES_ADMIN);
 
     private Scopes() {
     }

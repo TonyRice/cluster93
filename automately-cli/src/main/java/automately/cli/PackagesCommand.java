@@ -23,7 +23,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 @Command(name = "packages", description = "Versioned JavaScript you publish once and import from scripts (D-083).",
-        subcommands = {PackagesCommand.Publish.class, PackagesCommand.ListPackages.class, PackagesCommand.Info.class})
+        subcommands = {PackagesCommand.Publish.class, PackagesCommand.ListPackages.class, PackagesCommand.Info.class,
+                PackagesCommand.Yank.class, PackagesCommand.Unyank.class, PackagesCommand.Block.class, PackagesCommand.Unblock.class,
+                PackagesCommand.Purge.class})
 final class PackagesCommand extends Base {
 
     /** The server's limits on one version (D-083), checked here first so a publish fails before uploading. */
@@ -68,6 +70,105 @@ final class PackagesCommand extends Base {
                         + " (" + outcome.uploadedFiles() + " uploaded, " + kb(outcome.uploadedBytes()) + ")");
             }
             return 0;
+        }
+    }
+
+    /** One version's lifecycle change (D-092): yank, unyank, block, unblock or purge. */
+    abstract static class Lifecycle extends Base {
+        @Parameters(index = "0", paramLabel = "NAME")
+        String name;
+
+        @Parameters(index = "1", paramLabel = "VERSION")
+        String version;
+
+        @Option(names = "--tenant", description = "Operators: the tenant whose package it is.")
+        String tenant;
+
+        abstract String action();
+
+        ObjectNode body() {
+            return null;
+        }
+
+        void check() {
+        }
+
+        @Override
+        int execute() {
+            check();
+            String uri = path(name) + "/versions/" + Api.segment(version) + "/" + action() + (tenant == null ? "" : "?tenant=" + Api.segment(tenant));
+            JsonNode changed = api().post(uri, body() == null ? Json.object() : body());
+            if (!printedJson(changed)) {
+                out().println(name + "@" + version + ": " + action() + (action().endsWith("e") ? "d" : "ed"));
+                changed.path("stoppedServices").forEach(svc -> out().println("  stopped service " + svc.asText()));
+                if (changed.path("purged").isObject()) {
+                    out().println("  " + changed.path("purged").path("deletedFiles").asInt() + " files deleted, "
+                            + changed.path("purged").path("keptFiles").asInt() + " kept (other versions have them)");
+                }
+            }
+            return 0;
+        }
+    }
+
+    @Command(name = "yank", description = "Yank a version: new resolutions skip it; jobs and services already locked to it still load it.")
+    static final class Yank extends Lifecycle {
+        String action() {
+            return "yank";
+        }
+    }
+
+    @Command(name = "unyank", description = "Take back a yank.")
+    static final class Unyank extends Lifecycle {
+        String action() {
+            return "unyank";
+        }
+    }
+
+    @Command(name = "block", description = "Block a version with a security hole: it refuses to load anywhere, and services running it stop.")
+    static final class Block extends Lifecycle {
+        @Option(names = "--reason", required = true, description = "Why; shown wherever the version is refused.")
+        String reason;
+
+        String action() {
+            return "block";
+        }
+
+        @Override
+        ObjectNode body() {
+            return Json.object().put("reason", reason);
+        }
+    }
+
+    @Command(name = "unblock", description = "Lift a block: the version loads again.")
+    static final class Unblock extends Lifecycle {
+        String action() {
+            return "unblock";
+        }
+    }
+
+    @Command(name = "purge", description = {"Purge a version published with a secret in it: its files are deleted, services running it stop,"
+            + " and anything locked to it fails. This can't be undone."})
+    static final class Purge extends Lifecycle {
+        @Option(names = "--reason", required = true, description = "Why; shown wherever the version is refused.")
+        String reason;
+
+        @Option(names = "--yes", description = "Confirm: purging can't be undone.")
+        boolean yes;
+
+        String action() {
+            return "purge";
+        }
+
+        @Override
+        void check() {
+            if (!yes) {
+                throw new CliException("Purging deletes " + name + "@" + version + "'s files for good; add --yes to confirm");
+            }
+        }
+
+        @Override
+        ObjectNode body() {
+            return Json.object().put("reason", reason);
         }
     }
 
@@ -179,6 +280,12 @@ final class PackagesCommand extends Base {
                 if (!printedJson(found)) {
                     out().println(name + "@" + version + " · " + kb(found.path("size").asLong()) + " · published " + Output.time(found, "publishedAt")
                             + " by " + Json.text(found, "publishedByName") + (found.path("yanked").asBoolean() ? " · yanked" : ""));
+                    if (found.path("blocked").isObject()) {
+                        out().println("  BLOCKED: " + Json.text(found.path("blocked"), "reason") + " (it won't load anywhere)");
+                    }
+                    if (found.path("purged").isObject()) {
+                        out().println("  PURGED: " + Json.text(found.path("purged"), "reason") + " (its files are deleted)");
+                    }
                     found.path("dependencies").properties().forEach(d -> out().println("  depends on " + d.getKey() + " " + d.getValue().asText()));
                     found.path("exports").properties().forEach(e -> out().println("  export " + e.getKey() + " → " + e.getValue().asText()));
                     found.path("files").properties().forEach(f -> out().println("  " + f.getKey()));
@@ -192,8 +299,8 @@ final class PackagesCommand extends Base {
             List<List<String>> rows = new ArrayList<>();
             found.path("versions").forEach(v -> rows.add(List.of(Json.text(v, "version"), Output.time(v, "publishedAt"),
                     Json.text(v, "publishedByName"), v.path("fileCount").asText(), kb(v.path("size").asLong()),
-                    v.path("yanked").asBoolean() ? "yes" : "")));
-            Output.table(out(), List.of("VERSION", "PUBLISHED", "BY", "FILES", "SIZE", "YANKED"), rows);
+                    v.path("purged").isObject() ? "purged" : v.path("blocked").isObject() ? "blocked" : v.path("yanked").asBoolean() ? "yanked" : "")));
+            Output.table(out(), List.of("VERSION", "PUBLISHED", "BY", "FILES", "SIZE", "STATE"), rows);
             return 0;
         }
     }

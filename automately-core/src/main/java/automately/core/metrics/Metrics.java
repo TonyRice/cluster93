@@ -64,6 +64,12 @@ public final class Metrics implements Shareable {
                 .publishPercentileHistogram().register(registry).record(took);
     }
 
+    /** A package file looked up in the node's cache before a job runs (D-092): served from memory, or fetched. */
+    public void packageFile(boolean cached) {
+        Counter.builder("automately.packages.files").description("Package files a job needed, served from the node's cache or fetched")
+                .tag("source", cached ? "cache" : "fetched").register(registry).increment();
+    }
+
     /** Fetching and checking a job's packages before its isolate is made (D-089). */
     public void packagesLoaded(boolean ok, Duration took) {
         Timer.builder("automately.packages.load").description("Fetching and checking a job's packages before it runs")

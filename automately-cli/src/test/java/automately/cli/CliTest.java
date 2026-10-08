@@ -519,6 +519,19 @@ class CliTest {
         assertThat(cli("packages", "info", "strings").out()).contains("1.1.0").contains("1.0.0").contains("tok_");
         assertThat(cli("packages", "info", "strings", "1.0.0").out()).contains("lib/trim.js").contains("export . → index.js");
 
+        assertThat(cli("packages", "yank", "strings", "1.1.0").out()).contains("strings@1.1.0: yanked");
+        assertThat(cli("packages", "info", "strings").out()).contains("yanked");
+        assertThat(cli("packages", "unyank", "strings", "1.1.0").out()).contains("unyanked");
+        Result blocked = cli("packages", "block", "strings", "1.0.0", "--reason", "CVE-1");
+        assertThat(blocked.code()).as(blocked.err()).isZero();
+        assertThat(cli("packages", "info", "strings", "1.0.0").out()).contains("BLOCKED: CVE-1");
+        Result unconfirmed = cli("packages", "purge", "strings", "1.0.0", "--reason", "leaked a key");
+        assertThat(unconfirmed.code()).isEqualTo(1);
+        assertThat(unconfirmed.err()).contains("--yes");
+        Result purged = cli("packages", "purge", "strings", "1.0.0", "--reason", "leaked a key", "--yes");
+        assertThat(purged.code()).as(purged.err()).isZero();
+        assertThat(purged.out()).contains("purged").contains("1 files deleted, 1 kept");
+
         Path app = Files.createDirectories(home.resolve("app"));
         Files.writeString(app.resolve("automately.json"), "{\"name\": \"app\", \"version\": \"0.1.0\", \"entry\": \"main.js\","
                 + " \"dependencies\": {\"strings\": \"^1.0.0\", \"dates\": \"^1.0.0\"}}");

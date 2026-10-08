@@ -155,6 +155,11 @@ final class RouteScopes {
                     Scopes.PACKAGES_WRITE, Body.STREAM, 0),
             rule("GET", "/v1/packages/" + SEG, "getPackage", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_READ),
             rule("GET", "/v1/packages/" + SEG + "/versions/" + SEG, "getPackageVersion", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_READ),
+            rule("POST", "/v1/packages/" + SEG + "/versions/" + SEG + "/yank", "yankPackageVersion", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_WRITE),
+            rule("POST", "/v1/packages/" + SEG + "/versions/" + SEG + "/unyank", "unyankPackageVersion", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_WRITE),
+            json("POST", "/v1/packages/" + SEG + "/versions/" + SEG + "/block", "blockPackageVersion", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_ADMIN, SMALL),
+            rule("POST", "/v1/packages/" + SEG + "/versions/" + SEG + "/unblock", "unblockPackageVersion", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_ADMIN),
+            json("POST", "/v1/packages/" + SEG + "/versions/" + SEG + "/purge", "purgePackageVersion", Who.ADMIN_OR_TENANT, Scopes.PACKAGES_ADMIN, SMALL),
 
             json("POST", "/v1/bus/" + SEG + "/request", "request", Who.TENANT, Scopes.BUS_REQUEST, MESSAGE),
             json("POST", "/v1/bus/" + SEG, "publish", Who.TENANT, Scopes.BUS_PUBLISH, MESSAGE),

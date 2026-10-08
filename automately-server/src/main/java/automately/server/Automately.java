@@ -81,6 +81,9 @@ public final class Automately {
 
     static final java.time.Duration RETENTION_INTERVAL = java.time.Duration.ofMinutes(10);
     static final java.time.Duration FILE_GARBAGE_INTERVAL = java.time.Duration.ofMinutes(1);
+    /** How often unreferenced package files are looked for, and how old one must be before it's deleted (D-092). */
+    static final java.time.Duration PACKAGE_GARBAGE_INTERVAL = java.time.Duration.ofMinutes(10);
+    static final java.time.Duration PACKAGE_GARBAGE_GRACE = java.time.Duration.ofHours(1);
 
     private Automately() {
     }
@@ -383,7 +386,8 @@ public final class Automately {
             return vertx.deployVerticle(endpoint)
                     .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes,
                             runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port(),
-                            new automately.core.packages.PackageLoader(packages, config.packageCacheBytes()))))
+                            new automately.core.packages.PackageLoader(packages, config.packageCacheBytes(),
+                                    automately.core.metrics.Metrics.of(vertx)))))
                     .compose(id -> vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, config.heartbeat(),
                             config.orphanGrace(), config.requeueAfter())))
                     .compose(id -> vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler,
@@ -391,6 +395,8 @@ public final class Automately {
                     .compose(id -> vertx.deployVerticle(new RetentionVerticle(instanceId, jobs, state, nodes, config.jobRetention(),
                             RETENTION_INTERVAL)))
                     .compose(id -> vertx.deployVerticle(new FileGarbageVerticle(instanceId, stores.files(), nodes, FILE_GARBAGE_INTERVAL)))
+                    .compose(id -> vertx.deployVerticle(new automately.core.packages.PackageGarbageVerticle(instanceId, packages, nodes,
+                            PACKAGE_GARBAGE_INTERVAL, PACKAGE_GARBAGE_GRACE)))
                     .compose(id -> new CallbackDelivery(queues, jobs, fetch, callbackSecrets).start())
                     .compose(id -> security.tls() == null ? Future.succeededFuture()
                             : ClusterSecurity.follow(vertx, stores.kv(), security.revocations(), security.directory(), config.nodeId(),

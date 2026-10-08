@@ -25,10 +25,15 @@ final class PackagesRoutes {
 
     private final PackageStore packages;
     private final TenantQuota quota;
+    private final automately.core.service.ServiceStore services;
+    private final automately.core.scheduler.JobScheduler scheduler;
 
-    PackagesRoutes(PackageStore packages, TenantQuota quota) {
+    PackagesRoutes(PackageStore packages, TenantQuota quota, automately.core.service.ServiceStore services,
+                   automately.core.scheduler.JobScheduler scheduler) {
         this.packages = packages;
         this.quota = quota;
+        this.services = services;
+        this.scheduler = scheduler;
     }
 
     void mount(Router router) {
@@ -38,6 +43,12 @@ final class PackagesRoutes {
         router.put("/v1/packages/blobs/:hash").handler(this::upload);
         router.get("/v1/packages/:name").handler(this::info);
         router.get("/v1/packages/:name/versions/:version").handler(this::version);
+        String one = "/v1/packages/:name/versions/:version/";
+        router.post(one + "yank").handler(ctx -> lifecycle(ctx, (owner, by) -> packages.yank(owner, name(ctx), ver(ctx), true, by), false));
+        router.post(one + "unyank").handler(ctx -> lifecycle(ctx, (owner, by) -> packages.yank(owner, name(ctx), ver(ctx), false, by), false));
+        router.post(one + "block").handler(ctx -> lifecycle(ctx, (owner, by) -> packages.block(owner, name(ctx), ver(ctx), reason(ctx), by), true));
+        router.post(one + "unblock").handler(ctx -> lifecycle(ctx, (owner, by) -> packages.unblock(owner, name(ctx), ver(ctx)), false));
+        router.post(one + "purge").handler(ctx -> lifecycle(ctx, (owner, by) -> packages.purge(owner, name(ctx), ver(ctx), reason(ctx), by), true));
     }
 
     /** The tenant a caller acts for, or null for operators. */
@@ -77,6 +88,67 @@ final class PackagesRoutes {
                 ctx.json(found);
             }
         }).onFailure(err -> fail(ctx, err));
+    }
+
+    private static String name(RoutingContext ctx) {
+        return ctx.pathParam("name");
+    }
+
+    private static String ver(RoutingContext ctx) {
+        return ctx.pathParam("version");
+    }
+
+    private static String reason(RoutingContext ctx) {
+        JsonObject body = body(ctx);
+        return body != null && body.getValue("reason") instanceof String r ? r : null;
+    }
+
+    /**
+     * Yank, block, unblock or purge one version (D-092). A tenant manages its own packages; an operator manages the
+     * cluster's, and any tenant's with {@code ?tenant=<id>} (to block or purge one that's dangerous). Blocking and
+     * purging stop the services running the version, and the answer lists them.
+     */
+    private void lifecycle(RoutingContext ctx, java.util.function.BiFunction<String, String, Future<JsonObject>> change, boolean stopsServices) {
+        String name = name(ctx);
+        String owner = tenant(ctx);
+        if (owner == null) {
+            String named = ctx.request().getParam("tenant");
+            owner = name.startsWith(PackageStore.CLUSTER_PREFIX) ? PackageStore.CLUSTER : named;
+            if (owner == null) {
+                error(ctx, 400, "invalid_request", "Name the tenant whose package this is: ?tenant=<id>");
+                return;
+            }
+        }
+        Principal principal = ctx.get("principal");
+        String packageOwner = owner;
+        change.apply(owner, principal.actor()).compose(changed -> !stopsServices ? Future.succeededFuture(changed)
+                        : stopServices(packageOwner, name, ver(ctx), changed).map(stopped -> changed.put("stoppedServices", new JsonArray(stopped))))
+                .onSuccess(ctx::json)
+                .onFailure(err -> fail(ctx, err));
+    }
+
+    /**
+     * Stops every enabled service whose revision runs {@code name@version}: disabled, so it doesn't restart into the
+     * same code, and its current run stopped with the reason. A cluster package's services can be any tenant's.
+     */
+    private Future<List<String>> stopServices(String owner, String name, String version, JsonObject changed) {
+        String why = PackageStore.unloadable(changed.copy().put("name", name).put("version", version));
+        Future<List<automately.core.service.ServiceDefinition>> candidates = PackageStore.CLUSTER.equals(owner) ? services.all() : services.list(owner);
+        return candidates.compose(all -> {
+            List<Future<String>> stopping = new ArrayList<>();
+            for (automately.core.service.ServiceDefinition service : all) {
+                if (!service.enabled() || service.packages() == null || !version.equals(service.packages().getString(name))) {
+                    continue;
+                }
+                stopping.add(services.update(service.tenant(), service.name(), current -> java.util.Optional.of(current.withEnabled(false, System.currentTimeMillis())))
+                        .compose(updated -> {
+                            String job = updated.map(automately.core.service.ServiceDefinition::currentJobId).orElse(null);
+                            return job == null ? Future.succeededFuture() : scheduler.cancel(job, why).mapEmpty();
+                        })
+                        .map(v -> service.tenant() + "/" + service.name()));
+            }
+            return Future.all(stopping).map(done -> stopping.stream().map(Future::result).toList());
+        });
     }
 
     /** {@code {sha256: [...]}} → {@code {missing: [...]}}. */
@@ -193,7 +265,7 @@ final class PackagesRoutes {
             switch (host.code()) {
                 case "forbidden" -> error(ctx, 403, host.code(), host.getMessage());
                 case "not_found" -> error(ctx, 404, host.code(), host.getMessage());
-                case "already_exists", "missing_files", "unmet_dependency" -> error(ctx, 409, host.code(), host.getMessage());
+                case "already_exists", "missing_files", "unmet_dependency", "purged", "already_purged" -> error(ctx, 409, host.code(), host.getMessage());
                 case "limit_exceeded" -> error(ctx, 413, host.code(), host.getMessage());
                 case "insufficient_storage" -> error(ctx, 507, host.code(), host.getMessage());
                 case "invalid_argument" -> error(ctx, 400, "invalid_request", host.getMessage());

@@ -2,7 +2,7 @@
 
 A package is versioned JavaScript you publish to the cluster once, and import from your scripts and services ([design](../design/packages.md), D-083). A published version never changes; a fix is a new version.
 
-> **Status:** publishing (step 1), importing from jobs and services (step 2, with stand-ins for Node's `path`, `events`, `buffer`, `url` and `util`), and deploying a version as a service, `/packages` in `fs` and the `automately:*` modules (step 3) are built. Yanking, blocking and purging versions come with step 4.
+> **Status:** built (D-088 to D-092): publishing; importing from jobs and services, with stand-ins for Node's `path`, `events`, `buffer`, `url` and `util`; deploying a version as a service; `/packages` in `fs`; the `automately:*` modules; and yanking, blocking and purging versions.
 
 ## Publish
 ```bash
@@ -122,9 +122,23 @@ The latest version is the highest release (not a pre-release like `2.0.0-beta.1`
 | Scope | Allows |
 |---|---|
 | `packages:read` | Listing and reading packages (every built-in role) |
-| `packages:write` | Publishing (`owner`, `admin` and `developer`) |
+| `packages:write` | Publishing, yanking and unyanking (`owner`, `admin` and `developer`) |
+| `packages:admin` | Blocking, unblocking and purging (`owner` and `admin`) |
 
-Publishing a version is recorded in the [audit log](users.md); uploading its files isn't, since the publish names them all. Deleting a tenant deletes its packages.
+Publishing, yanking, blocking and purging are recorded in the [audit log](users.md); uploading files isn't, since the publish names them all. Deleting a tenant deletes its packages.
+
+## When a version goes wrong
+| | New jobs and deploys | Jobs and services already locked to it | Its files | Undo |
+|---|---|---|---|---|
+| **Yank** (`packages yank NAME VERSION`) | skip it | still load it | kept | `unyank` |
+| **Block** (`packages block … --reason`) | skip it | **refuse to load it**; services running it stop and are disabled | kept | `unblock` |
+| **Purge** (`packages purge … --reason --yes`) | skip it | refuse to load it; services running it stop and are disabled | **deleted** | never |
+
+- **Yank** a version that's merely broken: nothing already running changes.
+- **Block** a version with a security hole. The reason is shown wherever it's refused ("shop@1.4.0 is blocked (CVE-2026-1234)"). The answer lists the services that were stopped; deploy a fixed version and start them again.
+- **Purge** a version published with a secret in it: its files are deleted for good. A file another version also has is kept, since deleting it would break that version; the answer counts both, so purge those versions too if they share the secret. Rotate the secret either way: it was published.
+- **Operators** manage `@cluster/` packages, and can block or purge any tenant's with `--tenant <id>` (`?tenant=` in the API).
+- **Garbage:** files no version names, such as from a publish that never finished, are deleted after an hour.
 
 ## The API
 | Method | Path | |
@@ -133,4 +147,5 @@ Publishing a version is recorded in the [audit log](users.md); uploading its fil
 | `PUT` | `/v1/packages/blobs/{sha256}` | One file's bytes; `201` stored, `200` already there, `400` if it doesn't match the hash |
 | `POST` | `/v1/packages` | Publish a manifest `{name, version, files: {path: "sha256:…"}, exports?, dependencies?}` |
 | `GET` | `/v1/packages` · `/v1/packages/{name}` · `/v1/packages/{name}/versions/{version}` | List · versions · one version. A cluster package's slash is encoded: `/v1/packages/%40cluster%2Fdates` |
+| `POST` | `/v1/packages/{name}/versions/{version}/yank` · `unyank` · `block` · `unblock` · `purge` | Block and purge take `{reason}` and answer with `stoppedServices` |
 | `POST` | `/v1/jobs` | With `"packages": false` to refuse imports; the answer's `packages` is the lock |

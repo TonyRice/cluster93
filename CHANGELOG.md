@@ -26,7 +26,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
-## Packages, step 3: deploying versions (2026-10-08)
+## Packages, step 4: yank, block, purge (2026-10-08)
+
+### Added
+- **When a version goes wrong (D-092):** `packages yank`, `block` and `purge`, with `unyank` and `unblock`, and `POST /v1/packages/{name}/versions/{version}/…`.
+  - **Yank:** new resolutions skip the version, and what's locked to it still runs.
+  - **Block** (for a security hole): the version refuses to load anywhere, and the services running it stop and are disabled.
+  - **Purge** (for a published secret): the version's files are deleted for good, keeping any another version shares, and the services running it stop.
+  - **Why:** versions never change, so something has to stop bad ones (D-086).
+- **`packages:admin`:** blocking and purging need it; owners and admins have it, developers don't. Operators can block or purge any tenant's package with `?tenant=`.
+- **Package garbage collection:** files no version names are deleted after an hour, on one node. This covers uploads whose publish never came, and files a purge had to keep.
+- **The `automately.packages.files` counter:** cache hits against fetches.
+
+
 
 ### Added
 - **`automately deploy` (D-091).** It publishes the project in a folder, or reuses the version if it's already published with the same files, and runs it as a service whose revision is that version. A changed file without a version bump is refused. **Why:** one command from code to a running service, with every revision traceable to an immutable version.

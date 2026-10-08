@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -293,7 +294,7 @@ public final class PackageStore {
                 return Future.failedFuture(HostException.invalid("A cluster-wide package can only depend on @cluster/ packages, not " + dep.getKey()));
             }
             checks.add(versions.where("package", depOwner + "/" + dep.getKey()).compose(published -> {
-                boolean met = published.stream().anyMatch(v -> !v.getBoolean("yanked", false)
+                boolean met = published.stream().anyMatch(v -> usable(v)
                         && dep.getValue().matches(Semver.Version.parse(v.getString("version"))));
                 return met ? Future.succeededFuture() : Future.failedFuture(new HostException("Error", "unmet_dependency",
                         "No published version of " + dep.getKey() + " matches \"" + m.dependencies.getString(dep.getKey())
@@ -327,7 +328,7 @@ public final class PackageStore {
     /** The highest release that isn't yanked; failing that, the highest version of all. */
     private static JsonObject latest(List<JsonObject> all) {
         Comparator<JsonObject> byVersion = Comparator.comparing(v -> Semver.Version.parse(v.getString("version")));
-        return all.stream().filter(v -> !v.getBoolean("yanked", false) && Semver.Version.parse(v.getString("version")).pre() == null)
+        return all.stream().filter(v -> usable(v) && Semver.Version.parse(v.getString("version")).pre() == null)
                 .max(byVersion).orElseGet(() -> all.stream().max(byVersion).orElse(null));
     }
 
@@ -522,7 +523,7 @@ public final class PackageStore {
                             + asked(entry.getValue())));
                 }
                 JsonObject best = candidates.stream()
-                        .filter(v -> !v.getBoolean("yanked", false))
+                        .filter(PackageStore::usable)
                         .filter(v -> entry.getValue().stream().allMatch(r -> r.getValue().matches(Semver.Version.parse(v.getString("version")))))
                         .max(Comparator.comparing(v -> Semver.Version.parse(v.getString("version"))))
                         .orElse(null);
@@ -579,6 +580,183 @@ public final class PackageStore {
             stream.handler(bytes::appendBuffer, () -> read.tryComplete(bytes), read::tryFail);
             stream.resume();
             return read.future();
+        });
+    }
+
+    // --- lifecycle: yank, block, purge, garbage (D-086, D-092) ---
+
+    /** Whether new resolutions may pick this version: not yanked, blocked or purged. Existing locks still load yanked ones. */
+    static boolean usable(JsonObject version) {
+        return !version.getBoolean("yanked", false) && version.getValue("blocked") == null && version.getValue("purged") == null;
+    }
+
+    /**
+     * Why a locked version can't load, or null if it can (D-086): a blocked version refuses to load anywhere, and a
+     * purged one has no files left. A yanked version still loads from an existing lock.
+     */
+    public static String unloadable(JsonObject version) {
+        String label = version.getString("name") + "@" + version.getString("version");
+        if (version.getValue("purged") instanceof JsonObject purged) {
+            return label + " was purged (" + purged.getString("reason") + "); deploy or lock another version";
+        }
+        if (version.getValue("blocked") instanceof JsonObject blocked) {
+            return label + " is blocked (" + blocked.getString("reason") + "); deploy or lock another version";
+        }
+        return null;
+    }
+
+    /** Yanks a version (new resolutions skip it; existing locks still load it), or takes the yank back. */
+    public Future<JsonObject> yank(String owner, String name, String version, boolean yanked, String by) {
+        return change(owner, name, version, v -> {
+            if (v.getValue("purged") != null) {
+                throw new HostException("Error", "purged", name + "@" + version + " was purged; it can't be changed");
+            }
+            return v.put("yanked", yanked).put("yankedAt", yanked ? System.currentTimeMillis() : null).put("yankedBy", yanked ? by : null);
+        });
+    }
+
+    /**
+     * Blocks a version with a security hole: it refuses to load anywhere, even from an existing lock (D-086). Stopping
+     * the services running it is the caller's part. {@code reason} is shown wherever it's refused.
+     */
+    public Future<JsonObject> block(String owner, String name, String version, String reason, String by) {
+        String why;
+        try {
+            why = checkReason(reason);
+        } catch (HostException e) {
+            return Future.failedFuture(e);
+        }
+        return change(owner, name, version, v -> {
+            if (v.getValue("purged") != null) {
+                throw new HostException("Error", "purged", name + "@" + version + " was purged; it can't load anyway");
+            }
+            return v.put("blocked", new JsonObject().put("reason", why).put("at", System.currentTimeMillis()).put("by", by));
+        });
+    }
+
+    /** Lifts a block: the version loads again, and new resolutions can pick it. */
+    public Future<JsonObject> unblock(String owner, String name, String version) {
+        return change(owner, name, version, v -> {
+            if (v.getValue("purged") != null) {
+                throw new HostException("Error", "purged", name + "@" + version + " was purged; it can't be unblocked");
+            }
+            v.remove("blocked");
+            return v;
+        });
+    }
+
+    /**
+     * Purges a version published with a secret in it (D-086): its files are deleted, and anything locked to it fails
+     * loudly rather than running other code. Final. A file another version also has is kept, since deleting it would
+     * break that version; the answer counts both, and those versions can be purged too.
+     */
+    public Future<JsonObject> purge(String owner, String name, String version, String reason, String by) {
+        String why;
+        try {
+            why = checkReason(reason);
+        } catch (HostException e) {
+            return Future.failedFuture(e);
+        }
+        return change(owner, name, version, v -> {
+            if (v.getValue("purged") != null) {
+                throw new HostException("Error", "already_purged", name + "@" + version + " is already purged");
+            }
+            return v.put("purged", new JsonObject().put("reason", why).put("at", System.currentTimeMillis()).put("by", by));
+        }).compose(purged -> versions.where("tenant", owner).compose(all -> {
+            java.util.Set<String> stillUsed = new java.util.HashSet<>();
+            for (JsonObject other : all) {
+                if (other.getValue("purged") == null) {
+                    other.getJsonObject("files", new JsonObject()).forEach(f -> stillUsed.add(hashOf(f.getValue())));
+                }
+            }
+            List<String> doomed = new ArrayList<>();
+            int kept = 0;
+            for (String hash : new LinkedHashSet<>(purged.getJsonObject("files").stream().map(f -> hashOf(f.getValue())).toList())) {
+                if (stillUsed.contains(hash)) {
+                    kept++;
+                } else {
+                    doomed.add(hash);
+                }
+            }
+            int keptFiles = kept;
+            return Future.all(doomed.stream().map(hash -> deleteBlob(owner, hash)).toList())
+                    .compose(done -> change(owner, name, version, v -> {
+                        v.getJsonObject("purged").put("deletedFiles", doomed.size()).put("keptFiles", keptFiles);
+                        return v;
+                    }));
+        }));
+    }
+
+    private static String hashOf(Object ref) {
+        return String.valueOf(ref).substring("sha256:".length());
+    }
+
+    private Future<Void> deleteBlob(String owner, String sha256) {
+        return blobs.get(blobKey(owner, sha256)).compose(blob -> blob == null ? Future.succeededFuture()
+                : store.delete(blob.getString("blobId")).compose(v -> blobs.remove(blobKey(owner, sha256))).mapEmpty());
+    }
+
+    private static String checkReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            throw HostException.invalid("Give a \"reason\": it's shown wherever the version is refused");
+        }
+        if (reason.length() > 500) {
+            throw HostException.invalid("A reason can be at most 500 characters");
+        }
+        return reason.strip();
+    }
+
+    /** Changes one version's record; {@code not_found} if the owner has no such version. Answers it as the API shows it. */
+    private Future<JsonObject> change(String owner, String name, String version, java.util.function.UnaryOperator<JsonObject> edit) {
+        if (invalidName(name) != null || Semver.Version.parse(version) == null) {
+            return Future.failedFuture(new HostException("Error", "not_found", "No version " + version + " of " + name));
+        }
+        if (name.startsWith(CLUSTER_PREFIX) != CLUSTER.equals(owner)) {
+            return Future.failedFuture(new HostException("Error", "forbidden", CLUSTER.equals(owner)
+                    ? "Operators manage cluster packages here; a tenant's package is named with ?tenant=<id>"
+                    : "Only operators manage @cluster/ packages"));
+        }
+        String key = versionKey(owner, name, version);
+        HostException missing = new HostException("Error", "not_found", "No version " + version + " of " + name);
+        return versions.get(key).compose(existing -> {
+            if (existing == null) {
+                return Future.failedFuture(missing);
+            }
+            try {
+                // Checked here first, so a refusal is a plain failure rather than something thrown inside the store's update.
+                edit.apply(existing.copy());
+            } catch (HostException e) {
+                return Future.failedFuture(e);
+            }
+            return versions.update(key, current -> current == null ? Optional.empty() : Optional.of(edit.apply(current.copy())))
+                    .compose(updated -> updated.isPresent() ? Future.succeededFuture(strip(updated.get())) : Future.failedFuture(missing));
+        });
+    }
+
+    /**
+     * Deletes package files no version names any more, once they're older than {@code graceMs}: uploads a publish never
+     * committed (a crash, or a client that gave up), and files a purge kept until their last version went. Answers how
+     * many were deleted. Run on one node at a time.
+     */
+    public Future<Integer> collectGarbage(long now, long graceMs) {
+        return versions.all().compose(allVersions -> {
+            java.util.Set<String> referenced = new java.util.HashSet<>();
+            for (JsonObject v : allVersions) {
+                if (v.getValue("purged") == null) {
+                    String owner = v.getString("tenant");
+                    v.getJsonObject("files", new JsonObject()).forEach(f -> referenced.add(blobKey(owner, hashOf(f.getValue()))));
+                }
+            }
+            return blobs.all().compose(allBlobs -> {
+                List<Future<Void>> deletions = new ArrayList<>();
+                for (JsonObject blob : allBlobs) {
+                    String key = blobKey(blob.getString("tenant"), blob.getString("sha256"));
+                    if (!referenced.contains(key) && now - blob.getLong("createdAt", 0L) > graceMs) {
+                        deletions.add(deleteBlob(blob.getString("tenant"), blob.getString("sha256")));
+                    }
+                }
+                return Future.all(deletions).map(done -> deletions.size());
+            });
         });
     }
 
