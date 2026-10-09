@@ -215,7 +215,7 @@ class ServiceSupervisorTest {
     void aClaimedRunWhoseJobNeverAppearedIsGivenUp() throws Exception {
         long now = System.currentTimeMillis();
         ServiceDefinition ghost = new ServiceDefinition(TENANT, "ghost", "hold", new JsonObject(), RestartPolicy.ALWAYS, true, false, 1,
-                "job-that-was-never-saved", 1, now - 60_000, 1, 0, 0, null, now, now, false, null, null);
+                "job-that-was-never-saved", 1, now - 60_000, 1, 0, 0, null, now, now, false, null, null, null);
         LocalClusterAccess.await(cluster.services().create(ghost));
 
         Job run = awaitRunningRun("ghost", 2);

@@ -59,13 +59,16 @@ final class DeployCommand extends Base {
         if (service.has("env")) {
             body.set("env", service.get("env"));
         }
+        if (service.has("ports")) {
+            body.set("ports", service.get("ports"));
+        }
         JsonNode deployed = api().put("/v1/services/" + Api.segment(serviceName), body);
         if (!printedJson(deployed)) {
             out().println((outcome.unchanged() ? "Using " + outcome.label() + " (already published)"
                     : "Published " + outcome.label() + " (" + outcome.uploadedFiles() + " files uploaded, " + PackagesCommand.kb(outcome.uploadedBytes()) + ")"));
             out().println("Deployed " + outcome.label() + " as service " + serviceName + ", revision " + deployed.path("revision").asInt()
                     + (disabled ? " (not started)" : ""));
-            deployed.path("hosts").forEach(host -> out().println("  " + host.asText()));
+            deployed.path("routes").forEach(route -> out().println("  " + ServicesCommand.describeRoute(route)));
         }
         return 0;
     }

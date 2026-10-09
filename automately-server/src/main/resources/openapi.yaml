@@ -823,6 +823,7 @@ paths:
                 config: { type: object }
                 restart: { type: string, enum: [always, on-failure] }
                 enabled: { type: boolean }
+                ports: { $ref: '#/components/schemas/ServicePorts' }
       responses:
         '200': { $ref: '#/components/responses/Service' }
         '201': { $ref: '#/components/responses/Service' }
@@ -913,6 +914,7 @@ paths:
               required: [domain]
               properties:
                 domain: { type: string, minLength: 1, maxLength: 253 }
+                port: { type: integer, minimum: 1, maximum: 65535, description: 'The server port it reaches (D-123); without it, the main server.' }
       responses:
         '200': { $ref: '#/components/responses/Domain' }
         '201': { $ref: '#/components/responses/Domain' }
@@ -3108,11 +3110,34 @@ components:
         hosts:
           type: array
           items: { type: string }
+        routes:
+          type: array
+          description: Where its servers are reached (D-112, D-123). A port it listens on without declaring it is at `<service>--<tenant>--<port>` too.
+          items:
+            type: object
+            properties:
+              host: { type: string }
+              path: { type: string, description: 'A path prefix under the host, taken off before the server sees it.' }
+              port: { type: integer, description: 'The server port; absent for the main server.' }
+              exposed: { type: boolean, const: false, description: 'Present only for a port kept off the network.' }
+        ports: { $ref: '#/components/schemas/ServicePorts' }
         createdAt: { type: integer }
         updatedAt: { type: integer }
         secrets: { type: boolean, description: 'Whether its runs may read your secrets: whether the token that last defined it had secrets:use.' }
         packages: { $ref: '#/components/schemas/PackageLock' }
         env: { $ref: '#/components/schemas/EnvDeclaration' }
+    ServicePorts:
+      type: [array, 'null']
+      maxItems: 32
+      description: How its servers' ports are reached (D-112, D-123). Each port has its own host by default; a path prefix serves it under the service's host too, and expose false keeps it off the network.
+      items:
+        type: object
+        required: [port]
+        additionalProperties: false
+        properties:
+          port: { type: integer, minimum: 1, maximum: 65535 }
+          path: { type: string, pattern: '^(/[A-Za-z0-9._~!$&''()*+,;=:@%-]+)+$', maxLength: 200 }
+          expose: { type: boolean, default: true }
     Domain:
       type: object
       required: [domain, service, verified, createdAt]
@@ -3123,6 +3148,7 @@ components:
         verified: { type: boolean }
         createdAt: { type: integer }
         verifiedAt: { type: [integer, 'null'] }
+        port: { type: [integer, 'null'], description: 'The server port it reaches (D-123); null for the main server.' }
         verification:
           type: object
           properties:

@@ -12,7 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Command(name = "services", description = "Deploy and manage long-running services.",
-        subcommands = {ServicesCommand.Deploy.class, ServicesCommand.Ls.class, ServicesCommand.Get.class, ServicesCommand.Logs.class,
+        subcommands = {ServicesCommand.Deploy.class, ServicesCommand.Ls.class, ServicesCommand.Get.class, ServicesCommand.Routes.class, ServicesCommand.Logs.class,
                 ServicesCommand.Start.class, ServicesCommand.Stop.class, ServicesCommand.Restart.class, ServicesCommand.Rm.class})
 final class ServicesCommand extends Base {
 
@@ -108,6 +108,32 @@ final class ServicesCommand extends Base {
             Output.json(out(), api().get("/v1/services/" + Api.segment(name)));
             return 0;
         }
+    }
+
+    @Command(name = "routes", description = "Where the service's servers are reached: hosts, path prefixes and domains, with their ports.")
+    static final class Routes extends Base {
+        @Parameters(paramLabel = "NAME")
+        String name;
+
+        @Override
+        int execute() {
+            JsonNode service = api().get("/v1/services/" + Api.segment(name));
+            if (printedJson(service.path("routes"))) {
+                return 0;
+            }
+            service.path("routes").forEach(route -> out().println(describeRoute(route)));
+            out().println("Any other port the service listens on is reached at <service>--<tenant>--<port>, as the ports above (D-112).");
+            return 0;
+        }
+    }
+
+    /** One route as people read it: "https://host/path -> port 3001", or the main server. */
+    static String describeRoute(JsonNode route) {
+        String target = route.has("port") ? "port " + route.path("port").asInt() : "the main server";
+        if (!route.path("exposed").asBoolean(true)) {
+            return target + ": not exposed";
+        }
+        return Json.text(route, "host") + (route.has("path") ? Json.text(route, "path") : "") + " -> " + target;
     }
 
     @Command(name = "logs", description = "Follow the service's current run: its recent lines, then live.")

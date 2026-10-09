@@ -25,6 +25,8 @@ import java.util.Optional;
  * @param packages           the exact versions its script imports, resolved when it was defined, so every run of a
  *                           revision runs the same code (D-089); null if it imports none
  * @param env                its runs' {@code process.env} declaration (D-095); null if none
+ * @param ports              how its servers' ports are reached (D-112, D-123): {@code [{port, path?, expose?}]}; null if
+ *                           none are declared, so each port has its default host
  */
 public record ServiceDefinition(
         String tenant,
@@ -46,7 +48,8 @@ public record ServiceDefinition(
         long updatedAt,
         boolean secrets,
         JsonObject packages,
-        JsonObject env) {
+        JsonObject env,
+        io.vertx.core.json.JsonArray ports) {
 
     public ServiceDefinition {
         Objects.requireNonNull(tenant, "tenant");
@@ -56,6 +59,7 @@ public record ServiceDefinition(
         config = config == null ? new JsonObject() : config;
         packages = packages == null || packages.isEmpty() ? null : packages;
         env = env == null || env.isEmpty() ? null : env;
+        ports = ports == null || ports.isEmpty() ? null : ports;
     }
 
     public static ServiceDefinition create(String tenant, String name, String script, JsonObject config, RestartPolicy restart,
@@ -65,7 +69,7 @@ public record ServiceDefinition(
 
     public static ServiceDefinition create(String tenant, String name, String script, JsonObject config, RestartPolicy restart,
                                            boolean enabled, boolean secrets, long now) {
-        return new ServiceDefinition(tenant, name, script, config, restart, enabled, false, 1, null, 0, 0, 0, 0, 0, null, now, now, secrets, null, null);
+        return new ServiceDefinition(tenant, name, script, config, restart, enabled, false, 1, null, 0, 0, 0, 0, 0, null, now, now, secrets, null, null, null);
     }
 
     public String key() {
@@ -100,26 +104,32 @@ public record ServiceDefinition(
                 || !Objects.equals(this.packages, lock) || !Objects.equals(this.env, declared);
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, changed ? false : completed,
                 changed ? revision + 1 : revision, currentJobId, currentRevision, currentSince, runs,
-                changed ? 0 : consecutiveFailures, changed ? 0 : nextStartAt, lastExit, createdAt, now, secrets, lock, declared);
+                changed ? 0 : consecutiveFailures, changed ? 0 : nextStartAt, lastExit, createdAt, now, secrets, lock, declared, ports);
     }
 
     /** The exact versions its script imports (D-089). Only before it's first saved. */
     public ServiceDefinition withPackages(JsonObject lock) {
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision, currentJobId, currentRevision,
-                currentSince, runs, consecutiveFailures, nextStartAt, lastExit, createdAt, updatedAt, secrets, lock, env);
+                currentSince, runs, consecutiveFailures, nextStartAt, lastExit, createdAt, updatedAt, secrets, lock, env, ports);
     }
 
     /** Its runs' {@code process.env} declaration (D-095). Only before it's first saved. */
     public ServiceDefinition withEnv(JsonObject declared) {
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision, currentJobId, currentRevision,
-                currentSince, runs, consecutiveFailures, nextStartAt, lastExit, createdAt, updatedAt, secrets, packages, declared);
+                currentSince, runs, consecutiveFailures, nextStartAt, lastExit, createdAt, updatedAt, secrets, packages, declared, ports);
+    }
+
+    /** How its servers' ports are reached (D-123). Routing only: not a new revision, and the run carries on. */
+    public ServiceDefinition withPorts(io.vertx.core.json.JsonArray declared) {
+        return new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision, currentJobId, currentRevision,
+                currentSince, runs, consecutiveFailures, nextStartAt, lastExit, createdAt, updatedAt, secrets, packages, env, declared);
     }
 
     /** Desired state: running or not. Enabling clears completion and backoff. */
     public ServiceDefinition withEnabled(boolean enabled, long now) {
         return new ServiceDefinition(tenant, name, script, config, restart, enabled, enabled ? false : completed, revision,
                 currentJobId, currentRevision, currentSince, runs, enabled ? 0 : consecutiveFailures, enabled ? 0 : nextStartAt,
-                lastExit, createdAt, now, secrets, packages, env);
+                lastExit, createdAt, now, secrets, packages, env, ports);
     }
 
     /** Claims a new run. Only applies when no run is current and a start is due. */
@@ -128,7 +138,7 @@ public record ServiceDefinition(
             return Optional.empty();
         }
         return Optional.of(new ServiceDefinition(tenant, name, script, config, restart, enabled, completed, revision,
-                jobId, revision, now, runs + 1, consecutiveFailures, nextStartAt, lastExit, createdAt, now, secrets, packages, env));
+                jobId, revision, now, runs + 1, consecutiveFailures, nextStartAt, lastExit, createdAt, now, secrets, packages, env, ports));
     }
 
     /**
@@ -167,7 +177,7 @@ public record ServiceDefinition(
             next = now + Math.min(delay, maxBackoff.toMillis());
         }
         return Optional.of(new ServiceDefinition(tenant, name, script, config, restart, enabled, done, revision,
-                null, 0, 0, runs, failures, next, exit, createdAt, now, secrets, packages, env));
+                null, 0, 0, runs, failures, next, exit, createdAt, now, secrets, packages, env, ports));
     }
 
     /** The state the API shows, given the current run's job (null if none or not found). */
@@ -208,7 +218,8 @@ public record ServiceDefinition(
                 .put("updatedAt", updatedAt)
                 .put("secrets", secrets)
                 .put("packages", packages)
-                .put("env", env);
+                .put("env", env)
+                .put("ports", ports);
     }
 
     public static ServiceDefinition fromJson(JsonObject json) {
@@ -232,6 +243,7 @@ public record ServiceDefinition(
                 json.getLong("updatedAt", 0L),
                 json.getBoolean("secrets", false),
                 json.getJsonObject("packages"),
-                json.getJsonObject("env"));
+                json.getJsonObject("env"),
+                json.getJsonArray("ports"));
     }
 }

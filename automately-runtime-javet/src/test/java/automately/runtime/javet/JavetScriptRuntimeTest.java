@@ -623,10 +623,11 @@ class JavetScriptRuntimeTest {
         @Test
         void timerGlobalsCannotBeReplaced() throws Exception {
             ExecutionResult result = run("""
-                    export default () => { try { globalThis.setTimeout = () => 'hijacked'; } catch {} return typeof setTimeout(() => {}, 1); }
+                    export default () => { try { globalThis.setTimeout = () => 'hijacked'; } catch {} return setTimeout(() => {}, 1).constructor.name; }
                     """);
 
-            assertThat(result.output()).isEqualTo("number");
+            // Still the isolate's own: it returns Node's Timeout (D-123).
+            assertThat(result.output()).isEqualTo("Timeout");
         }
 
         @Test

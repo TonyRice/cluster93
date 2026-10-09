@@ -61,6 +61,11 @@ final class JsValues implements AutoCloseable {
         return value instanceof V8ValueString string ? string.getValue() : null;
     }
 
+    /** A list; anything else counts as an empty one. */
+    io.vertx.core.json.JsonArray list(V8Value value) {
+        return toJava(value) instanceof io.vertx.core.json.JsonArray array ? array : new io.vertx.core.json.JsonArray();
+    }
+
     /** An options object; anything else counts as no options. */
     JsonObject options(V8Value value) {
         return toJava(value) instanceof JsonObject object ? object : new JsonObject();

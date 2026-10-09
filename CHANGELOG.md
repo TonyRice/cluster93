@@ -26,6 +26,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Node's HTTP servers in services, by hostname and port (2026-10-09)
+
+### Added
+- **`http.createServer` and `https.createServer` in services, as Node's** (D-123). Nothing opens a port on the cluster:
+  - **`listen(port)`** registers it, and the ingress routes `<service>--<tenant>--<port>` to it. The service's host goes to the first server.
+  - **Requests:** the client's own headers, address and HTTP version.
+  - **Responses:** headers with repeats, the reason phrase, length or chunking as Node, trailers, and a client leaving.
+  - **Plain apps:** a plain `app.js` with no default export runs as a service, and a stop emits `SIGTERM`.
+
+  **Why:** phase B's step 6; Express, Koa and Fastify run on it.
+- **A service's `ports`** (path prefixes, ports kept off the network), domains pointing at a port, `routes` in the API, `automately services routes` and `domains add --port`.
+- **Node's `Timeout` objects** from `setTimeout`/`setInterval`, **`async_hooks`** (`AsyncResource`) and **`perf_hooks`**.
+
+### Fixed
+- **The ingress** now passes `Trailer` headers and trailers, and the app's reason phrase. It answers `Expect: 100-continue` at once.
+- **`dns.lookup('localhost')`** answers loopback even without the development switch. **Why:** Fastify looks it up to listen; it reveals nothing (RFC 6761).
+
 ## `dns` as Node's, filtered through the egress gate (2026-10-09)
 
 ### Added

@@ -45,14 +45,17 @@ final class NodeDnsApi implements DnsApi {
     public Future<JsonArray> lookup(JsonObject request) {
         String hostname = request.getString("hostname", "");
         int family = request.getInteger("family", 0);
+        // localhost and *.localhost always mean loopback (RFC 6761): answering reveals nothing, connecting there is
+        // still refused, and servers' libraries look it up to listen (Fastify) (D-123).
+        boolean loopbackName = isLocalhost(hostname);
         return limited(() -> egress.dnsView(tenant).compose(view -> {
-            if (view.hidden(hostname)) {
+            if (!loopbackName && view.hidden(hostname)) {
                 return Future.failedFuture(new HostException("Error", "ENOTFOUND", "not found"));
             }
             return resolver.lookup(hostname, family).compose(addresses -> {
                 JsonArray out = new JsonArray();
                 for (InetAddress address : addresses) {
-                    if (view.visible(hostname, address)) {
+                    if (loopbackName ? address.isLoopbackAddress() : view.visible(hostname, address)) {
                         out.add(new JsonObject().put("address", automately.core.host.dns.DnsRecords.text(address))
                                 .put("family", address instanceof Inet4Address ? 4 : 6));
                     }
@@ -141,6 +144,12 @@ final class NodeDnsApi implements DnsApi {
         JsonArray out = new JsonArray();
         resolver.defaultServers().forEach(server -> out.add(DnsResolver.describe(server)));
         return out;
+    }
+
+    static boolean isLocalhost(String hostname) {
+        String lower = hostname.toLowerCase(java.util.Locale.ROOT);
+        lower = lower.endsWith(".") ? lower.substring(0, lower.length() - 1) : lower;
+        return lower.equals("localhost") || lower.endsWith(".localhost");
     }
 
     /** Whether a record may be shown: addresses the tenant could reach, and no name pointing into an internal zone. */

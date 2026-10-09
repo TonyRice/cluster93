@@ -39,6 +39,9 @@ public final class IngressVerticle extends VerticleBase {
 
     static final Set<String> HOP_BY_HOP = Set.of("connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
             "proxy-authorization", "proxy-authenticate", "host");
+    /** A response's own headers that don't pass through: hop-by-hop, but its Trailer announcement does (D-123). */
+    static final Set<String> RESPONSE_HOP_BY_HOP = Set.of("connection", "keep-alive", "transfer-encoding", "te", "upgrade",
+            "proxy-authorization", "proxy-authenticate");
 
     private final int port;
     private final HostRouter router;
@@ -77,7 +80,9 @@ public final class IngressVerticle extends VerticleBase {
     @Override
     public Future<?> start() {
         client = vertx.createHttpClient(internalTls.apply(new HttpClientOptions().setKeepAlive(true)), new PoolOptions().setHttp1MaxSize(256));
-        return vertx.createHttpServer().requestHandler(this::handle).listen(port).onSuccess(bound -> server = bound);
+        // Expect: 100-continue is answered at once, as Node's server does without a 'checkContinue' listener (D-123).
+        return vertx.createHttpServer(new io.vertx.core.http.HttpServerOptions().setHandle100ContinueAutomatically(true))
+                .requestHandler(this::handle).listen(port).onSuccess(bound -> server = bound);
     }
 
     private void handle(HttpServerRequest request) {
@@ -88,7 +93,7 @@ public final class IngressVerticle extends VerticleBase {
             error(request, 413, "Request body is over " + maxRequestBytes + " bytes", false);
             return;
         }
-        resolve(host).onComplete(ar -> {
+        resolve(host, request.uri()).onComplete(ar -> {
             if (ar.failed()) {
                 LOG.warn("Ingress routing failed for {}", host, ar.cause());
                 error(request, 502, "Bad gateway", false);
@@ -103,19 +108,22 @@ public final class IngressVerticle extends VerticleBase {
         });
     }
 
-    /** Where a request should go: a node endpoint and job, or an error to answer with. */
-    private record Target(String endpoint, String jobId, int status, String error) {
+    /**
+     * Where a request should go: a node endpoint, job and server port (null for the main server), the URI the server
+     * sees and the path prefix taken off it; or an error to answer with.
+     */
+    private record Target(String endpoint, String jobId, Integer port, String uri, String prefix, int status, String error) {
 
-        static Target of(String endpoint, String jobId) {
-            return new Target(endpoint, jobId, 0, null);
+        Target at(String endpoint, String jobId) {
+            return new Target(endpoint, jobId, port, uri, prefix, 0, null);
         }
 
         static Target error(int status, String message) {
-            return new Target(null, null, status, message);
+            return new Target(null, null, null, null, null, status, message);
         }
     }
 
-    private Future<Target> resolve(String host) {
+    private Future<Target> resolve(String host, String uri) {
         return router.route(host).compose(route -> {
             if (route == null) {
                 return Future.succeededFuture(Target.error(404, "No service is served at " + host));
@@ -124,6 +132,24 @@ public final class IngressVerticle extends VerticleBase {
                 if (service == null) {
                     return Future.succeededFuture(Target.error(404, "No service is served at " + host));
                 }
+                // Which server (D-112, D-123): the host's or domain's port, else a declared path prefix, else the main one.
+                java.util.List<automately.core.service.ServicePorts.Port> ports = automately.core.service.ServicePorts.of(service.ports());
+                Integer port = route.port();
+                String forwardUri = uri;
+                String prefix = null;
+                if (port == null) {
+                    automately.core.service.ServicePorts.Match match = automately.core.service.ServicePorts.match(ports, uri);
+                    if (match != null) {
+                        port = match.port();
+                        prefix = match.prefix();
+                        forwardUri = match.uri();
+                    }
+                }
+                automately.core.service.ServicePorts.Port declared = port == null ? null : automately.core.service.ServicePorts.declared(ports, port);
+                if (declared != null && !declared.expose()) {
+                    return Future.succeededFuture(Target.error(404, "No service is served at " + host));
+                }
+                Target routed = new Target(null, null, port, forwardUri, prefix, 0, null);
                 if (service.currentJobId() == null) {
                     return Future.succeededFuture(Target.error(503, "The service is not running"));
                 }
@@ -135,7 +161,7 @@ public final class IngressVerticle extends VerticleBase {
                             .filter(node -> node.instanceId().equals(job.nodeInstance()) && node.endpoint() != null)
                             .map(NodeInfo::endpoint)
                             .findFirst()
-                            .map(endpoint -> Target.of(endpoint, job.id()))
+                            .map(endpoint -> routed.at(endpoint, job.id()))
                             .orElse(Target.error(503, "The service's node is unavailable")));
                 });
             });
@@ -147,9 +173,29 @@ public final class IngressVerticle extends VerticleBase {
         MultiMap headers = MultiMap.caseInsensitiveMultiMap();
         request.headers().forEach(h -> {
             String name = h.getKey().toLowerCase(Locale.ROOT);
-            if (!HOP_BY_HOP.contains(name) && !name.startsWith("x-automately-") && !name.equals("content-length")) {
+            if (!HOP_BY_HOP.contains(name) && !name.startsWith("x-automately-") && !name.equals("content-length") && !name.equals("expect")) {
                 headers.add(h.getKey(), h.getValue());
             }
+        });
+        // The request as the client sent it, for Node servers (D-123): its own headers in order and spelling, hop-by-hop
+        // ones included, its address and its HTTP version. A client can't set these: x-automately-* are dropped above.
+        // The client's own X-Forwarded-* are left out: only the ingress's reach the service, appended on the node (its
+        // X-Forwarded-For carries the client's chain, then the address the ingress saw), so none can be spoofed.
+        io.vertx.core.json.JsonArray raw = new io.vertx.core.json.JsonArray();
+        request.headers().forEach(h -> {
+            String lower = h.getKey().toLowerCase(Locale.ROOT);
+            if (!lower.startsWith("x-automately-") && !lower.startsWith("x-forwarded-")) {
+                raw.add(h.getKey()).add(h.getValue());
+            }
+        });
+        headers.set(InternalHttpVerticle.RAW_HEADERS_HEADER, raw.encode());
+        if (request.remoteAddress() != null) {
+            headers.set(InternalHttpVerticle.REMOTE_HEADER, request.remoteAddress().hostAddress() + ":" + request.remoteAddress().port());
+        }
+        headers.set(InternalHttpVerticle.VERSION_HEADER, switch (request.version()) {
+            case HTTP_1_0 -> "1.0";
+            case HTTP_2 -> "2.0";
+            default -> "1.1";
         });
         String forwardedFor = request.getHeader("X-Forwarded-For");
         String remote = request.remoteAddress() == null ? "unknown" : request.remoteAddress().hostAddress();
@@ -162,11 +208,19 @@ public final class IngressVerticle extends VerticleBase {
             headers.remove(InternalHttpVerticle.SECRET_HEADER);
         }
         headers.set(InternalHttpVerticle.JOB_HEADER, target.jobId());
+        if (target.port() != null) {
+            headers.set(InternalHttpVerticle.PORT_HEADER, String.valueOf(target.port()));
+        }
+        // Only the ingress says what prefix it took off; a client's own claim is dropped.
+        headers.remove("X-Forwarded-Prefix");
+        if (target.prefix() != null) {
+            headers.set("X-Forwarded-Prefix", target.prefix());
+        }
         RequestOptions options = new RequestOptions()
                 .setMethod(request.method())
                 .setHost(target.endpoint().substring(0, colon))
                 .setPort(Integer.parseInt(target.endpoint().substring(colon + 1)))
-                .setURI(request.uri())
+                .setURI(target.uri())
                 .setHeaders(headers)
                 .setConnectTimeout(5_000);
 
@@ -183,8 +237,12 @@ public final class IngressVerticle extends VerticleBase {
             response.endHandler(v -> idle.stop());
             upstream.response().onFailure(err -> upstreamFailed(request, err)).onSuccess(answer -> {
                 response.setStatusCode(answer.statusCode());
+                // The service's own reason phrase, as Node's res.writeHead(201, 'Made It') sends it (D-123).
+                if (answer.statusMessage() != null && !answer.statusMessage().isEmpty()) {
+                    response.setStatusMessage(answer.statusMessage());
+                }
                 answer.headers().forEach(h -> {
-                    if (!HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT))) {
+                    if (!RESPONSE_HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT))) {
                         response.headers().add(h.getKey(), h.getValue());
                     }
                 });
@@ -205,6 +263,9 @@ public final class IngressVerticle extends VerticleBase {
                 });
                 answer.endHandler(v -> {
                     idle.stop();
+                    if (response.isChunked()) {
+                        response.trailers().addAll(answer.trailers());
+                    }
                     response.end();
                 });
                 answer.exceptionHandler(err -> {

@@ -563,16 +563,524 @@ export function get(input, options, callback) {
   return req;
 }
 
-// --- servers: phase B3 ---
+// --- servers (D-112, D-123) ---
+// Node's http.Server, as lib/_http_server.js and lib/_http_outgoing.js behave. Nothing listens on the node: listen(port)
+// registers the port with the host, and the cluster's ingress routes the port's host to it (<service>--<tenant>--<port>,
+// the first server also answering the service's own host). Requests arrive as the client sent them (its raw headers,
+// address and HTTP version), and responses stream back with backpressure.
 
-export function createServer() {
-  throw nodeError(Error, 'ERR_NOT_SUPPORTED', "http.createServer isn't available in the isolate yet; use ctx.serve in a service");
+const server = globalThis[Symbol.for('automately.server')];
+const kHeaders = Symbol('kOutHeaders');
+
+function headersSentError(action) {
+  return nodeError(Error, 'ERR_HTTP_HEADERS_SENT', `Cannot ${action} headers after they are sent to the client`);
 }
+
+/** As Node's OutgoingMessage: the header API both ServerResponse and (in Node) ClientRequest share. */
+export class OutgoingMessage extends Writable {
+  constructor(options) {
+    super({ highWaterMark: options?.highWaterMark ?? 16 * 1024 });
+    this[kHeaders] = null;
+    this.sendDate = false;
+    this.chunkedEncoding = false;
+    this.useChunkedEncodingByDefault = true;
+    this.shouldKeepAlive = true;
+    this.strictContentLength = false;
+    this._headerSent = false;
+    this._trailers = null;
+    this.socket = null;
+  }
+  get connection() { return this.socket; }
+  get headersSent() { return this._headerSent; }
+  get finished() { return this.writableEnded; }
+
+  setHeader(name, value) {
+    if (this._headerSent) throw headersSentError('set');
+    validateHeaderName(name);
+    validateHeaderValue(name, value);
+    (this[kHeaders] ??= new Map()).set(name.toLowerCase(), [name, value]);
+    return this;
+  }
+
+  appendHeader(name, value) {
+    if (this._headerSent) throw headersSentError('append');
+    validateHeaderName(name);
+    validateHeaderValue(name, value);
+    const key = name.toLowerCase();
+    const existing = this[kHeaders]?.get(key);
+    if (!existing) return this.setHeader(name, value);
+    const before = Array.isArray(existing[1]) ? existing[1] : [existing[1]];
+    existing[1] = before.concat(value);
+    return this;
+  }
+
+  getHeader(name) {
+    if (typeof name !== 'string') throw nodeError(TypeError, 'ERR_INVALID_ARG_TYPE', `The "name" argument must be of type string. Received ${typeof name}`);
+    return this[kHeaders]?.get(name.toLowerCase())?.[1];
+  }
+
+  getHeaders() {
+    const out = { __proto__: null };
+    for (const [key, [, value]] of this[kHeaders] ?? []) out[key] = value;
+    return out;
+  }
+
+  getHeaderNames() { return [...(this[kHeaders]?.keys() ?? [])]; }
+  getRawHeaderNames() { return [...(this[kHeaders]?.values() ?? [])].map(([name]) => name); }
+
+  hasHeader(name) {
+    if (typeof name !== 'string') throw nodeError(TypeError, 'ERR_INVALID_ARG_TYPE', `The "name" argument must be of type string. Received ${typeof name}`);
+    return this[kHeaders]?.has(name.toLowerCase()) ?? false;
+  }
+
+  removeHeader(name) {
+    if (typeof name !== 'string') throw nodeError(TypeError, 'ERR_INVALID_ARG_TYPE', `The "name" argument must be of type string. Received ${typeof name}`);
+    if (this._headerSent) throw headersSentError('remove');
+    this[kHeaders]?.delete(name.toLowerCase());
+  }
+
+  addTrailers(headers) {
+    const pairs = [];
+    const add = (name, value) => {
+      validateHeaderName(name, 'Trailer name');
+      validateHeaderValue(name, value);
+      for (const v of Array.isArray(value) ? value : [value]) pairs.push(String(name), String(v));
+    };
+    if (Array.isArray(headers)) {
+      for (const entry of headers) add(entry[0], entry[1]);
+    } else {
+      for (const [name, value] of Object.entries(headers ?? {})) add(name, value);
+    }
+    this._trailers = (this._trailers ?? []).concat(pairs);
+  }
+
+  flushHeaders() {
+    if (!this._headerSent) this._implicitHeader();
+  }
+
+  setTimeout(ms, callback) {
+    if (callback) this.on('timeout', callback);
+    this.socket?.setTimeout(ms);
+    return this;
+  }
+
+  _implicitHeader() {
+    throw nodeError(Error, 'ERR_METHOD_NOT_IMPLEMENTED', 'The _implicitHeader() method is not implemented');
+  }
+}
+
+/** The connection a server's request came on: the client's address, as the ingress saw it. */
+class ServerSocket extends EventEmitter {
+  constructor(srv, r) {
+    super();
+    this.server = srv;
+    this.remoteAddress = r.remoteAddress ?? undefined;
+    this.remotePort = r.remotePort ?? undefined;
+    this.remoteFamily = r.remoteAddress === undefined || r.remoteAddress === null ? undefined : r.remoteAddress.includes(':') ? 'IPv6' : 'IPv4';
+    if (r.encrypted) this.encrypted = true;
+    this.readable = true;
+    this.writable = true;
+    this.destroyed = false;
+    this.bytesRead = 0;
+    this.bytesWritten = 0;
+    this.timeout = 0;
+    this._httpMessage = null;
+  }
+  get localAddress() { return this.server._address?.address; }
+  get localPort() { return this.server._address?.port; }
+  address() { return this.server._address ? { ...this.server._address } : {}; }
+  setTimeout(ms, callback) { this.timeout = Number(ms) || 0; if (callback) this.once('timeout', callback); return this; }
+  setNoDelay() { return this; }
+  setKeepAlive() { return this; }
+  ref() { return this; }
+  unref() { return this; }
+  cork() {}
+  uncork() {}
+  end() { this._httpMessage?.end(); return this; }
+  destroy(err) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    this.readable = false;
+    this.writable = false;
+    const res = this._httpMessage;
+    if (res && !res.writableFinished) res._abandon();
+    nextTick(() => { if (err) this.emit('error', err); this.emit('close', Boolean(err)); });
+    return this;
+  }
+  _clientLeft() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.readable = false;
+    this.writable = false;
+    nextTick(() => this.emit('close', true));
+  }
+}
+
+const NO_BODY = (status) => status === 204 || status === 304 || (status >= 100 && status < 200);
+
+export class ServerResponse extends OutgoingMessage {
+  constructor(req, options) {
+    super(options);
+    this.req = req;
+    this.statusCode = 200;
+    this.statusMessage = undefined;
+    this.sendDate = true;
+    this._exchange = null;
+    this._hasBody = req?.method !== 'HEAD';
+    this._fastHeaders = null;
+    this._wroteAny = false;
+    this._length = null;
+    this._clientGone = false;
+    if (req?.httpVersionMajor < 1 || (req?.httpVersionMajor === 1 && req?.httpVersionMinor === 0)) this.useChunkedEncodingByDefault = false;
+  }
+
+  writeHead(statusCode, reason, obj) {
+    if (this._headerSent) throw headersSentError('write');
+    const original = statusCode;
+    statusCode |= 0;
+    if (statusCode < 100 || statusCode > 999) throw nodeError(RangeError, 'ERR_HTTP_INVALID_STATUS_CODE', `Invalid status code: ${original}`);
+    if (typeof reason === 'string') {
+      this.statusMessage = reason;
+    } else {
+      this.statusMessage ||= STATUS_CODES[statusCode] || 'unknown';
+      obj ??= reason;
+    }
+    this.statusCode = statusCode;
+    if (this[kHeaders]) {
+      if (Array.isArray(obj)) {
+        if (obj.length % 2 !== 0) throw nodeError(TypeError, 'ERR_INVALID_ARG_VALUE', `The argument 'headers' is invalid. Received ${obj}`);
+        for (let n = 0; n < obj.length; n += 2) this.removeHeader(obj[n]);
+        for (let n = 0; n < obj.length; n += 2) if (obj[n]) this.appendHeader(obj[n], obj[n + 1]);
+      } else if (obj) {
+        for (const key of Object.keys(obj)) if (key) this.setHeader(key, obj[key]);
+      }
+    } else if (obj) {
+      // Node's fast path: headers given only here are sent, but getHeader() doesn't see them.
+      const pairs = [];
+      if (Array.isArray(obj)) {
+        if (obj.length % 2 !== 0) throw nodeError(TypeError, 'ERR_INVALID_ARG_VALUE', `The argument 'headers' is invalid. Received ${obj}`);
+        for (let n = 0; n < obj.length; n += 2) { validateHeaderName(obj[n]); validateHeaderValue(obj[n], obj[n + 1]); pairs.push([obj[n], obj[n + 1]]); }
+      } else {
+        for (const key of Object.keys(obj)) { validateHeaderName(key); validateHeaderValue(key, obj[key]); pairs.push([key, obj[key]]); }
+      }
+      this._fastHeaders = pairs;
+    }
+    if (INVALID_VALUE.test(this.statusMessage) || /[\r\n]/.test(this.statusMessage)) {
+      throw nodeError(TypeError, 'ERR_INVALID_CHAR', 'Invalid character in statusMessage');
+    }
+    if (NO_BODY(statusCode)) this._hasBody = false;
+    this._sendHead();
+    return this;
+  }
+
+  _implicitHeader() { this.writeHead(this.statusCode); }
+  writeContinue(callback) { if (callback) nextTick(callback); }
+  writeProcessing(callback) { if (callback) nextTick(callback); }
+  writeEarlyHints(hints, callback) { if (callback) nextTick(callback); }
+  assignSocket(socket) { this.socket = socket; socket._httpMessage = this; this.emit('socket', socket); }
+  detachSocket(socket) { if (socket) socket._httpMessage = null; this.socket = null; }
+
+  /** The status line and headers, to the host: as Node writes them, with Date and the length or chunking it adds. */
+  _sendHead() {
+    this._headerSent = true;
+    const pairs = [];
+    const entries = this._fastHeaders ?? [...(this[kHeaders]?.values() ?? [])];
+    let hasDate = false;
+    let hasLength = false;
+    let chunked = false;
+    for (const [name, value] of entries) {
+      const lower = String(name).toLowerCase();
+      if (lower === 'date') hasDate = true;
+      if (lower === 'content-length') hasLength = true;
+      if (lower === 'transfer-encoding' && /chunked/i.test(String(value))) chunked = true;
+      for (const v of Array.isArray(value) ? value : [value]) pairs.push(String(name), String(v));
+    }
+    if (this.sendDate && !hasDate) pairs.push('Date', new Date().toUTCString());
+    if (!hasLength && !chunked && this._hasBody && this._length !== null && !this._trailers) pairs.push('Content-Length', String(this._length));
+    this.chunkedEncoding = this._hasBody && !hasLength && (chunked || this._length === null || this._trailers !== null);
+    if (this._exchange !== null) server.respond(this._exchange, this.statusCode, this.statusMessage || STATUS_CODES[this.statusCode] || 'unknown', pairs);
+  }
+
+  write(chunk, encoding, callback) {
+    if (!this._headerSent && !this.writableEnded && chunk !== undefined && chunk !== null) this._wroteAny = true;
+    return super.write(chunk, encoding, callback);
+  }
+
+  end(chunk, encoding, callback) {
+    if (typeof chunk === 'function') { callback = chunk; chunk = undefined; } else if (typeof encoding === 'function') { callback = encoding; encoding = undefined; }
+    // Ended in one go, before anything was written: Node sends the length rather than chunks.
+    if (!this._headerSent && !this._wroteAny && !this.writableEnded) {
+      this._length = chunk === undefined || chunk === null ? 0 : typeof chunk === 'string' ? Buffer.byteLength(chunk, encoding) : chunk.byteLength ?? chunk.length;
+    }
+    if (chunk === undefined || chunk === null) return super.end(callback);
+    return super.end(chunk, encoding, callback);
+  }
+
+  _write(chunk, encoding, callback) {
+    if (!this._headerSent) {
+      this.statusMessage ||= STATUS_CODES[this.statusCode] || 'unknown';
+      if (NO_BODY(this.statusCode)) this._hasBody = false;
+      this._sendHead();
+    }
+    if (!this._hasBody || this._clientGone || this._exchange === null || chunk.length === 0) { callback(); return; }
+    const bytes = chunk.length;
+    server.write(this._exchange, chunk).then(surfaced(() => {
+      if (this.socket) this.socket.bytesWritten += bytes;
+      callback();
+    }), surfaced(() => { this._clientGone = true; callback(); }));
+  }
+
+  _final(callback) {
+    if (!this._headerSent) {
+      this.statusMessage ||= STATUS_CODES[this.statusCode] || 'unknown';
+      if (NO_BODY(this.statusCode)) this._hasBody = false;
+      this._sendHead();
+    }
+    if (this._exchange !== null && !this._clientGone) {
+      if (this._trailers && this.chunkedEncoding) server.trailers(this._exchange, this._trailers);
+      server.end(this._exchange);
+    }
+    callback();
+  }
+
+  /** The socket was destroyed before the response finished: the client's connection is reset. */
+  _abandon() {
+    if (this._exchange !== null && !this._clientGone) server.fail(this._exchange, 500, 'The server closed the connection');
+    this._clientGone = true;
+    this.destroy();
+  }
+}
+
+/** The address a server reports: the host it asked for (an address, or localhost's), else every address (::). */
+function boundAddress(host, port) {
+  if (host === undefined || host === null || host === '' || host === '::') return { address: '::', family: 'IPv6', port };
+  if (host === 'localhost') return { address: '127.0.0.1', family: 'IPv4', port };
+  const family = isIPv6Literal(host) ? 'IPv6' : 'IPv4';
+  return { address: host, family, port };
+}
+const isIPv6Literal = (host) => String(host).includes(':');
+const WILDCARDS = new Set(['::', '0.0.0.0']);
+
+// The run's ports, as the operating system would see them: two servers can share a port on two specific addresses
+// (Fastify listens on localhost's ::1 and 127.0.0.1), and the first one there takes the ingress's requests.
+const ports = new Map();
+
+function badPort(port) {
+  return nodeError(RangeError, 'ERR_SOCKET_BAD_PORT', `options.port should be >= 0 and < 65536. Received ${typeof port === 'number' ? `type number (${port})` : typeof port === 'string' ? `type string ('${port}')` : String(port)}.`);
+}
+
+/** listen()'s arguments, in any of Node's forms: { port, host, path, signal, callback }. */
+function listenArgs(args) {
+  const out = { port: 0, host: undefined, path: undefined, signal: undefined, callback: undefined };
+  if (typeof args[args.length - 1] === 'function') out.callback = args.pop();
+  const [first, second] = args;
+  if (first !== null && typeof first === 'object') {
+    if (first._handle || first.fd !== undefined) throw nodeError(Error, 'ERR_NOT_SUPPORTED', 'Listening on a handle or file descriptor isn\'t available in the isolate: servers are reached by hostname');
+    out.port = first.port ?? 0;
+    out.host = first.host;
+    out.path = first.path;
+    out.signal = first.signal;
+  } else if (typeof first === 'string' && first !== '' && !/^\d+$/.test(first)) {
+    out.path = first;
+  } else if (first !== undefined && first !== null) {
+    out.port = first;
+    if (typeof second === 'string') out.host = second;
+  }
+  if (out.path !== undefined) {
+    throw nodeError(Error, 'ERR_NOT_SUPPORTED', 'Listening on a Unix socket or pipe isn\'t available in the isolate: servers are reached by hostname through the ingress');
+  }
+  const number = typeof out.port === 'string' && out.port.trim() !== '' ? Number(out.port) : out.port;
+  if (typeof number !== 'number' || !Number.isInteger(number) || number < 0 || number > 65535) throw badPort(out.port);
+  out.port = number;
+  return out;
+}
+
 export class Server extends EventEmitter {
-  constructor() { super(); throw nodeError(Error, 'ERR_NOT_SUPPORTED', "http.Server isn't available in the isolate yet; use ctx.serve in a service"); }
+  constructor(options, requestListener) {
+    super();
+    if (typeof options === 'function') { requestListener = options; options = {}; }
+    else if (options === null || options === undefined) options = {};
+    else if (typeof options !== 'object') throw nodeError(TypeError, 'ERR_INVALID_ARG_TYPE', `The "options" argument must be of type object. Received type ${typeof options} (${options})`);
+    this._incomingMessage = options.IncomingMessage ?? IncomingMessage;
+    this._serverResponse = options.ServerResponse ?? ServerResponse;
+    this.timeout = 0;
+    this.keepAliveTimeout = options.keepAliveTimeout ?? 5000;
+    this.headersTimeout = options.headersTimeout ?? 60000;
+    this.requestTimeout = options.requestTimeout ?? 300000;
+    this.maxHeadersCount = null;
+    this.maxRequestsPerSocket = 0;
+    this.listening = false;
+    this._address = null;
+    this._stop = null;
+    this._starting = false;
+    this._primary = false;
+    this._responses = new Set();
+    this._closing = false;
+    this._closeRequested = false;
+    if (requestListener) this.on('request', requestListener);
+  }
+
+  listen(...args) {
+    if (this.listening || this._starting) {
+      throw nodeError(Error, 'ERR_SERVER_ALREADY_LISTEN', 'Listen method has been called more than once without closing.');
+    }
+    const { port: asked, host, signal, callback } = listenArgs(args);
+    if (callback) this.once('listening', callback);
+    let port = asked;
+    if (port === 0) do { port = 1024 + Math.floor(Math.random() * 64512); } while (ports.has(port));
+    const address = boundAddress(host, port);
+    this._starting = true;
+    this._closing = false;
+    server.opened();
+    const fail = (err) => {
+      this._starting = false;
+      server.closed();
+      nextTick(() => this.emit('error', err));
+    };
+    const inUse = () => Object.assign(nodeError(Error, 'EADDRINUSE',
+      `listen EADDRINUSE: address already in use ${address.family === 'IPv6' ? address.address === '::' ? ':::' : `${address.address}:` : `${address.address}:`}${port}`),
+    { errno: -98, syscall: 'listen', address: address.address, port });
+    const sharing = ports.get(port);
+    if (sharing) {
+      if (sharing.has(address.address) || WILDCARDS.has(address.address) || [...sharing].some((a) => WILDCARDS.has(a))) {
+        fail(inUse());
+        return this;
+      }
+      // The port is this run's already, on another address: Node lets it be shared, and the ingress has the first.
+      sharing.add(address.address);
+      this._started(address, null);
+      return this;
+    }
+    ports.set(port, new Set([address.address]));
+    server.listen(port, surfaced((exchangeId, r, body) => this._onRequest(exchangeId, r, body))).then(surfaced((stop) => {
+      if (this._closing) {
+        // Closed while it was starting: it never listened.
+        stop();
+        ports.delete(port);
+        server.closed();
+        this._starting = false;
+        this._closing = false;
+        this._closeIfDrained();
+        return;
+      }
+      this._started(address, stop);
+    }), surfaced((err) => {
+      ports.delete(port);
+      fail(err?.code === 'EADDRINUSE' ? inUse()
+        : nodeError(Error, err?.code === 'not_a_service' ? 'ERR_NOT_SUPPORTED' : (err?.code ?? 'ERR_SERVER_NOT_RUNNING'), String(err?.message ?? err)));
+    }));
+    if (signal) {
+      const onAbort = () => this.close();
+      if (signal.aborted) nextTick(onAbort); else signal.addEventListener('abort', onAbort, { once: true });
+    }
+    return this;
+  }
+
+  _started(address, stop) {
+    this._starting = false;
+    this._address = address;
+    this._stop = stop;
+    this._primary = stop !== null;
+    this.listening = true;
+    nextTick(() => this.emit('listening'));
+  }
+
+  _release() {
+    if (!this._address) return;
+    const sharing = ports.get(this._address.port);
+    sharing?.delete(this._address.address);
+    if (sharing && sharing.size === 0) ports.delete(this._address.port);
+  }
+
+  address() { return this.listening ? { ...this._address } : null; }
+
+  close(callback) {
+    this._closeRequested = true;
+    if (typeof callback === 'function') {
+      if (!this.listening && !this._starting) {
+        this.once('close', () => callback(nodeError(Error, 'ERR_SERVER_NOT_RUNNING', 'Server is not running.')));
+      } else {
+        this.once('close', callback);
+      }
+    }
+    if (this._starting) { this._closing = true; return this; }
+    if (this.listening) {
+      this.listening = false;
+      this._stop?.();
+      this._stop = null;
+      this._release();
+      server.closed();
+    }
+    this.closeIdleConnections();
+    this._closeIfDrained();
+    return this;
+  }
+
+  /** 'close', as Node's: once a close was asked for and no response is in flight. */
+  _closeIfDrained() {
+    if (!this._closeRequested || this.listening || this._starting || this._responses.size > 0) return;
+    this._closeRequested = false;
+    nextTick(() => this.emit('close'));
+  }
+
+  closeAllConnections() {
+    for (const res of [...this._responses]) res.socket?.destroy();
+  }
+
+  closeIdleConnections() {}
+
+  setTimeout(ms, callback) {
+    this.timeout = Number(ms) || 0;
+    if (callback) this.on('timeout', callback);
+    return this;
+  }
+
+  ref() { return this; }
+  unref() { return this; }
+  getConnections(callback) { nextTick(callback, null, this._responses.size); return this; }
+  [Symbol.asyncDispose]() { return new Promise((resolve) => this.close(() => resolve())); }
+
+  _onRequest(exchangeId, r, body) {
+    const socket = new ServerSocket(this, r);
+    const req = new this._incomingMessage(socket);
+    req.method = r.method;
+    req.url = r.uri ?? r.path;
+    req.httpVersion = r.httpVersion ?? '1.1';
+    req.httpVersionMajor = Number(req.httpVersion.split('.')[0]);
+    req.httpVersionMinor = Number(req.httpVersion.split('.')[1] ?? 0);
+    req.rawHeaders = (r.rawHeaders ?? []).map(String);
+    const { headers, distinct } = headersOf(req.rawHeaders);
+    req.headers = headers;
+    req.headersDistinct = distinct;
+    req._source = body;
+    req._body = body[Symbol.asyncIterator]();
+    const res = new this._serverResponse(req);
+    res._exchange = exchangeId;
+    res.shouldKeepAlive = true;
+    res.assignSocket(socket);
+    this._responses.add(res);
+    const done = () => {
+      if (!this._responses.delete(res)) return;
+      // Whatever of the body the handler didn't read is let go, as Node dumps it.
+      if (!req.readableEnded) { try { req._source.cancel(); } catch { /* finished */ } }
+      this._closeIfDrained();
+    };
+    res.on('finish', done);
+    res.on('close', done);
+    server.clientClosed(exchangeId).then(surfaced((left) => {
+      if (!left) return;
+      res._clientGone = true;
+      if (!req.complete) { req.aborted = true; req.destroy(); }
+      socket._clientLeft();
+      if (!res.writableFinished) res.destroy();
+    }), () => {});
+    this.emit('request', req, res);
+  }
 }
-export class OutgoingMessage extends Writable {}
-export class ServerResponse extends OutgoingMessage {}
+
+export function createServer(options, requestListener) {
+  return new Server(options, requestListener);
+}
 
 export function setMaxIdleHTTPParsers() {}
 

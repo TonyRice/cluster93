@@ -91,7 +91,8 @@ class NodeDnsApiTest {
         assertThat(await(dns.reverse(new JsonObject().put("address", "93.184.216.34")))).containsExactly("example.test");
         assertThat(code(dns.reverse(new JsonObject().put("address", "10.0.0.5")))).isEqualTo("ENOTFOUND");
         assertThat(code(dns.resolve(query("5.0.0.10.in-addr.arpa", "PTR")))).isEqualTo("ENOTFOUND");
-        assertThat(code(system(false).lookup(new JsonObject().put("hostname", "localhost")))).isEqualTo("ENOTFOUND");
+        // localhost is always loopback, which reveals nothing; connecting there is still refused (D-123).
+        assertThat(await(system(false).lookup(new JsonObject().put("hostname", "localhost")))).allMatch(a -> ((JsonObject) a).getString("address").matches("127\\..*|::1"));
         assertThat(code(system(false).lookupService(new JsonObject().put("address", "127.0.0.1").put("port", 22)))).isEqualTo("ENOTFOUND");
         // With servers set, lookups ask them too, and filter the same way.
         assertThat(await(dns.lookup(new JsonObject().put("hostname", "mixed.example.test")))).extracting(r -> ((JsonObject) r).getString("address"))

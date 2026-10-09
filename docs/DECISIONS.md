@@ -2283,3 +2283,47 @@ It's written for people, because the console will show the same response as a "N
 
 **Differs:** none known.
 
+### D-123 — Node's HTTP servers in services, reached by hostname and port
+**Date:** 2026-10-09 · **Status:** Accepted. Phase B's step 6 (network-reach.md §5), building D-112 (Tony: "let's do phase b step 6").
+
+**Decision:**
+- **Routes and ports:**
+  - **On the node:** `ServeRegistry` holds a run's main server (`ctx.serve`) and its servers by port.
+  - **The ingress** reads a port from the host (`<service>--<tenant>--<port>`), from a custom domain claimed with a `port`, or from a declared `path` prefix under the service's host (taken off, and sent as `X-Forwarded-Prefix`). It forwards the run and port to the run's node; the service's host goes to the main server, or else the first port that listened.
+  - **A service's `ports`** (`[{port, path?, expose?}]`) change routing without a new revision. `expose: false` takes a port off the network.
+  - **The API** shows `routes`, and the CLI has `services routes`, `domains add --port`, and `ports` in `automately.json`.
+  - **Not opaque route ids:** the run and port suffice, since the internal endpoint is authenticated and nothing listens on the node. This saves a cluster write per `listen`.
+- **The exchange** (`HttpExchange`, `ServerExchange`, the ingress):
+  - **Requests:** the client's own headers, address and HTTP version are forwarded so a Node server sees exact `rawHeaders` and `req.socket`. The client's `X-Forwarded-*` are dropped and only the ingress's added.
+  - **Responses:** headers in order with repeats, the reason phrase, a kept `Content-Length`, response trailers, a `closed` signal when the client leaves, and `Expect: 100-continue` answered by the ingress.
+- **Node's server in the isolate** (`http.js`):
+  - **Classes:** `Server`, `ServerResponse` and `OutgoingMessage`, as `_http_server.js` and `_http_outgoing.js`, with `IncomingMessage` shared with the client.
+  - **`listen`:** every form, with Node's errors, and ports shared across distinct addresses as the OS allows (Fastify listens on localhost's two).
+  - **`https.createServer`** is accepted, with `key` and `cert` set aside.
+- **How a service runs:**
+  - **Lasting:** a listening server keeps the run going after the default export returns; a module that only listens needs no default export.
+  - **A stop** emits `SIGTERM` on `process`; with no listener, the run ends.
+  - **Jobs** can't listen.
+- **The other modules:**
+  - **Timers:** `setTimeout`/`setInterval` return Node's `Timeout`.
+  - **`async_hooks`:** `AsyncResource` complete; `AsyncLocalStorage.run` refused as D-112 recorded.
+  - **`perf_hooks`:** added.
+  - **`dns.lookup`** answers `localhost` and `*.localhost` as loopback (RFC 6761).
+
+**Found while testing, and fixed:**
+- **A spoofed `X-Forwarded-Prefix` reached the app** through the forwarded raw headers. The client's whole `X-Forwarded-*` family is now kept out.
+- **The ingress dropped the app's reason phrase.**
+
+**Tested:**
+- **`NodeServersTest` (2), through the real ingress:**
+  - a plain `app.js` with no default export, on three ports and `listen(0)`
+  - raw headers and the client's address
+  - `Set-Cookie` repeats, a reason phrase, the implicit length and chunking, HEAD
+  - `100-continue`, trailers, and a client leaving
+  - port hosts, a path prefix (with a spoofed prefix dropped), `expose: false`, an unknown port
+  - `EADDRINUSE`, `SIGTERM` closing everything well inside the grace period, and a job refused
+- **`ServicePortsTest` (3):** validation, prefix matching and port hosts.
+- **Regressions:** every existing serving test, and the real-npm suite with the drivers.
+
+**Next:** Express, Koa and Fastify against real Node (§5's proof).
+

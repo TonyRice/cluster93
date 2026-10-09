@@ -187,6 +187,16 @@ public final class HostBridge {
                 });
     }
 
+    /** A Node server listening on {@code port} (D-123): its requests arrive at listener {@code listenerId}, as serve's. */
+    V8ValuePromise listen(int listenerId, int port) throws JavetException {
+        return promise(() -> apis.http().listen(port, exchange -> onExchange(listenerId, exchange)),
+                registration -> {
+                    registrations.put(listenerId, registration);
+                    loop.listenerAdded();
+                    return null;
+                });
+    }
+
     /** Any thread. */
     private void deliver(int listenerId, Inbound inbound) {
         if (closed.get()) {

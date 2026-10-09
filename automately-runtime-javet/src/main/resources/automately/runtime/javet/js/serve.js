@@ -44,11 +44,48 @@ const respond = async (exchangeId, value) => {
 // Same id space as bus listeners: the host keeps both in one registry.
 const serve = (handler) => listen((id) => host.http.serve(id), handler);
 
+// Node's servers (D-123): http.createServer's listen registers a port, and its requests come here raw, for node:http to
+// shape. A service's run lasts while one is open, after its default export returns (or without one).
+const RAW = Symbol('raw request handler');
+let openServers = 0;
+const serversDone = [];
+const serverOpened = () => { openServers++; };
+const serverClosed = () => {
+  if (openServers > 0) openServers--;
+  if (openServers === 0) for (const done of serversDone.splice(0)) done();
+};
+/** Resolves once no server is open, or at once if none is. */
+const whenServersClose = () => (openServers === 0 ? Promise.resolve() : new Promise((resolve) => serversDone.push(resolve)));
+/** A stop with no SIGTERM listener ends the run, as Node's default action ends the process. */
+const releaseServers = () => { openServers = 0; for (const done of serversDone.splice(0)) done(); };
+Object.defineProperty(globalThis, Symbol.for('automately.server'), {
+  value: Object.freeze({
+    listen: (port, onRequest) => listen((id) => host.http.listen(id, port), Object.assign((...args) => onRequest(...args), { [RAW]: true })),
+    opened: serverOpened,
+    closed: serverClosed,
+    respond: (id, status, message, rawHeaders) => host.http.respondRaw(id, status, message ?? null, rawHeaders),
+    write: (id, bytes) => host.http.write(id, bytes),
+    end: (id) => host.http.end(id),
+    trailers: (id, rawTrailers) => host.http.trailers(id, rawTrailers),
+    fail: (id, status, message) => host.http.fail(id, status, message),
+    clientClosed: (id) => host.http.closed(id),
+  }),
+});
+
 // Called by the event loop for each request to a serving listener.
 const request = (listenerId, exchangeId, requestJson, bodyId) => {
   const handler = listeners.get(listenerId);
   const r = JSON.parse(requestJson);
   const body = readable(bodyId);
+  if (handler?.[RAW]) {
+    try {
+      handler(exchangeId, r, body);
+    } catch (e) {
+      host.http.fail(exchangeId, 500, 'The server failed');
+      reportUncaught(e, 'an http server');
+    }
+    return;
+  }
   const req = Object.freeze({
     method: r.method, url: r.url, path: r.path, host: r.host, query: Object.freeze({ ...r.query }),
     headers: headerBag(r.headers),

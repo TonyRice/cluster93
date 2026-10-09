@@ -20,8 +20,17 @@ const toJson = (value, what) => {
 
 let resolveStop;
 const stopRequested = new Promise((resolve) => { resolveStop = resolve; });
-// Called by the event loop when the job is asked to stop.
-const requestStop = (reason) => resolveStop({ reason });
+// Called by the event loop when the job is asked to stop. As Node receiving SIGTERM: listeners on process hear it (and
+// can close their servers); with none, the run ends, as Node's default action ends the process (D-123).
+const requestStop = (reason) => {
+  resolveStop({ reason });
+  const proc = globalThis[Symbol.for('automately.process')];
+  if (proc && proc.listenerCount('SIGTERM') > 0) {
+    try { proc.emit('SIGTERM', 'SIGTERM'); } catch (e) { reportUncaught(e, "a 'SIGTERM' listener"); }
+  } else {
+    releaseServers();
+  }
+};
 
 const deepFreeze = (value) => {
   if (value && typeof value === 'object') { Object.values(value).forEach(deepFreeze); Object.freeze(value); }

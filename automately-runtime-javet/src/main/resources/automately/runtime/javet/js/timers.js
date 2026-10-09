@@ -1,18 +1,64 @@
 // setTimeout and setInterval: the callbacks stay here, the schedule is the isolate's event loop (EventLoop).
 const timers = new Map();
 let nextTimerId = 1;
+const callbackError = (fn) => {
+  const received = fn === null ? 'null' : fn === undefined ? 'undefined' : typeof fn === 'object' ? `an instance of ${fn.constructor?.name ?? 'Object'}`
+    : `type ${typeof fn} (${typeof fn === 'string' ? `'${fn}'` : String(fn)})`;
+  const err = new TypeError(`The "callback" argument must be of type function. Received ${received}`);
+  err.code = 'ERR_INVALID_ARG_TYPE';
+  return err;
+};
+// Node's delay: a number from 1 to 2^31-1 ms, else 1 (and a TimeoutOverflowWarning past the top).
+const delayOf = (delay) => {
+  let ms = Number(delay);
+  if (ms > 2147483647) {
+    globalThis[Symbol.for('automately.process')]?.emitWarning(`${delay} does not fit into a 32-bit signed integer.\nTimeout duration was set to 1.`,
+      'TimeoutOverflowWarning');
+    ms = 1;
+  }
+  return ms >= 1 && ms <= 2147483647 ? ms : 1;
+};
 const schedule = (fn, delay, args, repeat) => {
-  if (typeof fn !== 'function') throw new TypeError('A timer callback must be a function');
+  if (typeof fn !== 'function') throw callbackError(fn);
   if (timers.size >= 10000) throw new RangeError('Too many pending timers (limit 10000)');
   const id = nextTimerId++;
-  const ms = Math.max(1, Number(delay) || 0);
+  const ms = delayOf(delay);
   timers.set(id, { fn, args, repeat, ms });
   host.timer(id, ms);
   return id;
 };
-const clear = (id) => { if (timers.delete(id)) host.clearTimer(id); };
-define('setTimeout', (fn, delay, ...args) => schedule(fn, delay, args, false));
-define('setInterval', (fn, delay, ...args) => schedule(fn, delay, args, true));
+
+// Node's Timeout (D-123): setTimeout and setInterval return one. Its primitive is the timer's id, so +timeout and
+// clearTimeout(id) work as in Node. ref and unref are kept but change nothing: a run lasts until its promise settles.
+class Timeout {
+  constructor(id, ms, fn, repeat) {
+    this._id = id;
+    this._idleTimeout = ms;
+    this._onTimeout = fn;
+    this._repeat = repeat ? ms : null;
+    this._ref = true;
+  }
+  ref() { this._ref = true; return this; }
+  unref() { this._ref = false; return this; }
+  hasRef() { return this._ref; }
+  refresh() {
+    if (timers.has(this._id)) { host.clearTimer(this._id); host.timer(this._id, this._idleTimeout); }
+    return this;
+  }
+  close() { clear(this); return this; }
+  [Symbol.toPrimitive]() { return this._id; }
+  [Symbol.dispose]() { clear(this); }
+}
+const timeout = (fn, delay, args, repeat) => {
+  const id = schedule(fn, delay, args, repeat);
+  return new Timeout(id, timers.get(id).ms, fn, repeat);
+};
+const clear = (timer) => {
+  const id = timer instanceof Timeout ? timer._id : Number(timer);
+  if (timers.delete(id)) host.clearTimer(id);
+};
+define('setTimeout', (fn, delay, ...args) => timeout(fn, delay, args, false));
+define('setInterval', (fn, delay, ...args) => timeout(fn, delay, args, true));
 define('clearTimeout', clear);
 define('clearInterval', clear);
 

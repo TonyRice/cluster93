@@ -22,6 +22,38 @@ Authorization: Bearer atly_…
 - Changing `script`, `config` or `restart` creates a new **revision**. The running instance is asked to stop and the new revision starts.
 - `POST /v1/services/{name}/stop`, `/start`, `/restart`, and `DELETE /v1/services/{name}`.
 
+## Servers and their ports
+
+A service can run Node's own HTTP servers, Express, Koa and Fastify included, unchanged (D-112, D-123). Nothing opens a port on the cluster: `listen(port)` registers it, and the cluster's ingress routes to it by hostname, with TLS, your domains and the ingress's limits.
+
+```js
+// app.js: a plain Node app. No default export is needed; the server keeps the service running.
+import http from 'node:http';
+const server = http.createServer((req, res) => res.end('hello ' + req.socket.remoteAddress));
+server.listen(3000);
+process.on('SIGTERM', () => server.close());   // a stop: close, and the run ends cleanly
+```
+
+- **Where each server is reached:**
+  - **The service's host** (`<service>--<tenant>.<domain>`) goes to `ctx.serve`'s handler, or else to the first server that listened.
+  - **Every port has a host of its own:** `<service>--<tenant>--<port>.<domain>`, one label deep, so the wildcard certificate covers it.
+- **`ports` in the definition** changes that per port, without restarting the run:
+  ```http
+  PUT /v1/services/shop
+  { "script": "…", "ports": [ { "port": 4000, "path": "/admin" }, { "port": 9090, "expose": false } ] }
+  ```
+  - **`path`:** the port is also served under the service's host at that prefix. The prefix is taken off before the server sees the request, and sent as `X-Forwarded-Prefix`.
+  - **`expose: false`:** the port isn't reachable from outside at all.
+- **A custom domain** can point at a port: `POST /v1/services/shop/domains {"domain": "admin.example.com", "port": 4000}`, or `automately domains add shop admin.example.com --port 4000`.
+- **`GET /v1/services/{name}`** lists the `routes` (host, path, domain and port), as does `automately services routes shop`. `automately deploy` takes `service.ports` from `automately.json`.
+- **Requests arrive as the client sent them:**
+  - **Headers:** its own headers in its own order, then the ingress's `X-Forwarded-*`. A client's own `X-Forwarded-*` never reach your server.
+  - **The client:** its real address and port on `req.socket`, and `encrypted` when it came over HTTPS.
+- **How long it runs:** while a server listens, after the default export (if any) returns.
+  - **A stop emits `SIGTERM` on `process`:** close your servers and the run ends. The 5-second grace period still applies.
+  - **Without a `SIGTERM` listener,** the run ends at once, as Node's default.
+- **Only services listen.** A job's `listen` fails with `ERR_NOT_SUPPORTED`. Raw TCP and UDP servers never run on the cluster's nodes.
+
 ## What a service script sees
 
 ```js

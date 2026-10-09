@@ -25,9 +25,17 @@ final class DomainsCommand extends Base {
         @Parameters(index = "1", paramLabel = "DOMAIN")
         String domain;
 
+        @picocli.CommandLine.Option(names = "--port", paramLabel = "PORT", description = "The server port it reaches (a port the service listens on); "
+                + "without it, the service's main server.")
+        Integer port;
+
         @Override
         int execute() {
-            JsonNode claim = api().post("/v1/services/" + Api.segment(service) + "/domains", Json.object().put("domain", domain));
+            com.fasterxml.jackson.databind.node.ObjectNode body = Json.object().put("domain", domain);
+            if (port != null) {
+                body.put("port", port);
+            }
+            JsonNode claim = api().post("/v1/services/" + Api.segment(service) + "/domains", body);
             if (printedJson(claim)) {
                 return 0;
             }

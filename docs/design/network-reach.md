@@ -8,7 +8,7 @@
 - **got and real socket details (§11):** ✅ built (D-114). The isolate reports a Node version so got loads (D-115).
 - **B5, `net` and `tls` sockets (§7):** ✅ built (D-116), with pg, mysql2, ioredis, MongoDB and nodemailer matching real Node against real servers.
 - **The `http2` client (§12):** ✅ built (D-117), with got's `http2: true` matching real Node. Request trailers, `state`, priorities and the frames' real flags as Node 26 has them (D-118).
-- **Servers reached by hostname with intercepted ports (§5, D-112):** accepted (Tony, 2026-10-08).
+- **Servers reached by hostname with intercepted ports (§5, D-112):** ✅ built (D-123): Node's `http.Server`, ports by host, path prefixes, ports kept off the network, domains per port. Express, Koa and Fastify against real Node are next.
 - **The rest, accepted with Tony's answers in §8** (2026-10-08):
   - got and real socket details (§11)
   - sockets, B5 (§7)
@@ -127,7 +127,16 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **`process` reports itself as `[object process]`,** which is how axios picks its Node adapter.
 - **Tests use the development switch,** not a policy rule as planned: the test server is on loopback, which is the node itself, and no rule can reach a node.
 
-## 5. B3: servers, reached by hostname only (accepted, D-112)
+## 5. B3: servers, reached by hostname only (built, D-123; designed in D-112)
+
+**As built (D-123):**
+- **The route table is the run and its ports, not opaque ids.** The ingress already finds a service's node through its current run, and the internal endpoint is authenticated. So it forwards `(run, declared port)` and the node's `ServeRegistry` (keyed by run and port) finds the server. Nothing opens on the node, and nothing is written to the cluster on each `listen`. The Node containers' mapped ports will add a table when they exist.
+- **The request as the client sent it:** the ingress forwards the client's own headers, address and HTTP version in internal headers, which it strips from clients. The node then gives Node servers exact `rawHeaders`, then the ingress's `X-Forwarded-*`. A client's own `X-Forwarded-*` are dropped: the first version passed a spoofed `X-Forwarded-Prefix` through, and a test caught it.
+- **Responses:** headers in order with repeats, the reason phrase, the app's `Content-Length`, trailers (forwarded by the ingress), and a disconnect signal. `Expect: 100-continue` is answered by the ingress.
+- **Custom domains point at a port** when claimed, rather than through a list in `ports`, so they keep one verification flow.
+- **`localhost` and `*.localhost` always look up as loopback** in `dns.lookup` (RFC 6761), since Fastify looks localhost up to listen. That reveals nothing, and connecting there is still refused.
+
+**The design as accepted:**
 **No script ever opens a port on the cluster.** Inbound traffic arrives only through the cluster's HTTP ingress, which picks the service by hostname. A script's `listen(port)` is intercepted, and the script never learns how its traffic reaches it (Tony, 2026-10-08).
 
 **The route table, one for both runtimes:** a route is `(tenant, service, declared port) → (node, backend endpoint)`. It's kept with the service's records and cached by every node's ingress, as `HostRouter` and `ServiceStore` route today.

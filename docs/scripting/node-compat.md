@@ -38,7 +38,9 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `querystring` | Complete | JavaScript | D-103 |
 | `timers`, `timers/promises` | Complete | The isolate's timers | D-103 |
 | `os` | Describes the job, not the machine | JavaScript | D-103 |
-| `http`, `https` | The client; `createServer` is phase B3 | The host's HTTP client, through the egress gate | D-108, D-109 |
+| `http`, `https` | The client, and servers reached by hostname | The host's HTTP client, through the egress gate; servers through the cluster's ingress | D-108, D-109, D-123 |
+| `async_hooks` | `AsyncResource` complete; `AsyncLocalStorage` without `run` | JavaScript | D-123 |
+| `perf_hooks` | `performance`, observers of marks and measures | JavaScript | D-123 |
 | `net` | Outbound TCP sockets, as Node's; no servers | The host's sockets, through the egress rules | D-109, D-114, D-116 |
 | `tls` | Outbound TLS sockets and upgrades, as Node's; no servers | The host's sockets, through the egress rules | D-109, D-114, D-116 |
 | `child_process` | Its names only: starting a process throws | JavaScript | D-116 |
@@ -48,9 +50,9 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `dns`, `dns/promises` | As Node's; answers show only what the tenant could reach | The host's resolver: the operating system for `lookup`, DNS servers for the rest | D-114, D-122 |
 | `automately:kv`, `:bus`, `:jobs`, `:files`, `:secrets`, `:fetch`, `:log` | The host APIs as modules | The host | D-091 |
 
-**Refused:** `dgram`, `cluster`, `worker_threads`, `vm`, `v8`, `inspector`, `module`, `readline`, `repl`, `perf_hooks`, `async_hooks`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module), `constants` and `stream/web`.
+**Refused:** `dgram`, `cluster`, `worker_threads`, `vm`, `v8`, `inspector`, `module`, `readline`, `repl`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module), `constants` and `stream/web`.
 - **When:** importing one stops the publish ("Node's "dns" module isn't available in the isolate …"). A CommonJS `require()` of one throws when it runs instead, with a warning at publish.
-- **What's coming** ([network reach](../design/network-reach.md)): `http.createServer` by hostname (B3), and WebSockets, all through the egress rules. `async_hooks` and `perf_hooks` come with B3, since the web frameworks need them.
+- **What's coming** ([network reach](../design/network-reach.md)): WebSockets, through the ingress and the egress rules.
 - **The rest** need the Node runtime.
 
 ## Globals
@@ -295,8 +297,12 @@ A fixture compares Node's guaranteed orderings with real Node.
 - **`timers`:** `setTimeout`, `setInterval`, `setImmediate` and their `clear…`.
 - **`timers/promises`:** `setTimeout`, `setImmediate`, `setInterval` (an async iterator) and `scheduler.wait`/`yield`. All of them accept a `signal` (D-103).
 - **`setImmediate`** returns an `Immediate` (`ref`, `unref`, `hasRef`) and runs in the check phase, as Node's (D-121).
+- **`setTimeout` and `setInterval` return a `Timeout`, as Node's (D-123):**
+  - **Methods:** `ref`, `unref`, `hasRef`, `refresh`, `close` and `Symbol.dispose`.
+  - **Its primitive is the timer's id,** so `clearTimeout(+timeout)` works too.
+  - **Validation:** a callback that isn't a function throws `ERR_INVALID_ARG_TYPE`, and a delay past 2^31-1 ms becomes 1 with a `TimeoutOverflowWarning`.
 - **Differs:**
-  - **Timers return numbers,** not `Timeout` objects, so `ref`/`unref`/`refresh` don't exist.
+  - **`unref()`** is remembered but changes nothing: a run lasts until its promise settles (or, in a service, while its servers listen), not while timers are pending.
   - **Signals:** `AbortController`'s, or any object shaped like an `AbortSignal`.
 
 ## `os`
@@ -350,7 +356,7 @@ The client, as Node's, on the host's HTTP client (D-109). Every request goes thr
   - **`maxHeaderSize`** is 64 KiB, the host's limit; Node's default is 16 KiB.
 - **Refused, with an error that says why:** `createConnection` (it would bypass the gate), `socketPath`, `CONNECT`, upgrades to WebSocket, `pfx`, `passphrase` (encrypted keys), and a custom `checkServerIdentity` (the isolate never sees the certificate; `tls.checkServerIdentity` itself is accepted).
 - **Ignored:** `lookup`, `family`, `localAddress`, `localPort` and `servername`. The gate does the resolving, and SNI is the request's host.
-- **Not there yet:** `createServer`, `Server` and `ServerResponse` (phase B3, on `ctx.serve`). `https.createServer` never: a service serves HTTPS through the cluster's ingress.
+- **Servers:** `createServer`, `Server`, `ServerResponse` and `OutgoingMessage`; see [HTTP servers](#http-servers).
 - **Limits:**
   - **Concurrency:** 16 open requests per execution, shared with `fetch`. A request counts until its response has been read or it's aborted.
   - **Timeouts:** 30 s to connect, and 5 min with no data either way.
@@ -497,6 +503,45 @@ Node's (D-122), on the host's resolver: the one the egress gate uses for every c
   - **The development switch** shows private addresses and internal names, as it opens them to connections.
 - **Limits:** 16 queries at once per run (more wait their turn), 10 s per query whatever the tries, answers up to a DNS message's 64 KB.
 
+## HTTP servers
+
+Node's `http.Server` (D-112, D-123), as `lib/_http_server.js` and `lib/_http_outgoing.js` behave. Nothing listens on the node: `listen(port)` registers the port, and the cluster's ingress routes to it by hostname. Clients reach the main server at the service's host and each other port at `<service>--<tenant>--<port>`; a service's `ports` can add a path prefix or keep a port off the network ([services](services.md#servers-and-their-ports)).
+- **`http.createServer([options][, listener])` and `new http.Server`:**
+  - **Options:** `IncomingMessage` and `ServerResponse` (your own classes) and the timeouts are kept.
+  - **`listen`:** every form (`listen(port[, host][, backlog][, cb])`, `listen({ port, host, signal })`, `listen(cb)`). `listen(0)` picks a free virtual port. `server.address()` gives the port asked for, and the host if one was given (else `::`).
+  - **Errors:** a port this run already listens on fails with Node's `EADDRINUSE`, unless both are on distinct specific addresses, as Fastify does for localhost's two. A path or a handle is refused: servers are reached by hostname.
+  - **Events and methods:** `listening`, `request`, `close` and `error`; `close()` (after the requests in flight), `closeAllConnections()`, `getConnections()`, `setTimeout()` and `Symbol.asyncDispose`.
+- **`req` is an `IncomingMessage`, as the client sent it:**
+  - **Its fields:** `method`, `url`, `httpVersion`, `rawHeaders` (the client's own names, values and order), and `headers` and `headersDistinct` (Node's rules).
+  - **Behind the proxy:** the ingress's `X-Forwarded-For`, `-Host`, `-Proto` (and `-Prefix` under a path) follow the client's headers, as for any app behind a proxy. A client's own `X-Forwarded-*` are dropped.
+  - **`req.socket`:** the client's real address (`remoteAddress`, `remotePort`, `remoteFamily`) and `encrypted` when it came over TLS.
+  - **The body** streams with backpressure.
+- **`res` is a `ServerResponse`:**
+  - **Headers:** the whole header API (`setHeader`, `appendHeader`, `getHeader(s)`, `getHeaderNames`, `getRawHeaderNames`, `hasHeader`, `removeHeader`, `flushHeaders`, `headersSent`).
+  - **`writeHead`:** in all its forms, including Node's fast path and arrays.
+  - **Status:** `statusCode`, and `statusMessage`, whose own reason phrase reaches the client.
+  - **What Node adds:** `Date`, and `Content-Length` when the response ends in one go (else it's chunked). HEAD, 204 and 304 have no body.
+  - **The rest:** `write` (with backpressure and `drain`), `end`, `addTrailers`, `finish` and `close`, and Node's errors (`ERR_HTTP_HEADERS_SENT`, `ERR_HTTP_INVALID_STATUS_CODE`, `ERR_INVALID_HTTP_TOKEN`).
+  - **A client that leaves:** `res` and `req.socket` close without finishing.
+- **`Expect: 100-continue`** is answered by the ingress at once, as Node's server does without a `checkContinue` listener.
+- **`https.createServer`** is accepted; `key` and `cert` are set aside, with a note in the log, since the ingress serves TLS.
+- **How long a service runs:** a listening server keeps its run going after the default export returns, and a service module that only calls `listen` needs no default export (a plain `app.js`).
+  - **A stop emits `SIGTERM` on `process`**, so the app can close its servers; once they're closed the run ends.
+  - **With no `SIGTERM` listener,** the run ends at once, as Node's default action ends the process.
+- **Only services listen:** in a job, `listen` fails with `ERR_NOT_SUPPORTED`, since a job has no host.
+- **Differs:**
+  - **Request trailers** aren't seen (`req.trailers` is empty): the cluster's HTTP server doesn't expose them.
+  - **No per-connection events:** `connection`, `checkContinue` and `clientError` aren't emitted, since connections end at the ingress.
+  - **Keep-alive is the ingress's,** so `Connection` and `Keep-Alive` aren't sent from the app.
+  - **The ingress adds `Server: automately`.**
+
+## `async_hooks` and `perf_hooks`
+
+- **`AsyncResource`,** as Node's: `runInAsyncScope`, `bind`, the static `bind`, `asyncId` and `triggerAsyncId`. That's all on-finished, raw-body and Fastify use it for.
+- **`AsyncLocalStorage`:** `getStore`, `exit`, `disable`, `bind` and `snapshot` are there. `run()` and `enterWith()` throw `ERR_NOT_SUPPORTED`, because carrying a value across `await` needs a V8 hook the isolate doesn't have, and losing it silently would be worse (D-112).
+- **`createHook`** returns a hook whose `enable()` throws, for the same reason. `executionAsyncId()` is 1.
+- **`perf_hooks`:** the isolate's `performance` (whole milliseconds). A `PerformanceObserver` sees `mark` and `measure` entries a turn later. `monitorEventLoopDelay()` and `createHistogram()` return empty histograms.
+
 ## `tty` and `child_process`
 
 These have everything that doesn't start a process or need a terminal, so libraries that import them load (D-109, D-116).
@@ -578,6 +623,6 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 **Missing for now:**
 - **Globals:** `Blob`, `FormData`, `Headers`/`Request`/`Response`, Web Streams, `MessageChannel` and `WebSocket`.
 - **Crypto:** Brotli compression, AES-KW, classic Diffie-Hellman, and encrypted private keys.
-- **Network:** `http.createServer` (B3), then WebSockets (network-reach.md §9).
+- **Network:** WebSockets (network-reach.md §13).
 
 Changes to any stand-in are recorded in the [changelog](../../CHANGELOG.md) and [decisions](../DECISIONS.md).

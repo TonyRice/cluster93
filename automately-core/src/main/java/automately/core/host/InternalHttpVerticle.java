@@ -23,6 +23,13 @@ public final class InternalHttpVerticle extends VerticleBase {
 
     public static final String SECRET_HEADER = "X-Automately-Cluster-Secret";
     public static final String JOB_HEADER = "X-Automately-Job";
+    /** What the ingress forwards so a Node server sees the request as the client sent it (D-123): its own headers, as JSON. */
+    public static final String RAW_HEADERS_HEADER = "X-Automately-Raw-Headers";
+    /** The client's address and port, as the ingress's connection saw them: "address:port". */
+    public static final String REMOTE_HEADER = "X-Automately-Remote";
+    public static final String VERSION_HEADER = "X-Automately-Http-Version";
+    /** The server's declared port (D-112), or absent for the service's main server. */
+    public static final String PORT_HEADER = "X-Automately-Port";
     public static final int MAX_CONCURRENT_REQUESTS = 64;
 
     private final int port;
@@ -54,6 +61,8 @@ public final class InternalHttpVerticle extends VerticleBase {
 
     @Override
     public Future<?> start() {
+        // The client's own headers come along as one more header (D-123), so allow twice the ingress's limit.
+        options.setMaxHeaderSize(Math.max(options.getMaxHeaderSize(), 64 * 1024));
         return vertx.createHttpServer(options).requestHandler(this::handle).listen(port).onSuccess(bound -> server = bound);
     }
 
@@ -65,9 +74,11 @@ public final class InternalHttpVerticle extends VerticleBase {
             return;
         }
         String jobId = request.getHeader(JOB_HEADER);
-        Consumer<HttpExchange> handler = jobId == null ? null : registry.handler(jobId);
+        Integer port = port(request.getHeader(PORT_HEADER));
+        Consumer<HttpExchange> handler = jobId == null ? null : port == null ? registry.handler(jobId) : registry.handler(jobId, port);
         if (handler == null) {
-            reject(request, 503, "The service is not accepting requests right now");
+            reject(request, 503, port == null ? "The service is not accepting requests right now"
+                    : "Nothing is listening on port " + port + " in the service's current run");
             return;
         }
         AtomicInteger count = inFlight.computeIfAbsent(jobId, id -> new AtomicInteger());
@@ -83,6 +94,14 @@ public final class InternalHttpVerticle extends VerticleBase {
             }
         });
         handler.accept(new ServerExchange(request, context));
+    }
+
+    private static Integer port(String header) {
+        try {
+            return header == null ? null : Integer.valueOf(header);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static void reject(HttpServerRequest request, int status, String message) {

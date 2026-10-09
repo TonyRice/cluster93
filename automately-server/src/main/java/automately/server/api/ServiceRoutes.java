@@ -90,9 +90,15 @@ final class ServiceRoutes {
                 error(ctx, 400, "invalid_request", "Hosts under the ingress domain are assigned automatically");
                 return;
             }
+            // The server port it reaches (D-123); without one, the service's main server.
+            Object portValue = body.getValue("port");
+            if (portValue != null && (!(portValue instanceof Integer p) || p < 1 || p > 65535)) {
+                error(ctx, 400, "invalid_request", "\"port\" must be a number from 1 to 65535");
+                return;
+            }
             long now = System.currentTimeMillis();
             Domain claim = new Domain(domain, service.tenant(), service.name(), java.util.UUID.randomUUID().toString().replace("-", ""),
-                    false, now, null);
+                    false, now, null, (Integer) portValue);
             domains.claim(claim, now)
                     .onSuccess(stored -> stored.ifPresentOrElse(
                             d -> ctx.response().setStatusCode(d == claim ? 201 : 200).putHeader("Content-Type", "application/json")
@@ -167,6 +173,13 @@ final class ServiceRoutes {
             return;
         }
         JsonObject env = body.getJsonObject("env");
+        // How its servers' ports are reached (D-112, D-123): path prefixes, ports kept off the network.
+        String badPorts = automately.core.service.ServicePorts.invalid(body.getValue("ports"));
+        if (badPorts != null) {
+            error(ctx, 400, "invalid_request", badPorts);
+            return;
+        }
+        JsonArray ports = body.getJsonArray("ports");
         if (automately.core.job.JobEnv.usesSecrets(env)
                 && !ctx.<automately.core.auth.Principal>get("principal").allows(automately.core.auth.Scopes.SECRETS_USE)) {
             error(ctx, 403, "forbidden", "env names secrets, which needs a token with secrets:use");
@@ -180,13 +193,13 @@ final class ServiceRoutes {
                 ApiVerticle.refuseImports(ctx, locked.cause());
             } else {
                 define(ctx, tenant, name, locked.result().getString("script"), serviceConfig, restart, enabled,
-                        locked.result().getJsonObject("packages"), env);
+                        locked.result().getJsonObject("packages"), env, ports);
             }
         });
     }
 
     private void define(RoutingContext ctx, String tenant, String name, String script, JsonObject serviceConfig, RestartPolicy restart,
-                        boolean enabled, JsonObject lock, JsonObject env) {
+                        boolean enabled, JsonObject lock, JsonObject env, JsonArray ports) {
         services.get(tenant, name).compose(existing -> withinLimit(tenant, name, enabled && (existing == null || !existing.enabled()))
                         .compose(allowed -> {
                             if (!allowed) {
@@ -197,13 +210,14 @@ final class ServiceRoutes {
                             boolean secrets = ctx.<automately.core.auth.Principal>get("principal").allows(automately.core.auth.Scopes.SECRETS_USE);
                             if (existing == null) {
                                 ServiceDefinition created = ServiceDefinition.create(tenant, name, script, serviceConfig, restart, enabled, secrets, now)
-                                        .withPackages(lock).withEnv(env);
+                                        .withPackages(lock).withEnv(env).withPorts(ports);
                                 return services.create(created).map(ok -> ok
                                         ? () -> respond(ctx, 201, created)
                                         : () -> error(ctx, 409, "conflict", "The service was created concurrently; retry"));
                             }
                             return services.update(tenant, name, current -> Optional.of(
-                                            current.redefined(script, serviceConfig, restart, secrets, lock, env, now).withEnabled(enabled, now)))
+                                            current.redefined(script, serviceConfig, restart, secrets, lock, env, now).withEnabled(enabled, now)
+                                                    .withPorts(ports)))
                                     .map(updated -> updated.<Runnable>map(s -> () -> respond(ctx, 200, s))
                                             .orElse(() -> error(ctx, 404, "not_found", "No such service")));
                         }))
@@ -305,6 +319,34 @@ final class ServiceRoutes {
                 .onFailure(ctx::fail);
     }
 
+    /**
+     * Where the service's servers are reached (D-112, D-123): its host (the main server, or the first port listening),
+     * each declared port's own host and path prefix, and verified domains with their ports. A port it listens on without
+     * declaring it has a host of its own too, as {@code <service>--<tenant>--<port>}.
+     */
+    private JsonArray routes(ServiceDefinition service, List<Domain> custom) {
+        String main = hostRouter.automaticHost(service.tenant(), service.name());
+        JsonArray routes = new JsonArray().add(new JsonObject().put("host", main));
+        for (automately.core.service.ServicePorts.Port port : automately.core.service.ServicePorts.of(service.ports())) {
+            if (!port.expose()) {
+                routes.add(new JsonObject().put("port", port.port()).put("exposed", false));
+                continue;
+            }
+            routes.add(new JsonObject().put("port", port.port()).put("host", hostRouter.portHost(service.tenant(), service.name(), port.port())));
+            if (port.path() != null) {
+                routes.add(new JsonObject().put("port", port.port()).put("host", main).put("path", port.path()));
+            }
+        }
+        custom.stream().filter(Domain::verified).forEach(d -> {
+            JsonObject route = new JsonObject().put("host", d.domain());
+            if (d.port() != null) {
+                route.put("port", d.port());
+            }
+            routes.add(route);
+        });
+        return routes;
+    }
+
     /** The definition plus its status, which depends on the current run's job. */
     private Future<JsonObject> view(ServiceDefinition service) {
         Future<Job> current = service.currentJobId() == null ? Future.succeededFuture() : jobs.get(service.currentJobId());
@@ -317,6 +359,7 @@ final class ServiceRoutes {
             JsonArray hosts = new JsonArray().add(hostRouter.automaticHost(service.tenant(), service.name()));
             custom.result().stream().filter(Domain::verified).forEach(d -> hosts.add(d.domain()));
             json.put("hosts", hosts);
+            json.put("routes", routes(service, custom.result()));
             return json;
         });
     }

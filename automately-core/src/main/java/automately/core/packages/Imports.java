@@ -33,13 +33,15 @@ public final class Imports {
             "timers", "node:timers", "timers/promises", "node:timers/promises", "os", "node:os",
             // Phase B (D-109): the HTTP client, through the egress gate.
             "http", "node:http", "https", "node:https",
-            // Their pure parts; connecting throws until phase B5 (net, tls), or always (http2, tty).
+            // Sockets (D-116), the HTTP/2 client (D-117), and tty's pure parts.
             "net", "node:net", "tls", "node:tls", "http2", "node:http2", "tty", "node:tty",
             "diagnostics_channel", "node:diagnostics_channel", "util/types", "node:util/types",
             // Its names only: starting a process throws (D-116).
             "child_process", "node:child_process",
-            // Its names and constants; lookups throw until phase B's dns step.
+            // Through the egress gate's resolver (D-122).
             "dns", "node:dns", "dns/promises", "node:dns/promises",
+            // For servers' libraries (D-123).
+            "async_hooks", "node:async_hooks", "perf_hooks", "node:perf_hooks",
             // The host APIs as modules (D-091).
             "automately:kv", "automately:bus", "automately:jobs", "automately:files", "automately:secrets", "automately:fetch", "automately:log");
 

@@ -23,6 +23,38 @@ public final class HttpBinding {
         return bridge.serve(listenerId);
     }
 
+    /** A Node server on {@code port} (D-123). */
+    @V8Function(name = "listen")
+    public V8ValuePromise listen(int listenerId, int port) throws JavetException {
+        return bridge.listen(listenerId, port);
+    }
+
+    /** Status, reason phrase (null for the standard one) and headers as name/value pairs, repeats kept (D-123). */
+    @V8Function(name = "respondRaw")
+    public void respondRaw(int exchangeId, int status, V8Value message, V8Value rawHeaders) throws JavetException {
+        HttpExchange exchange = bridge.exchange(exchangeId);
+        if (exchange != null) {
+            Object text = bridge.values().toJava(message);
+            exchange.respond(status, text == null ? null : String.valueOf(text), bridge.values().list(rawHeaders));
+        }
+    }
+
+    /** Trailers for the end of a chunked response (D-123). */
+    @V8Function(name = "trailers")
+    public void trailers(int exchangeId, V8Value rawTrailers) throws JavetException {
+        HttpExchange exchange = bridge.exchange(exchangeId);
+        if (exchange != null) {
+            exchange.trailers(bridge.values().list(rawTrailers));
+        }
+    }
+
+    /** Resolves with true if the client leaves before the response ends, false once it ends (D-123). */
+    @V8Function(name = "closed")
+    public V8ValuePromise closed(int exchangeId) throws JavetException {
+        HttpExchange exchange = bridge.exchange(exchangeId);
+        return bridge.promise(() -> exchange == null ? Future.succeededFuture(false) : exchange.closed());
+    }
+
     @V8Function(name = "respond")
     public void respond(int exchangeId, int status, V8Value headers) {
         HttpExchange exchange = bridge.exchange(exchangeId);

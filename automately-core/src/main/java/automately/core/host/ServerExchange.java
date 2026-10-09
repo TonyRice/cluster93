@@ -10,6 +10,7 @@ import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.JsonObject;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -20,9 +21,7 @@ import java.util.Set;
  */
 public final class ServerExchange implements HttpExchange {
 
-    static final Set<String> INTERNAL_HEADERS = Set.of(InternalHttpVerticle.SECRET_HEADER.toLowerCase(Locale.ROOT),
-            InternalHttpVerticle.JOB_HEADER.toLowerCase(Locale.ROOT));
-    static final Set<String> HOP_BY_HOP = Set.of("connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
+    static final Set<String> HOP_BY_HOP = Set.of("connection", "keep-alive", "transfer-encoding", "te", "upgrade",
             "proxy-authorization", "proxy-authenticate");
 
     private final HttpServerRequest request;
@@ -30,7 +29,9 @@ public final class ServerExchange implements HttpExchange {
     private final Context context;
     private final JsonObject requestJson;
     private final BodyStream body;
+    private final Promise<Boolean> closedPromise = Promise.promise();
     private volatile boolean closed;
+    private volatile io.vertx.core.json.JsonArray trailers;
 
     public ServerExchange(HttpServerRequest request, Context context) {
         this.request = request;
@@ -38,28 +39,80 @@ public final class ServerExchange implements HttpExchange {
         this.context = context;
         this.requestJson = describe(request);
         this.body = new VertxBodyStream(request, context, () -> { });
-        response.closeHandler(v -> closed = true);
+        response.closeHandler(v -> {
+            closed = true;
+            closedPromise.tryComplete(!response.ended());
+        });
+        response.endHandler(v -> closedPromise.tryComplete(false));
+    }
+
+    /** Whether a header is the cluster's own, which a script never sees. */
+    private static boolean internal(String name) {
+        return name.toLowerCase(Locale.ROOT).startsWith("x-automately-");
     }
 
     private static JsonObject describe(HttpServerRequest request) {
         JsonObject headers = new JsonObject();
         request.headers().names().forEach(name -> {
-            String lower = name.toLowerCase(Locale.ROOT);
-            if (!INTERNAL_HEADERS.contains(lower)) {
-                headers.put(lower, String.join(", ", request.headers().getAll(name)));
+            if (!internal(name)) {
+                headers.put(name.toLowerCase(Locale.ROOT), String.join(", ", request.headers().getAll(name)));
             }
         });
         JsonObject query = new JsonObject();
         request.params().names().forEach(name -> query.put(name, request.params().get(name)));
         String host = request.getHeader("X-Forwarded-Host") != null ? request.getHeader("X-Forwarded-Host") : request.getHeader("Host");
         String proto = request.getHeader("X-Forwarded-Proto") != null ? request.getHeader("X-Forwarded-Proto") : "http";
+        // The client's own headers, in its order and spelling, then what the proxy added (D-123).
+        io.vertx.core.json.JsonArray raw = new io.vertx.core.json.JsonArray();
+        String forwarded = request.getHeader(InternalHttpVerticle.RAW_HEADERS_HEADER);
+        if (forwarded != null) {
+            try {
+                for (Object item : new io.vertx.core.json.JsonArray(forwarded)) {
+                    raw.add(String.valueOf(item));
+                }
+            } catch (io.vertx.core.json.DecodeException e) {
+                raw.clear();
+            }
+            for (String added : List.of("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Prefix")) {
+                if (request.getHeader(added) != null) {
+                    raw.add(added).add(request.getHeader(added));
+                }
+            }
+        } else {
+            request.headers().forEach(h -> {
+                if (!internal(h.getKey())) {
+                    raw.add(h.getKey()).add(h.getValue());
+                }
+            });
+        }
+        String remote = request.getHeader(InternalHttpVerticle.REMOTE_HEADER);
+        String remoteAddress = request.remoteAddress() == null ? null : request.remoteAddress().hostAddress();
+        Integer remotePort = request.remoteAddress() == null ? null : request.remoteAddress().port();
+        if (remote != null && remote.lastIndexOf(':') > 0) {
+            remoteAddress = remote.substring(0, remote.lastIndexOf(':'));
+            try {
+                remotePort = Integer.parseInt(remote.substring(remote.lastIndexOf(':') + 1));
+            } catch (NumberFormatException e) {
+                remotePort = null;
+            }
+        }
+        String version = request.getHeader(InternalHttpVerticle.VERSION_HEADER);
+        String port = request.getHeader(InternalHttpVerticle.PORT_HEADER);
         return new JsonObject()
                 .put("method", request.method().name())
                 .put("url", proto + "://" + host + request.uri())
                 .put("path", request.path())
                 .put("host", host)
                 .put("query", query)
-                .put("headers", headers);
+                .put("headers", headers)
+                .put("uri", request.uri())
+                .put("rawHeaders", raw)
+                .put("httpVersion", version != null ? version : request.version() == io.vertx.core.http.HttpVersion.HTTP_1_0 ? "1.0"
+                        : request.version() == io.vertx.core.http.HttpVersion.HTTP_2 ? "2.0" : "1.1")
+                .put("remoteAddress", remoteAddress)
+                .put("remotePort", remotePort)
+                .put("encrypted", "https".equals(proto))
+                .put("port", port == null ? null : Integer.valueOf(port));
     }
 
     @Override
@@ -92,6 +145,48 @@ public final class ServerExchange implements HttpExchange {
     }
 
     @Override
+    public void respond(int status, String statusMessage, io.vertx.core.json.JsonArray rawHeaders) {
+        context.runOnContext(v -> {
+            if (response.headWritten() || closed) {
+                return;
+            }
+            response.setStatusCode(status);
+            if (statusMessage != null) {
+                response.setStatusMessage(statusMessage);
+            }
+            boolean length = false;
+            boolean chunked = false;
+            for (int i = 0; i + 1 < rawHeaders.size(); i += 2) {
+                String name = rawHeaders.getString(i);
+                String lower = name.toLowerCase(Locale.ROOT);
+                if (lower.equals("content-length")) {
+                    length = true;
+                } else if (lower.equals("transfer-encoding")) {
+                    chunked = true;
+                }
+                if (!HOP_BY_HOP.contains(lower)) {
+                    response.headers().add(name, rawHeaders.getString(i + 1));
+                }
+            }
+            // The script's own length is kept, as Node sends it; anything else streams chunked.
+            if (chunked || !length) {
+                response.headers().remove("content-length");
+                response.setChunked(true);
+            }
+        });
+    }
+
+    @Override
+    public void trailers(io.vertx.core.json.JsonArray rawTrailers) {
+        trailers = rawTrailers;
+    }
+
+    @Override
+    public Future<Boolean> closed() {
+        return closedPromise.future();
+    }
+
+    @Override
     public Future<Void> write(Buffer chunk) {
         Promise<Void> written = Promise.promise();
         context.runOnContext(v -> {
@@ -117,6 +212,12 @@ public final class ServerExchange implements HttpExchange {
     public void end() {
         context.runOnContext(v -> {
             if (!response.ended() && !closed) {
+                io.vertx.core.json.JsonArray last = trailers;
+                if (last != null && response.isChunked()) {
+                    for (int i = 0; i + 1 < last.size(); i += 2) {
+                        response.trailers().add(last.getString(i), last.getString(i + 1));
+                    }
+                }
                 response.end();
             }
         });

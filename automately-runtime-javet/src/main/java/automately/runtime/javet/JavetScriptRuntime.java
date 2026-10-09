@@ -15,7 +15,6 @@ import com.caoccao.javet.interop.options.V8Flags;
 import com.caoccao.javet.interop.options.V8RuntimeOptions;
 import com.caoccao.javet.values.V8Value;
 import com.caoccao.javet.values.reference.V8Module;
-import com.caoccao.javet.values.reference.V8ValueFunction;
 import com.caoccao.javet.values.reference.V8ValueObject;
 import com.caoccao.javet.values.reference.V8ValuePromise;
 import io.vertx.core.Future;
@@ -91,6 +90,8 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("assert/strict", "node:assert/strict"), java.util.Map.entry("node:assert/strict", "node:assert/strict"),
             java.util.Map.entry("querystring", "node:querystring"), java.util.Map.entry("node:querystring", "node:querystring"),
             java.util.Map.entry("timers", "node:timers"), java.util.Map.entry("node:timers", "node:timers"),
+            java.util.Map.entry("async_hooks", "node:async_hooks"), java.util.Map.entry("node:async_hooks", "node:async_hooks"),
+            java.util.Map.entry("perf_hooks", "node:perf_hooks"), java.util.Map.entry("node:perf_hooks", "node:perf_hooks"),
             java.util.Map.entry("timers/promises", "node:timers/promises"), java.util.Map.entry("node:timers/promises", "node:timers/promises"),
             java.util.Map.entry("os", "node:os"), java.util.Map.entry("node:os", "node:os"),
             java.util.Map.entry("http", "node:http"), java.util.Map.entry("node:http", "node:http"),
@@ -150,6 +151,8 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:tty", resource("node/tty.js")),
             java.util.Map.entry("node:diagnostics_channel", resource("node/diagnostics_channel.js")),
             java.util.Map.entry("node:dns", resource("node/dns.js")),
+            java.util.Map.entry("node:async_hooks", resource("node/async_hooks.js")),
+            java.util.Map.entry("node:perf_hooks", resource("node/perf_hooks.js")),
             java.util.Map.entry("node:dns/promises", "import dns from 'node:dns'; export const { lookup, lookupService, Resolver, getServers, setServers, "
                     + "getDefaultResultOrder, setDefaultResultOrder, resolve, resolve4, resolve6, resolveAny, resolveCaa, resolveCname, resolveMx, "
                     + "resolveNaptr, resolveNs, resolvePtr, resolveSoa, resolveSrv, resolveTlsa, resolveTxt, reverse } = dns.promises; "
@@ -489,11 +492,9 @@ public final class JavetScriptRuntime implements ScriptRuntime {
         }
         try (V8ValueObject namespace = (V8ValueObject) module.getNamespace();
              V8Value entry = namespace.get("default")) {
-            if (!(entry instanceof V8ValueFunction fn)) {
-                return ExecutionResult.failed("The script must export a default function");
-            }
+            // Without a default function, a service may still run its servers (D-123); entry.js decides.
             String context = execution.context().toScriptJson().encode();
-            try (V8ValuePromise promise = js.invoke.call(null, fn, execution.input().encode(), context)) {
+            try (V8ValuePromise promise = js.invoke.call(null, entry, execution.input().encode(), context)) {
                 ExecutionResult early = runLoop(v8, promise, js, execution, control);
                 if (early != null) {
                     return early;
