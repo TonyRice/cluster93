@@ -12,7 +12,7 @@ const utf8Encode = (text) => {
 };
 // UTF-8 as the WHATWG Encoding standard decodes it (as Node and browsers do): a sequence that's broken or overlong
 // becomes one U+FFFD and the byte that broke it is read again, so nothing after it is swallowed (D-103).
-const utf8Decode = (input) => {
+const utf8Decode = (input, fatal = false) => {
   const bytes = input instanceof Uint8Array ? input
     : ArrayBuffer.isView(input) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength) : new Uint8Array(input);
   let out = '';
@@ -29,6 +29,13 @@ const utf8Decode = (input) => {
       units.length = 0;
     }
   };
+  // With fatal (D-125), a broken sequence throws, as Node's TextDecoder({ fatal: true }) does.
+  const bad = () => {
+    if (fatal) {
+      throw Object.assign(new TypeError('The encoded data was not valid for encoding utf-8'), { code: 'ERR_ENCODING_INVALID_ENCODED_DATA' });
+    }
+    push(0xfffd);
+  };
   let needed = 0, seen = 0, cp = 0, lower = 0x80, upper = 0xbf;
   for (let i = 0; i < bytes.length; i++) {
     const b = bytes[i];
@@ -37,14 +44,14 @@ const utf8Decode = (input) => {
       else if (b >= 0xc2 && b <= 0xdf) { needed = 1; cp = b & 0x1f; }
       else if (b >= 0xe0 && b <= 0xef) { if (b === 0xe0) lower = 0xa0; if (b === 0xed) upper = 0x9f; needed = 2; cp = b & 0x0f; }
       else if (b >= 0xf0 && b <= 0xf4) { if (b === 0xf0) lower = 0x90; if (b === 0xf4) upper = 0x8f; needed = 3; cp = b & 0x07; }
-      else push(0xfffd);
+      else bad();
       continue;
     }
     if (b < lower || b > upper) {
       needed = seen = cp = 0;
       lower = 0x80;
       upper = 0xbf;
-      push(0xfffd);
+      bad();
       i--;
       continue;
     }
@@ -56,11 +63,22 @@ const utf8Decode = (input) => {
       needed = seen = cp = 0;
     }
   }
-  if (needed) push(0xfffd);
+  if (needed) bad();
   return out + String.fromCharCode.apply(null, units);
 };
 define('TextEncoder', class TextEncoder { get encoding() { return 'utf-8'; } encode(text = '') { return utf8Encode(text); } });
-define('TextDecoder', class TextDecoder { get encoding() { return 'utf-8'; } decode(bytes) { return bytes ? utf8Decode(bytes) : ''; } });
+define('TextDecoder', class TextDecoder {
+  #fatal;
+  #ignoreBOM;
+  constructor(label = 'utf-8', options = {}) {
+    this.#fatal = Boolean(options?.fatal);
+    this.#ignoreBOM = Boolean(options?.ignoreBOM);
+  }
+  get encoding() { return 'utf-8'; }
+  get fatal() { return this.#fatal; }
+  get ignoreBOM() { return this.#ignoreBOM; }
+  decode(bytes) { return bytes ? utf8Decode(bytes, this.#fatal) : ''; }
+});
 
 const headerBag = (raw) => {
   const lower = {};

@@ -31,11 +31,15 @@ public final class InternalHttpVerticle extends VerticleBase {
     /** The server's declared port (D-112), or absent for the service's main server. */
     public static final String PORT_HEADER = "X-Automately-Port";
     public static final int MAX_CONCURRENT_REQUESTS = 64;
+    /** Upgraded connections (WebSockets) one run may hold open at once by default (D-125). */
+    public static final int DEFAULT_MAX_UPGRADED = 1_000;
 
     private final int port;
     private final byte[] secret;
     private final ServeRegistry registry;
     private final Map<String, AtomicInteger> inFlight = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> upgraded = new ConcurrentHashMap<>();
+    private final int maxUpgraded;
     private HttpServer server;
 
     private final io.vertx.core.http.HttpServerOptions options;
@@ -49,6 +53,13 @@ public final class InternalHttpVerticle extends VerticleBase {
      *                are the only check: only another node of the cluster can complete the TLS handshake
      */
     public InternalHttpVerticle(int port, String secret, ServeRegistry registry, io.vertx.core.http.HttpServerOptions options) {
+        this(port, secret, registry, options, DEFAULT_MAX_UPGRADED);
+    }
+
+    /** @param maxUpgraded upgraded connections (WebSockets) one run may hold open at once (D-125) */
+    public InternalHttpVerticle(int port, String secret, ServeRegistry registry, io.vertx.core.http.HttpServerOptions options,
+                                int maxUpgraded) {
+        this.maxUpgraded = maxUpgraded;
         this.port = port;
         this.secret = secret == null ? null : secret.getBytes(StandardCharsets.UTF_8);
         this.registry = registry;
@@ -81,19 +92,23 @@ public final class InternalHttpVerticle extends VerticleBase {
                     : "Nothing is listening on port " + port + " in the service's current run");
             return;
         }
-        AtomicInteger count = inFlight.computeIfAbsent(jobId, id -> new AtomicInteger());
-        if (count.incrementAndGet() > MAX_CONCURRENT_REQUESTS) {
+        // A request asking to upgrade may hold its connection for hours, so it counts against its own limit (D-125).
+        boolean upgrade = UpgradeSocket.asks(request);
+        AtomicInteger count = (upgrade ? upgraded : inFlight).computeIfAbsent(jobId, id -> new AtomicInteger());
+        int limit = upgrade ? maxUpgraded : MAX_CONCURRENT_REQUESTS;
+        if (count.incrementAndGet() > limit) {
             count.decrementAndGet();
-            reject(request, 429, "Too many requests in flight for this service");
+            reject(request, upgrade ? 503 : 429, upgrade ? "The service has " + limit + " upgraded connections open, its limit"
+                    : "Too many requests in flight for this service");
             return;
         }
-        request.response().endHandler(v -> count.decrementAndGet());
-        request.response().closeHandler(v -> {
-            if (!request.response().ended()) {
-                count.decrementAndGet();
-            }
-        });
-        handler.accept(new ServerExchange(request, context));
+        handler.accept(new ServerExchange(request, context, count::decrementAndGet));
+    }
+
+    /** For tests: the requests and upgraded connections a run has open on this node. */
+    int open(String jobId, boolean upgradedOnly) {
+        AtomicInteger count = (upgradedOnly ? upgraded : inFlight).get(jobId);
+        return count == null ? 0 : count.get();
     }
 
     private static Integer port(String header) {

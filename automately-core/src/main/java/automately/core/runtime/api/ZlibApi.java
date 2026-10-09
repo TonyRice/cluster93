@@ -27,6 +27,12 @@ public interface ZlibApi {
     /** Feeds a stream; answers the output so far. */
     byte[] write(int handle, byte[] data);
 
+    /**
+     * Flushes a stream as zlib's {@code Z_SYNC_FLUSH} (2) or {@code Z_FULL_FLUSH} (3) does (D-125): what was written so
+     * far comes out, ending on a byte boundary; any other kind is a sync flush. Decompressing streams have nothing held.
+     */
+    byte[] flush(int handle, int kind);
+
     /** Ends a stream's input; answers the rest of its output and closes it. */
     byte[] finish(int handle);
 

@@ -44,6 +44,7 @@ function hostOptions(options) {
   const out = {};
   if (options?.level !== undefined) out.level = options.level;
   if (options?.strategy !== undefined) out.strategy = options.strategy;
+  if (options?.windowBits !== undefined) out.windowBits = options.windowBits;
   if (options?.maxOutputLength !== undefined) out.maxOutputLength = options.maxOutputLength;
   if (options?.dictionary !== undefined) out.dictionary = Buffer.from(bytesOf(options.dictionary)).toString('base64');
   return out;
@@ -76,6 +77,19 @@ function callback(kind) {
   };
 }
 
+// One empty buffer per flush kind, told apart from data by identity, as Node's kFlushBuffers.
+const FLUSH_MARKS = new Map();
+const MARK_BY_KIND = new Map();
+function flushMark(kind) {
+  let mark = MARK_BY_KIND.get(kind);
+  if (!mark) {
+    mark = Buffer.alloc(0);
+    MARK_BY_KIND.set(kind, mark);
+    FLUSH_MARKS.set(mark, kind);
+  }
+  return mark;
+}
+
 /** A zlib stream: a Transform whose state is a host stream, dropped when it ends or is destroyed. */
 class ZlibBase extends Transform {
   #handle;
@@ -89,6 +103,19 @@ class ZlibBase extends Transform {
 
   _transform(chunk, encoding, done) {
     let out;
+    const flushKind = FLUSH_MARKS.get(chunk);
+    if (flushKind !== undefined) {
+      try {
+        out = call(() => internals.flush(this.#handle, flushKind));
+      } catch (err) {
+        this.#ended = true;
+        done(err);
+        return;
+      }
+      if (out.length) this.push(toBuffer(out));
+      done();
+      return;
+    }
     try {
       const bytes = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : bytesOf(chunk);
       this.bytesWritten += bytes.length;
@@ -127,10 +154,15 @@ class ZlibBase extends Transform {
     done(err);
   }
 
-  /** Node flushes zlib's buffer here; the isolate's streams hand their output on as they go, so there's nothing to wait for. */
+  /**
+   * As Node's (D-125): a marker written after what's pending, so the flush comes in order; a compressor gives out what it
+   * holds (a sync flush ends it on a byte boundary, as permessage-deflate needs), then the callback runs.
+   */
   flush(kind, done) {
-    const cb = typeof kind === 'function' ? kind : done;
-    if (typeof cb === 'function') Promise.resolve().then(cb);
+    if (typeof kind === 'function' || (kind === undefined && !done)) { done = kind; kind = constants.Z_FULL_FLUSH; }
+    if (this.writableFinished) { if (done) Promise.resolve().then(done); }
+    else if (this.writableEnded) { if (done) this.once('end', done); }
+    else this.write(flushMark(kind), '', done);
   }
 
   params(level, strategy, done) {

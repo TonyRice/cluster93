@@ -2382,3 +2382,62 @@ It's written for people, because the console will show the same response as a "N
 **Found while testing, and fixed:**
 - **A race in the first version:** `fetch` asked for the response only after ending the body. A server that answered quickly settled it first, and the request had already left the registry ("The request is already finished"). The response is now requested as soon as the request opens, as `http.js` does.
 - **`docs/scripting/node-compat.md` still listed `worker_threads`, `module` and `v8` as refused** after D-123 added them. Corrected.
+
+### D-125 — WebSockets as Node's: tunnelled through the ingress, servers' `upgrade`, clients over the job's own sockets
+**Date:** 2026-10-09 · **Status:** Accepted. Phase B's step 7 (network-reach.md §13; Tony: "alright.. let's do it"). Phase B is complete.
+
+**Decision:**
+- **The app answers the upgrade itself, as on Node.**
+  - **On the node:** a request that asks to upgrade (`Connection: upgrade` and an `Upgrade`, as llhttp decides) reaches the server's `upgrade` listener with a real `net.Socket` on the client's connection, unless `shouldUpgradeCallback` (default: is there a listener) says no.
+  - **Reading the answer:** the node reads the head the app writes there. A 101 makes Vert.x switch the connection, with the app's headers. Anything else (a 401 from ws's `verifyClient`) becomes an ordinary response, its body what follows the head. Closing without an answer closes the client's connection.
+  - **Why the app's own bytes:** the app chooses the subprotocol, the extensions and whether to accept, exactly as under Node. Handling the handshake in the host would have meant re-implementing those choices.
+- **The ingress tunnels; it doesn't parse frames.**
+  - **What it tunnels:** a GET over HTTP/1.1 with no body that asks to upgrade goes to the run's node with its `Connection` and `Upgrade`, through Vert.x's `connect()`. On a 101 both connections become one byte tunnel with backpressure; otherwise the answer is relayed and the connection let go.
+  - **Why GET only:** that's what WebSocket clients send, and the only method Vert.x's client switches for. Other upgrade requests are ordinary requests.
+  - **No frame-size limit at the ingress:** it never sees frames, so that limit is the app's (ws's `maxPayload`).
+- **Limits:**
+  - **Per run:** `AUTOMATELY_SERVICE_MAX_WEBSOCKETS` (1,000) upgraded connections, counted on the run's node apart from the 64 requests in flight (an upgraded connection can last hours). Past it, a 503.
+  - **Idle:** `AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS` (10 minutes) with no byte either way.
+  - **End of run:** the run's upgraded sockets close when it ends.
+- **Clients write HTTP/1.1 over the job's own sockets.**
+  - **When:** an `http.request` that asks to upgrade, or brings `createConnection` (no longer refused: a socket from `net`/`tls` is already gated), is written on a `net`/`tls` socket in the isolate and its response parsed there, as Node's client does.
+  - **Responses:** a 101 hands the socket to `upgrade`. Other answers are parsed by length, chunked or until close, with 1xx `information`.
+  - **The gate checks these as `tcp`:** the job writes the bytes, so the host can't vouch they're HTTP, and an `http`-only rule must not cover raw bytes.
+- **The global `WebSocket` is undici 8.10's** (Node 26's): its source was read and its behaviour followed.
+  - **What follows undici:** the handshake headers in its order, its checks of the 101, the frame parser and its failure codes, the close and fail rules, events (`CloseEvent`, `ErrorEvent`, `MessageEvent`), binary types and the messages.
+  - **Compression:** incoming permessage-deflate is decompressed and nothing is compressed going out, as undici does.
+  - **Where it runs:** it's a lazily loaded web script (D-124) driving `node:http`'s client. A classic script has no `import()`, so the web binding hands it a built-in's namespace through the job's resolver (`node:http`, `https`, `crypto`, `zlib` only), the same instance the job's own imports get.
+- **What ws needed elsewhere, built as Node's:**
+  - **`zlib`:** `flush()` writes a marker after what's pending, as Node's, and a compressor gives out what it holds. `windowBits` under 15 for compressing is honoured by storing, since the JVM's deflater has only the 15-bit window and stored blocks refer back to nothing. The zlib header states the window, with zlib's level bits.
+  - **`Buffer`:** integers of 1 to 6 bytes, with Node's range errors.
+  - **The bundler:** a `require()` of a left-out optional native package (`bufferutil`) throws `MODULE_NOT_FOUND`, so ws falls back; it used to return an empty module.
+  - **`TextDecoder`'s `fatal` option**, for undici's invalid-UTF-8 failure.
+  - **`URL`'s errors are Node's:** "Invalid URL", with `input` and `base`.
+
+**Found while testing, and fixed:**
+- **Every service stopped answering after 64 requests in a run.**
+  - **The cause:** the internal endpoint counted requests in flight in the response's end and close handlers. `ServerExchange` then set its own, and Vert.x keeps one of each, so the count never went down: the 65th request, and every one after, got a 429.
+  - **The fix:** exchanges count through a release hook the exchange runs once, and `write()` no longer replaces the close handler either.
+  - **The test:** 80 requests in a row; it fails at the 64th on the old wiring.
+- **A non-101 answer to the ingress's `connect()`** left Vert.x's request unended, and ending it threw. The connection is now let go after the answer is relayed.
+- **A flaky test, not a product bug:** the tunnel test's connection sometimes closed mid-transfer.
+  - **The cause:** Vert.x 5 closes a client's connections once the client object is garbage-collected, and the test made a `NetClient` per connection without keeping it. A 2 MB message's allocations triggered the collection.
+  - **The fix:** the test holds one `NetClient`, and it then passed 8 runs in 8.
+  - **What changed in the product meanwhile:** the tunnel's backpressure now follows each write's completion rather than drain events, which is simpler.
+
+**Tested:**
+- **Against real Node, in `RealNpmPackagesTest`:**
+  - **`wsclient`:** the ws client against a local WebSocket server with compression. Covered: the handshake as the server received it, text, binary and 300 KB messages, pings both ways, closes from either side, a refused upgrade, nothing listening, and a bad URL.
+  - **`wsglobal`:** the same for the global `WebSocket`, plus its constructor and close errors, binary types and Blobs, `bufferedAmount`, and closing while connecting.
+  - **`wsserver`:** the ws library's server as a service, compared conversation by conversation with the same app under Node. Covered: the 101's headers, messages both ways, a ping, closes from either side, the server's own log, and `verifyClient` refusing.
+  - **Integer and zlib checks** in `nodemodules`, and `fatal` in `webglobals`.
+  - **The result:** all identical.
+- **`NodeUpgradesTest`, through the real ingress:**
+  - the tunnel both ways, with 2 MB echoed back under backpressure
+  - a 426 answer, a silent close, a server without a listener, and an upgrade with a body
+  - the per-run limit and the idle timeout
+  - the 64-request regression
+- **`NodeWebSocketTest`** (the global against a local server) and **`NodeZlibTest`** (sync flush, small windows, headers).
+- **Regressions:** the full local suite, with the real-npm suite and the drivers.
+
+**Differs from Node:** a 101's reason phrase is always "Switching Protocols". A server's `upgrade` gets an empty `head`, since early bytes come as the socket's data. A `windowBits` under 15 stores rather than compresses.

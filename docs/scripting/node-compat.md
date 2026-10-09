@@ -54,7 +54,6 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 
 **Refused:** `dgram`, `cluster`, `vm`, `inspector`, `readline`, `repl`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module) and `constants`.
 - **When:** importing one stops the publish ("Node's "dns" module isn't available in the isolate …"). A CommonJS `require()` of one throws when it runs instead, with a warning at publish.
-- **What's coming** ([network reach](../design/network-reach.md)): WebSockets, through the ingress and the egress rules.
 - **The rest** need the Node runtime.
 
 ## Globals
@@ -68,11 +67,12 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval` | The isolate's event loop; at most 10,000 pending timers; the shortest delay is 1 ms. |
 | `process` | The `process` stand-in (D-096); see [process](#process). |
 | `crypto`, `CryptoKey` | Web Crypto; see [Web Crypto](#web-crypto-the-global-crypto). |
-| `TextEncoder`, `TextDecoder` | UTF-8 only. Decoding follows the WHATWG rules, so a broken sequence gives one U+FFFD (D-103), but a leading byte-order mark isn't removed, and there's no `{ stream: true }` or `fatal` option. |
+| `TextEncoder`, `TextDecoder` | UTF-8 only. Decoding follows the WHATWG rules, so a broken sequence gives one U+FFFD (D-103), or with `fatal: true` throws Node's `ERR_ENCODING_INVALID_ENCODED_DATA` (D-125). A leading byte-order mark isn't removed, and there's no `{ stream: true }`. |
 | `fetch`, `Headers`, `Request`, `Response`, `FormData` | Node's (undici's), through the egress gate (D-124): redirects followed, gzip and deflate decoded, Node's default request headers, multipart `FormData` both ways, and Node's errors. The host's older fetch is `automately:fetch` ([host APIs](host-apis.md#fetch-outbound-http)). |
 | `Blob`, `File` | Node's, and the same classes as `buffer`'s: parts, `type` normalisation, `endings`, `slice`, `text`/`arrayBuffer`/`bytes`/`stream`. |
 | `ReadableStream`, `WritableStream`, `TransformStream` and the rest of the WHATWG streams | Readers (default and BYOB), controllers, `pipeTo`/`pipeThrough`, `tee`, async iteration and the queuing strategies, from web-streams-polyfill 4.3.0, vendored. Some argument errors keep the polyfill's wording; the ones scripts meet (a bad `highWaterMark`) are Node's. |
 | `TextEncoderStream`, `TextDecoderStream`, `CompressionStream`, `DecompressionStream` | `gzip`, `deflate` and `deflate-raw`, on the host's zlib; Brotli decompresses but doesn't compress. |
+| `WebSocket`, `CloseEvent`, `ErrorEvent` | Node's (undici's) (D-125): the same handshake headers in the same order, events, binary types, errors and closing rules. The handshake goes through `node:http` over a socket of the job's own, so it's checked by the egress gate as a `tcp` connection, with TLS host names checked as `tls.connect` checks them. As in Node, incoming permessage-deflate is decompressed and nothing is compressed going out. |
 | `MessageChannel`, `MessagePort`, `MessageEvent`, `BroadcastChannel` | Within the job: messages are `structuredClone`d and delivered on a later turn, and ports have Node's `on`/`once`. `BroadcastChannel` reaches the channels of the same job only; there are no workers or other jobs to reach. |
 | `fs`, `kv`, `bus`, `jobs`, `files`, `secrets`, `log` | Automately's host APIs ([host APIs](host-apis.md)). |
 | `URL`, `URLSearchParams` | The WHATWG URL for the common cases, with `URL.canParse`/`URL.parse` (D-106). Hostnames aren't converted to punycode, and IPv6 isn't normalised. |
@@ -86,7 +86,6 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `WebAssembly`, `SharedArrayBuffer`, `Atomics`, `WeakRef`, `FinalizationRegistry`, `Intl` | V8's own. `Intl` has full ICU data (D-093). WebAssembly runs inside the same isolate and limits; there are no threads to share memory with. |
 
 **Absent:**
-- **`WebSocket`:** network reach (phase B, step 7).
 - **`Buffer`:** not a global. The bundler adds an import where bundled code uses it.
 - **Never:** `require`, `module`, `exports`, `__dirname` and `__filename`. Scripts are ES modules, and the bundler converts CommonJS. `window`, `self`, `navigator` and `location` are absent too: this isn't a browser.
 
@@ -136,13 +135,13 @@ POSIX paths, following Node's own algorithms: `join`, `resolve`, `normalize`, `r
 
 `Buffer`, a `Uint8Array` subclass with Node's methods.
 - **Encodings:** `utf8`, `hex`, `base64`, `base64url`, `latin1`/`binary`, `ascii` and `utf16le`/`ucs2`.
-- **Methods:** `from`, `alloc`, `allocUnsafe`, `concat`, `compare`, `byteLength`, `isBuffer`, `isEncoding`, `toString`, `write`, `copy`, `fill`, `indexOf`/`includes`, `equals`, `toJSON`, and every `read…`/`write…` for 8, 16 and 32-bit integers, floats, doubles and 64-bit BigInts in both byte orders. Also `atob`/`btoa`, `kMaxLength` and `constants`.
+- **Methods:** `from`, `alloc`, `allocUnsafe`, `concat`, `compare`, `byteLength`, `isBuffer`, `isEncoding`, `toString`, `write`, `copy`, `fill`, `indexOf`/`includes`, `equals`, `toJSON`, and every `read…`/`write…` for 8, 16 and 32-bit integers, integers of 1 to 6 bytes (`readUIntBE` and the rest, with Node's range errors; D-125), floats, doubles and 64-bit BigInts in both byte orders. Also `atob`/`btoa`, `kMaxLength` and `constants`.
 - **`slice`** shares memory, as in Node.
 - **`copy`** follows Node's rules: it copies what fits, returns the count, copies nothing when a start is at or past the end, and throws Node's `ERR_OUT_OF_RANGE` for negative starts (D-116).
 - **Enumerable, as Node's:** the statics (`from`, `alloc`, …) and every prototype method, so code that copies them with `for…in` works. safer-buffer and mysql2 do (D-116).
 - **Differs:** there's no pool. `poolSize` exists, but `allocUnsafe` returns zeroed memory, which is safer and otherwise the same.
 - **`Blob` and `File`** are the globals (D-124), and `isUtf8`/`isAscii` are there.
-- **Not there:** `transcode`, `swap16/32/64`, and `readIntLE/BE` of arbitrary widths.
+- **Not there:** `transcode` and `swap16/32/64`.
 
 ## `url`
 
@@ -152,6 +151,7 @@ POSIX paths, following Node's own algorithms: `join`, `resolve`, `normalize`, `r
 - relative references, dot segments, default ports and percent-encoding
 
 Also `fileURLToPath`, `pathToFileURL`, `urlToHttpOptions`, and the legacy `parse`, `format` and `resolve`.
+- **Errors:** a URL that doesn't parse throws Node's `TypeError` "Invalid URL", with `code: 'ERR_INVALID_URL'`, its `input`, and the `base` if one was given (D-125).
 - **Differs:** hostnames are lowercased but not converted to punycode, and IPv6 addresses aren't normalised.
 
 ## `util`
@@ -256,12 +256,13 @@ Compression on the JVM's own zlib, plus a pure-Java Brotli decoder (`org.brotli:
   - **Three forms of each:** `…Sync`, callbacks (so `util.promisify` works) and streams (`createGzip`, …, as `stream` Transforms).
   - **Extras:** `crc32`, `constants` and the `Z_*` constants, and `codes`.
   - **Gzip details:** concatenated gzip members are read, and errors carry zlib's messages and Node's `code`/`errno` ("incorrect header check", `Z_DATA_ERROR`, -3).
-  - **Options:** `level`, `strategy` (default, filtered, Huffman only), `dictionary` and `maxOutputLength`.
+  - **Options:** `level`, `strategy` (default, filtered, Huffman only), `dictionary`, `maxOutputLength` and `windowBits`.
+  - **`flush()`** as Node's (D-125): a marker written after what's pending, so a compressor gives out what it holds. `Z_SYNC_FLUSH` ends it on a byte boundary, which is what permessage-deflate (ws) needs.
 - **Differs:**
   - **Compressed bytes** may differ from Node's: Node uses Chromium's zlib fork, which can choose differently. Both are valid, and each side reads the other's.
-  - **`flush()`** completes at once, since output is handed on as it's made.
+  - **A `windowBits` under 15 for compressing** is honoured by storing rather than compressing: the JVM's deflater has only zlib's largest window, and stored blocks refer back to nothing, so a peer with a smaller window reads them. The zlib header states the window as zlib writes it. Decompressing reads any window.
   - **A Brotli stream** decodes when it ends, not as it goes.
-- **Not there:** Brotli **compression** (no pure-Java encoder exists), `params()`, `Z_RLE`/`Z_FIXED`, and `windowBits`/`memLevel`, which are accepted and ignored.
+- **Not there:** Brotli **compression** (no pure-Java encoder exists), `params()`, `Z_RLE`/`Z_FIXED`, and `memLevel`, which is accepted and ignored.
 - **Limits:**
   - **Output per call:** at most 32 MB (`ERR_BUFFER_TOO_LARGE`), or less with `maxOutputLength`. That's the guard against zip bombs.
   - **Brotli input:** 32 MB.
@@ -361,7 +362,11 @@ The client, as Node's, on the host's HTTP client (D-109). Every request goes thr
   - **Agents don't pool.** `keepAlive` and `maxSockets` are accepted; the host pools connections per node.
   - **Errors carry Node's codes** where there's one (`ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`). A refused connection and an unknown host have Node's messages and fields too (`connect ECONNREFUSED 10.0.0.1:5432` with `address`, `port`, `syscall` and `errno`; `getaddrinfo ENOTFOUND db.example`) (D-114). A refusal by the egress gate has `code: 'egress_denied'` and says why.
   - **`maxHeaderSize`** is 64 KiB, the host's limit; Node's default is 16 KiB.
-- **Refused, with an error that says why:** `createConnection` (it would bypass the gate), `socketPath`, `CONNECT`, upgrades to WebSocket, `pfx`, `passphrase` (encrypted keys), and a custom `checkServerIdentity` (the isolate never sees the certificate; `tls.checkServerIdentity` itself is accepted).
+- **Over a socket of the job's own (D-125):** a request that asks to upgrade (`Connection: upgrade` and `Upgrade` in its headers, as the ws library sends), or that brings its own `createConnection`, is written as HTTP/1.1 on a `net` or `tls` socket (or the one `createConnection` returns), as Node's client does, and its response is parsed in the isolate.
+  - **A 101** hands the socket to `upgrade` (`res`, the socket, and any bytes after the head), or closes it if nothing listens. Other answers are ordinary responses: by length, chunked, or until the connection closes, with 1xx `information` events.
+  - **The egress gate** checks these as `tcp` connections, since the job writes their bytes: a rule scoped to `http` alone doesn't cover them.
+  - **The connection isn't kept** for another request.
+- **Refused, with an error that says why:** `socketPath`, `CONNECT`, `pfx`, `passphrase` (encrypted keys), and a custom `checkServerIdentity` (the isolate never sees the certificate; `tls.checkServerIdentity` itself is accepted).
 - **Ignored:** `lookup`, `family`, `localAddress`, `localPort` and `servername`. The gate does the resolving, and SNI is the request's host.
 - **Servers:** `createServer`, `Server`, `ServerResponse` and `OutgoingMessage`; see [HTTP servers](#http-servers).
 - **Limits:**
@@ -517,7 +522,7 @@ Node's `http.Server` (D-112, D-123), as `lib/_http_server.js` and `lib/_http_out
   - **Options:** `IncomingMessage` and `ServerResponse` (your own classes) and the timeouts are kept.
   - **`listen`:** every form (`listen(port[, host][, backlog][, cb])`, `listen({ port, host, signal })`, `listen(cb)`). `listen(0)` picks a free virtual port. `server.address()` gives the port asked for, and the host if one was given (else `::`).
   - **Errors:** a port this run already listens on fails with Node's `EADDRINUSE`, unless both are on distinct specific addresses, as Fastify does for localhost's two. A path or a handle is refused: servers are reached by hostname.
-  - **Events and methods:** `listening`, `request`, `close` and `error`; `close()` (after the requests in flight), `closeAllConnections()`, `getConnections()`, `setTimeout()` and `Symbol.asyncDispose`.
+  - **Events and methods:** `listening`, `request`, `upgrade`, `close` and `error`; `close()` (after the requests in flight), `closeAllConnections()`, `getConnections()`, `setTimeout()` and `Symbol.asyncDispose`.
 - **`req` is an `IncomingMessage`, as the client sent it:**
   - **Its fields:** `method`, `url`, `httpVersion`, `rawHeaders` (the client's own names, values and order), and `headers` and `headersDistinct` (Node's rules).
   - **Behind the proxy:** the ingress's `X-Forwarded-For`, `-Host`, `-Proto` (and `-Prefix` under a path) follow the client's headers, as for any app behind a proxy. A client's own `X-Forwarded-*` are dropped.
@@ -530,6 +535,11 @@ Node's `http.Server` (D-112, D-123), as `lib/_http_server.js` and `lib/_http_out
   - **What Node adds:** `Date`, and `Content-Length` when the response ends in one go (else it's chunked). HEAD, 204 and 304 have no body.
   - **The rest:** `write` (with backpressure and `drain`), `end`, `addTrailers`, `finish` and `close`, and Node's errors (`ERR_HTTP_HEADERS_SENT`, `ERR_HTTP_INVALID_STATUS_CODE`, `ERR_INVALID_HTTP_TOKEN`).
   - **A client that leaves:** `res` and `req.socket` close without finishing.
+- **`upgrade` (WebSockets, D-125):** a request that asks to upgrade goes to the `upgrade` listener, as in Node: `(req, socket, head)`, where `socket` is a real `net.Socket` on the client's connection. Without a listener (or when `shouldUpgradeCallback` says no) it's an ordinary request.
+  - **The app answers on the socket**, as on Node. A `101` makes the connection a byte tunnel from the client, through the ingress, to the app. Any other answer (ws's `verifyClient` refusing with a 401) goes back as a response. Closing without answering closes the client's connection.
+  - **What the ingress tunnels:** a GET over HTTP/1.1 with no body. Any other upgrade request is an ordinary one.
+  - **Limits:** `AUTOMATELY_SERVICE_MAX_WEBSOCKETS` upgraded connections per run (1,000; past it, a 503), and `AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS` with no byte either way (10 minutes). A run's upgraded sockets close when it ends, and `server.close()` waits for them, as Node's does.
+  - **The ws library's server** answers through the ingress exactly as under Node (`RealNpmPackagesTest`).
 - **`Expect: 100-continue`** is answered by the ingress at once, as Node's server does without a `checkContinue` listener.
 - **`https.createServer`** is accepted; `key` and `cert` are set aside, with a note in the log, since the ingress serves TLS.
 - **How long a service runs:** a listening server keeps its run going after the default export returns, and a service module that only calls `listen` needs no default export (a plain `app.js`).
@@ -539,6 +549,7 @@ Node's `http.Server` (D-112, D-123), as `lib/_http_server.js` and `lib/_http_out
 - **Differs:**
   - **Request trailers** aren't seen (`req.trailers` is empty): the cluster's HTTP server doesn't expose them.
   - **No per-connection events:** `connection`, `checkContinue` and `clientError` aren't emitted, since connections end at the ingress.
+  - **A 101's reason phrase** is always "Switching Protocols", and `head` in `upgrade` is empty: what the client sends after the head comes as the socket's data.
   - **Keep-alive is the ingress's,** so `Connection` and `Keep-Alive` aren't sent from the app.
   - **The ingress adds `Server: automately`.**
 
@@ -610,12 +621,13 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
     - `node:dns`, against a local DNS server for every record type and failure, and the system's resolver for `lookup`. The mongodb driver also connects with `mongodb+srv://` through SRV and TXT records (D-122).
     - the event loop's guaranteed orderings (`setImmediate`, ticks, microtasks)
     - `node:net`/`tls`, against local echo, TLS, STARTTLS and half-close servers: event order, held writes, half-close, async iteration, idle timeouts, every error, trusted, refused, unverified and wrong-name TLS, custom identity checks, the upgrade, and `checkServerIdentity` itself
+    - WebSockets (D-125), against a local WebSocket server with compression: the ws library's client and the global `WebSocket` (the handshake as sent, text, binary and large messages, pings, closes from either side, refusals and errors); and the ws library's server as a service through the ingress, compared request by request with the same app under Node
   - **Refused at publish, as expected:** bcrypt and sharp (native).
 - **Against the standards:** the Java side is checked against its standards' test vectors:
   - **KDFs:** RFC 6070 (PBKDF2), 5869 (HKDF) and 7914 (scrypt)
   - **Ciphers:** the GCM spec and RFC 8439 (ChaCha20-Poly1305)
   - **Curves:** RFC 8032 (Ed25519) and 7748 (X25519)
-- **Always-on tests:** `NodeStandInsTest` runs in every build, checking each module's behaviour in the isolate, the caps, and what stays unavailable. `NodeNetworkStandInsTest` runs `node:http` against a local server, including the socket's real connection details over plain HTTP and over TLS (unverified and trusted). It also covers `diagnostics_channel`, `events.on`, `dns` without the network, unconnected sockets, the pure parts of `net`, `tls`, `http2` and `tty`, and the `fs` streams. `StreamedRequestTest` checks the host side of `http`: framing, TLS (verification, `ca`, opting out), refused requests, and the shared limit and its release. `NodeHttp2Test` and `Http2ClientTest` check HTTP/2 in the isolate and on the host (streams, trailers, resets, ping, settings, refusals, the shared limits, cleanup). `NodeDnsTest`, `NodeDnsApiTest` and `DnsResolverTest` check `dns` in the isolate, what the filtering shows, and the resolver (every record type, compressed names, each failure, TCP after truncation) against a local DNS server. `NodeSocketsTest` and `SocketClientTest` check sockets in the isolate and on the host: events, half-close, errors, TLS, the upgrade, the limits, cleanup at the end of a run, and that a socket nobody reads pushes back on its peer.
+- **Always-on tests:** `NodeStandInsTest` runs in every build, checking each module's behaviour in the isolate, the caps, and what stays unavailable. `NodeNetworkStandInsTest` runs `node:http` against a local server, including the socket's real connection details over plain HTTP and over TLS (unverified and trusted). It also covers `diagnostics_channel`, `events.on`, `dns` without the network, unconnected sockets, the pure parts of `net`, `tls`, `http2` and `tty`, and the `fs` streams. `StreamedRequestTest` checks the host side of `http`: framing, TLS (verification, `ca`, opting out), refused requests, and the shared limit and its release. `NodeHttp2Test` and `Http2ClientTest` check HTTP/2 in the isolate and on the host (streams, trailers, resets, ping, settings, refusals, the shared limits, cleanup). `NodeDnsTest`, `NodeDnsApiTest` and `DnsResolverTest` check `dns` in the isolate, what the filtering shows, and the resolver (every record type, compressed names, each failure, TCP after truncation) against a local DNS server. `NodeSocketsTest` and `SocketClientTest` check sockets in the isolate and on the host: events, half-close, errors, TLS, the upgrade, the limits, cleanup at the end of a run, and that a socket nobody reads pushes back on its peer. `NodeUpgradesTest` checks upgraded connections through the real ingress (the tunnel both ways with backpressure, other answers, a server without a listener, the limit and the idle timeout); `NodeWebSocketTest` the global `WebSocket` against a local server; and `NodeZlibTest` zlib's flush and small windows.
 
 ## Known differences, in one list
 
@@ -623,20 +635,19 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 - **The Node version** is fixed at `v26.8.1`, the release the stand-ins are checked against (D-115), whatever V8 the isolate runs.
 - **PKCS#1 v1.5 decryption** is refused in `privateDecrypt`; use OAEP (D-104).
 - **Streams:** crypto classes aren't streams; `fetch` bodies and `files.stream` are async iterables, not Node streams. `fs` streams hold the whole file (32 MB).
-- **HTTP:** `req.socket` is a stand-in reporting the host's connection (D-114); agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused for `http`/`https` (`tls.connect` takes one); TLS cipher names are IANA's, not OpenSSL's.
+- **HTTP:** `req.socket` is a stand-in reporting the host's connection (D-114), except for a request over a socket of the job's own (an upgrade, or `createConnection`; D-125); agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused for `http`/`https` (`tls.connect` takes one); TLS cipher names are IANA's, not OpenSSL's.
 - **Sockets:** `ref`/`unref` change nothing, a job doesn't wait for open sockets, TLS sessions aren't reused, and over TLS `end()` closes (D-116).
 - **HTTP/2:** no server push, a `createConnection` socket replaced by the host's own connection (D-117), and a large body's `data` events and the windows they show. Both follow how the server cut its frames and how TCP split them into reads, which varies between runs of Node itself. Given the same frames in the same reads they match Node exactly (D-121).
 - **Uncaught errors:** a throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` event listener, fails the job as it would end Node. So does a promise rejected with no handler by the end of the turn (D-110), unless `process.on('unhandledRejection')` has a listener; that one isn't a difference from Node.
 - **Approximate output:** `util.inspect` output and `assert`'s messages for structures.
 - **Compressed bytes** may differ from Node's (both are valid).
 - **URLs:** no punycode, and IPv6 isn't normalised.
-- **`TextDecoder`:** keeps a leading byte-order mark, and has no `stream`/`fatal` options.
+- **`TextDecoder`:** keeps a leading byte-order mark, and has no `stream` option.
+- **WebSockets:** a server's 101 always has the standard reason phrase; a server's `upgrade` gets an empty `head`; a `windowBits` under 15 stores rather than compresses.
 - **Timers** (`setTimeout`, `setInterval`) return numbers.
 - **`os` and `process`** describe the job: `/tmp`, one CPU, the heap limit, no host details.
 
 **Missing for now:**
-- **Globals:** `WebSocket`.
 - **Crypto:** Brotli compression, AES-KW, classic Diffie-Hellman, and encrypted private keys.
-- **Network:** WebSockets (network-reach.md §13).
 
 Changes to any stand-in are recorded in the [changelog](../../CHANGELOG.md) and [decisions](../DECISIONS.md).

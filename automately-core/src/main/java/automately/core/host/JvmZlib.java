@@ -64,6 +64,19 @@ public final class JvmZlib implements ZlibApi {
     }
 
     @Override
+    public synchronized byte[] flush(int handle, int kind) {
+        Codec codec = stream(handle);
+        try {
+            Output out = new Output(codec.limit);
+            codec.flush(kind, out);
+            return out.bytes();
+        } catch (RuntimeException e) {
+            close(handle);
+            throw e;
+        }
+    }
+
+    @Override
     public synchronized byte[] finish(int handle) {
         Codec codec = stream(handle);
         try {
@@ -106,10 +119,15 @@ public final class JvmZlib implements ZlibApi {
             throw HostException.invalid("The isolate's zlib supports strategies 0 (default), 1 (filtered) and 2 (Huffman only)");
         }
         byte[] dictionary = options.getString("dictionary") == null ? null : Base64.getDecoder().decode(options.getString("dictionary"));
+        int windowBits = options.getInteger("windowBits", 15);
+        if (windowBits != 0 && (windowBits < 8 || windowBits > 15)) {
+            throw new HostException("RangeError", "ERR_OUT_OF_RANGE",
+                    "The value of \"options.windowBits\" is out of range. It must be >= 8 and <= 15. Received " + windowBits);
+        }
         Codec codec = switch (kind == null ? "" : kind) {
-            case "deflate" -> new Deflating(level, strategy, false, false, dictionary);
-            case "deflateRaw" -> new Deflating(level, strategy, true, false, dictionary);
-            case "gzip" -> new Deflating(level, strategy, true, true, dictionary);
+            case "deflate" -> new Deflating(level, strategy, false, false, dictionary, windowBits);
+            case "deflateRaw" -> new Deflating(level, strategy, true, false, dictionary, windowBits);
+            case "gzip" -> new Deflating(level, strategy, true, true, dictionary, windowBits);
             case "inflate" -> new Inflating(false, dictionary);
             case "inflateRaw" -> new Inflating(true, dictionary);
             case "gunzip" -> new Gunzip();
@@ -163,6 +181,10 @@ public final class JvmZlib implements ZlibApi {
 
         abstract void finish(Output out);
 
+        /** Compressors give out what they hold; decompressors already have. */
+        void flush(int kind, Output out) {
+        }
+
         void end() {
         }
     }
@@ -177,8 +199,25 @@ public final class JvmZlib implements ZlibApi {
         private long size;
         private boolean headerWritten;
         private final byte[] buffer = new byte[CHUNK];
+        private final boolean raw;
+        private final int windowBits;
+        private boolean windowStated;
+        private final int flevel;
 
-        Deflating(int level, int strategy, boolean raw, boolean gzip, byte[] dictionary) {
+        /**
+         * The JVM's deflater always uses zlib's largest window (15 bits). A smaller {@code windowBits} (a WebSocket's
+         * negotiated {@code client_max_window_bits}) is honoured by storing rather than compressing (D-125): stored
+         * blocks refer back to nothing, so any window reads them. The zlib header then states the smaller window.
+         */
+        Deflating(int level, int strategy, boolean raw, boolean gzip, byte[] dictionary, int windowBits) {
+            boolean small = windowBits != 0 && windowBits < 15;
+            // zlib's FLEVEL, from the level asked for: the header says how it was meant to be compressed.
+            int asked = level == Deflater.DEFAULT_COMPRESSION ? 6 : level;
+            this.flevel = strategy >= 2 || asked < 2 ? 0 : asked < 6 ? 1 : asked == 6 ? 2 : 3;
+            this.raw = raw;
+            this.windowBits = small ? windowBits : 15;
+            this.windowStated = !small || raw || gzip;
+            level = small ? Deflater.NO_COMPRESSION : level;
             this.deflater = new Deflater(level, raw);
             this.deflater.setStrategy(strategy == 1 ? Deflater.FILTERED : strategy == 2 ? Deflater.HUFFMAN_ONLY : Deflater.DEFAULT_STRATEGY);
             if (dictionary != null) {
@@ -208,7 +247,7 @@ public final class JvmZlib implements ZlibApi {
             deflater.setInput(data);
             while (!deflater.needsInput()) {
                 int n = deflater.deflate(buffer, 0, buffer.length, Deflater.NO_FLUSH);
-                out.write(buffer, n);
+                emit(out, n);
             }
         }
 
@@ -218,13 +257,37 @@ public final class JvmZlib implements ZlibApi {
             deflater.finish();
             while (!deflater.finished()) {
                 int n = deflater.deflate(buffer);
-                out.write(buffer, n);
+                emit(out, n);
             }
             if (gzip) {
                 long c = crc.getValue();
                 out.write(new byte[] {(byte) c, (byte) (c >>> 8), (byte) (c >>> 16), (byte) (c >>> 24),
                         (byte) size, (byte) (size >>> 8), (byte) (size >>> 16), (byte) (size >>> 24)});
             }
+        }
+
+        @Override
+        void flush(int kind, Output out) {
+            header(out);
+            int mode = kind == 3 ? Deflater.FULL_FLUSH : Deflater.SYNC_FLUSH;
+            int n;
+            do {
+                n = deflater.deflate(buffer, 0, buffer.length, mode);
+                emit(out, n);
+            } while (n == buffer.length);
+        }
+
+        /** Hands on output; the zlib header's first two bytes state a smaller window, as zlib writes them. */
+        private void emit(Output out, int n) {
+            if (!windowStated && n >= 2) {
+                windowStated = true;
+                int cmf = ((windowBits - 8) << 4) | 8;
+                int flg = (flevel << 6) | (buffer[1] & 0x20);
+                flg |= 31 - ((cmf << 8) | flg) % 31;
+                buffer[0] = (byte) cmf;
+                buffer[1] = (byte) flg;
+            }
+            out.write(buffer, n);
         }
 
         @Override

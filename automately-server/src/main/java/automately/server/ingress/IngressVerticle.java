@@ -50,6 +50,7 @@ public final class IngressVerticle extends VerticleBase {
     private final NodeRegistry nodes;
     private final String secret;
     private final Duration idleTimeout;
+    private final Duration upgradedIdleTimeout;
     private final long maxRequestBytes;
     private HttpServer server;
     private HttpClient client;
@@ -59,9 +60,12 @@ public final class IngressVerticle extends VerticleBase {
     /**
      * @param secret      D-036's shared secret for the internal endpoint, or null when node certificates secure it (D-066)
      * @param internalTls adds TLS with this node's certificate to the client for the internal endpoint (identity if none)
+     * @param upgradedIdleTimeout how long an upgraded connection (a WebSocket) may go without a byte either way (D-125)
      */
     public IngressVerticle(int port, HostRouter router, ServiceStore services, JobStore jobs, NodeRegistry nodes, String secret,
-                           Duration idleTimeout, long maxRequestBytes, java.util.function.UnaryOperator<HttpClientOptions> internalTls) {
+                           Duration idleTimeout, Duration upgradedIdleTimeout, long maxRequestBytes,
+                           java.util.function.UnaryOperator<HttpClientOptions> internalTls) {
+        this.upgradedIdleTimeout = upgradedIdleTimeout;
         this.internalTls = internalTls;
         this.port = port;
         this.router = router;
@@ -211,6 +215,12 @@ public final class IngressVerticle extends VerticleBase {
         if (target.port() != null) {
             headers.set(InternalHttpVerticle.PORT_HEADER, String.valueOf(target.port()));
         }
+        // A request asking to upgrade (a WebSocket) keeps its Connection and Upgrade, so the service can answer 101 (D-125).
+        boolean upgrade = asksToUpgrade(request);
+        if (upgrade) {
+            headers.set("Connection", "Upgrade");
+            headers.set("Upgrade", request.getHeader("Upgrade"));
+        }
         // Only the ingress says what prefix it took off; a client's own claim is dropped.
         headers.remove("X-Forwarded-Prefix");
         if (target.prefix() != null) {
@@ -235,46 +245,161 @@ public final class IngressVerticle extends VerticleBase {
                 upstream.reset();
             });
             response.endHandler(v -> idle.stop());
-            upstream.response().onFailure(err -> upstreamFailed(request, err)).onSuccess(answer -> {
-                response.setStatusCode(answer.statusCode());
-                // The service's own reason phrase, as Node's res.writeHead(201, 'Made It') sends it (D-123).
-                if (answer.statusMessage() != null && !answer.statusMessage().isEmpty()) {
-                    response.setStatusMessage(answer.statusMessage());
-                }
-                answer.headers().forEach(h -> {
-                    if (!RESPONSE_HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT))) {
-                        response.headers().add(h.getKey(), h.getValue());
+            if (upgrade) {
+                // The head goes alone; a 101 turns both connections into one byte tunnel.
+                upstream.connect().onFailure(err -> {
+                    // A service that closed without answering is a closed connection to the client too, as from Node.
+                    if (err instanceof io.vertx.core.http.HttpClosedException) {
+                        request.connection().close();
+                    } else {
+                        upstreamFailed(request, err);
+                    }
+                }).onSuccess(answer -> {
+                    if (answer.statusCode() == 101) {
+                        idle.stop();
+                        tunnel(request, answer);
+                    } else {
+                        // Not switching, the exchange is an ordinary one Vert.x never saw ended: the connection is
+                        // let go once the answer has been relayed, rather than reused.
+                        relay(request, answer, idle);
+                        answer.end().onComplete(done -> upstream.reset());
                     }
                 });
-                if (answer.statusCode() == 503 && !response.headers().contains("Retry-After")) {
-                    response.putHeader("Retry-After", "1");
-                }
-                response.putHeader("Server", "automately");
-                if (answer.getHeader("Content-Length") == null) {
-                    response.setChunked(true);
-                }
-                answer.handler(chunk -> {
-                    idle.touch();
-                    response.write(chunk);
-                    if (response.writeQueueFull()) {
-                        answer.pause();
-                        response.drainHandler(v -> answer.resume());
-                    }
-                });
-                answer.endHandler(v -> {
-                    idle.stop();
-                    if (response.isChunked()) {
-                        response.trailers().addAll(answer.trailers());
-                    }
-                    response.end();
-                });
-                answer.exceptionHandler(err -> {
-                    idle.stop();
-                    error(request, 502, "The service's connection failed", false);
-                });
-            });
+                request.resume();
+                return;
+            }
+            upstream.response().onFailure(err -> upstreamFailed(request, err)).onSuccess(answer -> relay(request, answer, idle));
             streamBody(request, upstream, idle);
         });
+    }
+
+    /** Sends the service's answer back to the client as it streams in. */
+    private void relay(HttpServerRequest request, io.vertx.core.http.HttpClientResponse answer, Idle idle) {
+        HttpServerResponse response = request.response();
+        response.setStatusCode(answer.statusCode());
+        // The service's own reason phrase, as Node's res.writeHead(201, 'Made It') sends it (D-123).
+        if (answer.statusMessage() != null && !answer.statusMessage().isEmpty()) {
+            response.setStatusMessage(answer.statusMessage());
+        }
+        answer.headers().forEach(h -> {
+            if (!RESPONSE_HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT))) {
+                response.headers().add(h.getKey(), h.getValue());
+            }
+        });
+        if (answer.statusCode() == 503 && !response.headers().contains("Retry-After")) {
+            response.putHeader("Retry-After", "1");
+        }
+        response.putHeader("Server", "automately");
+        if (answer.getHeader("Content-Length") == null) {
+            response.setChunked(true);
+        }
+        answer.handler(chunk -> {
+            idle.touch();
+            response.write(chunk);
+            if (response.writeQueueFull()) {
+                answer.pause();
+                response.drainHandler(v -> answer.resume());
+            }
+        });
+        answer.endHandler(v -> {
+            idle.stop();
+            if (response.isChunked()) {
+                response.trailers().addAll(answer.trailers());
+            }
+            response.end();
+        });
+        answer.exceptionHandler(err -> {
+            idle.stop();
+            error(request, 502, "The service's connection failed", false);
+        });
+    }
+
+    /**
+     * Whether a request asks to upgrade its connection (a WebSocket): HTTP/1.1, an {@code Upgrade} header, the
+     * {@code upgrade} token in {@code Connection}, a GET with no body (D-125).
+     */
+    static boolean asksToUpgrade(HttpServerRequest request) {
+        // GET only: what WebSocket clients send, and the only method Vert.x's client switches a connection for.
+        if (request.version() != io.vertx.core.http.HttpVersion.HTTP_1_1 || request.method() != io.vertx.core.http.HttpMethod.GET
+                || request.getHeader("Upgrade") == null || request.getHeader("Transfer-Encoding") != null) {
+            return false;
+        }
+        String length = request.getHeader("Content-Length");
+        if (length != null && parseLong(length) != 0) {
+            return false;
+        }
+        for (String value : request.headers().getAll("Connection")) {
+            for (String token : value.split(",")) {
+                if (token.trim().equalsIgnoreCase("upgrade")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The service answered 101: the client gets the same head, and from then on bytes pass both ways untouched, with
+     * backpressure, until either side closes or nothing moves for the upgraded idle timeout (D-125).
+     */
+    private void tunnel(HttpServerRequest request, io.vertx.core.http.HttpClientResponse answer) {
+        HttpServerResponse response = request.response();
+        answer.headers().forEach(h -> response.headers().add(h.getKey(), h.getValue()));
+        response.putHeader("Server", "automately");
+        io.vertx.core.net.NetSocket service = answer.netSocket();
+        service.pause();
+        request.toNetSocket().onFailure(err -> service.close()).onSuccess(client -> {
+            long[] last = {System.currentTimeMillis()};
+            long period = Math.max(50, Math.min(10_000, upgradedIdleTimeout.toMillis() / 4));
+            long timer = vertx.setPeriodic(period, id -> {
+                if (System.currentTimeMillis() - last[0] >= upgradedIdleTimeout.toMillis()) {
+                    vertx.cancelTimer(id);
+                    client.close();
+                    service.close();
+                }
+            });
+            pipe(client, service, last);
+            pipe(service, client, last);
+            client.closeHandler(v -> {
+                vertx.cancelTimer(timer);
+                service.close();
+            });
+            service.closeHandler(v -> {
+                vertx.cancelTimer(timer);
+                client.close();
+            });
+            service.resume();
+        });
+    }
+
+    /** Bytes a tunnel direction may have written but not yet on the wire before it stops reading. */
+    private static final long TUNNEL_HIGH_WATER = 256 * 1024;
+
+    /**
+     * One direction of a tunnel, its backpressure from each write's own completion: the reader pauses with more than
+     * {@link #TUNNEL_HIGH_WATER} written but not yet on the wire, and resumes once half of it has gone.
+     */
+    private static void pipe(io.vertx.core.net.NetSocket from, io.vertx.core.net.NetSocket to, long[] last) {
+        long[] inFlight = {0};
+        boolean[] paused = {false};
+        from.handler(chunk -> {
+            last[0] = System.currentTimeMillis();
+            int length = chunk.length();
+            inFlight[0] += length;
+            to.write(chunk).onComplete(done -> {
+                inFlight[0] -= length;
+                if (paused[0] && inFlight[0] <= TUNNEL_HIGH_WATER / 2) {
+                    paused[0] = false;
+                    from.resume();
+                }
+            });
+            if (!paused[0] && inFlight[0] > TUNNEL_HIGH_WATER) {
+                paused[0] = true;
+                from.pause();
+            }
+        });
+        // A half-close passes on as a close: the WebSocket closing handshake has already happened by then.
+        from.endHandler(v -> to.end());
     }
 
     /**

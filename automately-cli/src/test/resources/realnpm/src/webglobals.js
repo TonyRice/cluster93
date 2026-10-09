@@ -193,5 +193,10 @@ export async function run() {
       setTimeout(() => resolve(events), 20);
     }, 30);
   });
+  // TextDecoder's fatal option (D-125): a broken sequence throws instead of becoming U+FFFD.
+  const fatal = new TextDecoder('utf-8', { fatal: true });
+  out.textDecoder = [fatal.fatal, fatal.ignoreBOM, new TextDecoder().fatal, fatal.decode(new Uint8Array([104, 195, 169])),
+    error(() => fatal.decode(new Uint8Array([104, 0xff]))), error(() => fatal.decode(new Uint8Array([0xe2, 0x82]))),
+    new TextDecoder().decode(new Uint8Array([104, 0xff]))];
   return out;
 }

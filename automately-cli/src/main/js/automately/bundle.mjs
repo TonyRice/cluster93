@@ -63,7 +63,8 @@ const plugin = {
       }
       if (OPTIONAL.has(name)) {
         out.warnings.push(name + ' (an optional native extra, imported by ' + rel(args.importer) + ') is left out');
-        return { path: name, namespace: 'automately-stub' };
+        // Required, it throws as a package that isn't installed does in Node, so a try/require falls back (ws, D-125).
+        return { path: name, namespace: args.kind === 'require-call' ? 'automately-absent' : 'automately-stub' };
       }
       if (isBuiltin(name) && args.kind === 'require-call') {
         // CommonJS code requiring a built-in the isolate lacks: often inside try/catch, with a fallback (fetch-blob's
@@ -83,6 +84,9 @@ const plugin = {
       return undefined;
     });
     build.onLoad({ filter: /.*/, namespace: 'automately-stub' }, () => ({ contents: 'export default undefined;', loader: 'js' }));
+    build.onLoad({ filter: /.*/, namespace: 'automately-absent' }, (args) => ({
+      contents: 'const e = new Error(' + JSON.stringify("Cannot find module '" + args.path + "'") + '); e.code = "MODULE_NOT_FOUND"; throw e;',
+      loader: 'js' }));
     build.onLoad({ filter: /.*/, namespace: 'automately-missing' }, (args) => ({
       contents: 'const e = new Error(' + JSON.stringify("Cannot find module '" + args.path + "': Node's \"" + args.path.replace(/^node:/, '')
         + "\" module isn't available in the isolate") + '); e.code = "MODULE_NOT_FOUND"; throw e;', loader: 'js' }));

@@ -32,18 +32,51 @@ public final class ServerExchange implements HttpExchange {
     private final Promise<Boolean> closedPromise = Promise.promise();
     private volatile boolean closed;
     private volatile io.vertx.core.json.JsonArray trailers;
+    private final UpgradeSocket upgrade;
 
     public ServerExchange(HttpServerRequest request, Context context) {
+        this(request, context, () -> { });
+    }
+
+    /**
+     * @param done runs once, when the response has ended or the connection closed (an upgraded one included). Vert.x
+     *             keeps one end and one close handler per response, so whoever counts exchanges counts through this.
+     */
+    public ServerExchange(HttpServerRequest request, Context context, Runnable done) {
         this.request = request;
         this.response = request.response();
         this.context = context;
         this.requestJson = describe(request);
         this.body = new VertxBodyStream(request, context, () -> { });
+        java.util.concurrent.atomic.AtomicBoolean once = new java.util.concurrent.atomic.AtomicBoolean();
+        Runnable finished = () -> {
+            if (once.compareAndSet(false, true)) {
+                done.run();
+            }
+        };
+        this.upgrade = UpgradeSocket.asks(request) ? new UpgradeSocket(request, context, new JsonObject()
+                .put("remoteAddress", requestJson.getString("remoteAddress")).put("remotePort", requestJson.getInteger("remotePort")),
+                finished) : null;
         response.closeHandler(v -> {
             closed = true;
             closedPromise.tryComplete(!response.ended());
+            if (upgrade != null) {
+                upgrade.closed();
+            }
+            finished.run();
         });
-        response.endHandler(v -> closedPromise.tryComplete(false));
+        response.endHandler(v -> {
+            closedPromise.tryComplete(false);
+            if (upgrade != null) {
+                upgrade.closed();
+            }
+            finished.run();
+        });
+    }
+
+    @Override
+    public automately.core.runtime.OutgoingSocket upgrade() {
+        return upgrade;
     }
 
     /** Whether a header is the cluster's own, which a script never sees. */
@@ -112,6 +145,8 @@ public final class ServerExchange implements HttpExchange {
                 .put("remoteAddress", remoteAddress)
                 .put("remotePort", remotePort)
                 .put("encrypted", "https".equals(proto))
+                // As llhttp's flag: the server's 'upgrade' listener, or its shouldUpgradeCallback, then decides (D-125).
+                .put("upgrade", UpgradeSocket.asks(request))
                 .put("port", port == null ? null : Integer.valueOf(port));
     }
 
@@ -197,10 +232,8 @@ public final class ServerExchange implements HttpExchange {
             response.write(chunk).onFailure(written::tryFail);
             if (response.writeQueueFull()) {
                 response.drainHandler(d -> written.tryComplete());
-                response.closeHandler(c -> {
-                    closed = true;
-                    written.tryFail("The client disconnected");
-                });
+                // Not a second closeHandler: Vert.x keeps one, and the constructor's counts the exchange as done.
+                closedPromise.future().onSuccess(left -> written.tryFail("The client disconnected"));
             } else {
                 written.tryComplete();
             }

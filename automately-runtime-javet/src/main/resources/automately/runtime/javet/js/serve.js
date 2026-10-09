@@ -69,6 +69,13 @@ Object.defineProperty(globalThis, Symbol.for('automately.server'), {
     trailers: (id, rawTrailers) => host.http.trailers(id, rawTrailers),
     fail: (id, status, message) => host.http.fail(id, status, message),
     clientClosed: (id) => host.http.closed(id),
+    // The request's connection as a socket, for an 'upgrade' listener (D-125); null if it can't be upgraded.
+    upgrade: (id) => {
+      const taken = host.http.upgrade(id);
+      if (taken === null || taken === undefined) return null;
+      const r = JSON.parse(taken);
+      return { id: r.id, info: r.info, body: readable(r.streamId) };
+    },
   }),
 });
 

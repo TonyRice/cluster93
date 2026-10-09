@@ -28,6 +28,8 @@ import java.util.UUID;
  * @param advertiseHost the address other nodes use to reach the internal endpoint
  * @param ingressIdleTimeout how long a proxied request may go without a byte before it's closed
  * @param maxRequestBytes largest request body the ingress accepts
+ * @param ingressUpgradedIdleTimeout how long an upgraded connection (a WebSocket) may go without a byte before it's closed (D-125)
+ * @param maxUpgradedPerRun upgraded connections (WebSockets) one run of a service may hold open at once (D-125)
  * @param tenantStorageBytes files one tenant may store
  * @param packageCacheBytes  package files a node keeps in memory once fetched and checked (D-089)
  * @param minFreeDiskBytes writes are refused when the data directory's disk has less free space than this (D-038)
@@ -61,6 +63,8 @@ public record ServerConfig(
         String advertiseHost,
         Duration ingressIdleTimeout,
         long maxRequestBytes,
+        Duration ingressUpgradedIdleTimeout,
+        int maxUpgradedPerRun,
         long tenantStorageBytes,
         long packageCacheBytes,
         long minFreeDiskBytes,
@@ -142,6 +146,8 @@ public record ServerConfig(
                 env.getOrDefault("AUTOMATELY_ADVERTISE_HOST", defaultAdvertiseHost()),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS", "60000"))),
                 Long.parseLong(env.getOrDefault("AUTOMATELY_MAX_REQUEST_BYTES", String.valueOf(1024L * 1024 * 1024))),
+                Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS", "600000"))),
+                Integer.parseInt(env.getOrDefault("AUTOMATELY_SERVICE_MAX_WEBSOCKETS", String.valueOf(automately.core.host.InternalHttpVerticle.DEFAULT_MAX_UPGRADED))),
                 Long.parseLong(env.getOrDefault("AUTOMATELY_TENANT_STORAGE_MB", "1024")) * 1024 * 1024,
                 Long.parseLong(env.getOrDefault("AUTOMATELY_PACKAGE_CACHE_MB", "64")) * 1024 * 1024,
                 Long.parseLong(env.getOrDefault("AUTOMATELY_MIN_FREE_DISK_MB", "1024")) * 1024 * 1024,

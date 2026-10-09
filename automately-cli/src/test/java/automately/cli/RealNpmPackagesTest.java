@@ -49,7 +49,7 @@ class RealNpmPackagesTest {
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
             "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals", "immediates");
     /** The HTTP libraries (D-109), published as a second package: one would be over a version's 10 MB. */
-    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets", "http2client", "gothttp2", "dnsclient", "webglobals");
+    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets", "http2client", "gothttp2", "dnsclient", "webglobals", "wsclient", "wsglobal");
     /**
      * Database and mail drivers (D-116), run against real servers in containers: two more packages, since together
      * they'd be over a version's 10 MB.
@@ -94,6 +94,7 @@ class RealNpmPackagesTest {
         testEnv.put("TEST_HTTP", testHttp);
         startSocketServers();
         startDnsServer();
+        startWebSocketServer();
         if (SERVICES) {
             startServices();
         }
@@ -142,6 +143,7 @@ class RealNpmPackagesTest {
         for (String web : WEB) {
             publishVariant("realworld-" + web, List.of(web));
         }
+        publishVariant("realworld-wsserver", List.of("wsserver"));
         if (SERVICES) {
             publishVariant("realworld-db", DRIVERS);
             publishVariant("realworld-mongo", MONGO);
@@ -208,7 +210,7 @@ class RealNpmPackagesTest {
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "immediates", "http2client", "gothttp2", "dnsclient", "webglobals"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "immediates", "http2client", "gothttp2", "dnsclient", "webglobals", "wsclient", "wsglobal"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
         sameAsNode(lib);
     }
@@ -253,6 +255,150 @@ class RealNpmPackagesTest {
             await(http.close());
             cli("services", "rm", lib);
         }
+    }
+
+    /**
+     * The ws library's server (D-125), under Node on a port and as a service through the ingress: the same WebSocket
+     * conversations with both, compared. The handshake's answer (but its accept key, which follows the random request key),
+     * messages both ways with and without compression, pings, closes from either side, and a refused upgrade.
+     */
+    @Test
+    void aWebSocketServerServesAsItDoesUnderNode() throws Exception {
+        int port;
+        try (java.net.ServerSocket free = new java.net.ServerSocket(0)) {
+            port = free.getLocalPort();
+        }
+        ProcessBuilder builder = new ProcessBuilder("node", "--no-warnings", "--input-type=module", "-e", "await import('./src/wsserver.js')")
+                .directory(project.toFile()).redirectErrorStream(true).redirectOutput(project.resolve("wsserver.node.log").toFile());
+        builder.environment().put("PORT", String.valueOf(port));
+        Process nodeApp = builder.start();
+        io.vertx.core.http.WebSocketClient client = serverVertx.createWebSocketClient(new io.vertx.core.http.WebSocketClientOptions()
+                .setTryUsePerMessageCompression(true).setMaxFrameSize(1024 * 1024).setMaxMessageSize(4 * 1024 * 1024));
+        try {
+            awaitListening(port, nodeApp, "wsserver");
+            Path script = project.resolve("service-wsserver.mjs");
+            Files.writeString(script, "import 'realworld-wsserver/wsserver';\n");
+            Result deployed = cli("services", "deploy", "wsserver", script.toString());
+            assertThat(deployed.code()).as(deployed.err()).isZero();
+            String host = "wsserver--realnpm.localhost";
+            // The service may still be starting its server.
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (!probe(client, node.ingressPort(), host) && System.currentTimeMillis() < deadline) {
+                Thread.sleep(200);
+            }
+            assertThat(probe(client, port, null)).as("wsserver under node").isTrue();
+            List<String> underNode = conversation(client, port, null);
+            List<String> inService;
+            try {
+                inService = conversation(client, node.ingressPort(), host);
+            } catch (Exception e) {
+                throw new AssertionError("wsserver: " + e + " (its last run: " + cli("jobs", "ls", "--json").out() + ")", e);
+            }
+            assertThat(String.join("\n", inService)).isEqualTo(String.join("\n", underNode));
+        } finally {
+            nodeApp.destroyForcibly();
+            await(client.close());
+            cli("services", "rm", "wsserver");
+        }
+    }
+
+    /** Whether a WebSocket connects (then closes it): the service may still be starting. */
+    private boolean probe(io.vertx.core.http.WebSocketClient client, int port, String host) throws Exception {
+        io.vertx.core.http.WebSocketConnectOptions options = new io.vertx.core.http.WebSocketConnectOptions().setHost("127.0.0.1")
+                .setPort(port).setURI("/probe");
+        if (host != null) {
+            options.addHeader("Host", host);
+        }
+        try {
+            await(await(client.connect(options)).close());
+            return true;
+        } catch (java.util.concurrent.ExecutionException notYet) {
+            return false;
+        }
+    }
+
+    /** Connects with its handlers set as it opens, on the event loop, so the server's first message can't come before them. */
+    private static io.vertx.core.http.WebSocket open(io.vertx.core.http.WebSocketClient client, io.vertx.core.http.WebSocketConnectOptions options,
+                                                     java.util.concurrent.BlockingQueue<String> received) throws Exception {
+        return await(client.connect(options).map(ws -> {
+            ws.textMessageHandler(text -> received.add("text " + (text.length() > 200 ? text.length() + " chars" : text)));
+            ws.binaryMessageHandler(bytes -> received.add("binary " + (bytes.length() > 200 ? bytes.length() + " bytes"
+                    : bytes.toString(StandardCharsets.ISO_8859_1))));
+            ws.pongHandler(data -> received.add("pong " + data));
+            return ws;
+        }));
+    }
+
+    /** One run of WebSocket conversations with the server, as lines to compare. */
+    private List<String> conversation(io.vertx.core.http.WebSocketClient client, int port, String host) throws Exception {
+        List<String> out = new java.util.ArrayList<>();
+        io.vertx.core.http.WebSocketConnectOptions options = new io.vertx.core.http.WebSocketConnectOptions().setHost("127.0.0.1").setPort(port)
+                .setURI("/chat?room=1").setSubProtocols(List.of("chat", "other")).addHeader("X-Custom", "c");
+        if (host != null) {
+            options.addHeader("Host", host);
+        }
+        java.util.concurrent.LinkedBlockingQueue<String> received = new java.util.concurrent.LinkedBlockingQueue<>();
+        io.vertx.core.http.WebSocket ws;
+        try {
+            ws = open(client, options, received);
+        } catch (java.util.concurrent.ExecutionException e) {
+            return List.of(String.valueOf(e.getCause()));
+        }
+        StringBuilder handshake = new StringBuilder("101 " + ws.subProtocol());
+        ws.headers().forEach(h -> {
+            String name = h.getKey().toLowerCase(java.util.Locale.ROOT);
+            if (!NOT_THE_APPS.contains(name) && !name.equals("sec-websocket-accept")) {
+                handshake.append(" | ").append(name).append(": ").append(h.getValue());
+            }
+        });
+        out.add(handshake.toString());
+        java.util.concurrent.CompletableFuture<String> closed = new java.util.concurrent.CompletableFuture<>();
+        ws.closeHandler(v -> closed.complete("closed " + ws.closeStatusCode() + " " + ws.closeReason()));
+        java.util.function.Supplier<String> next = () -> {
+            try {
+                String item = received.poll(10, TimeUnit.SECONDS);
+                return item == null ? "nothing" : item;
+            } catch (InterruptedException e) {
+                throw new IllegalStateException(e);
+            }
+        };
+        out.add(next.get());
+        await(ws.writeTextMessage("hello"));
+        out.add(next.get());
+        await(ws.writeBinaryMessage(io.vertx.core.buffer.Buffer.buffer(new byte[] {1, 2, 3, (byte) 255})));
+        out.add(next.get());
+        await(ws.writeTextMessage("y".repeat(300_000)));
+        out.add(next.get());
+        await(ws.writePing(io.vertx.core.buffer.Buffer.buffer("pp")));
+        out.add(next.get());
+        await(ws.writeTextMessage("ping"));
+        await(ws.writeTextMessage("log"));
+        out.add(next.get());
+        await(ws.writeTextMessage("close"));
+        out.add(closed.get(10, TimeUnit.SECONDS));
+
+        // A second connection closed from this side, then the server's log of both.
+        java.util.concurrent.LinkedBlockingQueue<String> secondReceived = new java.util.concurrent.LinkedBlockingQueue<>();
+        io.vertx.core.http.WebSocket second = open(client, new io.vertx.core.http.WebSocketConnectOptions(options).setURI("/second"), secondReceived);
+        out.add(secondReceived.poll(10, TimeUnit.SECONDS));
+        await(second.close((short) 1000, "client done"));
+        java.util.concurrent.LinkedBlockingQueue<String> thirdReceived = new java.util.concurrent.LinkedBlockingQueue<>();
+        io.vertx.core.http.WebSocket third = open(client, new io.vertx.core.http.WebSocketConnectOptions(options).setURI("/third"), thirdReceived);
+        out.add(thirdReceived.poll(10, TimeUnit.SECONDS));
+        Thread.sleep(200);
+        await(third.writeTextMessage("log"));
+        out.add(thirdReceived.poll(10, TimeUnit.SECONDS));
+        await(third.close());
+
+        // Refused by the app's verifyClient: its status and reason come back as they are.
+        try {
+            await(client.connect(new io.vertx.core.http.WebSocketConnectOptions(options).setURI("/refuse")));
+            out.add("refuse: connected");
+        } catch (java.util.concurrent.ExecutionException e) {
+            out.add("refuse: " + (e.getCause() instanceof io.vertx.core.http.UpgradeRejectedException rejected
+                    ? rejected.getStatus() + " " + rejected.getBody() : String.valueOf(e.getCause())));
+        }
+        return out;
     }
 
     /** Hop-by-hop headers and Date: the proxy's and the clock's, not the app's. */
@@ -382,6 +528,45 @@ class RealNpmPackagesTest {
      * The dnsclient fixture's zone (D-122): every record type, names compressed as real servers write them, and names
      * that fail each way (see TestDnsServer). TEST_DNS is its address, as setServers takes it.
      */
+    /**
+     * The WebSocket clients' server (D-125): TEST_WS. It first sends the handshake's request headers back (but the random
+     * key), then echoes; "ping-me" makes it ping, "close-me" makes it close with 4001, and /refuse is refused with a 403.
+     */
+    private void startWebSocketServer() throws Exception {
+        io.vertx.core.http.HttpServer ws = await(serverVertx.createHttpServer(new io.vertx.core.http.HttpServerOptions()
+                        .setWebSocketSubProtocols(List.of("chat")).setPerMessageWebSocketCompressionSupported(true)
+                        .setMaxWebSocketFrameSize(1024 * 1024).setMaxWebSocketMessageSize(4 * 1024 * 1024))
+                .webSocketHandshakeHandler(handshake -> {
+                    if (handshake.path().equals("/refuse")) {
+                        handshake.reject(403);
+                    } else {
+                        handshake.accept();
+                    }
+                })
+                .webSocketHandler(socket -> {
+                    io.vertx.core.json.JsonArray headers = new io.vertx.core.json.JsonArray();
+                    socket.headers().forEach(h -> {
+                        if (!h.getKey().equalsIgnoreCase("sec-websocket-key")) {
+                            headers.add(new io.vertx.core.json.JsonArray().add(h.getKey()).add(h.getValue()));
+                        }
+                    });
+                    socket.writeTextMessage(new io.vertx.core.json.JsonObject().put("uri", socket.uri()).put("headers", headers).encode());
+                    socket.textMessageHandler(text -> {
+                        if (text.equals("ping-me")) {
+                            socket.writePing(io.vertx.core.buffer.Buffer.buffer("server ping"));
+                            socket.writeTextMessage("pinged");
+                        } else if (text.equals("close-me")) {
+                            socket.close((short) 4001, "bye");
+                        } else {
+                            socket.writeTextMessage(text);
+                        }
+                    });
+                    socket.binaryMessageHandler(socket::writeBinaryMessage);
+                })
+                .listen(0, "127.0.0.1"));
+        testEnv.put("TEST_WS", "ws://127.0.0.1:" + ws.actualPort());
+    }
+
     private void startDnsServer() throws Exception {
         dnsServer = new automately.core.host.dns.TestDnsServer(serverVertx).start()
                 .a("example.test", "93.184.216.34").a("example.test", "93.184.216.35").ttl("example.test", 120)

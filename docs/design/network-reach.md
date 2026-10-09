@@ -9,15 +9,8 @@
 - **B5, `net` and `tls` sockets (§7):** ✅ built (D-116), with pg, mysql2, ioredis, MongoDB and nodemailer matching real Node against real servers.
 - **The `http2` client (§12):** ✅ built (D-117), with got's `http2: true` matching real Node. Request trailers, `state`, priorities and the frames' real flags as Node 26 has them (D-118).
 - **Servers reached by hostname with intercepted ports (§5, D-112):** ✅ built (D-123): Node's `http.Server`, ports by host, path prefixes, ports kept off the network, domains per port. Express 5, Koa 3 and Fastify 5 answer as they do under real Node; Koa 3 needed the WHATWG globals, built as Node's (D-124).
-- **The rest, accepted with Tony's answers in §8** (2026-10-08):
-  - got and real socket details (§11)
-  - sockets, B5 (§7)
-  - the `http2` client (§12)
-  - `dns`, B4 (§6)
-  - servers, B3 (§5)
-  - WebSockets (§13)
-
-  The order is in §9.
+- **WebSockets (§13):** ✅ built (D-125): the ingress tunnels upgraded connections, Node's server emits `upgrade`, `node:http` upgrades over the job's own sockets, and the global `WebSocket` is Node's. The ws library's client and server, and the global, match real Node.
+- **Phase B is complete.** Everything was accepted with Tony's answers in §8 (2026-10-08), in §9's order.
 
 **Where it comes from:** [isolate-polyfills.md](isolate-polyfills.md) §3. Phase A gave the isolate pure computation (D-095 to D-106). Phase B gives it the network: Node's `http`, `https`, `net`, `tls` and `dns`. Those are what database drivers (`pg`, `mysql2`, `ioredis`), HTTP clients (axios, got, node-fetch) and web frameworks (Express, Koa, Fastify) are written against.
 
@@ -456,11 +449,13 @@ GET /v1/egress-policy                     (the tenant, read-only)
   - **Network reads stay apart:** the host records which read each frame came in, and the isolate hands a later read to the script on a later turn.
   - **Proved against Node:** a paced test server (fixed frames, each in its own read) makes Node deterministic, and the isolate matches it frame by frame.
 
-## 13. WebSockets (accepted)
-- **The ingress** passes `Upgrade: websocket` through to the service's node, then its internal endpoint. Frames are bridged both ways with backpressure. Today it strips `Upgrade`, so WebSockets don't pass.
-  - **Limits:** connections per service, frame size and idle time.
+## 13. WebSockets (built, D-125)
+- **The ingress** passes a GET that asks to upgrade (`Connection: upgrade`, any `Upgrade`) to the run's node with its `Connection` and `Upgrade`, and waits for the app's answer. A `101` becomes a byte tunnel both ways with backpressure; any other answer is relayed as a response.
+  - **Frames aren't parsed:** the bytes are the app's and the client's. A frame size limit belongs to the app (the ws library's `maxPayload`).
+  - **Limits:** upgraded connections per run (`AUTOMATELY_SERVICE_MAX_WEBSOCKETS`, 1,000, counted on the run's node) and idle time (`AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS`, 10 minutes with no byte either way).
 - **In the isolate:**
-  - **Servers:** `http.Server` emits `upgrade` with a socket stand-in, so the `ws` library's server works.
-  - **Clients:** `http.request` with `Upgrade` works over §7's sockets, so its client works too.
+  - **Servers:** `http.Server` emits `upgrade` with a real `net.Socket` on the connection. The app writes its own answer on it, as on Node, and the node reads that head: a 101 switches the connection, anything else goes as a response. So the `ws` library's server works unchanged.
+  - **Clients:** an `http.request` that asks to upgrade, or brings its own `createConnection`, is written as HTTP/1.1 over §7's sockets in the isolate, as Node's client does. So the ws client works, and the gate checks it as `tcp`.
+  - **The global `WebSocket`** is undici's behaviour over that same client.
 - **Node containers use the same ingress path** (node-runtime.md §5).
 

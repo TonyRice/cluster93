@@ -150,9 +150,62 @@ function checkOffset(buf, offset, size) {
     offset = 0;
   }
   if (!Number.isInteger(offset) || offset < 0 || offset + size > buf.length) {
-    throw new RangeError('The value of "offset" is out of range. It must be >= 0 and <= ' + (buf.length - size) + '. Received ' + offset);
+    throw Object.assign(new RangeError('The value of "offset" is out of range. It must be >= 0 and <= ' + (buf.length - size) + '. Received ' + offset),
+      { code: 'ERR_OUT_OF_RANGE' });
   }
   return offset;
+}
+
+// Integers of 1 to 6 bytes (readUIntBE and the rest), with Node's checks and messages (lib/internal/buffer.js; D-125).
+function checkByteLength(byteLength) {
+  if (typeof byteLength !== 'number') {
+    throw Object.assign(new TypeError(`The "byteLength" argument must be of type number. Received ${byteLength === undefined ? 'undefined'
+      : byteLength === null ? 'null' : `type ${typeof byteLength} (${typeof byteLength === 'string' ? `'${byteLength}'` : String(byteLength)})`}`),
+    { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  if (!Number.isInteger(byteLength)) {
+    throw Object.assign(new RangeError(`The value of "byteLength" is out of range. It must be an integer. Received ${byteLength}`), { code: 'ERR_OUT_OF_RANGE' });
+  }
+  if (byteLength < 1 || byteLength > 6) {
+    throw Object.assign(new RangeError(`The value of "byteLength" is out of range. It must be >= 1 and <= 6. Received ${byteLength}`), { code: 'ERR_OUT_OF_RANGE' });
+  }
+}
+
+function checkIntValue(value, byteLength, signed) {
+  if (typeof value !== 'number') {
+    throw Object.assign(new TypeError(`The "value" argument must be of type number. Received type ${typeof value} (${String(value)})`),
+      { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  const bits = byteLength * 8;
+  const min = signed ? -(2 ** (bits - 1)) : 0;
+  const max = signed ? 2 ** (bits - 1) - 1 : 2 ** bits - 1;
+  if (value > max || value < min) {
+    const range = byteLength > 4
+      ? (signed ? `>= -(2 ** ${bits - 1}) and < 2 ** ${bits - 1}` : `>= 0 and < 2 ** ${bits}`)
+      : `>= ${min} and <= ${max}`;
+    throw Object.assign(new RangeError(`The value of "value" is out of range. It must be ${range}. Received ${Math.abs(value) > 2 ** 32 ? String(value).replace(/\B(?=(\d{3})+(?!\d))/g, '_') : value}`),
+      { code: 'ERR_OUT_OF_RANGE' });
+  }
+}
+
+function readVariable(buf, offset, byteLength, littleEndian, signed) {
+  checkByteLength(byteLength);
+  offset = checkOffset(buf, offset, byteLength);
+  let value = 0;
+  for (let i = 0; i < byteLength; i++) value = value * 256 + buf[offset + (littleEndian ? byteLength - 1 - i : i)];
+  return signed && value >= 2 ** (byteLength * 8 - 1) ? value - 2 ** (byteLength * 8) : value;
+}
+
+function writeVariable(buf, value, offset, byteLength, littleEndian, signed) {
+  checkByteLength(byteLength);
+  checkIntValue(value, byteLength, signed);
+  offset = checkOffset(buf, offset, byteLength);
+  let rest = Math.trunc(value < 0 ? value + 2 ** (byteLength * 8) : value);
+  for (let i = byteLength - 1; i >= 0; i--) {
+    buf[offset + (littleEndian ? byteLength - 1 - i : i)] = rest % 256;
+    rest = Math.floor(rest / 256);
+  }
+  return offset + byteLength;
 }
 
 export class Buffer extends Uint8Array {
@@ -408,6 +461,15 @@ export class Buffer extends Uint8Array {
   writeFloatBE(value, offset) { view(this).setFloat32(checkOffset(this, offset, 4), value, false); return (offset || 0) + 4; }
   writeDoubleLE(value, offset) { view(this).setFloat64(checkOffset(this, offset, 8), value, true); return (offset || 0) + 8; }
   writeDoubleBE(value, offset) { view(this).setFloat64(checkOffset(this, offset, 8), value, false); return (offset || 0) + 8; }
+
+  readUIntLE(offset, byteLength) { return readVariable(this, offset, byteLength, true, false); }
+  readUIntBE(offset, byteLength) { return readVariable(this, offset, byteLength, false, false); }
+  readIntLE(offset, byteLength) { return readVariable(this, offset, byteLength, true, true); }
+  readIntBE(offset, byteLength) { return readVariable(this, offset, byteLength, false, true); }
+  writeUIntLE(value, offset, byteLength) { return writeVariable(this, value, offset, byteLength, true, false); }
+  writeUIntBE(value, offset, byteLength) { return writeVariable(this, value, offset, byteLength, false, false); }
+  writeIntLE(value, offset, byteLength) { return writeVariable(this, value, offset, byteLength, true, true); }
+  writeIntBE(value, offset, byteLength) { return writeVariable(this, value, offset, byteLength, false, true); }
 }
 
 // Node's lowercase spellings.

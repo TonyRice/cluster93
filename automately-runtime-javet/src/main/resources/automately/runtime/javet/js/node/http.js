@@ -6,6 +6,8 @@ import { EventEmitter } from 'node:events';
 import { Readable, Writable } from 'node:stream';
 import { nextTick } from 'node:process';
 import { checkServerIdentity as defaultIdentityCheck, peerCertificate } from 'node:tls';
+import { Socket as NetSocket, connect as netConnect, isIP } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
 
 const internals = globalThis[Symbol.for('automately.http')];
 const reportUncaught = globalThis[Symbol.for('automately.uncaught')];
@@ -266,7 +268,6 @@ function networkError(err, req) {
 }
 
 const REFUSED_OPTIONS = {
-  createConnection: 'createConnection would bypass the egress gate',
   socketPath: 'Unix sockets are not available in the isolate',
   checkServerIdentity: "a custom certificate check isn't supported for http requests yet; use the ca option (tls.connect takes one)",
   pfx: 'PFX bundles are not supported; pass PEM cert and key',
@@ -338,6 +339,9 @@ export class ClientRequest extends Writable {
       this.setHeader('Authorization', 'Basic ' + Buffer.from(String(target.auth)).toString('base64'));
     }
     if (callback) this.once('response', callback);
+    // A request that asks to upgrade (a WebSocket), or brings its own connection, is written on a socket here (D-125).
+    this._viaSocket = typeof target.createConnection === 'function' || asksToUpgrade(this);
+    if (this._viaSocket) this._connectSocket(target);
     if (target.timeout !== undefined) this.setTimeout(target.timeout);
     if (target.signal) {
       const signal = target.signal;
@@ -409,6 +413,7 @@ export class ClientRequest extends Writable {
   /** Connects (once): the headers go to the host, which sends them with the first chunk or the end. */
   _open(chunked) {
     if (this._opening) return this._opening;
+    if (this._viaSocket) return (this._opening = Promise.resolve(this._writeHead(chunked)));
     this._sentHeaders = true;
     const headers = {};
     for (const { name, value } of this._headers.values()) headers[name] = Array.isArray(value) ? value.map(String) : String(value);
@@ -439,6 +444,11 @@ export class ClientRequest extends Writable {
     res.httpVersionMinor = res.httpVersion === '1.0' ? 0 : 1;
     res.req = this;
     res._body = body[Symbol.asyncIterator]();
+    this._respondWith(res);
+  }
+
+  /** Announces a response: 'response' once the body is sent (Node's order), and the request is done when it ends. */
+  _respondWith(res) {
     this.res = res;
     res.on('data', () => this._touch());
     // Once the response is complete the request is done: it closes without aborting, so the host can reuse the connection.
@@ -453,6 +463,7 @@ export class ClientRequest extends Writable {
   _clearTimer() { if (this._timer) { clearTimeout(this._timer); this._timer = null; } }
 
   _write(chunk, encoding, callback) {
+    if (this._viaSocket) { this._socketWrite(chunk, callback); return; }
     this._wroteBody = true;
     const bytes = chunk.length;
     this._open(!this.hasHeader('content-length')).then((id) => internals.write(id, chunk)).then(surfaced(() => {
@@ -463,6 +474,7 @@ export class ClientRequest extends Writable {
   }
 
   _final(callback) {
+    if (this._viaSocket) { this._socketFinal(callback); return; }
     this._ending = true;
     this._open(this._wroteBody && !this.hasHeader('content-length')).then((id) => internals.end(id))
       .then(surfaced(() => callback()), surfaced((err) => callback(networkError(err, this))));
@@ -481,6 +493,7 @@ export class ClientRequest extends Writable {
 
   _destroy(err, callback) {
     this._clearTimer();
+    if (this._viaSocket) { this._socketDestroy(err, callback); return; }
     if (this._done) { callback(err); return; }
     if (this._id !== null) internals.abort(this._id);
     if (this.res && !this.res.readableEnded) this.res.destroy(err ?? this._closedError());
@@ -488,6 +501,320 @@ export class ClientRequest extends Writable {
     callback(err ?? (this.res || this.aborted ? null : this._closedError()));
   }
 }
+
+// --- requests over a socket the script drives (D-125) ---
+// As Node's client: HTTP/1.1 written on a net or tls socket (or the one createConnection returns), and the response
+// parsed here. A 101 hands the socket to 'upgrade'. These sockets go through the egress gate as tcp connections, since
+// the script writes their bytes. The connection isn't kept for another request.
+
+const ClientRequestSocket = {
+  _connectSocket(target) {
+    const options = { ...target, host: this.host, port: this._port };
+    let socket;
+    if (typeof target.createConnection === 'function') {
+      let settled = false;
+      const created = target.createConnection(options, (err, made) => {
+        if (settled) return;
+        settled = true;
+        if (err) nextTick(() => this.destroy(err));
+        else if (made) this._attachSocket(made);
+      });
+      if (created && !settled) { settled = true; socket = created; }
+    } else if (this._encrypted) {
+      socket = tlsConnect({ ...this._tls, host: this.host, port: this._port, servername: isIP(this.host) ? undefined : this.host });
+    } else {
+      socket = netConnect({ host: this.host, port: this._port });
+    }
+    if (socket) this._attachSocket(socket);
+    else this._pendingWrites = [];
+  },
+
+  _attachSocket(socket) {
+    this.socket = socket;
+    this._parser = { state: 'head', buffer: Buffer.alloc(0), res: null, remaining: 0, chunk: 'size', queue: null };
+    this._onSocketData = (data) => this._socketData(data);
+    this._onSocketEnd = () => this._socketEnded();
+    this._onSocketError = (err) => { if (!this._handedOver) this.destroy(err); };
+    this._onSocketClose = () => { if (!this._handedOver) this._socketEnded(); };
+    socket.on('data', this._onSocketData);
+    socket.on('end', this._onSocketEnd);
+    socket.on('error', this._onSocketError);
+    socket.on('close', this._onSocketClose);
+    for (const go of this._pendingWrites?.splice(0) ?? []) go();
+  },
+
+  /** Runs once the socket is there: createConnection may hand it over later. */
+  _withSocket(go) {
+    if (this.socket instanceof SocketStandIn) (this._pendingWrites ??= []).push(go);
+    else go();
+  },
+
+  _writeHead(chunked) {
+    this._sentHeaders = true;
+    let head = `${this.method} ${this.path} HTTP/1.1\r\n`;
+    for (const { name, value } of this._headers.values()) {
+      for (const one of [].concat(value)) head += `${name}: ${one}\r\n`;
+    }
+    this._chunked = chunked && !this.hasHeader('content-length') && !this.hasHeader('transfer-encoding');
+    if (this._chunked) head += 'Transfer-Encoding: chunked\r\n';
+    // As Node's request with no agent: the connection isn't kept, unless the request says otherwise.
+    if (!this.hasHeader('connection')) head += 'Connection: close\r\n';
+    this._withSocket(() => this.socket.write(`${head}\r\n`, 'latin1'));
+  },
+
+  _socketWrite(chunk, callback) {
+    this._wroteBody = true;
+    this._open(!this.hasHeader('content-length'));
+    this._withSocket(() => {
+      if (this._chunked) this.socket.write(`${chunk.length.toString(16)}\r\n`, 'latin1');
+      this.socket.write(chunk);
+      if (this._chunked) this.socket.write('\r\n', 'latin1', () => callback());
+      else this.socket.write(Buffer.alloc(0), () => callback());
+    });
+  },
+
+  _socketFinal(callback) {
+    this._ending = true;
+    this._open(this._wroteBody && !this.hasHeader('content-length'));
+    this._withSocket(() => {
+      if (this._chunked) this.socket.write('0\r\n\r\n', 'latin1', () => callback());
+      else callback();
+    });
+  },
+
+  _socketDestroy(err, callback) {
+    const socket = this.socket;
+    if (!this._handedOver && socket && !(socket instanceof SocketStandIn)) {
+      socket.removeListener('data', this._onSocketData);
+      socket.destroy();
+    }
+    const queue = this._parser?.queue;
+    if (queue && !queue.done) queue.fail(err ?? this._closedError());
+    if (this._done || this._handedOver) { callback(err); return; }
+    callback(err ?? (this.res || this.aborted ? null : this._closedError()));
+  },
+
+  _socketData(data) {
+    const p = this._parser;
+    this._touch();
+    if (p.state === 'head') {
+      p.buffer = p.buffer.length ? Buffer.concat([p.buffer, data]) : data;
+      for (;;) {
+        const end = p.buffer.indexOf('\r\n\r\n');
+        if (end < 0) {
+          if (p.buffer.length > maxHeaderSize) this.destroy(nodeError(Error, 'HPE_HEADER_OVERFLOW', 'Header overflow'));
+          return;
+        }
+        const head = p.buffer.subarray(0, end).toString('latin1');
+        const rest = p.buffer.subarray(end + 4);
+        p.buffer = Buffer.alloc(0);
+        const res = this._parseHead(head);
+        if (!res) return;
+        if (res.statusCode === 101) { this._upgraded(res, rest); return; }
+        if (res.statusCode >= 100 && res.statusCode < 200) {
+          // Informational: 'information' (and 'continue' for a 100), then the real head follows.
+          this.emit('information', { statusCode: res.statusCode, statusMessage: res.statusMessage, httpVersion: res.httpVersion,
+            httpVersionMajor: 1, httpVersionMinor: res.httpVersionMinor, headers: res.headers, rawHeaders: res.rawHeaders });
+          if (res.statusCode === 100) this.emit('continue');
+          p.buffer = rest;
+          if (!rest.length) return;
+          continue;
+        }
+        this._socketResponse(res);
+        if (rest.length) this._socketBody(rest);
+        return;
+      }
+    }
+    if (p.state === 'body') this._socketBody(data);
+  },
+
+  _parseHead(head) {
+    const lines = head.split('\r\n');
+    const status = /^HTTP\/1\.([01]) (\d{3})(?: (.*))?$/.exec(lines[0]);
+    if (!status) {
+      this.destroy(nodeError(Error, 'HPE_INVALID_CONSTANT', 'Parse Error: Expected HTTP/'));
+      return null;
+    }
+    const res = new IncomingMessage(this.socket);
+    const raw = [];
+    for (const line of lines.slice(1)) {
+      const colon = line.indexOf(':');
+      if (colon > 0) raw.push(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+    }
+    const { headers, distinct } = headersOf(raw);
+    res.statusCode = Number(status[2]);
+    res.statusMessage = status[3] ?? '';
+    res.httpVersion = `1.${status[1]}`;
+    res.httpVersionMinor = Number(status[1]);
+    res.rawHeaders = raw;
+    res.headers = headers;
+    res.headersDistinct = distinct;
+    res.req = this;
+    return res;
+  },
+
+  /** A 101: the socket is the 'upgrade' listener's, with whatever came after the head; or closed if no one listens. */
+  _upgraded(res, rest) {
+    const socket = this.socket;
+    this._handedOver = true;
+    this._done = true;
+    this._clearTimer();
+    socket.removeListener('data', this._onSocketData);
+    socket.removeListener('end', this._onSocketEnd);
+    socket.removeListener('error', this._onSocketError);
+    socket.removeListener('close', this._onSocketClose);
+    // As Node's: no longer flowing, so the new owner's 'data' listener starts it.
+    socket.pause();
+    if (socket._readableState) socket._readableState.flowing = null;
+    res.upgrade = true;
+    res.complete = true;
+    this.res = res;
+    if (this.listenerCount('upgrade') > 0) {
+      this.upgradeOrConnect = true;
+      this.emit('upgrade', res, socket, rest);
+      this.destroyed = true;
+      nextTick(() => this.emit('close'));
+    } else {
+      socket.destroy();
+      this.destroy();
+    }
+  },
+
+  _socketResponse(res) {
+    const p = this._parser;
+    const queue = new BodyQueue(this.socket);
+    p.queue = queue;
+    p.res = res;
+    res._body = queue;
+    const length = res.headers['content-length'];
+    const chunked = /\bchunked\b/i.test(String(res.headers['transfer-encoding'] ?? ''));
+    if (this.method === 'HEAD' || res.statusCode === 204 || res.statusCode === 304) p.framing = 'none';
+    else if (chunked) p.framing = 'chunked';
+    else if (length !== undefined) { p.framing = 'length'; p.remaining = Number(length); }
+    else p.framing = 'close';
+    p.state = 'body';
+    this._respondWith(res);
+    if (p.framing === 'none' || (p.framing === 'length' && p.remaining === 0)) this._bodyDone();
+  },
+
+  _socketBody(data) {
+    const p = this._parser;
+    if (p.state !== 'body') return;
+    if (p.framing === 'close') { p.queue.push(data); return; }
+    if (p.framing === 'length') {
+      const take = data.subarray(0, p.remaining);
+      p.remaining -= take.length;
+      if (take.length) p.queue.push(take);
+      if (p.remaining === 0) this._bodyDone();
+      return;
+    }
+    // chunked
+    p.buffer = p.buffer.length ? Buffer.concat([p.buffer, data]) : data;
+    for (;;) {
+      if (p.chunk === 'size') {
+        const eol = p.buffer.indexOf('\r\n');
+        if (eol < 0) return;
+        const size = parseInt(p.buffer.subarray(0, eol).toString('latin1').split(';')[0].trim(), 16);
+        p.buffer = p.buffer.subarray(eol + 2);
+        if (Number.isNaN(size)) { this.destroy(nodeError(Error, 'HPE_INVALID_CHUNK_SIZE', 'Parse Error: Invalid character in chunk size')); return; }
+        if (size === 0) { p.chunk = 'trailers'; continue; }
+        p.remaining = size;
+        p.chunk = 'data';
+      } else if (p.chunk === 'data') {
+        if (!p.buffer.length) return;
+        const take = p.buffer.subarray(0, p.remaining);
+        p.remaining -= take.length;
+        p.buffer = p.buffer.subarray(take.length);
+        p.queue.push(take);
+        if (p.remaining === 0) p.chunk = 'crlf';
+      } else if (p.chunk === 'crlf') {
+        if (p.buffer.length < 2) return;
+        p.buffer = p.buffer.subarray(2);
+        p.chunk = 'size';
+      } else {
+        const end = p.buffer.indexOf('\r\n\r\n');
+        const bare = p.buffer.indexOf('\r\n');
+        if (bare === 0) { this._bodyDone(); return; }
+        if (end < 0) return;
+        const raw = [];
+        for (const line of p.buffer.subarray(0, end).toString('latin1').split('\r\n')) {
+          const colon = line.indexOf(':');
+          if (colon > 0) raw.push(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+        }
+        p.res.rawTrailers = raw;
+        p.res.trailers = headersOf(raw).headers;
+        this._bodyDone();
+        return;
+      }
+    }
+  },
+
+  _bodyDone() {
+    const p = this._parser;
+    if (p.state === 'done') return;
+    p.state = 'done';
+    p.queue.end();
+    // The connection isn't kept for another request.
+    p.queue.onDrained = () => this.socket.destroy();
+  },
+
+  _socketEnded() {
+    const p = this._parser;
+    if (!p || p.state === 'done') return;
+    if (p.state === 'body' && p.framing === 'close') { this._bodyDone(); return; }
+    if (p.queue) p.queue.fail(this._closedError());
+    else this.destroy(this._closedError());
+  },
+};
+
+/** A response body as the IncomingMessage reads it: chunks from the socket, which pauses while too many wait. */
+class BodyQueue {
+  constructor(socket) {
+    this.socket = socket;
+    this.items = [];
+    this.waiting = null;
+    this.done = false;
+    this.error = null;
+    this.onDrained = null;
+  }
+  push(chunk) {
+    if (this.waiting) { const w = this.waiting; this.waiting = null; w.resolve({ value: chunk, done: false }); return; }
+    this.items.push(chunk);
+    if (this.items.length > 16) this.socket.pause();
+  }
+  end() { this.done = true; this._settle(); }
+  fail(err) { this.done = true; this.error = err; this._settle(); }
+  _settle() {
+    if (!this.waiting || this.items.length) return;
+    const w = this.waiting;
+    this.waiting = null;
+    if (this.error) w.reject(this.error); else { w.resolve({ value: undefined, done: true }); this.onDrained?.(); }
+  }
+  next() {
+    if (this.items.length) {
+      const value = this.items.shift();
+      if (this.items.length < 4 && !this.done) this.socket.resume();
+      return Promise.resolve({ value, done: false });
+    }
+    if (this.done) {
+      if (this.error) return Promise.reject(this.error);
+      this.onDrained?.();
+      return Promise.resolve({ value: undefined, done: true });
+    }
+    return new Promise((resolve, reject) => { this.waiting = { resolve, reject }; });
+  }
+  return() { this.done = true; this.items = []; this.socket.destroy(); return Promise.resolve({ value: undefined, done: true }); }
+  [Symbol.asyncIterator]() { return this; }
+}
+
+/** Whether a request's own headers ask to upgrade: an Upgrade, and the upgrade token in Connection. */
+function asksToUpgrade(req) {
+  const connection = req.getHeader('connection');
+  return req.getHeader('upgrade') !== undefined && connection !== undefined
+    && [].concat(connection).some((v) => String(v).split(',').some((t) => t.trim().toLowerCase() === 'upgrade'));
+}
+
+Object.assign(ClientRequest.prototype, ClientRequestSocket);
 
 function abortError(reason) {
   const err = new Error('The operation was aborted', { cause: reason });
@@ -917,6 +1244,17 @@ export class Server extends EventEmitter {
     this._responses = new Set();
     this._closing = false;
     this._closeRequested = false;
+    // Upgraded connections: the server's 'close' waits for them, as Node's does (D-125).
+    this._upgraded = new Set();
+    if (options.shouldUpgradeCallback !== undefined) {
+      if (typeof options.shouldUpgradeCallback !== 'function') {
+        throw nodeError(TypeError, 'ERR_INVALID_ARG_TYPE',
+          `The "options.shouldUpgradeCallback" property must be of type function. Received ${describeValue(options.shouldUpgradeCallback)}`);
+      }
+      this.shouldUpgradeCallback = options.shouldUpgradeCallback;
+    } else {
+      this.shouldUpgradeCallback = function shouldUpgradeCallback() { return this.listenerCount('upgrade') > 0; };
+    }
     if (requestListener) this.on('request', requestListener);
   }
 
@@ -1018,7 +1356,7 @@ export class Server extends EventEmitter {
 
   /** 'close', as Node's: once a close was asked for and no response is in flight. */
   _closeIfDrained() {
-    if (!this._closeRequested || this.listening || this._starting || this._responses.size > 0) return;
+    if (!this._closeRequested || this.listening || this._starting || this._responses.size > 0 || this._upgraded.size > 0) return;
     this._closeRequested = false;
     nextTick(() => this.emit('close'));
   }
@@ -1040,6 +1378,32 @@ export class Server extends EventEmitter {
   getConnections(callback) { nextTick(callback, null, this._responses.size); return this; }
   [Symbol.asyncDispose]() { return new Promise((resolve) => this.close(() => resolve())); }
 
+  /**
+   * Hands an upgrading request's connection to the 'upgrade' listener as a net.Socket (D-125), with no data read past
+   * the head (it comes as the socket's data). False if the host can't take the connection over.
+   */
+  _upgrade(exchangeId, r, req, standIn) {
+    const taken = server.upgrade(exchangeId);
+    if (!taken) return false;
+    // The request has no body to read: what the client sends next is the upgraded protocol's.
+    try { req._source.cancel(); } catch { /* finished */ }
+    req._body = (async function* nothing() {})();
+    req.complete = true;
+    const socket = new NetSocket({ allowHalfOpen: true });
+    socket._adopt(taken.id, taken.body, {
+      remoteAddress: standIn.remoteAddress, remotePort: standIn.remotePort, remoteFamily: standIn.remoteFamily,
+      localAddress: this._address?.address, localPort: this._address?.port, localFamily: this._address?.family,
+    });
+    socket.server = this;
+    if (r.encrypted) socket.encrypted = true;
+    req.socket = socket;
+    this._upgraded.add(socket);
+    socket.once('close', () => { this._upgraded.delete(socket); this._closeIfDrained(); });
+    if (this.listenerCount('upgrade') > 0) this.emit('upgrade', req, socket, Buffer.alloc(0));
+    else socket.destroy();
+    return true;
+  }
+
   _onRequest(exchangeId, r, body) {
     const socket = new ServerSocket(this, r);
     const req = new this._incomingMessage(socket);
@@ -1054,6 +1418,10 @@ export class Server extends EventEmitter {
     req.headersDistinct = distinct;
     req._source = body;
     req._body = body[Symbol.asyncIterator]();
+    // As llhttp, then the server, decide it: the 'upgrade' listener (or shouldUpgradeCallback) takes the connection.
+    req.upgrade = Boolean(r.upgrade) && Boolean(this.shouldUpgradeCallback(req));
+    if (req.upgrade && this._upgrade(exchangeId, r, req, socket)) return;
+    req.upgrade = false;
     const res = new this._serverResponse(req);
     res._exchange = exchangeId;
     res.shouldKeepAlive = true;
@@ -1076,6 +1444,16 @@ export class Server extends EventEmitter {
     }), () => {});
     this.emit('request', req, res);
   }
+}
+
+/** The Node type description in ERR_INVALID_ARG_TYPE messages, for a value that isn't the expected type. */
+function describeValue(value) {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (typeof value === 'function') return `function ${value.name}`;
+  if (typeof value === 'object') return value.constructor?.name ? `an instance of ${value.constructor.name}` : 'an object';
+  const shown = typeof value === 'string' ? `'${value.length > 28 ? `${value.slice(0, 25)}...` : value}'` : String(value);
+  return `type ${typeof value} (${shown})`;
 }
 
 export function createServer(options, requestListener) {

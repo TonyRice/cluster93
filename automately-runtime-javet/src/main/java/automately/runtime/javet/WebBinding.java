@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class WebBinding {
 
     /** The scripts there are: js/web/<name>.js, each evaluating to an object of its classes. */
-    static final Set<String> SCRIPTS = Set.of("streams", "blob", "fetch", "messaging", "codecs");
+    static final Set<String> SCRIPTS = Set.of("streams", "blob", "fetch", "messaging", "codecs", "websocket");
 
     private final V8Runtime v8;
     private final Map<String, byte[]> caches;
@@ -42,6 +42,24 @@ public final class WebBinding {
                 caches.putIfAbsent(name, script.getCachedData());
             }
             return value;
+        }
+    }
+
+    /** The built-ins a web script may take (D-125): WebSocket's handshake runs over node:http's client. */
+    static final Set<String> MODULES = Set.of("node:http", "node:https", "node:crypto", "node:zlib");
+
+    /**
+     * A built-in's namespace, evaluated if it wasn't yet: the same module instance the job's own imports get, through the
+     * job's resolver. A classic script has no import(), and the WebSocket global needs node:http's socket-driven client.
+     */
+    @V8Function(name = "module")
+    public V8Value module(String name) throws JavetException {
+        if (!MODULES.contains(name)) {
+            throw new IllegalArgumentException("No built-in for web scripts named " + name);
+        }
+        com.caoccao.javet.values.reference.IV8Module module = v8.getV8ModuleResolver().resolve(v8, name, null);
+        try (V8Value evaluated = module.execute(true)) {
+            return module.getNamespace();
         }
     }
 

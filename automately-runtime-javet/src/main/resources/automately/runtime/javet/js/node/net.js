@@ -200,6 +200,20 @@ export class Socket extends Duplex {
       localAddress: info.localAddress, localPort: info.localPort, localFamily: info.localFamily };
   }
 
+  /**
+   * A connection the host already has, open (D-125): an upgraded request's, which an http server hands its 'upgrade'
+   * listener. There's nothing to announce; it reads and writes as any connected socket.
+   */
+  _adopt(id, body, info) {
+    this._id = id;
+    this._conn = new Connection(id, body, this);
+    this.connecting = false;
+    this.pending = false;
+    this._describe(info);
+    this._flush();
+    return this;
+  }
+
   // As Node's, read from the live connection: undefined before it connects and once it's closed.
   get remoteAddress() { return this.destroyed ? undefined : this._addresses?.remoteAddress; }
   get remotePort() { return this.destroyed ? undefined : this._addresses?.remotePort; }

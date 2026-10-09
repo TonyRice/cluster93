@@ -80,7 +80,8 @@ Automately runs other people's code. This page describes who is trusted, what ea
   - **Reverse lookups** only work for addresses it could reach.
   - **A DNS server a script chooses** must pass the gate as a `dns` connection, so a private one needs a rule.
   - **Split-horizon resolvers:** an operator whose system resolver answers internal records for public names sets `AUTOMATELY_EGRESS_DNS` to a public resolver, which then answers every script lookup and every connection's name.
-- **Nothing a script runs listens on a node:** TCP and UDP servers are refused, and HTTP servers are reached by hostname through the ingress (D-112).
+- **Nothing a script runs listens on a node:** TCP and UDP servers are refused, and HTTP servers are reached by hostname through the ingress (D-112). A WebSocket is an HTTP request the app chose to answer with 101: the ingress then tunnels that one connection to that run, capped per run and closed when idle (D-125).
+- **A script's WebSocket client is a socket of its own** (D-125), so the egress gate checks it as `tcp`, under the same rules and socket limits as `net`.
 - Tenant S3 endpoints are still checked by the older address check, without the cluster-node rule; they move to the gate with phase B's next step.
 
 **Secrets at rest:**

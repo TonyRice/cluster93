@@ -82,6 +82,7 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
 - ~~**`got`**~~: works over HTTP/1.1 (D-114); `http2: true` waits for the `http2` client step.
 
 ## Next after phase B (Tony, 2026-10-08)
+Phase B finished on 2026-10-09 with WebSockets (D-125), so this is what's next.
 - **The shared execution layer and the gVisor Node containers:**
   - **Status:** designed and accepted (`docs/design/node-runtime.md`, D-084 to D-086), and nothing built yet. It was meant to follow packages, but more of Node in the isolate (D-095 onward) came first.
   - **Starts with its spikes:**

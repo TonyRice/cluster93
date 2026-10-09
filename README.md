@@ -99,7 +99,7 @@ export default async (input, ctx) => {
 // `billing` stands for a host API that arrives in phase 3; `ctx` works today.
 ```
 
-Scripts can store data (`kv`), start and await other jobs (`jobs`), message each other (`bus`, with durable **queues** that survive a node dying), call out (`fetch`, with SSRF protection) and log with structure (`log`); services can **serve HTTP** at `<service>--<tenant>.<domain>` or your own verified domain. See the **[host APIs reference](docs/scripting/host-apis.md)**.
+Scripts can store data (`kv`), start and await other jobs (`jobs`), message each other (`bus`, with durable **queues** that survive a node dying), call out (`fetch`, with SSRF protection) and log with structure (`log`); services can **serve HTTP and WebSockets** at `<service>--<tenant>.<domain>` or your own verified domain. See the **[host APIs reference](docs/scripting/host-apis.md)**.
 
 **Services** are scripts the cluster keeps running: if one crashes or its node dies, it's restarted (with backoff) somewhere healthy, carrying its checkpoint over. See the **[services guide](docs/scripting/services.md)**.
 
@@ -245,6 +245,8 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_INGRESS_PORT` | `8000` | Services' HTTP traffic |
 | `AUTOMATELY_INGRESS_DOMAIN` | `localhost` | Automatic hosts are `<service>--<tenant>.<domain>` |
 | `AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS` | `60000` | A proxied request with no bytes moving either way for this long is closed |
+| `AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS` | `600000` | An upgraded connection (a WebSocket) with no bytes moving either way for this long is closed (D-125) |
+| `AUTOMATELY_SERVICE_MAX_WEBSOCKETS` | `1000` | Upgraded connections (WebSockets) one run of a service may hold open; past it, a 503 (D-125) |
 | `AUTOMATELY_MAX_REQUEST_BYTES` | `1073741824` | Largest request body the ingress accepts |
 | `AUTOMATELY_INTERNAL_PORT` | `8090` | Node-to-node endpoint for proxied service traffic (cluster-only, secret-protected) |
 | `AUTOMATELY_ADVERTISE_HOST` | this host's address | How other nodes reach this node's internal endpoint |
@@ -301,7 +303,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
-| No tests | 923 unit tests (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress rules, files, packages, Node stand-ins, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture), 7 Docker integration tests that use real `SIGKILL`s, and real npm libraries checked against Node: 38 alone, plus 5 database and mail drivers against real servers | `./mvnw verify` |
+| No tests | 930 unit tests (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress rules, files, packages, Node stand-ins, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture), 7 Docker integration tests that use real `SIGKILL`s, and real npm libraries checked against Node: 41 alone, plus 5 database and mail drivers against real servers | `./mvnw verify` |
 | `callbackUrl`: one unsigned POST of `{success, error}` when a job finished, never retried | A signed POST of the result and your `data` for every way a job ends, retried through a durable queue | `CallbacksTest`, `CallbackDeliveryTest` |
 | `messagebus`: at most once, lost if nobody listened | The same bus, plus durable queues: at least once, leases, retries, dead letters, surviving a node's death | `QueueStoreContract` on both stores, a three-node failover test, the demo |
 | `Automately.startJob(..., waitForJob)` blocked a thread until the child finished | `jobs.run()` returns a handle whose `result()` is a promise; children stay in the tenant, with depth and rate limits | `JobsFromScriptsTest` |
@@ -334,7 +336,8 @@ Javet's native library is included for linux-x86_64 only for now.
      - ✅ Node's HTTP servers in services, reached by hostname: a host per port, path prefixes, domains per port, a plain `app.js` with no default export, `SIGTERM` on stop (D-123)
      - ✅ Express 5, Koa 3 and Fastify 5 answer as under real Node
      - ✅ The WHATWG globals as Node's, loaded on first use: `Blob`/`File`, Web Streams and `stream/web`, `Headers`/`Request`/`Response`/`FormData`, the text and compression streams, `MessageChannel`/`BroadcastChannel`. The global `fetch` is Node's; the host's is `automately:fetch` (D-124)
-     - **Next:** WebSockets: through the ingress, the server's `upgrade` event, the `ws` client and a global `WebSocket`. Raw TCP and UDP servers never run on core nodes.
+     - ✅ WebSockets: the ingress tunnels upgraded connections, Node's server emits `upgrade`, and `node:http` upgrades over the job's own sockets. The ws library's client and server and the global `WebSocket` match real Node (D-125). Raw TCP and UDP servers never run on core nodes.
+     - **Phase B is complete.** Next: the shared execution layer and the Node runtime (item 10).
 10. **The Node runtime:** native code and the rest of Node, in gVisor containers ([design](docs/design/node-runtime.md); accepted, not built). It starts after phase B, with its spikes: the runner's speed, rootless Podman with gVisor, and networking passed out through the runner. It reuses phase B's egress gate and routing.
 11. **Links:** your own devices and servers joining the cluster, and the only place raw TCP and UDP servers may run (design under review; [NOTES.md](NOTES.md)).
 12. **Then:** apps, the console, databases and Python.

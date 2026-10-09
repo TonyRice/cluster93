@@ -100,15 +100,15 @@ function parseAbsolute(input) {
     }
     const portMatch = /^(\[[^\]]*\]|[^:]*)(?::(\d*))?$/.exec(host);
     if (!portMatch) {
-      throw new TypeError('Invalid URL: ' + input);
+      throw invalidURL(input);
     }
     parts.hostname = portMatch[1].toLowerCase();
     if (/[\s<>^|%]/.test(parts.hostname) || (special && protocol !== 'file:' && parts.hostname === '')) {
-      throw new TypeError('Invalid URL: ' + input);
+      throw invalidURL(input);
     }
     const port = portMatch[2] || '';
     if (port !== '' && Number(port) > 65535) {
-      throw new TypeError('Invalid URL: ' + input);
+      throw invalidURL(input);
     }
     parts.port = port === '' || String(Number(port)) === SPECIAL[protocol] ? '' : String(Number(port));
     parts.pathname = removeDotSegments(encodeSet(rest || '/', PATH_ESCAPE));
@@ -121,12 +121,21 @@ function parseAbsolute(input) {
   return parts;
 }
 
+/** Node's error for a URL that doesn't parse (D-125): "Invalid URL", with the input, and the base if one was given. */
+function invalidURL(input, base) {
+  const error = new TypeError('Invalid URL');
+  error.code = 'ERR_INVALID_URL';
+  error.input = input;
+  if (base !== undefined) error.base = base;
+  return error;
+}
+
 function resolveRelative(input, base) {
   if (base.opaque) {
     if (input.startsWith('#')) {
       return { ...base, hash: input === '#' ? '' : '#' + encodeSet(input.slice(1), FRAGMENT_ESCAPE) };
     }
-    throw new TypeError('Invalid URL: ' + input);
+    throw invalidURL(input);
   }
   const special = base.protocol in SPECIAL;
   if (special) {
@@ -253,11 +262,20 @@ class URL {
   #params = new URLSearchParams();
 
   constructor(input, base) {
+    try {
+      this.#parse(input, base);
+    } catch (e) {
+      if (e?.code === 'ERR_INVALID_URL') throw invalidURL(String(input), base === undefined ? undefined : String(base));
+      throw e;
+    }
+  }
+
+  #parse(input, base) {
     const text = String(input).trim();
     let parsed = parseAbsolute(text);
     if (!parsed) {
       if (base === undefined) {
-        throw new TypeError('Invalid URL: ' + text);
+        throw invalidURL(text);
       }
       const b = base instanceof URL ? base.#p : new URL(base).#p;
       parsed = resolveRelative(text, b);

@@ -432,10 +432,10 @@ public final class Automately {
                 .compose(v -> clusterSecret(vertx)).compose(secret -> {
             // With node certificates, only another node can reach the internal endpoint, so D-036's secret is retired (D-066).
             InternalHttpVerticle endpoint = security.tls() == null
-                    ? new InternalHttpVerticle(config.internalPort(), secret, serving)
-                    : new InternalHttpVerticle(config.internalPort(), null, serving, ClusterSecurity.internalServer(security.tls()));
+                    ? new InternalHttpVerticle(config.internalPort(), secret, serving, new io.vertx.core.http.HttpServerOptions(), config.maxUpgradedPerRun())
+                    : new InternalHttpVerticle(config.internalPort(), null, serving, ClusterSecurity.internalServer(security.tls()), config.maxUpgradedPerRun());
             IngressVerticle ingress = new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes,
-                    security.tls() == null ? secret : null, config.ingressIdleTimeout(), config.maxRequestBytes(),
+                    security.tls() == null ? secret : null, config.ingressIdleTimeout(), config.ingressUpgradedIdleTimeout(), config.maxRequestBytes(),
                     security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls()));
             return vertx.deployVerticle(endpoint)
                     .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes,

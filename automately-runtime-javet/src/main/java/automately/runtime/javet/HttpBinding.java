@@ -55,6 +55,24 @@ public final class HttpBinding {
         return bridge.promise(() -> exchange == null ? Future.succeededFuture(false) : exchange.closed());
     }
 
+    /**
+     * Takes a request that asks to upgrade as a socket, for a Node server's {@code 'upgrade'} listener (D-125): JSON
+     * {@code {id, info, streamId}}, the socket then driven as a {@code net} socket's; or null if it can't be upgraded.
+     * The exchange is the socket's from then on, closed with the run like any socket.
+     */
+    @V8Function(name = "upgrade")
+    public String upgrade(int exchangeId) {
+        HttpExchange exchange = bridge.exchange(exchangeId);
+        automately.core.runtime.OutgoingSocket socket = exchange == null ? null : exchange.upgrade();
+        if (socket == null) {
+            return null;
+        }
+        bridge.finish(exchangeId);
+        int id = bridge.addSocket(socket);
+        return new io.vertx.core.json.JsonObject().put("id", id).put("info", socket.info())
+                .put("streamId", bridge.openStream(socket.data())).encode();
+    }
+
     @V8Function(name = "respond")
     public void respond(int exchangeId, int status, V8Value headers) {
         HttpExchange exchange = bridge.exchange(exchangeId);

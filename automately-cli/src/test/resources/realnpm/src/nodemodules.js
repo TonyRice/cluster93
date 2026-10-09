@@ -63,6 +63,14 @@ async function zlibCases() {
     new Writable({ write(chunk, enc, done) { round.push(chunk); done(); } }));
   out.streamedRoundTrip = Buffer.concat(round).toString() === text;
   out.constants = [zlib.constants.Z_BEST_COMPRESSION, zlib.Z_DEFAULT_COMPRESSION, zlib.codes.Z_DATA_ERROR];
+  // Integers of 1 to 6 bytes (D-125): ws frames with writeUIntBE.
+  const ints = Buffer.alloc(8);
+  out.variableInts = [ints.writeUIntBE(0x123456, 1, 3), ints.toString('hex'), ints.readUIntBE(1, 3), ints.readIntLE(1, 3),
+    ints.writeIntLE(-5, 0, 6), ints.readIntLE(0, 6), ints.readIntBE(0, 6), ints.readUIntLE(0, 6), ints.writeUIntLE(2 ** 40 + 7, 1, 6),
+    ints.readUIntLE(1, 6), ints.writeIntBE(-129, 2, 2), ints.readIntBE(2, 2), ints.readUintBE(2, 2),
+    errorOf(() => ints.writeUIntBE(1, 0, 7)), errorOf(() => ints.writeUIntBE(-1, 0, 2)), errorOf(() => ints.writeIntBE(40000, 0, 2)),
+    errorOf(() => ints.readUIntBE(5, 4)), errorOf(() => ints.readUIntBE(0)), errorOf(() => ints.writeUIntBE(2 ** 48, 0, 6)),
+    errorOf(() => ints.writeIntLE(2 ** 40, 0, 5)), errorOf(() => ints.readIntLE(0, 2.5)), errorOf(() => ints.writeUIntBE(2 ** 33 * 3, 0, 4))];
   return out;
 }
 

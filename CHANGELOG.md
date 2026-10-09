@@ -26,6 +26,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## WebSockets, as Node's; phase B complete (2026-10-09)
+
+### Added
+- **WebSockets in services** (D-125):
+  - **Servers:** Node's `http.Server` emits `upgrade` with a real `net.Socket`, and `shouldUpgradeCallback` is honoured.
+  - **The ingress:** it tunnels the connection once the app answers 101; any other answer is relayed as a response.
+  - **The ws library's server** answers through the ingress exactly as it does under real Node.
+
+  **Why:** phase B's step 7.
+- **WebSocket clients:**
+  - **`node:http`:** a request that asks to upgrade, or brings its own `createConnection`, is written as HTTP/1.1 over a socket of the job's own, as Node's client does.
+  - **The global `WebSocket`, `CloseEvent` and `ErrorEvent`:** undici's behaviour.
+  - **Tested:** the ws library's client and the global both match real Node.
+- **New settings:** `AUTOMATELY_SERVICE_MAX_WEBSOCKETS` (1,000 upgraded connections per run) and `AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS` (10 minutes).
+- **`zlib`:** a real `flush()` (a sync flush, as permessage-deflate needs) and `windowBits`.
+- **`Buffer`:** integers of 1 to 6 bytes (`readUIntBE`, `writeUIntBE` and the rest).
+- **`TextDecoder`:** the `fatal` option.
+
+### Changed
+- **`URL` errors are Node's:** "Invalid URL" with `code`, `input` and `base`.
+- **Optional native packages (`bufferutil`):** a `require()` of one the bundler left out throws `MODULE_NOT_FOUND`, as when it isn't installed, so code falls back.
+- **`createConnection` is accepted** on `http.request`: the socket it gives is already gated.
+
+### Fixed
+- **A service stopped answering after 64 requests in its run.** The internal endpoint's count of requests in flight never went down, because the exchange replaced its end and close handlers (Vert.x keeps one of each). Every request after the 64th got a 429. Exchanges now count through a single release hook.
+
 ## The WHATWG globals, as Node's (2026-10-09)
 
 ### Added

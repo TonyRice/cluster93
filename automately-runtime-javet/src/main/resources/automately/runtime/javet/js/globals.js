@@ -349,6 +349,7 @@ define('queueMicrotask', (callback) => {
 // getter that loads its script (js/web) the first time it's touched, then becomes a plain writable global, as in
 // Node: an isolate that never uses them doesn't pay for them.
 const webLoad = host.web.load;
+const webModule = host.web.module;
 const webScripts = new Map();
 const webScript = (name) => {
   if (!webScripts.has(name)) webScripts.set(name, webLoad(name));
@@ -370,8 +371,12 @@ for (const name of ['Blob', 'File']) lazyGlobal(name, 'blob');
 for (const name of ['Headers', 'Request', 'Response', 'FormData', 'fetch']) lazyGlobal(name, 'fetch');
 for (const name of ['MessageChannel', 'MessagePort', 'MessageEvent', 'BroadcastChannel']) lazyGlobal(name, 'messaging');
 for (const name of ['TextEncoderStream', 'TextDecoderStream', 'CompressionStream', 'DecompressionStream']) lazyGlobal(name, 'codecs');
+// WebSocket, as Node's (undici's), with its events (D-125).
+for (const name of ['WebSocket', 'CloseEvent', 'ErrorEvent']) lazyGlobal(name, 'websocket');
 // The vendored and built classes, for node:stream/web, node:buffer and the rest to share.
 Object.defineProperty(globalThis, Symbol.for('automately.web'), { value: webScript });
+// A built-in module's namespace for the web scripts, which have no import() (D-125): the job's own instance of it.
+Object.defineProperty(globalThis, Symbol.for('automately.builtin'), { value: (name) => webModule(name) });
 
 const timeOrigin = Date.now();
 const marks = [];

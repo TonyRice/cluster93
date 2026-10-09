@@ -51,6 +51,15 @@ public interface HttpExchange {
         return Future.succeededFuture(false);
     }
 
+    /**
+     * For a request that asks to upgrade ({@code request().upgrade}), its connection as a socket, for a Node server's
+     * {@code 'upgrade'} listener (D-125): the script writes its own answer, and a {@code 101} turns the connection into a
+     * byte tunnel. Null for any other request. Once taken, the exchange is answered through the socket only.
+     */
+    default OutgoingSocket upgrade() {
+        return null;
+    }
+
     /** Before {@link #respond}: an error response with this status. After: the connection is reset. */
     void fail(int status, String message);
 }

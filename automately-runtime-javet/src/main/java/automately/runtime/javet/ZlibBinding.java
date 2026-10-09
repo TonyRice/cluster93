@@ -61,6 +61,11 @@ public final class ZlibBinding {
         return answer(() -> zlib.write(handle(handle), HostBridge.bytes(data)));
     }
 
+    @V8Function(name = "flush")
+    public V8Value flush(V8Value handle, V8Value kind) throws JavetException {
+        return answer(() -> zlib.flush(handle(handle), kind instanceof V8ValueInteger i ? i.getValue() : 2));
+    }
+
     @V8Function(name = "finish")
     public V8Value finish(V8Value handle) throws JavetException {
         return answer(() -> zlib.finish(handle(handle)));

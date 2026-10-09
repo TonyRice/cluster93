@@ -52,6 +52,16 @@ process.on('SIGTERM', () => server.close());   // a stop: close, and the run end
 - **How long it runs:** while a server listens, after the default export (if any) returns.
   - **A stop emits `SIGTERM` on `process`:** close your servers and the run ends. The 5-second grace period still applies.
   - **Without a `SIGTERM` listener,** the run ends at once, as Node's default.
+- **WebSockets** (D-125) reach a server's `upgrade` listener, so the ws library works unchanged:
+  ```js
+  import http from 'node:http';
+  import { WebSocketServer } from 'ws';
+  const server = http.createServer();
+  new WebSocketServer({ server }).on('connection', (ws) => ws.on('message', (data) => ws.send(data)));
+  server.listen(3000);   // wss://<service>--<tenant>.<domain>
+  ```
+  - **The ingress tunnels** the connection once your app answers 101, with TLS on the ingress as for HTTP.
+  - **Limits:** 1,000 open per run (`AUTOMATELY_SERVICE_MAX_WEBSOCKETS`), closed after 10 minutes with nothing sent either way (`AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS`). Ping from either side to keep a quiet connection open.
 - **Only services listen.** A job's `listen` fails with `ERR_NOT_SUPPORTED`. Raw TCP and UDP servers never run on the cluster's nodes.
 
 ## What a service script sees
