@@ -1860,9 +1860,8 @@ It's written for people, because the console will show the same response as a "N
 - **`got`** isn't tested; it needs `http2-wrapper` and socket timing events.
 - **Servers** (`createServer`) are B3.
 
-## D-110: Unhandled promise rejections fail the job, as in Node (2026-10-08)
-
-**Status:** accepted (Tony: "i think we should address that, there is nothing running this in production literally").
+### D-110 — Unhandled promise rejections fail the job, as in Node
+**Date:** 2026-10-08 · **Status:** Accepted (Tony: "i think we should address that, there is nothing running this in production literally").
 
 **Context:** D-109 made a throw in a microtask, `process.nextTick` or an `http` listener fail the job, but left unhandled rejections alone. Node ends the process for one (the `throw` mode, default since v15). In the isolate it vanished: `fetch(url)` without an `await`, or a library's floating promise, failed silently and the job reported success. The note proposed a grace period (log first, fail later); with nothing in production there's no one to protect.
 
@@ -1883,4 +1882,66 @@ It's written for people, because the console will show the same response as a "N
 - **Scripts that relied on silent rejections now fail.** That's intended: each was a bug.
 - **Library risk:** a library that leaves internal promises rejected would now fail jobs, as it would crash Node. All 30 real-npm fixtures still match Node.
 - **Tested** in `JavetScriptRuntimeTest` (seven cases).
+
+### D-111 — Configurable address spaces for the egress gate
+**Date:** 2026-10-08 · **Status:** Accepted (design; to be built as phase B's next step). Tony: "make it configurable what address spaces we allow and disallow", with these answers:
+- **Where:** stored in the cluster, edited through the API and CLI.
+- **Precedence:** cluster deny, then tenant, then cluster allow.
+- **The allow-list-only posture:** for the whole cluster and per tenant.
+
+**Context:** D-108's gate hard-coded "public allowed, private and reserved refused" and gave operators two controls: a global development switch and per-tenant allow rules. An operator couldn't do any of this:
+- deny a public range (their own public addresses, say)
+- allow a shared internal service for every tenant at once
+- lock a cluster or a tenant down to an allow-list
+- change the SMTP block
+- deny anything for one tenant
+
+**Decision** (network-reach.md §10):
+- **Rules at two levels, a cluster policy and each tenant's,** both set by operators: `allow` or `deny`, to a CIDR, a host, a `*.suffix` or a named set, optionally scoped by port and by protocol (`http`, `tcp`, `dns`), with a note.
+- **Named sets:**
+  - **Built in:** `@private`, `@loopback`, `@link-local`, `@cgnat`, `@reserved` and `@smtp-ports`.
+  - **The operator's own,** such as `@corp-public`.
+- **The order:**
+  1. **Cluster nodes are always refused,** as code that no rule can override.
+  2. **Cluster deny rules.**
+  3. **Tenant deny rules.**
+  4. **Tenant allow rules.**
+  5. **Cluster allow rules.**
+  6. **The posture:** the tenant's if set, else the cluster's. `public` (the default) or `allow-list`.
+- **SMTP** becomes a default cluster deny rule on `@smtp-ports` over `tcp`, which an operator can edit.
+- **The connect rate and socket caps** become cluster settings.
+- **The development switch** acts as allow rules for `@private` and `@loopback`.
+- **Where it's kept:**
+  - **Storage:** `Records`. Changed through `PUT /v1/egress/cluster-policy` (operators, audited) and the CLI.
+  - **Seeding:** `AUTOMATELY_EGRESS_POLICY_FILE` seeds it at the cluster's first start only.
+  - **Compatibility:** tenant policies gain deny rules and a posture, and today's rules read as allows.
+- **The tenant's view** (`GET /v1/egress-policy`) shows the effective policy in the order it's applied, with why, for the console's "Network access" page.
+
+**Consequences:**
+- `Egress.decide` becomes evaluation of these rules and stays pure, so it's tested exhaustively in `EgressTest`.
+- `EgressPolicy.isPublic` becomes the built-in sets.
+
+### D-112 — Servers are reached by hostname only; listening ports are intercepted
+**Date:** 2026-10-08 · **Status:** Accepted (design; built with B3).
+
+**Tony:** "intercept what port they are listening on… route through our cluster's http handling… an http server or websocket server should be able to strictly be handled via hostname". Also: "we have to make it so we can reserve what ports they can listen on and intercept and randomize it… each node will have to have a reserved port space", and "tcp and udp servers would be reserved for our automately link plan, that can run on their own hosted server… plain tcp and udp ports would only be possible if we are running untrusted nodes".
+
+**Decision** (network-reach.md §5):
+- **No script opens a port on a core node.** `listen(port)` is intercepted, and the ingress routes by hostname.
+- **The route table:** `(tenant, service, declared port) → (node, backend endpoint)`, shared by both runtimes.
+  - **Isolates:** a random, opaque route id on the node's internal endpoint. There's no operating-system socket at all.
+  - **Node containers:** a random port from the node's reserved range (`AUTOMATELY_SERVICE_PORTS`, default `20000-29999`), mapped to the port inside the container. The gate refuses that range to every script.
+- **Reaching each port:**
+  - **The default:** the first port gets the service's host; others get `<service>--<tenant>--<port>.<domain>`, one label, so the wildcard certificate covers it.
+  - **Per port, if asked:** a path prefix, custom domains, or not exposed.
+- **WebSocket servers** go through the ingress too, which will pass `Upgrade` through (network-reach.md §13).
+- **Raw TCP and UDP servers are never on core nodes.** They're possible only on untrusted nodes, such as a link on its own hosted server, and belong to the links design.
+
+**Recorded with it** (Tony's choices from the plan's review):
+- **No socket idle timeout,** as in Node.
+- **A listening server keeps a service alive,** and a stop emits `SIGTERM` on `process`.
+- **A service module that calls `listen` needs no default export.**
+- **`AsyncLocalStorage.run()` is refused** rather than losing its value across `await`.
+- **`https.createServer` ignores `key`/`cert`,** since the ingress does TLS.
+- **An `http2` client is built on Vert.x** (§12), replacing "never `http2`".
 

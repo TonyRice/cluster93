@@ -26,6 +26,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Phase B made concrete: configurable address spaces, and servers by hostname (2026-10-08)
+
+### Docs
+- **`docs/design/network-reach.md` now holds the whole remaining plan:**
+  - configurable address spaces (§10, D-111)
+  - servers reached by hostname only, with intercepted, remapped ports (§5, D-112)
+  - got and real socket details (§11)
+  - sockets (§7, now with no idle timeout)
+  - the `http2` client on Vert.x (§12)
+  - filtered `dns` (§6)
+  - WebSockets (§13)
+  - the order (§9)
+
+  **Why:** Tony asked for a comprehensive plan, then for address spaces to be configurable and servers routed only by hostname before anything more is built. Raw TCP and UDP servers are left to untrusted nodes (links).
+- **NOTES:** what comes after phase B: the shared execution layer and the gVisor Node containers (designed in D-084 to D-086, not built), then reviewing the links design.
+
 ## Unhandled promise rejections fail the job, as in Node (2026-10-08)
 
 ### Changed

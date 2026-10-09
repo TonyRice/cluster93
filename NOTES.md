@@ -80,3 +80,17 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
 - **The same view for other policies:** the storage policy (D-057) and quotas could be explained to tenants the same way, in one "What this tenant may do" place.
 - ~~**Unhandled promise rejections**~~: done in D-110; they fail the job as in Node.
 - **`got`**: needs `http2-wrapper` and socket timing events (`connect`, `secureConnect`) the `http` stand-in doesn't emit. Worth a look once `net` has real sockets (B5).
+
+## Next after phase B (Tony, 2026-10-08)
+- **The shared execution layer and the gVisor Node containers:**
+  - **Status:** designed and accepted (`docs/design/node-runtime.md`, D-084 to D-086), and nothing built yet. It was meant to follow packages, but more of Node in the isolate (D-095 onward) came first.
+  - **Starts with its spikes:**
+    - runner latency
+    - rootless Podman with gVisor and `sharp`
+    - gVisor's `--host-uds`
+    - tunnelled networking with `pg`/`ioredis`
+    - artifact sizes
+  - **What it reuses from phase B:** the egress gate (D-111) and the route table (D-112). Tony: "finish phase b, then we'll lock down the shared parts".
+- **Then the links design's review** (`ideas/links-and-capabilities.md`, `ideas/analysis-unsandboxed-links.md`; not accepted yet).
+  - **Its conflict to settle:** it has to decide TCP and UDP servers on a link's own host (D-112), against its "never listening publicly" rule.
+

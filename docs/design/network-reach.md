@@ -2,8 +2,17 @@
 
 **Status:**
 - **B1, the egress gate and allow-lists:** ✅ built (D-108). Tony decided its shape on 2026-10-08 (D-095 §4.5).
-- **B2, the `http`/`https` client:** ✅ built (D-109), with axios and node-fetch matching real Node.
-- **B3 to B5:** accepted with Tony's answers in §8 (2026-10-08).
+- **B2, the `http`/`https` client:** ✅ built (D-109), with axios and node-fetch matching real Node. Unhandled rejections fail jobs as in Node (D-110).
+- **Configurable address spaces (§10, D-111) and servers reached by hostname with intercepted ports (§5, D-112):** accepted (Tony, 2026-10-08).
+- **The rest, accepted with Tony's answers in §8** (2026-10-08):
+  - got and real socket details (§11)
+  - sockets, B5 (§7)
+  - the `http2` client (§12)
+  - `dns`, B4 (§6)
+  - servers, B3 (§5)
+  - WebSockets (§13)
+
+  The order is in §9.
 
 **Where it comes from:** [isolate-polyfills.md](isolate-polyfills.md) §3. Phase A gave the isolate pure computation (D-095 to D-106). Phase B gives it the network: Node's `http`, `https`, `net`, `tls` and `dns`. Those are what database drivers (`pg`, `mysql2`, `ioredis`), HTTP clients (axios, got, node-fetch) and web frameworks (Express, Koa, Fastify) are written against.
 
@@ -113,37 +122,140 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **`process` reports itself as `[object process]`,** which is how axios picks its Node adapter.
 - **Tests use the development switch,** not a policy rule as planned: the test server is on loopback, which is the node itself, and no rule can reach a node.
 
-## 5. B3: `http.createServer` over `ctx.serve` (proposed)
-**What it is:** `createServer(handler)` and `server.listen(port?, cb)` in a service bind the handler to `ctx.serve`. The port is ignored: a service is reached at its ingress host (D-028).
-- **`req`:** an `IncomingMessage`.
-- **`res`:** a `ServerResponse` with `writeHead`, `setHeader`, `getHeader`, `statusCode`, `write`, `end` and `headersSent`, written through the existing streaming response.
-- **Prototypes:** all of these are real prototypes, so Express's `Object.setPrototypeOf(res, app.response)` works.
+## 5. B3: servers, reached by hostname only (accepted, D-112)
+**No script ever opens a port on the cluster.** Inbound traffic arrives only through the cluster's HTTP ingress, which picks the service by hostname. A script's `listen(port)` is intercepted, and the script never learns how its traffic reaches it (Tony, 2026-10-08).
+
+**The route table, one for both runtimes:** a route is `(tenant, service, declared port) → (node, backend endpoint)`. It's kept with the service's records and cached by every node's ingress, as `HostRouter` and `ServiceStore` route today.
+- **Isolates have no operating-system socket at all.**
+  - **Registering:** `listen(3001)` registers the server under `(job, 3001)`. `ServeRegistry` becomes keyed by job and port.
+  - **The backend endpoint:** the node's internal endpoint plus a random, opaque route id that the ingress forwards on.
+  - **Why no port:** nothing is open on the node to scan or reach directly, which is stronger than a random port.
+  - **What the script sees:** `server.address()` gives the port it asked for. `listen(0)` gets a random virtual port from 1024 to 65535.
+- **Node containers (node-runtime.md) bind for real,** inside their own network namespace.
+  - **The reserved range:** each node keeps one, `AUTOMATELY_SERVICE_PORTS` (default `20000-29999`), and picks a random free port in it for each container port. The container sees 3001; the node uses, say, 24517.
+  - **Unreachable from scripts:** the range is added to the node's ports in `ClusterAddresses`, so the gate refuses it to every script, even with the development switch on.
+
+**How each port is reached:**
+- **The default is one hostname per port:**
+  - **The first server** gets the service's host, `<service>--<tenant>.<domain>`.
+  - **Each other port** gets `<service>--<tenant>--<port>.<domain>`.
+  - **No ambiguity:** names can't contain `--`, so splitting on it is unambiguous.
+  - **Certificates:** it's one label deep, so the wildcard certificate covers it.
+- **The service definition can change that per port,** with `ports: [{ "port": 3001, … }]` and these options:
+  - **`"path": "/admin"`:** served under the main host's path prefix. The ingress strips the prefix and sends `X-Forwarded-Prefix`.
+  - **`"domains": [...]`:** custom domains, verified as domains are today and pointing at a service and port.
+  - **`"expose": false`:** not reachable from outside.
+- **An undeclared port** gets the default hostname.
+- **Seeing the routes:** the API, the CLI and later the console list each service's routes (host, path, domain and port).
+
+**HTTP servers in the isolate:**
+- **The server:**
+  - `http.createServer` with `listen(...)` in any of Node's forms. `ctx.serve` is the same thing without a port, which means the main host.
+  - A second `listen` on the same port fails with `EADDRINUSE`.
+  - Outside a service, `listen` throws.
+- **`req`** is an `IncomingMessage`:
+  - **Fields:** `method`, `url` (the path and query), `headers` (Node's rules), `rawHeaders` and `httpVersion`.
+  - **The socket stand-in:** carries the client's address, from the ingress's `X-Forwarded-For`, and `encrypted`.
+  - **The body** streams with backpressure.
+- **`res`** is a `ServerResponse` with Node's whole header and body API: `writeHead` in all its forms, repeated headers, `write` returning false until the host takes the chunk, then `drain`, `addTrailers`, and the `finish` and `close` events.
+- **Real prototypes,** so Express's `Object.setPrototypeOf(res, app.response)` works.
+- **`https.createServer` is accepted.** `key`/`cert` are ignored with a log note, since the ingress already handles TLS.
+- **How the run lasts:**
+  - **A listening server keeps a service's run alive** after its default export returns, until it's stopped or `server.close()` is called.
+  - **A stop request** emits `SIGTERM` on `process`, then the usual 5 s grace period.
+  - **A service module that calls `listen`** needs no default export, so a plain Express `app.js` runs unchanged.
+- **`node:async_hooks`:**
+  - **`AsyncResource`** is provided (`bind`, `runInAsyncScope`), which is what on-finished, raw-body and Fastify use.
+  - **`AsyncLocalStorage.run()` throws "not supported":** carrying a value across `await` needs a V8 hook Javet 6 doesn't expose, and losing the value silently would be worse.
+
+**What `ctx.serve` needs first** (found reading `ServerExchange`):
+- **Repeated response headers:** a header has one value today, so several `Set-Cookie`s can't be sent.
+- **A script's `Content-Length`** is kept, and HEAD is answered without a body.
+- **The request's raw headers** and **the client's address.**
+- **An event when the client disconnects.**
+- **Trailers.**
+- **`Expect: 100-continue`,** answered automatically.
 
 **No new reach:** inbound traffic still comes only through the ingress, with its limits, its domains and its tenant routing.
 
-**Outside a service:** `listen` throws, saying that HTTP servers run in services.
+**Raw TCP and UDP servers: never on core nodes** (Tony, 2026-10-08).
+- **What scripts get:** `net.createServer`, `tls.createServer` and `dgram` throw an error saying so.
+- **Where they belong:** plain TCP and UDP ports exist only on untrusted nodes, such as an Automately Link running on its own hosted server. They belong to the links design, not phase B.
+- **Node containers on core nodes are the same:** they accept only HTTP and WebSockets (node-runtime.md §12).
 
-**Proven against:** Express, Koa and Fastify in `RealNpmPackagesTest`, each answering the same requests as under real Node.
+**Proven against:** Express 5, Koa (with @koa/router) and Fastify in `RealNpmPackagesTest`.
+- **The comparison:** each runs under real Node, listening on a port, and in a service through the ingress. The same requests go to both, and status, headers (except `Date`) and bodies must match.
+- **The requests cover:**
+  - routes and parameters
+  - JSON and urlencoded bodies
+  - several cookies
+  - redirects, 404s and error handlers
+  - streaming responses and HEAD
+  - a large upload
+  - a client that leaves mid-response
 
-## 6. B4: `dns` (proposed)
-- **`lookup`:** the same resolution the gate uses, answering only addresses the tenant could connect to. A name that resolves only to refused addresses is `ENOTFOUND`, so `dns` can't map out internal names.
-- **`resolve4`/`resolve6`:** filtered the same way.
-- **`resolveTxt`, `resolveMx`, `resolveSrv`, `resolveCname`, `resolveNs`, `reverse`:** the open question in §8.
-- **Limits:** 16 queries in flight per execution; answers capped at 64 KB.
-- **`dns/promises`** has the same functions.
+## 6. B4: `dns`, filtered (accepted)
+- **One resolver in core, shared by the gate and `dns`,** so `dns` can never answer differently from what a connection gets.
+  - **What it is:** Vert.x's `DnsClient`, which covers A, AAAA, CNAME, MX, TXT, SRV, NS and PTR.
+  - **Where it asks:** the system's resolver, or `AUTOMATELY_EGRESS_DNS` when that's set.
+- **Filtering,** as proposed in §8.2:
+  - **Addresses:** only those the tenant could connect to, by the rules of §10.
+  - **Internal names** answer `ENOTFOUND`.
+  - **Reverse lookups:** only for addresses the tenant could connect to.
+  - **Record answers:** MX, SRV, CNAME and NS targets in internal zones are dropped.
+- **The JavaScript modules, `dns` and `dns/promises`:**
+  - **`lookup`,** with `family`, `all`, `order` and `verbatim`.
+  - **The `resolve*` functions:** `resolve`, `resolve4`, `resolve6`, `resolveCname`, `resolveMx`, `resolveTxt`, `resolveSrv`, `resolveNs`, `resolvePtr` and `reverse`.
+  - **`Resolver`:** `getServers` answers. `setServers` is refused, since a script can't pick its resolver: that would bypass the filtering.
+  - **Errors:** Node's codes.
+- **Limits:** 16 queries in flight per execution, answers capped at 64 KB, and a 10 s timeout.
+- **Known differences:**
+  - **No TTLs:** `{ ttl: true }` gets no real TTLs, which Vert.x doesn't expose.
+  - **Not offered:** `resolveCaa`, `resolveNaptr`, `resolveSoa` and `resolveAny`, which are refused with `ENOTIMP`.
+- **What it unlocks:** `mongodb+srv://` (SRV and TXT records), tested with a Netty DNS test server against a MongoDB container.
 
-## 7. B5: outbound `net` and `tls` (proposed)
-**What it is:** a new host API for sockets.
-- **Calls:** `connect(host, port, {tls, servername, ca, rejectUnauthorized, alpn})`, `write` with backpressure, data events with flow control, `end` and `destroy`.
-- **Node's shapes:** the stand-ins build `net.Socket` (a `Duplex`), `net.connect`/`createConnection` and `tls.connect`, plus `isIP`, `isIPv4` and `isIPv6`.
-- **What it unlocks:** `pg`, `mysql2`, `ioredis`, `mongodb` (when its optional native parts are absent), `nodemailer` (see ports) and anything else on TCP.
+## 7. B5: outbound `net` and `tls` (accepted)
+**What it is:** real sockets on Vert.x's `NetClient`. The functionality is all of Node's; the only restrictions are where a socket may go (the gate) and how much it may use (limits).
 
-**Every socket goes through the gate,** as above.
+**The host:**
+- **Connecting:** `connect` goes through the gate, which answers with the address to use, and connects to exactly that address.
+- **Writing:** `write` completes when Vert.x has taken the bytes, which is the backpressure.
+- **Reading:** data is a paused stream the script acknowledges. At most 64 KB is held on the host per socket before the Vert.x socket is paused.
+- **Closing:** `end` (half-close) and `destroy`.
+- **Upgrading:** `upgradeTls` turns a live plain socket into TLS (`NetSocket.upgradeToSsl`), which is how pg, mysql2 and SMTP's STARTTLS work.
+- **TLS:**
+  - **Name and trust:** SNI, the JVM's trust store, or `ca`. Client `cert`/`key` are accepted.
+  - **Identity:** the host name is checked against the certificate.
+  - **Opting out:** `rejectUnauthorized: false` is noted once in the job's log.
+  - **Also passed through:** ALPN, and `minVersion`/`maxVersion`.
+
+**Node's shapes:**
+- **`net.Socket`,** a real `Duplex`:
+  - **Connecting:** `net.connect` and `createConnection`. `path` (Unix sockets) is refused.
+  - **Events:** `lookup`, `connect`, `ready`, `data`, `end`, `close`, `error`, `timeout` and `drain`.
+  - **Behaviour:** `allowHalfOpen`, `setTimeout`, `setNoDelay`, `setKeepAlive`, `ref`/`unref`, and the address and byte counters.
+  - **Errors:** Node's codes.
+- **`tls.connect` / `TLSSocket`:**
+  - **Upgrading:** `tls.connect({ socket })` upgrades an existing socket.
+  - **Events and state:** `secureConnect`, `authorized`, `getPeerCertificate`, `getProtocol`, `getCipher` and `alpnProtocol`.
+  - **Helpers:** `createSecureContext`, `checkServerIdentity` (Node's algorithm) and `rootCertificates` (from the JVM's trust store).
+  - **Refused:** session reuse, `renegotiate`, `exportKeyingMaterial` and PSK.
+- **Proxy agents work unchanged:** they `net.connect` to the proxy, write `CONNECT` themselves, then call `tls.connect({ socket })`. Both connections go through the gate.
 
 **Limits:**
-- 16 sockets per execution, and 256 per tenant per node
-- 30 s to connect, and an idle timeout of 5 min, extendable by `setTimeout`
-- every socket closed when the job ends
+- **Sockets:** 16 per execution, and 256 per tenant per node.
+- **Timeouts:** 30 s to connect, and **no idle timeout,** as in Node (changed from the 5 min first proposed). A database or Redis connection in a service sits idle for long stretches. Every socket is closed when its run ends, and TCP keepalive finds dead peers.
+- **Connect rate:** 120 new connections a minute per tenant per node.
+- **The SMTP block:** a default cluster deny rule (§10).
+- **Counted** per tenant, in `automately_egress_bytes_total{tenant,direction}`.
+
+**What it unlocks:** `pg`, `mysql2`, `ioredis`, `mongodb` (when its optional native parts are absent), `nodemailer`, and proxy agents. Each is tested against Testcontainers Postgres (also over TLS), MySQL, Redis and MongoDB, plus a mock SMTP server with STARTTLS, and must give real Node's results.
+
+**Never, on core nodes:**
+- `net.createServer`, `tls.createServer` and `dgram` (§5)
+- Unix sockets
+- `http`'s `createConnection` option
+
 - 64 KB of host-side buffering per direction, with the script's reads paused beyond that
 - bytes counted per tenant: `automately_egress_bytes_total{tenant,direction}`
 
@@ -168,13 +280,107 @@ GET /v1/egress-policy                     (the tenant, read-only)
    - **Split-horizon DNS:** an operator whose resolver answers internal records for public-looking names sets `AUTOMATELY_EGRESS_DNS` to a public resolver, which then answers every script query.
 3. **`rejectUnauthorized: false` is honoured** (B2, B5). It only affects the tenant's own connection, and the job log notes it once per job.
 4. **B3 (`createServer` over `ctx.serve`): yes.**
-5. **Later and separately:** `worker_threads` as child jobs, a WebSocket client (on B5's sockets, or a host API of its own), and `http2`.
+5. **Later and separately:** `worker_threads` as child jobs. (The WebSocket client and `http2`, also listed here at first, are now in this plan: §12 and §13.)
+
+6. **More from Tony, on reviewing the plan (2026-10-08):**
+   - **Address spaces must be configurable** before the rest is built (§10).
+   - **Servers are reached by hostname only:** the ports a script listens on are intercepted and remapped, with one hostname per port by default, and path prefixes or custom domains per port when asked (§5).
+   - **WebSocket servers too** (§13).
+   - **Raw TCP and UDP servers only on untrusted nodes,** such as a link on its own hosted server, never on core nodes.
+   - **`got`** is planned on Vert.x, including its HTTP/2 path (§11, §12).
+   - **The containers and links come after phase B:** the shared execution layer and the gVisor Node containers next, then the links review (NOTES).
 
 ## 9. Order and tests
-1. **B1:** the gate, tenant policies, the reserved-range additions, and binary `fetch` bodies. Tests:
-   - every range, embedded forms and rebinding
-   - cluster nodes on public addresses
-   - name and CIDR rules
-   - the API, the contract, the CLI and audit
-2. **B2:** `http`/`https` clients and streaming request bodies. Real-npm fixtures against a local server (allowed in tests through a policy rule, not the global switch).
-3. **B3, B4 and B5,** after §8, each with hostile scripts that exhaust each limit while the node stays healthy (`HostileScripts`). B5's tests use Testcontainers (Postgres, Redis) and run in `./mvnw verify`.
+1. **B1:** ✅ (D-108).
+2. **B2:** ✅ (D-109, D-110).
+3. **Configurable address spaces (§10, D-111).**
+4. **got over HTTP/1.1** (§11).
+5. **B5: sockets** (§7).
+6. **The `http2` client** (§12).
+7. **B4: `dns`** (§6).
+8. **B3: routes and ports, then `createServer`** (§5).
+9. **WebSockets** (§13).
+
+**Every step follows the same routine:**
+- **Probe:** bundle and publish the target libraries first, and list every refusal.
+- **Build.**
+- **Prove:** each library gives exactly real Node's results in `RealNpmPackagesTest`. From step 5 on, that runs against Testcontainers services.
+- **Test the limits:** hostile scripts hit every limit while the node stays healthy.
+- **Run the full build** with Docker.
+- **Document:** node-compat.md, this file, SECURITY.md where it applies, CHANGELOG, and a D-entry.
+
+**What the libraries need,** measured by bundling each as a publish does:
+
+| Library | Needs that the isolate lacks today |
+|---|---|
+| got 14 | `diagnostics_channel`, real socket details; `http2` only with `http2: true` |
+| pg, mysql2, ioredis, nodemailer | sockets, including upgrading to TLS; `diagnostics_channel` (mysql2, ioredis) |
+| mongodb | sockets; `dns` SRV and TXT for `mongodb+srv://` |
+| Express 5, Koa, Fastify | `createServer`; `async_hooks` (`AsyncResource`); also `diagnostics_channel` and `perf_hooks` (Fastify) |
+| ws | sockets plus HTTP `upgrade` (§13) |
+
+## 10. Configurable address spaces (accepted, D-111)
+**The problem:** the gate's ranges were hard-coded, and an operator could do only two things: flip one global switch, and give tenants allow rules. Tony: "make it configurable what address spaces we allow and disallow."
+
+**One rule model, at two levels:**
+- **The cluster policy** is set by an operator and applies to every tenant.
+- **The tenant policy** is set by an operator too, and is today's policy extended.
+- **What a rule holds:** `{ "action": "allow" | "deny", "to": CIDR | host | "*.suffix" | "@set", "ports": [...], "protocols": ["http", "tcp", "dns"], "note": "why" }`.
+  - **`protocols`:** `http` covers `fetch`, `http`, `https` and `http2`; `tcp` covers `net` and `tls`; `dns` covers lookups. Omitted means all.
+  - **`ports`:** optional on deny rules, where omitted means every port. Still required on allow rules, so an allow is always narrow.
+
+**Named sets:**
+- **Built in:** `@private` (RFC 1918 and ULA), `@loopback`, `@link-local` (including cloud metadata), `@cgnat`, `@reserved` (documentation, benchmarking, broadcast, multicast and the rest) and `@smtp-ports`.
+- **The operator's own,** such as `@corp-public`.
+- **Embedded IPv4:** IPv6 forms that carry an IPv4 address are judged by it, as now.
+
+**How a connection is decided** (Tony's order):
+1. **A cluster node → refused,** always, on every port. This floor is code, not a rule, and nothing overrides it.
+2. **A cluster deny rule → refused.** A tenant can't override it.
+3. **A tenant deny rule → refused.**
+4. **A tenant allow rule → allowed.**
+5. **A cluster allow rule → allowed.**
+6. **Otherwise the posture decides:** the tenant's own if an operator set one, otherwise the cluster's.
+   - **`public`** (the default): public addresses are allowed, and the private and reserved sets refused.
+   - **`allow-list`:** everything is refused unless a rule allows it.
+
+**Defaults:**
+- **A new cluster's policy is one cluster deny rule:** `@smtp-ports` over `tcp`, with a note saying why. An operator can edit or remove it, and a tenant allow can't override it.
+  - **Lifting it for one tenant:** the operator adds a narrower cluster allow, or moves the deny into specific tenants' policies.
+- **The development switch** (`AUTOMATELY_EGRESS_ALLOW_PRIVATE`) still works: it acts as allow rules for `@private` and `@loopback`. The node's own ports are still refused.
+
+**Settings in the cluster policy:** the connect rate (120 a minute per tenant per node) and the socket caps (16 per execution, 256 per tenant per node), with those defaults.
+
+**Where it lives:**
+- **Storage:** `Records`, edited through `GET`/`PUT /v1/egress/cluster-policy` (operators, audited) and `automately egress cluster …`.
+- **Seeding:** `AUTOMATELY_EGRESS_POLICY_FILE` seeds it on the cluster's first start only.
+- **Caching:** nodes cache it as they cache tenant policies.
+- **Tenant policies** gain deny rules and a posture. Today's rules read as allows.
+
+**The tenant's view (`GET /v1/egress-policy`)** shows the effective policy in the order it's applied: the floor, the cluster's rules with their notes, the tenant's rules, the posture, and the limits. Each item says why, which is what the console's "Network access" page shows.
+
+## 11. got, and real socket details on `http` (accepted)
+- **`node:diagnostics_channel`,** which doesn't touch the network: channels, subscribing, publishing, and `tracingChannel`. got, mysql2, ioredis and Fastify import it.
+- **Real connection details on `req.socket`,** from Vert.x's connection:
+  - **What it reports:** remote and local addresses, the family, and for TLS whether the certificate was trusted (and why not), the protocol, the cipher, ALPN and the peer certificate.
+  - **The socket stand-in:** `connecting` stays true until the host has the connection. Then it emits `lookup` (the address the gate checked), `connect`, then `secureConnect`, in Node's order. A connection reused from the pool is already connected, as a keep-alive socket in Node is.
+- **What it gives got:** real timings.
+- **Tested:** a got fixture against real Node covering JSON, retries, timeouts, hooks, streams, `HTTPError`, redirects and pagination.
+
+## 12. The `http2` client (accepted; this replaces "never `http2`")
+- **A session is a Vert.x connection:** `http2.connect` goes through the gate, then `HttpClientAgent.connect`, which answers with an `HttpClientConnection`. That's exactly a Node session. Over TLS it negotiates `h2` with ALPN; for `http://` it uses h2c with prior knowledge.
+- **Session calls:** `request` (a stream), `settings`, `ping`, `goaway`, `close`/`destroy` and the remote settings, mapped onto Vert.x's.
+- **A stream is a `Duplex`,** with `response`, `trailers`, `close(code)` and `rstCode`.
+- **Server push is off.**
+- **Limits:** a session counts as a socket, and a stream as a request. Headers are capped at 64 KB. TLS options as in §7.
+- **Not built:** HTTP/2 servers. The ingress can offer h2 to clients separately.
+- **Tested** against a Vert.x h2 test server, with a fixture against real Node and got with `http2: true`.
+
+## 13. WebSockets (accepted)
+- **The ingress** passes `Upgrade: websocket` through to the service's node, then its internal endpoint. Frames are bridged both ways with backpressure. Today it strips `Upgrade`, so WebSockets don't pass.
+  - **Limits:** connections per service, frame size and idle time.
+- **In the isolate:**
+  - **Servers:** `http.Server` emits `upgrade` with a socket stand-in, so the `ws` library's server works.
+  - **Clients:** `http.request` with `Upgrade` works over §7's sockets, so its client works too.
+- **Node containers use the same ingress path** (node-runtime.md §5).
+
