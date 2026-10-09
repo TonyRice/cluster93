@@ -26,6 +26,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## The WHATWG globals, as Node's (2026-10-09)
+
+### Added
+- **The WHATWG globals, matching Node** (D-124):
+  - `Blob` and `File` (also `buffer`'s)
+  - `Headers`, `Request`, `Response` and `FormData`
+  - the WHATWG streams, also as `node:stream/web`
+  - `TextEncoderStream`, `TextDecoderStream`, `CompressionStream` and `DecompressionStream`
+  - `MessageChannel`, `MessagePort`, `MessageEvent` and `BroadcastChannel`
+  - Node's `fromWeb`/`toWeb` on `Readable`, `Writable` and `Duplex`, plus `buffer.isUtf8`/`isAscii`
+
+  Each group loads on first use, from the code cache, so a job that never touches them pays nothing. **Why:** Koa 3 checks bodies against `Blob`, `ReadableStream` and `Response`, and Tony chose to build the globals fully (2026-10-09).
+- **Koa 3 runs as a service and answers as it does under real Node,** request by request, alongside Express 5 and Fastify 5.
+
+### Changed
+- **The global `fetch` is Node's** (D-124): WHATWG classes, redirects followed, gzip and deflate decoded, Node's default headers and errors, through the egress gate as before. **Why:** our polyfills match Node, and code written for Node expects it. The host's convenience fetch (JSON bodies, `timeoutMs`, no redirects) is now `import { fetch } from 'automately:fetch'`. Scripts using its JSON bodies or `timeoutMs` on the global need that import.
+- **The global `fetch` can be replaced** by a script, as under Node.
+
 ## Node's HTTP servers in services, by hostname and port (2026-10-09)
 
 ### Added

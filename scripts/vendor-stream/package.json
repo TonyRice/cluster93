@@ -1,1 +1,1 @@
-{ "name": "vendor-stream", "private": true, "dependencies": { "readable-stream": "4.8.0", "string_decoder": "1.3.0", "abort-controller": "3.0.0" }, "devDependencies": { "esbuild": "0.28.2" } }
+{"name": "vendor-stream", "private": true, "dependencies": {"readable-stream": "4.8.0", "string_decoder": "1.3.0", "abort-controller": "3.0.0", "web-streams-polyfill": "4.3.0"}, "devDependencies": {"esbuild": "0.28.2"}}

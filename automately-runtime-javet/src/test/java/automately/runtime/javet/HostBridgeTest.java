@@ -555,6 +555,7 @@ class HostBridgeTest {
         host.fetchChunks = List.of("a", "b", "c");
 
         ExecutionResult result = run("""
+                import { fetch } from 'automately:fetch';
                 export default async () => {
                   const streamed = [];
                   for await (const part of (await fetch('https://x.test/stream')).body) streamed.push(new TextDecoder().decode(part));
@@ -572,6 +573,7 @@ class HostBridgeTest {
         host.fetchChunks = List.of();
 
         run("""
+                import { fetch } from 'automately:fetch';
                 export default async () => {
                   const whole = new Uint8Array([1, 2, 0xff, 0x00, 0x80, 9]);
                   await fetch('https://x.test/bytes', { method: 'POST', body: whole.subarray(2, 5) });
@@ -593,6 +595,7 @@ class HostBridgeTest {
         host.fetchChunks = java.util.stream.IntStream.range(0, 6).mapToObj(i -> "z".repeat(1024 * 1024)).toList();
 
         ExecutionResult result = run("""
+                import { fetch } from 'automately:fetch';
                 export default async () => {
                   try { await (await fetch('https://x.test/huge')).text(); } catch (e) { return [e.name, e.message]; }
                 }
@@ -607,7 +610,7 @@ class HostBridgeTest {
         FakeHost host = new FakeHost();
         host.fetchChunks = java.util.stream.IntStream.range(0, 100).mapToObj(i -> "chunk").toList();
 
-        run("export default async () => { await fetch('https://x.test/ignored'); return 'done'; }", host);
+        run("import { fetch } from 'automately:fetch'; export default async () => { await fetch('https://x.test/ignored'); return 'done'; }", host);
 
         assertThat(host.fetchesCancelled).contains("https://x.test/ignored");
     }
@@ -630,6 +633,7 @@ class HostBridgeTest {
     void aBodyCanOnlyBeReadOnce() throws Exception {
         FakeHost host = new FakeHost();
         ExecutionResult result = run("""
+                import { fetch } from 'automately:fetch';
                 export default async () => {
                   const res = await fetch('https://x.test/once');
                   await res.text();
@@ -682,12 +686,14 @@ class HostBridgeTest {
     void hostApiGlobalsCannotBeReplaced() throws Exception {
         ExecutionResult result = run("""
                 export default () => {
-                  for (const name of ['kv', 'bus', 'fetch', 'log']) { try { globalThis[name] = null; } catch {} }
-                  return [typeof kv.get, typeof bus.publish, typeof fetch, typeof log.info];
+                  for (const name of ['kv', 'bus', 'log']) { try { globalThis[name] = null; } catch {} }
+                  // fetch is Node's global now (D-124), which a script may replace, as under Node.
+                  globalThis.fetch = 'mine';
+                  return [typeof kv.get, typeof bus.publish, typeof log.info, fetch];
                 }
                 """, new FakeHost());
 
-        assertThat(result.output()).isEqualTo(new JsonArray().add("function").add("function").add("function").add("function"));
+        assertThat(result.output()).isEqualTo(new JsonArray().add("function").add("function").add("function").add("mine"));
     }
 
     /** A body stream over fixed chunks; it delivers as long as it's resumed, like a socket. */

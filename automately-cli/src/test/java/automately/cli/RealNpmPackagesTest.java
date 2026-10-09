@@ -49,7 +49,7 @@ class RealNpmPackagesTest {
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
             "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals", "immediates");
     /** The HTTP libraries (D-109), published as a second package: one would be over a version's 10 MB. */
-    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets", "http2client", "gothttp2", "dnsclient");
+    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets", "http2client", "gothttp2", "dnsclient", "webglobals");
     /**
      * Database and mail drivers (D-116), run against real servers in containers: two more packages, since together
      * they'd be over a version's 10 MB.
@@ -208,7 +208,7 @@ class RealNpmPackagesTest {
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "immediates", "http2client", "gothttp2", "dnsclient"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "immediates", "http2client", "gothttp2", "dnsclient", "webglobals"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
         sameAsNode(lib);
     }
@@ -221,8 +221,7 @@ class RealNpmPackagesTest {
     }
 
     @ParameterizedTest(name = "{0} serves through the ingress as it does under Node")
-    // Koa 3 joins once the isolate has the WHATWG globals it checks bodies against (Blob, ReadableStream, Response).
-    @ValueSource(strings = {"express", "fastify"})
+    @ValueSource(strings = {"express", "koa", "fastify"})
     void aWebFrameworkServesAsItDoesUnderNode(String lib) throws Exception {
         // Under real Node, listening on a free port.
         int port;

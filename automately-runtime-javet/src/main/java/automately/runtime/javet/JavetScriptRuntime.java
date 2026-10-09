@@ -95,6 +95,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("worker_threads", "node:worker_threads"), java.util.Map.entry("node:worker_threads", "node:worker_threads"),
             java.util.Map.entry("module", "node:module"), java.util.Map.entry("node:module", "node:module"),
             java.util.Map.entry("v8", "node:v8"), java.util.Map.entry("node:v8", "node:v8"),
+            java.util.Map.entry("stream/web", "node:stream/web"), java.util.Map.entry("node:stream/web", "node:stream/web"),
             java.util.Map.entry("timers/promises", "node:timers/promises"), java.util.Map.entry("node:timers/promises", "node:timers/promises"),
             java.util.Map.entry("os", "node:os"), java.util.Map.entry("node:os", "node:os"),
             java.util.Map.entry("http", "node:http"), java.util.Map.entry("node:http", "node:http"),
@@ -159,6 +160,17 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:worker_threads", resource("node/worker_threads.js")),
             java.util.Map.entry("node:module", resource("node/module.js")),
             java.util.Map.entry("node:v8", resource("node/v8.js")),
+            // The WHATWG streams (D-124): the globals, loaded when this module is imported.
+            java.util.Map.entry("node:stream/web", "const w = globalThis; const names = ['ReadableStream', 'ReadableStreamDefaultReader', "
+                    + "'ReadableStreamBYOBReader', 'ReadableStreamBYOBRequest', 'ReadableByteStreamController', 'ReadableStreamDefaultController', "
+                    + "'TransformStream', 'TransformStreamDefaultController', 'WritableStream', 'WritableStreamDefaultWriter', "
+                    + "'WritableStreamDefaultController', 'ByteLengthQueuingStrategy', 'CountQueuingStrategy', 'TextEncoderStream', "
+                    + "'TextDecoderStream', 'CompressionStream', 'DecompressionStream']; const api = Object.fromEntries(names.map((n) => [n, w[n]])); "
+                    + "export default api; export const { ReadableStream, ReadableStreamDefaultReader, ReadableStreamBYOBReader, "
+                    + "ReadableStreamBYOBRequest, ReadableByteStreamController, ReadableStreamDefaultController, TransformStream, "
+                    + "TransformStreamDefaultController, WritableStream, WritableStreamDefaultWriter, WritableStreamDefaultController, "
+                    + "ByteLengthQueuingStrategy, CountQueuingStrategy, TextEncoderStream, TextDecoderStream, CompressionStream, "
+                    + "DecompressionStream } = api;"),
             java.util.Map.entry("node:dns/promises", "import dns from 'node:dns'; export const { lookup, lookupService, Resolver, getServers, setServers, "
                     + "getDefaultResultOrder, setDefaultResultOrder, resolve, resolve4, resolve6, resolveAny, resolveCaa, resolveCname, resolveMx, "
                     + "resolveNaptr, resolveNs, resolvePtr, resolveSoa, resolveSrv, resolveTlsa, resolveTxt, reverse } = dns.promises; "
@@ -167,8 +179,9 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("automately:bus", hostModule("bus")),
             java.util.Map.entry("automately:jobs", hostModule("jobs")),
             java.util.Map.entry("automately:files", hostModule("files")),
+            // The host's own fetch: the global is Node's WHATWG one (D-124).
+            java.util.Map.entry("automately:fetch", "const api = globalThis[Symbol.for('automately.hostFetch')]; export default api; export { api as fetch };"),
             java.util.Map.entry("automately:secrets", hostModule("secrets")),
-            java.util.Map.entry("automately:fetch", hostModule("fetch")),
             java.util.Map.entry("automately:log", hostModule("log")));
 
     /**
@@ -232,6 +245,8 @@ public final class JavetScriptRuntime implements ScriptRuntime {
     private final long heapBytes;
     /** V8's compiled prelude, from the first isolate that ran it (D-106); null until then. */
     private volatile byte[] preludeCache;
+    /** The WHATWG globals' compiled scripts (D-124), shared by every isolate as the prelude's is. */
+    private final java.util.Map<String, byte[]> webCaches = new java.util.concurrent.ConcurrentHashMap<>();
     /** V8's compiled built-in modules, by module name (D-106). */
     private final java.util.Map<String, byte[]> moduleCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final WorkerExecutor isolates;
@@ -414,6 +429,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 bindApi(v8, hostObject, "fs", new FsBinding(bridge, host.fs()), callbacks);
                 bindApi(v8, hostObject, "crypto", new CryptoBinding(bridge, host.crypto()), callbacks);
                 bindApi(v8, hostObject, "zlib", new ZlibBinding(bridge, host.zlib()), callbacks);
+                bindApi(v8, hostObject, "web", new WebBinding(v8, webCaches), callbacks);
                 v8.getGlobalObject().set("__automately", hostObject);
             }
             try {

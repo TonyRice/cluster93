@@ -344,6 +344,35 @@ define('queueMicrotask', (callback) => {
 });
 
 
+// --- the WHATWG globals (D-124) ---
+// Node's Blob, File, Headers, Request, Response, FormData and fetch; the streams; MessageChannel and its kin. Each is a
+// getter that loads its script (js/web) the first time it's touched, then becomes a plain writable global, as in
+// Node: an isolate that never uses them doesn't pay for them.
+const webLoad = host.web.load;
+const webScripts = new Map();
+const webScript = (name) => {
+  if (!webScripts.has(name)) webScripts.set(name, webLoad(name));
+  return webScripts.get(name);
+};
+const settle = (name, value) => Object.defineProperty(globalThis, name, { value, writable: true, configurable: true, enumerable: false });
+const lazyGlobal = (name, script) => Object.defineProperty(globalThis, name, {
+  configurable: true,
+  enumerable: false,
+  get() { const value = webScript(script)[name]; settle(name, value); return value; },
+  set(value) { settle(name, value); },
+});
+for (const name of ['ReadableStream', 'ReadableStreamDefaultReader', 'ReadableStreamBYOBReader', 'ReadableStreamBYOBRequest',
+  'ReadableByteStreamController', 'ReadableStreamDefaultController', 'TransformStream', 'TransformStreamDefaultController',
+  'WritableStream', 'WritableStreamDefaultWriter', 'WritableStreamDefaultController', 'ByteLengthQueuingStrategy', 'CountQueuingStrategy']) {
+  lazyGlobal(name, 'streams');
+}
+for (const name of ['Blob', 'File']) lazyGlobal(name, 'blob');
+for (const name of ['Headers', 'Request', 'Response', 'FormData', 'fetch']) lazyGlobal(name, 'fetch');
+for (const name of ['MessageChannel', 'MessagePort', 'MessageEvent', 'BroadcastChannel']) lazyGlobal(name, 'messaging');
+for (const name of ['TextEncoderStream', 'TextDecoderStream', 'CompressionStream', 'DecompressionStream']) lazyGlobal(name, 'codecs');
+// The vendored and built classes, for node:stream/web, node:buffer and the rest to share.
+Object.defineProperty(globalThis, Symbol.for('automately.web'), { value: webScript });
+
 const timeOrigin = Date.now();
 const marks = [];
 // perf_hooks' observers hear of each mark and measure through this (D-123); performance itself stays frozen.

@@ -30,7 +30,7 @@ const PROVIDED = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises', 'p
   'net', 'node:net', 'tls', 'node:tls', 'http2', 'node:http2', 'tty', 'node:tty', 'diagnostics_channel', 'node:diagnostics_channel', 'util/types', 'node:util/types',
   'child_process', 'node:child_process',
   'dns', 'node:dns', 'dns/promises', 'node:dns/promises', 'async_hooks', 'node:async_hooks', 'perf_hooks', 'node:perf_hooks',
-  'worker_threads', 'node:worker_threads', 'module', 'node:module', 'v8', 'node:v8']);
+  'worker_threads', 'node:worker_threads', 'module', 'node:module', 'v8', 'node:v8', 'stream/web', 'node:stream/web']);
 // Native extras some packages use only if they're there (ws uses the first two); left out, with a warning.
 const OPTIONAL = new Set(['bufferutil', 'utf-8-validate', 'fsevents']);
 // What gives a package away as needing a native build.

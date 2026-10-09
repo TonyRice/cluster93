@@ -2340,3 +2340,45 @@ It's written for people, because the console will show the same response as a "N
   - a fix to `perf_hooks`, which tried to redefine the frozen global `performance` (observers now hear marks through an internal hook)
 - **Koa 3 waits on the WHATWG globals:** it checks every body against `Blob`, `ReadableStream` and `Response`, which the isolate doesn't have. Tony chose to build them fully next (2026-10-09).
 
+
+### D-124 — The WHATWG globals as Node's, loaded on first use; the global `fetch` becomes Node's
+**Date:** 2026-10-09 · **Status:** Accepted. Tony chose "Build them fully now" when Koa 3 needed them (D-123), under the standing rule that our polyfills match Node.
+
+**Decision:**
+- **Which globals:**
+  - `Blob` and `File`, the same classes as `buffer`'s
+  - `Headers`, `Request`, `Response`, `FormData` and `fetch`
+  - the WHATWG streams, and `node:stream/web`
+  - `TextEncoderStream`, `TextDecoderStream`, `CompressionStream` and `DecompressionStream`
+  - `MessageChannel`, `MessagePort`, `MessageEvent` and `BroadcastChannel`
+  - plus Node's `fromWeb`/`toWeb` on `Readable`, `Writable` and `Duplex`
+- **Loaded on first use:**
+  - **Groups:** five scripts (`js/web/streams`, `blob`, `fetch`, `messaging`, `codecs`) behind getters on `globalThis`.
+  - **Loading:** `WebBinding.load` compiles one from the node's code cache the first time a script reads one of its names, and the getter then settles to a plain, writable value, as Node's globals are.
+  - **Why:** the streams alone are about 100 KB of JavaScript. A job that never touches them shouldn't pay for them at start-up, which D-106 measured at 3.5 ms.
+- **The streams are web-streams-polyfill 4.3.0,** vendored by `scripts/vendor-stream` with the rest of the stream code:
+  - **Why vendored:** it's spec-complete and tested against the WPT suite. Writing our own would mean re-deriving the same spec.
+  - **One patch:** the `highWaterMark` check throws Node's `ERR_INVALID_ARG_VALUE`. The build fails if the patch stops applying.
+- **The rest is written to undici's behaviour:**
+  - **Covered:** messages, header order and `getSetCookie`, the multipart boundary format, method normalisation, null-body statuses, default request headers, redirect rules (303 and POST, cross-origin header stripping, 20 at most), content decoding, and `TypeError: fetch failed` with a `cause`.
+  - **The transport:** the same streamed host request as `node:http` (D-109), so the egress gate, the 16-request cap and streaming bodies are shared.
+- **The global `fetch` becomes Node's.**
+  - **The host's fetch** (JSON bodies, `timeoutMs`, no redirects) moves to `import { fetch } from 'automately:fetch'`.
+  - **Why:** code written for Node, and libraries that call `fetch`, expect Node's. A global that differs breaks them quietly: redirects not followed, and no `Response` class to check against.
+  - **The cost:** scripts that relied on the host's JSON bodies or `timeoutMs` on the global need the import.
+  - **Replaceable:** the global is now writable, as under Node.
+- **Compression streams** use the host's zlib. Brotli decompresses but doesn't compress, as with `zlib`.
+- **Messaging stays within the job:**
+  - **Delivery:** messages are `structuredClone`d and delivered with `setImmediate`. Ports have Node's `on`/`once`, and closing a port emits `close` on both ends.
+  - **`BroadcastChannel`:** reaches only channels in the same job, since there are no workers or other jobs to reach.
+
+**Tested:**
+- **The `webglobals` fixture against real Node** (`RealNpmPackagesTest`): every group above, its errors (codes and messages), `fetch` against a real server, and `stream/web` with `fromWeb`/`toWeb`. The output is identical to Node's.
+  - **Covered:** redirects followed, manual and refused; gzip; a 1 MB body buffered and streamed; 404; aborts; a refused connection; and a bad URL.
+- **Koa 3** with `@koa/router` and `@koa/bodyparser` joins Express 5 and Fastify 5 in the framework comparison, and matches Node on every request.
+- **`HostBridgeTest`'s host-fetch tests** now import `automately:fetch`.
+- **Regressions:** the full local suite, with the real-npm suite and the drivers.
+
+**Found while testing, and fixed:**
+- **A race in the first version:** `fetch` asked for the response only after ending the body. A server that answered quickly settled it first, and the request had already left the registry ("The request is already finished"). The response is now requested as soon as the request opens, as `http.js` does.
+- **`docs/scripting/node-compat.md` still listed `worker_threads`, `module` and `v8` as refused** after D-123 added them. Corrected.

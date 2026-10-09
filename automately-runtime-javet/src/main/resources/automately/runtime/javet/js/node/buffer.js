@@ -453,4 +453,15 @@ for (const name of Object.getOwnPropertyNames(Buffer.prototype)) {
   }
 }
 
-export default { Buffer, kMaxLength, kStringMaxLength, constants, INSPECT_MAX_BYTES, atob, btoa };
+// Node's Blob and File are the globals (D-124): a small script, loaded here so the named exports are the classes.
+export const Blob = globalThis.Blob;
+export const File = globalThis.File;
+export function isUtf8(input) {
+  try { new TextDecoder('utf-8', { fatal: true }).decode(input); return true; } catch { return false; }
+}
+export function isAscii(input) {
+  const bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  for (const b of bytes) if (b > 0x7f) return false;
+  return true;
+}
+export default { Buffer, kMaxLength, kStringMaxLength, constants, INSPECT_MAX_BYTES, atob, btoa, Blob, File, isUtf8, isAscii };

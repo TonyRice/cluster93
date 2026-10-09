@@ -215,18 +215,25 @@ class HostApisTest {
     @Test
     void fetchToPrivateAddressesIsRefusedByDefault() throws Exception {
         JsonObject job = runJob(nodeA, TENANT, """
+                import { fetch as hostFetch } from 'automately:fetch';
                 export default async () => {
-                  try { await fetch('http://127.0.0.1:%d/health'); return 'reached'; } catch (e) { return [e.name, e.code]; }
+                  const url = 'http://127.0.0.1:%d/health';
+                  const host = await hostFetch(url).then(() => 'reached', (e) => [e.name, e.code]);
+                  // The global fetch is Node's (D-124): the gate's refusal is its cause.
+                  const node = await fetch(url).then(() => 'reached', (e) => [e.name, e.message, e.cause?.code]);
+                  return [host, node];
                 }
                 """.formatted(nodeA.httpPort()));
 
-        assertThat(job.getJsonArray("output")).isEqualTo(new JsonArray().add("TypeError").add("egress_denied"));
+        assertThat(job.getJsonArray("output")).isEqualTo(new JsonArray().add(new JsonArray().add("TypeError").add("egress_denied"))
+                .add(new JsonArray().add("TypeError").add("fetch failed").add("egress_denied")));
     }
 
     @Test
     void anOperatorsRuleLetsATenantReachAPrivateAddressButNeverANode() throws Exception {
         // 10.255.255.1 is private and unrouted: refused before connecting, or, once allowed, attempted and timed out.
         String probe = """
+                import { fetch } from 'automately:fetch';
                 export default async () => {
                   const tries = [];
                   for (const url of ['http://10.255.255.1:9/', 'http://10.255.255.1:10/', 'http://127.0.0.1:%d/health']) {
@@ -281,6 +288,7 @@ class HostApisTest {
     @Test
     void clusterRulesApplyToEveryTenantAndATenantRuleCantUndoADeny() throws Exception {
         String probe = """
+                import { fetch } from 'automately:fetch';
                 export default async () => {
                   const tries = [];
                   for (const url of ['http://10.255.255.1:9/', 'http://10.255.254.1:9/', 'http://93.184.216.34:9/']) {

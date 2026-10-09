@@ -132,7 +132,7 @@ POST /v1/jobs
 { "script": "...", "env": { "API_URL": "https://api.example.com", "STRIPE_KEY": { "secret": "stripe-live" } } }
 ```
 ```js
-export default async () => fetch(process.env.API_URL, { headers: { authorization: `Bearer ${process.env.STRIPE_KEY}` } });
+export default async () => (await fetch(process.env.API_URL, { headers: { authorization: `Bearer ${process.env.STRIPE_KEY}` } })).json();
 ```
 - **Secrets by name.** `{"secret": "name"}` is read when the run starts, by the same rule as `secrets.get`: the submitting token needs `secrets:use`. The job record keeps the name, never the value, and **the value is masked in the job's log** as `[secret:name]`, since libraries print their configuration.
 - **Where to set it:**
@@ -191,16 +191,22 @@ Bodies are **streams of `Uint8Array` chunks** that you read with `for await`. Re
 
 ```js
 for await (const chunk of req.body) { ... }        // request bodies in ctx.serve
-for await (const chunk of res.body) { ... }        // fetch response bodies
+for await (const chunk of res.body) { ... }        // fetch response bodies, either fetch
 ```
 
-A body can be read **once**: either as a stream, or with `text()`, `json()` or `bytes()`, which buffer it. Buffering is capped (32 MB for request bodies, 5 MB for fetch responses); anything larger must be read as a stream.
+A body can be read **once**: either as a stream, or with `text()`, `json()` or `bytes()`, which buffer it. Buffering is capped for host bodies (32 MB for request bodies, 5 MB for `automately:fetch` responses); anything larger must be read as a stream. The global `fetch`'s responses are Node's and buffer within the job's memory, as under Node.
 
 `TextEncoder` and `TextDecoder` (UTF-8) are available for turning chunks into text and back.
 
 ## `fetch`: outbound HTTP
 
+There are two, and both go through the same egress gate:
+- **The global `fetch` is Node's** (D-124): WHATWG `Request`, `Response`, `Headers` and `FormData`, redirects followed (up to 20; `redirect: 'manual'` and `'error'` as in Node), gzip and deflate bodies decoded, `AbortSignal` for timeouts, and errors as `TypeError: fetch failed` with the reason in `cause`. Code written for Node works unchanged. Its bodies stream, so they aren't limited to 1 MB, and it shares the 16 requests per script with `http`. See [Node compatibility](node-compat.md#globals).
+- **The host's convenience fetch** is `import { fetch } from 'automately:fetch'`, described below. Before D-124 it was the global. It takes JSON bodies and a `timeoutMs`, and doesn't follow redirects.
+
 ```js
+import { fetch } from 'automately:fetch';
+
 const res = await fetch('https://api.example.com/items?page=2', {
   method: 'POST',
   headers: { authorization: `Bearer ${token}` },
@@ -212,7 +218,7 @@ const data = await res.json();      // or res.text(), res.bytes(), or stream res
 ```
 
 - Only `http` and `https`.
-- **Every connection goes through the egress gate** (D-108), and a refusal fails with `code: 'egress_denied'` and a message that says why:
+- **Every connection goes through the egress gate** (both fetches) (D-108), and a refusal fails with `code: 'egress_denied'` and a message that says why:
   - **By default, public addresses** are allowed.
   - **Private and reserved addresses are refused by default:** loopback, 10/8, 172.16/12, 192.168/16, link-local (including the 169.254.169.254 cloud metadata endpoint), CGNAT, unique-local IPv6, the documentation ranges, and IPv6 forms that carry one of these (NAT64, 6to4, IPv4-mapped and IPv4-compatible).
   - **Operators can change both** (D-111): allow and deny rules for the whole cluster and for your tenant, and an "allow-list" posture under which only what a rule allows is reachable.

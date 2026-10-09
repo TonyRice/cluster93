@@ -10,6 +10,7 @@
 //   readable-stream@4.8.0 sha512-2jhTTU3Eilp/2DMT71gbcoqC35eQHasMJH0RHkYxwlxIv3+FR6Y5xAFZIwEGLxKkjZYEFlsiMNIdwUqjK2lLHQ==
 //   safe-buffer@5.2.1 sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==
 //   string_decoder@1.3.0 sha512-hkRX8U1WjJFd8LsDJ2yQ/wWWxaopEsABU1XfkM8A+j0+85JAGppt16cr1Whg6KIbb4okU6Mql6BOj+uup/wKeA==
+//   web-streams-polyfill@4.3.0 sha512-/Gnggvj9oSrEvJbDyyPtAnxBt5fGQM2iWOKQNu7ie1OxDgK40iZpyV3TKaRiEzVj1oA1UxKnEy9XPXh6PW3eVw==
 // MIT licensed; the licences are in THIRD-PARTY-LICENSES.txt beside this file. Don't edit by hand: change and rerun the script.
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -6250,5 +6251,48 @@ var require_stream_entry = __commonJS({
   }
 });
 const exported = require_stream_entry();
+
+{
+  const { Readable, Writable, Duplex } = exported;
+  const chunkOf = (chunk) => (typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
+  Readable.fromWeb = (readableStream, options = {}) => {
+    const reader = readableStream.getReader();
+    return new Readable({
+      highWaterMark: options.highWaterMark, encoding: options.encoding, objectMode: options.objectMode ?? false, signal: options.signal,
+      read() { reader.read().then(({ value, done }) => { if (done) this.push(null); else this.push(value); }, (err) => this.destroy(err)); },
+      destroy(err, callback) { reader.cancel(err).then(() => callback(err), () => callback(err)); },
+    });
+  };
+  Readable.toWeb = (streamReadable, options = {}) => {
+    const iterator = streamReadable[Symbol.asyncIterator]();
+    return new globalThis.ReadableStream({
+      async pull(controller) {
+        const { value, done } = await iterator.next();
+        if (done) controller.close(); else controller.enqueue(streamReadable.readableObjectMode ? value : chunkOf(value));
+      },
+      cancel(reason) { streamReadable.destroy(reason); },
+    }, options.strategy);
+  };
+  Writable.fromWeb = (writableStream, options = {}) => {
+    const writer = writableStream.getWriter();
+    return new Writable({
+      highWaterMark: options.highWaterMark, decodeStrings: options.decodeStrings ?? true, objectMode: options.objectMode ?? false, signal: options.signal,
+      write(chunk, encoding, callback) { writer.write(chunk).then(() => callback(), callback); },
+      final(callback) { writer.close().then(() => callback(), callback); },
+      destroy(err, callback) { writer.abort(err).then(() => callback(err), () => callback(err)); },
+    });
+  };
+  Writable.toWeb = (streamWritable) => new globalThis.WritableStream({
+    write(chunk) { return new Promise((resolve, reject) => streamWritable.write(chunk, (err) => (err ? reject(err) : resolve()))); },
+    close() { return new Promise((resolve) => streamWritable.end(resolve)); },
+    abort(reason) { streamWritable.destroy(reason); },
+  });
+  Duplex.fromWeb = (pair, options = {}) => {
+    const readable = Readable.fromWeb(pair.readable, options);
+    const writable = Writable.fromWeb(pair.writable, options);
+    return Duplex.from({ readable, writable });
+  };
+  Duplex.toWeb = (duplex) => ({ readable: Readable.toWeb(duplex), writable: Writable.toWeb(duplex) });
+}
 export default exported;
 export const { Readable, Writable, Duplex, Transform, PassThrough, Stream, pipeline, finished, promises, addAbortSignal, compose, destroy, isDisturbed, isErrored, isReadable, getDefaultHighWaterMark, setDefaultHighWaterMark, duplexPair } = exported;

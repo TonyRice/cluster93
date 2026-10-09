@@ -1,5 +1,7 @@
-// fetch: FetchBinding through the egress gate (D-026, D-108); the response body is a stream.
-define('fetch', async (input, init = {}) => {
+// The host's own fetch (D-026, D-108), the convenience API documented in host-apis.md: JSON for an object body,
+// timeoutMs, redirects not followed. It's `import { fetch } from 'automately:fetch'`; the global fetch is Node's
+// WHATWG one (js/web/fetch.js, D-124), through the same egress gate.
+const hostFetch = async (input, init = {}) => {
   const headers = {};
   for (const [k, v] of Object.entries(init.headers ?? {})) headers[String(k).toLowerCase()] = String(v);
   let body = null;
@@ -21,7 +23,8 @@ define('fetch', async (input, init = {}) => {
     text: async () => utf8Decode(await collect(stream, FETCH_BUFFER_LIMIT, 'The response body')),
     json: async () => JSON.parse(utf8Decode(await collect(stream, FETCH_BUFFER_LIMIT, 'The response body'))),
   });
-});
+};
+Object.defineProperty(globalThis, Symbol.for('automately.hostFetch'), { value: hostFetch });
 
 // node:http's way to the host (D-109): a request whose body streams, through the same gate and limits as fetch.
 // No global, only a symbol node:http (js/node/http.js) finds, as zlib's.

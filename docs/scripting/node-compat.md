@@ -49,9 +49,10 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `tty` | `isatty()` is false: a job has no terminal | JavaScript | D-109 |
 | `diagnostics_channel` | Complete: channels, `tracingChannel` | JavaScript | D-114 |
 | `dns`, `dns/promises` | As Node's; answers show only what the tenant could reach | The host's resolver: the operating system for `lookup`, DNS servers for the rest | D-114, D-122 |
+| `stream/web` | The WHATWG streams, the same classes as the globals | JavaScript (web-streams-polyfill, vendored) | D-124 |
 | `automately:kv`, `:bus`, `:jobs`, `:files`, `:secrets`, `:fetch`, `:log` | The host APIs as modules | The host | D-091 |
 
-**Refused:** `dgram`, `cluster`, `worker_threads`, `vm`, `v8`, `inspector`, `module`, `readline`, `repl`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module), `constants` and `stream/web`.
+**Refused:** `dgram`, `cluster`, `vm`, `inspector`, `readline`, `repl`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module) and `constants`.
 - **When:** importing one stops the publish ("Node's "dns" module isn't available in the isolate …"). A CommonJS `require()` of one throws when it runs instead, with a warning at publish.
 - **What's coming** ([network reach](../design/network-reach.md)): WebSockets, through the ingress and the egress rules.
 - **The rest** need the Node runtime.
@@ -68,7 +69,11 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `process` | The `process` stand-in (D-096); see [process](#process). |
 | `crypto`, `CryptoKey` | Web Crypto; see [Web Crypto](#web-crypto-the-global-crypto). |
 | `TextEncoder`, `TextDecoder` | UTF-8 only. Decoding follows the WHATWG rules, so a broken sequence gives one U+FFFD (D-103), but a leading byte-order mark isn't removed, and there's no `{ stream: true }` or `fatal` option. |
-| `fetch` | The host's egress-checked fetch, not the WHATWG one: it returns the host's response object, and there are no `Request`/`Response`/`Headers` classes ([host APIs](host-apis.md)). |
+| `fetch`, `Headers`, `Request`, `Response`, `FormData` | Node's (undici's), through the egress gate (D-124): redirects followed, gzip and deflate decoded, Node's default request headers, multipart `FormData` both ways, and Node's errors. The host's older fetch is `automately:fetch` ([host APIs](host-apis.md#fetch-outbound-http)). |
+| `Blob`, `File` | Node's, and the same classes as `buffer`'s: parts, `type` normalisation, `endings`, `slice`, `text`/`arrayBuffer`/`bytes`/`stream`. |
+| `ReadableStream`, `WritableStream`, `TransformStream` and the rest of the WHATWG streams | Readers (default and BYOB), controllers, `pipeTo`/`pipeThrough`, `tee`, async iteration and the queuing strategies, from web-streams-polyfill 4.3.0, vendored. Some argument errors keep the polyfill's wording; the ones scripts meet (a bad `highWaterMark`) are Node's. |
+| `TextEncoderStream`, `TextDecoderStream`, `CompressionStream`, `DecompressionStream` | `gzip`, `deflate` and `deflate-raw`, on the host's zlib; Brotli decompresses but doesn't compress. |
+| `MessageChannel`, `MessagePort`, `MessageEvent`, `BroadcastChannel` | Within the job: messages are `structuredClone`d and delivered on a later turn, and ports have Node's `on`/`once`. `BroadcastChannel` reaches the channels of the same job only; there are no workers or other jobs to reach. |
 | `fs`, `kv`, `bus`, `jobs`, `files`, `secrets`, `log` | Automately's host APIs ([host APIs](host-apis.md)). |
 | `URL`, `URLSearchParams` | The WHATWG URL for the common cases, with `URL.canParse`/`URL.parse` (D-106). Hostnames aren't converted to punycode, and IPv6 isn't normalised. |
 | `AbortController`, `AbortSignal` | With `AbortSignal.abort`/`timeout`/`any`, `throwIfAborted`, and `onabort` running in the order it was set (D-106). `node:stream` and `timers/promises` use them. |
@@ -81,11 +86,11 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `WebAssembly`, `SharedArrayBuffer`, `Atomics`, `WeakRef`, `FinalizationRegistry`, `Intl` | V8's own. `Intl` has full ICU data (D-093). WebAssembly runs inside the same isolate and limits; there are no threads to share memory with. |
 
 **Absent:**
-- **Waiting for their own designs:** `Blob`, `File`, `FormData`, `Headers`, `Request`, `Response`, `ReadableStream`/`WritableStream`/`TransformStream`, `MessageChannel` and `WebSocket`. `fetch` returns the host's response today, and WebSocket is network reach (phase B). Libraries that bring their own (node-fetch brings `fetch-blob` and a Web Streams polyfill) work.
+- **`WebSocket`:** network reach (phase B, step 7).
 - **`Buffer`:** not a global. The bundler adds an import where bundled code uses it.
 - **Never:** `require`, `module`, `exports`, `__dirname` and `__filename`. Scripts are ES modules, and the bundler converts CommonJS. `window`, `self`, `navigator` and `location` are absent too: this isn't a browser.
 
-**What the globals cost:** nothing, net. They were added after a start-up benchmark (D-106). The prelude and built-in modules are compiled once per node and then come from V8's code cache, so a trivial job starts in about 3.5 ms (p50) with them, against 4.9 ms before. Numbers are in [benchmarks](../benchmarks.md#isolate-start-up).
+**What the globals cost:** nothing, net. The WHATWG ones (D-124) load on first use: each group (streams, `Blob`, fetch, messaging, the text and compression streams) is compiled from the code cache the first time a script touches one of its names, so a job that never does pays nothing. They were added after a start-up benchmark (D-106). The prelude and built-in modules are compiled once per node and then come from V8's code cache, so a trivial job starts in about 3.5 ms (p50) with them, against 4.9 ms before. Numbers are in [benchmarks](../benchmarks.md#isolate-start-up).
 
 ---
 
@@ -136,7 +141,8 @@ POSIX paths, following Node's own algorithms: `join`, `resolve`, `normalize`, `r
 - **`copy`** follows Node's rules: it copies what fits, returns the count, copies nothing when a start is at or past the end, and throws Node's `ERR_OUT_OF_RANGE` for negative starts (D-116).
 - **Enumerable, as Node's:** the statics (`from`, `alloc`, …) and every prototype method, so code that copies them with `for…in` works. safer-buffer and mysql2 do (D-116).
 - **Differs:** there's no pool. `poolSize` exists, but `allocUnsafe` returns zeroed memory, which is safer and otherwise the same.
-- **Not there:** `Blob`, `File`, `transcode`, `swap16/32/64`, and `readIntLE/BE` of arbitrary widths.
+- **`Blob` and `File`** are the globals (D-124), and `isUtf8`/`isAscii` are there.
+- **Not there:** `transcode`, `swap16/32/64`, and `readIntLE/BE` of arbitrary widths.
 
 ## `url`
 
@@ -238,8 +244,8 @@ Node's own code: `readable-stream` 4.8.0 and `string_decoder` 1.3.0 (MIT), bundl
   - **Functions:** `pipeline`, `finished`, `compose`, `addAbortSignal`, `destroy`, `duplexPair`, `isReadable`/`isErrored`/`isDisturbed`, `get`/`setDefaultHighWaterMark`, `Readable.from` and async iteration.
   - **`stream/promises`:** `pipeline` and `finished`.
 - **Differs:**
-  - **Platform streams:** `fs.createReadStream`/`createWriteStream`, `http`'s requests and responses, and `zlib`'s streams are Node streams (D-109). `fetch` bodies and `files.stream` are async iterables; wrap them with `Readable.from(...)`. There are no sockets yet.
-  - **Web Streams:** there are no global Web Streams (`ReadableStream`), so `Readable.toWeb`/`fromWeb` have nothing to convert.
+  - **Platform streams:** `fs.createReadStream`/`createWriteStream`, `http`'s requests and responses, and `zlib`'s streams are Node streams (D-109). So are `net`/`tls` sockets. The global `fetch`'s bodies are WHATWG streams (`Readable.fromWeb`); `automately:fetch` bodies and `files.stream` are async iterables (`Readable.from`).
+  - **Web Streams:** `Readable`, `Writable` and `Duplex` have Node's `fromWeb`/`toWeb` (D-124).
 - **Where it comes from:** `scripts/vendor-stream` rebuilds it from hash-checked packages, and the output is committed.
 
 ## `zlib`
@@ -629,7 +635,7 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 - **`os` and `process`** describe the job: `/tmp`, one CPU, the heap limit, no host details.
 
 **Missing for now:**
-- **Globals:** `Blob`, `FormData`, `Headers`/`Request`/`Response`, Web Streams, `MessageChannel` and `WebSocket`.
+- **Globals:** `WebSocket`.
 - **Crypto:** Brotli compression, AES-KW, classic Diffie-Hellman, and encrypted private keys.
 - **Network:** WebSockets (network-reach.md §13).
 

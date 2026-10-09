@@ -1,6 +1,6 @@
 # Vendored streams
 
-Node's own `stream` (from [`readable-stream`](https://github.com/nodejs/readable-stream)) and `string_decoder`, bundled into ES modules for the isolate (D-095, D-100). The output is committed in `automately-runtime-javet/src/main/resources/automately/runtime/javet/js/node/`, so building Automately never needs Node.
+Node's own `stream` (from [`readable-stream`](https://github.com/nodejs/readable-stream)) and `string_decoder`, bundled into ES modules for the isolate (D-095, D-100), and the WHATWG streams (from [`web-streams-polyfill`](https://github.com/MattiasBuelens/web-streams-polyfill), which ships only a minified build) as a script the prelude loads on first use (D-124). The output is committed in `automately-runtime-javet/src/main/resources/automately/runtime/javet/js/node/`, so building Automately never needs Node.
 
 To update: change the versions in `package.json`, then
 ```bash

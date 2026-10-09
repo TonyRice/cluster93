@@ -39,17 +39,78 @@ ${pinned}
 
 const STREAM_NAMES = ['Readable', 'Writable', 'Duplex', 'Transform', 'PassThrough', 'Stream', 'pipeline', 'finished', 'promises', 'addAbortSignal',
   'compose', 'destroy', 'isDisturbed', 'isErrored', 'isReadable', 'getDefaultHighWaterMark', 'setDefaultHighWaterMark', 'duplexPair'];
-writeFileSync(OUT + 'stream.js', header("Node's stream") + await bundle('stream-entry.cjs')
+// Node's fromWeb/toWeb (D-124), which readable-stream lacks: Node streams over the WHATWG ones and back. The WHATWG
+// classes are the isolate's globals, loaded when first touched.
+const WEB_INTEROP = `
+{
+  const { Readable, Writable, Duplex } = exported;
+  const chunkOf = (chunk) => (typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
+  Readable.fromWeb = (readableStream, options = {}) => {
+    const reader = readableStream.getReader();
+    return new Readable({
+      highWaterMark: options.highWaterMark, encoding: options.encoding, objectMode: options.objectMode ?? false, signal: options.signal,
+      read() { reader.read().then(({ value, done }) => { if (done) this.push(null); else this.push(value); }, (err) => this.destroy(err)); },
+      destroy(err, callback) { reader.cancel(err).then(() => callback(err), () => callback(err)); },
+    });
+  };
+  Readable.toWeb = (streamReadable, options = {}) => {
+    const iterator = streamReadable[Symbol.asyncIterator]();
+    return new globalThis.ReadableStream({
+      async pull(controller) {
+        const { value, done } = await iterator.next();
+        if (done) controller.close(); else controller.enqueue(streamReadable.readableObjectMode ? value : chunkOf(value));
+      },
+      cancel(reason) { streamReadable.destroy(reason); },
+    }, options.strategy);
+  };
+  Writable.fromWeb = (writableStream, options = {}) => {
+    const writer = writableStream.getWriter();
+    return new Writable({
+      highWaterMark: options.highWaterMark, decodeStrings: options.decodeStrings ?? true, objectMode: options.objectMode ?? false, signal: options.signal,
+      write(chunk, encoding, callback) { writer.write(chunk).then(() => callback(), callback); },
+      final(callback) { writer.close().then(() => callback(), callback); },
+      destroy(err, callback) { writer.abort(err).then(() => callback(err), () => callback(err)); },
+    });
+  };
+  Writable.toWeb = (streamWritable) => new globalThis.WritableStream({
+    write(chunk) { return new Promise((resolve, reject) => streamWritable.write(chunk, (err) => (err ? reject(err) : resolve()))); },
+    close() { return new Promise((resolve) => streamWritable.end(resolve)); },
+    abort(reason) { streamWritable.destroy(reason); },
+  });
+  Duplex.fromWeb = (pair, options = {}) => {
+    const readable = Readable.fromWeb(pair.readable, options);
+    const writable = Writable.fromWeb(pair.writable, options);
+    return Duplex.from({ readable, writable });
+  };
+  Duplex.toWeb = (duplex) => ({ readable: Readable.toWeb(duplex), writable: Writable.toWeb(duplex) });
+}
+`;
+writeFileSync(OUT + 'stream.js', header("Node's stream") + await bundle('stream-entry.cjs') + WEB_INTEROP
   + 'export default exported;\nexport const { ' + STREAM_NAMES.join(', ') + ' } = exported;\n');
 writeFileSync(OUT + 'string_decoder.js', header("Node's string_decoder") + await bundle('string_decoder-entry.cjs')
   + 'export default exported;\nexport const { StringDecoder } = exported;\n');
 writeFileSync(OUT + 'stream_promises.js', "// Node's stream/promises, from the vendored stream (D-100).\nimport stream from 'node:stream';\n"
   + 'const promises = stream.promises;\nexport default promises;\nexport const { pipeline, finished } = promises;\n');
 
-const licences = ['readable-stream', 'string_decoder', 'safe-buffer', 'abort-controller', 'event-target-shim'].map((name) => {
+// The WHATWG streams (D-124), from web-streams-polyfill (spec-compliant, tested against the web-platform tests). Not a
+// module: a script that evaluates to its classes, which the prelude loads on first use, so isolates that never touch
+// ReadableStream pay nothing for it. The package ships only its minified build.
+const WEB = new URL('../../automately-runtime-javet/src/main/resources/automately/runtime/javet/js/web/', import.meta.url).pathname;
+const webStreams = await esbuild.build({ stdin: { contents: "export * from 'web-streams-polyfill';", resolveDir: new URL('.', import.meta.url).pathname },
+  bundle: true, write: false, format: 'iife', globalName: 'webStreams', platform: 'neutral', target: 'es2022', mainFields: ['module', 'main'],
+  conditions: ['import'], logLevel: 'warning', legalComments: 'inline' });
+// The strategy check scripts actually hit throws Node's error rather than the polyfill's (D-124).
+const streamsSource = webStreams.outputFiles[0].text.replace(
+  /if \((\w+)\((\w+)\) \|\| \2 < 0\) throw new RangeError\("Invalid highWaterMark"\);/,
+  (match, isNaN, value) => `if (${isNaN}(${value}) || ${value} < 0) throw Object.assign(new RangeError(\`The property 'strategy.highWaterMark' is invalid. Received \${${value}}\`), { code: "ERR_INVALID_ARG_VALUE" });`);
+if (streamsSource === webStreams.outputFiles[0].text) throw new Error('web-streams-polyfill: the highWaterMark check has moved; update the patch');
+writeFileSync(WEB + 'streams.js', header('The WHATWG streams') + '(() => {\n' + streamsSource + 'return webStreams;\n})()\n');
+
+const licences = ['readable-stream', 'string_decoder', 'safe-buffer', 'abort-controller', 'event-target-shim', 'web-streams-polyfill'].map((name) => {
   const dir = new URL('./node_modules/' + name + '/', import.meta.url).pathname;
   const file = ['LICENSE', 'LICENSE.md', 'license'].map((f) => dir + f).find((f) => { try { readFileSync(f); return true; } catch { return false; } });
   return '=== ' + name + ' ===\n' + readFileSync(file, 'utf8').trim() + '\n';
 });
-writeFileSync(OUT + 'THIRD-PARTY-LICENSES.txt', 'Vendored into js/node/stream.js and js/node/string_decoder.js (D-100).\n\n' + licences.join('\n'));
+writeFileSync(OUT + 'THIRD-PARTY-LICENSES.txt', 'Vendored into js/node/stream.js and js/node/string_decoder.js (D-100), and js/web/streams.js (D-124).\n\n'
+  + licences.join('\n'));
 console.log('Wrote stream.js, stream_promises.js, string_decoder.js and THIRD-PARTY-LICENSES.txt to', OUT);
