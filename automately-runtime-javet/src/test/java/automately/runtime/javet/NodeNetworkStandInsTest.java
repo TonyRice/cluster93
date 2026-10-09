@@ -305,19 +305,22 @@ class NodeNetworkStandInsTest {
     }
 
     @Test
-    void dnsHasNodesNamesAndRefusesLookupsUntilItsStep() throws Exception {
+    void dnsHasNodesNamesAndLooksUpWithoutTheNetworkWhereNodeDoes() throws Exception {
+        // Real lookups and queries are NodeDnsTest's and the dnsclient fixture's (D-122); this stays off the network:
+        // an address needs no lookup, and localhost comes from the hosts file.
         JsonArray out = run("""
                 import dns, { promises, Resolver, ADDRCONFIG, NOTFOUND } from 'node:dns';
                 import { lookup } from 'node:dns/promises';
                 export default async () => {
-                  const callback = await new Promise((resolve) => dns.lookup('example.com', (err) => resolve(err.code)));
-                  const promised = await lookup('example.com').catch((e) => e.code);
-                  const resolver = await new promises.Resolver().resolveSrv('_x._tcp.example.com').catch((e) => e.code);
-                  return [ADDRCONFIG, NOTFOUND, typeof Resolver, callback, promised, resolver, dns.getDefaultResultOrder()];
+                  const literal = await new Promise((resolve) => dns.lookup('93.184.216.34', (err, address, family) => resolve([address, family])));
+                  const local = await lookup('localhost', { family: 4 });
+                  let badServer;
+                  try { new promises.Resolver().setServers(['not-an-ip']); } catch (e) { badServer = e.code; }
+                  return [ADDRCONFIG, NOTFOUND, typeof Resolver, literal, local.address, badServer, dns.getDefaultResultOrder()];
                 };
                 """);
 
-        assertThat(out).containsExactly(32, "ENOTFOUND", "function", "ERR_NOT_SUPPORTED", "ERR_NOT_SUPPORTED", "ERR_NOT_SUPPORTED", "verbatim");
+        assertThat(out.encode()).isEqualTo("[32,\"ENOTFOUND\",\"function\",[\"93.184.216.34\",4],\"127.0.0.1\",\"ERR_INVALID_IP_ADDRESS\",\"verbatim\"]");
     }
 
     @Test

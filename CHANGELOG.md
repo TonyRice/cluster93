@@ -26,6 +26,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## `dns` as Node's, filtered through the egress gate (2026-10-09)
+
+### Added
+- **`dns` and `dns/promises`, as Node 26's** (D-122):
+  - **`lookup`** through the operating system, in its order.
+  - **The queries:** every `resolve*` (CAA, NAPTR, SOA, TLSA and ANY included, with real TTLs) and `reverse`, through DNS servers as c-ares asks them.
+  - **`lookupService`,** and **`Resolver`** with `cancel`.
+
+  Answers, errors and validation match real Node. **Why:** phase B's `dns` step; `mongodb+srv://` and other libraries need it.
+- **Filtering:** a script sees only what its tenant could reach. Internal names answer `ENOTFOUND`, addresses it couldn't connect to are left out, and so are records naming internal hosts. **Why:** `dns` mustn't map the cluster's private network (§8.2).
+- **`setServers` works:** a script's DNS servers pass the egress gate like any connection, so a public resolver is fine and a private one needs a rule. **Why:** Tony, so scripts can use public resolvers, as in Node.
+- **`AUTOMATELY_EGRESS_DNS`** (servers that answer scripts instead of the system's, for split-horizon DNS) and **`AUTOMATELY_EGRESS_INTERNAL_DOMAINS`** (more internal zones).
+
+### Changed
+- **The egress gate resolves names through the same resolver as `dns`.** **Why:** so the two can't disagree, and so `AUTOMATELY_EGRESS_DNS` covers connections too.
+
 ## The event loop runs Node's phases; HTTP/2 flow control matched exactly (2026-10-09)
 
 ### Changed

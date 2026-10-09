@@ -365,7 +365,8 @@ public final class Automately {
                     + "It's for local development only; grant a tenant specific addresses with its egress policy instead (D-108).");
         }
         FetchClient fetch = new FetchClient(vertx, new automately.core.host.egress.Egress(vertx, config.egressAllowPrivate(),
-                new automately.core.host.egress.ClusterAddresses(vertx, nodes, nodePorts(config)), egressPolicies));
+                new automately.core.host.egress.ClusterAddresses(vertx, nodes, nodePorts(config)), egressPolicies,
+                new automately.core.host.dns.DnsResolver(vertx, config.egressDnsServers()), config.egressInternalDomains()));
         ScriptRuntime runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
         JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
         ServeRegistry serving = new ServeRegistry();

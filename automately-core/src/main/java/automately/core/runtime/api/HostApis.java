@@ -27,17 +27,22 @@ public interface HostApis {
 
     HttpApi http();
 
-    /** The tenant's secrets, if this execution may read them (D-068). */
-    /** The file system (D-079), where the node offers it. */
+    /** {@code dns}: lookups and queries through the egress gate's resolver, filtered (D-122). */
+    default DnsApi dns() {
+        return DnsApi.UNAVAILABLE;
+    }
+
     /** {@code net} and {@code tls} sockets (D-116). */
     default SocketApi sockets() {
         return SocketApi.UNAVAILABLE;
     }
 
+    /** The file system (D-079), where the node offers it. */
     default FsApi fs() {
         return Unavailable.FS;
     }
 
+    /** The tenant's secrets, if this execution may read them (D-068). */
     default SecretsApi secrets() {
         return Unavailable.SECRETS;
     }

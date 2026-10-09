@@ -4,6 +4,7 @@
 - **B1, the egress gate and allow-lists:** ✅ built (D-108). Tony decided its shape on 2026-10-08 (D-095 §4.5).
 - **B2, the `http`/`https` client:** ✅ built (D-109), with axios and node-fetch matching real Node. Unhandled rejections fail jobs as in Node (D-110).
 - **Configurable address spaces (§10):** ✅ built (D-111, D-113).
+- **B4, `dns` (§6):** ✅ built (D-122), with `mongodb+srv://` matching real Node.
 - **got and real socket details (§11):** ✅ built (D-114). The isolate reports a Node version so got loads (D-115).
 - **B5, `net` and `tls` sockets (§7):** ✅ built (D-116), with pg, mysql2, ioredis, MongoDB and nodemailer matching real Node against real servers.
 - **The `http2` client (§12):** ✅ built (D-117), with got's `http2: true` matching real Node. Request trailers, `state`, priorities and the frames' real flags as Node 26 has them (D-118).
@@ -198,25 +199,26 @@ GET /v1/egress-policy                     (the tenant, read-only)
   - a large upload
   - a client that leaves mid-response
 
-## 6. B4: `dns`, filtered (accepted)
-- **One resolver in core, shared by the gate and `dns`,** so `dns` can never answer differently from what a connection gets.
-  - **What it is:** Vert.x's `DnsClient`, which covers A, AAAA, CNAME, MX, TXT, SRV, NS and PTR.
-  - **Where it asks:** the system's resolver, or `AUTOMATELY_EGRESS_DNS` when that's set.
+## 6. B4: `dns`, filtered (built, D-122)
+- **One resolver in core, shared by the gate and `dns`,** so `dns` can never answer differently from what a connection gets (`DnsResolver`).
+  - **Lookups** (`dns.lookup` and the gate's own) ask the operating system, as Node's getaddrinfo does, and `dns.lookup` keeps the system's order.
+  - **Queries** (`resolve*`, `reverse`) ask DNS servers as c-ares does: no search domains, each server in turn on each try, TCP when truncated. They use Netty's DNS client, which gives every record type and real TTLs.
+  - **Where they ask:** `AUTOMATELY_EGRESS_DNS` when set (then lookups and the gate ask it too, so a split-horizon system resolver never answers scripts), else the system's.
 - **Filtering,** as proposed in §8.2:
-  - **Addresses:** only those the tenant could connect to, by the rules of §10.
-  - **Internal names** answer `ENOTFOUND`.
-  - **Reverse lookups:** only for addresses the tenant could connect to.
-  - **Record answers:** MX, SRV, CNAME and NS targets in internal zones are dropped.
-- **The JavaScript modules, `dns` and `dns/promises`:**
-  - **`lookup`,** with `family`, `all`, `order` and `verbatim`.
-  - **The `resolve*` functions:** `resolve`, `resolve4`, `resolve6`, `resolveCname`, `resolveMx`, `resolveTxt`, `resolveSrv`, `resolveNs`, `resolvePtr` and `reverse`.
-  - **`Resolver`:** `getServers` answers. `setServers` is refused, since a script can't pick its resolver: that would bypass the filtering.
-  - **Errors:** Node's codes.
-- **Limits:** 16 queries in flight per execution, answers capped at 64 KB, and a 10 s timeout.
-- **Known differences:**
-  - **No TTLs:** `{ ttl: true }` gets no real TTLs, which Vert.x doesn't expose.
-  - **Not offered:** `resolveCaa`, `resolveNaptr`, `resolveSoa` and `resolveAny`, which are refused with `ENOTIMP`.
-- **What it unlocks:** `mongodb+srv://` (SRV and TXT records), tested with a Netty DNS test server against a MongoDB container.
+  - **Addresses:** only those the tenant could connect to on some port by some protocol. An allow rule for one port is enough; a deny rule hides only if it covers every port and every protocol or `dns`.
+  - **Internal names** answer `ENOTFOUND`, unless a rule names them or the development switch is on: single labels, the special-use suffixes, and `AUTOMATELY_EGRESS_INTERNAL_DOMAINS`.
+  - **Reverse lookups and `lookupService`:** only for addresses the tenant could connect to.
+  - **Record answers:** MX, SRV, CNAME, NS, SOA and NAPTR targets in internal zones are dropped.
+- **The JavaScript modules, `dns` and `dns/promises`:** all of Node 26's, with its arguments, answer shapes and errors: `lookup`, `lookupService`, every `resolve*` (including CAA, NAPTR, SOA, TLSA and ANY), `reverse`, and `Resolver` with `cancel`.
+- **`setServers` works, gated** (Tony, 2026-10-09: "why would we block a public dns server?"). A script's servers must pass the gate as `dns` connections, so a public resolver is fine and a private one needs a rule. Answers are filtered whichever server gives them.
+- **Limits:** 16 queries in flight per run (the rest wait, as Node has no such limit), and 10 s per query.
+- **What changed from the plan:**
+  - **The client:** Netty's DNS client instead of Vert.x's `DnsClient`. Vert.x's has no TTLs and no CAA, NAPTR, SOA, TLSA or ANY, so neither "known difference" remains.
+  - **`setServers`** is allowed, gated, rather than refused.
+- **Tested:**
+  - **The `dnsclient` fixture** matches real Node across every call and error, against a test DNS server that compresses names as real ones do.
+  - **`mongodb+srv://`** connects through SRV and TXT records, as under Node.
+  - **`NodeDnsApiTest`** checks the filtering.
 
 ## 7. B5: outbound `net` and `tls` (built, D-116)
 **What it is:** real sockets on Vert.x's `NetClient`. The functionality is all of Node's; the only restrictions are where a socket may go (the gate) and how much it may use (limits).

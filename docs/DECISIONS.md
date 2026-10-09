@@ -2251,3 +2251,35 @@ It's written for people, because the console will show the same response as a "N
 
 **What still varies, by nature:** with a real server and a real network, the frames and reads, and so the windows per event, differ between runs of Node itself. Given the same frames in the same reads, the isolate now gives Node's values.
 
+### D-122 — `dns` as Node's, on the egress gate's resolver, showing only what the tenant could reach
+**Date:** 2026-10-09 · **Status:** Accepted. Phase B's `dns` step (network-reach.md §6, §8.2), with one change Tony made: `setServers` is allowed, gated ("wouldn't we just make it block trying to set servers on a private network? … why would we block a public dns server?").
+
+**Decision:**
+- **One resolver (`DnsResolver`) for the gate and for `dns`:**
+  - **Lookups** ask the operating system as getaddrinfo does. `dns.lookup` keeps the system's order: a JDK `InetAddressResolverProvider` hands the JVM its built-in resolver unchanged, and `dns.lookup` asks that resolver for both families with no preference. `InetAddress` itself puts IPv4 first, so it couldn't be used.
+  - **Queries** use Netty's DNS client as c-ares behaves: explicit servers, each in turn on each try, a per-try timeout, TCP after truncation, no caches.
+  - **Decoding:** records are decoded to Node 26's shapes, following compressed names by absolute offset. Character-strings are read as Latin-1, as Node reads them, and IPv6 is written compressed (RFC 5952).
+  - **With `AUTOMATELY_EGRESS_DNS` set,** lookups and the gate ask those servers too, for split-horizon resolvers.
+- **Filtering (§8.2), in `NodeDnsApi` with the gate's `DnsView`:**
+  - **Addresses:** visible if the tenant could connect to them on some port by some protocol. A deny rule hides one only if it covers every port and every protocol or `dns`. Cluster nodes are hidden unless the development switch is on.
+  - **Internal names** (single labels, the special-use suffixes, `AUTOMATELY_EGRESS_INTERNAL_DOMAINS`) answer `ENOTFOUND` unless an allow rule names them or the development switch is on.
+  - **Records** naming internal hosts are dropped.
+  - **Reverse lookups** need a visible address.
+- **`setServers`:** each server is checked by the gate as a `dns` connection to its address and port. Refused ones are left out, and if none remain the query fails with `ECONNREFUSED` and the gate's reason. The cluster's own servers aren't checked.
+- **Limits:** 16 queries at once per run, the rest queued; 10 s per query.
+- **The module:** all of Node 26's `dns` and `dns/promises`, rewritten to its behaviour:
+  - **Calls:** `lookup` with every option and Node 26's refusal of empty names, `lookupService`, every `resolve*`, and `reverse`.
+  - **`Resolver`:** `timeout`, `tries` and `cancel`, sharing the default resolver with `dns.promises`.
+  - **Errors:** `DNSException`'s shape, and the validators' messages.
+
+**Tested:**
+- **`DnsResolverTest` (6):** every record type with compressed names, each failure, TCP after truncation, servers in turn, and the system's lookups.
+- **`NodeDnsApiTest` (5):** the filtering, the development switch, gated servers, queueing, and visibility under rules.
+- **`NodeDnsTest` (2):** the isolate end to end, and a private server refused with its reason.
+- **`RealNpmPackagesTest`:**
+  - **A `dnsclient` fixture** matches real Node 26.8.1: every query and its errors, `{ ttl }`, ANY, TCP, timeouts, `cancel`, the validators, lookups in every order, and `lookupService`.
+  - **The mongodb fixture** connects with `mongodb+srv://` through SRV and TXT records from the test's DNS server, as under Node.
+- **A shared `TestDnsServer`** (UDP and TCP, compressing names as real servers do) is in core's test jar, used by core, the runtime and the CLI's tests.
+
+**Differs:** none known.
+

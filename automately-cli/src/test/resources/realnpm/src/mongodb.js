@@ -1,6 +1,7 @@
 // The MongoDB driver against a real MongoDB (D-116): inserts, queries, updates, aggregation, indexes, cursors and
-// errors. TEST_MONGO is the server. Runs the same under Node.
+// errors; then mongodb+srv:// through SRV and TXT records (D-122). TEST_MONGO is the server. Runs the same under Node.
 import { MongoClient } from 'mongodb';
+import dns from 'node:dns';
 
 export async function run() {
   const out = {};
@@ -26,5 +27,17 @@ export async function run() {
   out.cursor = names;
   out.deleted = (await items.deleteMany({ stock: 0 })).deletedCount;
   await client.close();
+
+  // mongodb+srv (D-122): the driver finds the server through SRV and TXT records, here from TEST_DNS; the SRV target is
+  // a *.localhost name, which the system resolves.
+  dns.setServers([process.env.TEST_DNS]);
+  const viaSrv = new MongoClient(process.env.TEST_MONGO_SRV, { serverSelectionTimeoutMS: 10000 });
+  await viaSrv.connect();
+  out.srv = {
+    count: await viaSrv.db('app').collection('items').countDocuments(),
+    hosts: viaSrv.options.hosts.map(String),
+    authSource: viaSrv.options.credentials?.source ?? viaSrv.s?.options?.authSource ?? null,
+  };
+  await viaSrv.close();
   return out;
 }

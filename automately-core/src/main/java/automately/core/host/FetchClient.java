@@ -283,6 +283,11 @@ public final class FetchClient {
         }).onFailure(err -> done.run());
     }
 
+    /** The egress gate, and through it the resolver, scripts' connections and {@code dns} share (D-122). */
+    public automately.core.host.egress.Egress egress() {
+        return egress;
+    }
+
     /** Scripts' TCP and TLS sockets (D-116), through the same gate as their HTTP requests. Made when first asked for. */
     public SocketClient sockets() {
         SocketClient made = sockets;

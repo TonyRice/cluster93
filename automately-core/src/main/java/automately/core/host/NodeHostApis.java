@@ -29,6 +29,7 @@ public final class NodeHostApis implements HostApis {
     private final FilesApi files;
     private final FetchApi fetch;
     private final automately.core.runtime.api.SocketApi sockets;
+    private final automately.core.runtime.api.DnsApi dns;
     private final HttpApi http;
     private final SecretsApi secrets;
     private final JvmCrypto.Pool cryptoPool;
@@ -84,6 +85,7 @@ public final class NodeHostApis implements HostApis {
         NodeFetchApi requests = (NodeFetchApi) this.fetch;
         this.sockets = node.fetch() == null ? automately.core.runtime.api.SocketApi.UNAVAILABLE
                 : new NodeSocketApi(node.fetch().sockets(), node.fetch().http2(), tenant, requests::take);
+        this.dns = node.fetch() == null ? automately.core.runtime.api.DnsApi.UNAVAILABLE : new NodeDnsApi(node.fetch().egress(), tenant);
         this.http = new NodeHttpApi(scope, node.serve());
         this.secrets = new NodeSecretsApi(scope, node.secrets(), node.jobs());
         this.fs = new NodeFsApi(scope, node.files(), node.tree(), node.capacity(), node.quota(), node.room(),
@@ -145,6 +147,11 @@ public final class NodeHostApis implements HostApis {
     @Override
     public FetchApi fetch() {
         return fetch;
+    }
+
+    @Override
+    public automately.core.runtime.api.DnsApi dns() {
+        return dns;
     }
 
     @Override

@@ -47,7 +47,7 @@ class RealNpmPackagesTest {
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
             "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals", "immediates");
     /** The HTTP libraries (D-109), published as a second package: one would be over a version's 10 MB. */
-    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets", "http2client", "gothttp2");
+    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets", "http2client", "gothttp2", "dnsclient");
     /**
      * Database and mail drivers (D-116), run against real servers in containers: two more packages, since together
      * they'd be over a version's 10 MB.
@@ -61,6 +61,8 @@ class RealNpmPackagesTest {
     private RunningNode node;
     /** The HTTP libraries' server (D-109), the same one for Node and the isolate: TEST_HTTP. */
     private io.vertx.core.Vertx serverVertx;
+    /** The dnsclient fixture's DNS server (D-122), and mongodb+srv's: Node and the isolate both set it as their server. */
+    private automately.core.host.dns.TestDnsServer dnsServer;
     private String testHttp;
     /** What both Node and the isolate are given: the servers' addresses, and the TLS servers' CA (D-116). */
     private final Map<String, String> testEnv = new java.util.LinkedHashMap<>();
@@ -87,6 +89,7 @@ class RealNpmPackagesTest {
                 .listen(0, "127.0.0.1")).actualPort();
         testEnv.put("TEST_HTTP", testHttp);
         startSocketServers();
+        startDnsServer();
         if (SERVICES) {
             startServices();
         }
@@ -183,17 +186,21 @@ class RealNpmPackagesTest {
         if (node != null) {
             await(node.stop());
         }
+        if (dnsServer != null) {
+            dnsServer.close();
+        }
         if (serverVertx != null) {
             await(serverVertx.close());
         }
         if (halfClose != null) {
             halfClose.close();
         }
+
         containers.forEach(org.testcontainers.containers.GenericContainer::stop);
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "immediates", "http2client", "gothttp2"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "immediates", "http2client", "gothttp2", "dnsclient"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
         sameAsNode(lib);
     }
@@ -250,6 +257,28 @@ class RealNpmPackagesTest {
      * CA is TEST_PG_CA), MySQL, Redis, MongoDB, and Mailpit for SMTP with STARTTLS. Their addresses go to Node and the
      * isolate alike.
      */
+    /**
+     * The dnsclient fixture's zone (D-122): every record type, names compressed as real servers write them, and names
+     * that fail each way (see TestDnsServer). TEST_DNS is its address, as setServers takes it.
+     */
+    private void startDnsServer() throws Exception {
+        dnsServer = new automately.core.host.dns.TestDnsServer(serverVertx).start()
+                .a("example.test", "93.184.216.34").a("example.test", "93.184.216.35").ttl("example.test", 120)
+                .aaaa("example.test", "2606:2800:220:1::1")
+                .mx("example.test", 10, "mail.example.test").mx("example.test", 20, "backup.other.test")
+                .txt("example.test", "v=spf1 -all", "second").txt("example.test", "h\u00e9llo")
+                .ns("example.test", "ns1.example.test").ns("example.test", "ns2.example.test")
+                .soa("example.test", "ns1.example.test", "hostmaster.example.test", 2026100901, 7200, 900, 1209600, 300)
+                .caa("example.test", 0, "issue", "letsencrypt.org").caa("example.test", 128, "iodef", "mailto:security@example.test")
+                .naptr("example.test", 100, 10, "S", "SIP+D2U", "", "_sip._udp.example.test")
+                .srv("_sip._tcp.example.test", 10, 60, 5060, "sip1.example.test").srv("_sip._tcp.example.test", 20, 0, 5060, "sip2.example.test")
+                .tlsa("_443._tcp.example.test", 3, 1, 1, new byte[]{(byte) 0xde, (byte) 0xad, (byte) 0xbe, (byte) 0xef})
+                .cname("www.example.test", "example.test")
+                .ptr("34.216.184.93.in-addr.arpa", "example.test")
+                .txt("big.example.test", "x".repeat(250), "y".repeat(250), "z".repeat(250));
+        testEnv.put("TEST_DNS", dnsServer.address());
+    }
+
     private void startServices() throws Exception {
         io.vertx.core.net.SelfSignedCertificate pgCert = io.vertx.core.net.SelfSignedCertificate.create("localhost");
         testEnv.put("TEST_PG_CA", Files.readString(Path.of(pgCert.certificatePath())));
@@ -282,6 +311,10 @@ class RealNpmPackagesTest {
         testEnv.put("TEST_MYSQL", "mysql://app:secret@127.0.0.1:" + mysql.getMappedPort(3306) + "/app");
         testEnv.put("TEST_REDIS", "redis://127.0.0.1:" + redis.getMappedPort(6379));
         testEnv.put("TEST_MONGO", "mongodb://127.0.0.1:" + mongo.getMappedPort(27017));
+        // mongodb+srv (D-122): the SRV record names a host under *.localhost, which the system resolves to loopback.
+        dnsServer.srv("_mongodb._tcp.cluster.localhost", 0, 5, mongo.getMappedPort(27017), "mongo1.cluster.localhost")
+                .txt("cluster.localhost", "authSource=admin");
+        testEnv.put("TEST_MONGO_SRV", "mongodb+srv://cluster.localhost/?tls=false");
         testEnv.put("TEST_SMTP", String.valueOf(mailpit.getMappedPort(1025)));
     }
 

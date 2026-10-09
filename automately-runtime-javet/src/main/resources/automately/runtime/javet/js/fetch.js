@@ -58,6 +58,18 @@ Object.defineProperty(globalThis, Symbol.for('automately.sockets'), {
   }),
 });
 
+// node:dns's way to the host (D-122): the egress gate's resolver, answering only what the tenant could reach.
+const dnsHost = host.dns;
+Object.defineProperty(globalThis, Symbol.for('automately.dns'), {
+  value: Object.freeze({
+    lookup: (request) => dnsHost.lookup(request),
+    resolve: (request) => dnsHost.resolve(request),
+    reverse: (request) => dnsHost.reverse(request),
+    lookupService: (request) => dnsHost.lookupService(request),
+    servers: () => JSON.parse(dnsHost.servers()),
+  }),
+});
+
 // node:http2's way to the host (D-117): sessions counted as sockets, streams as requests. A session's events (goaway,
 // new settings) arrive as JSON chunks on a stream; a stream's body arrives as a stream once it has answered.
 const http2Host = host.http2;

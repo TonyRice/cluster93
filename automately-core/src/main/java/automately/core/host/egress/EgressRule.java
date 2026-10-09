@@ -67,6 +67,32 @@ public record EgressRule(Action action, String to, Kind kind, Cidr cidr, String 
         };
     }
 
+    /**
+     * Whether this rule names {@code address} (or {@code host}), whatever the port and protocol: for what {@code dns}
+     * may show (D-122).
+     */
+    public boolean names(String requestedHost, InetAddress address, InetAddress checked, AddressSets sets) {
+        boolean deny = action == Action.DENY;
+        return switch (kind) {
+            case ANY -> true;
+            case HOST -> requestedHost != null && name.equals(normalise(requestedHost));
+            case SUFFIX -> requestedHost != null && normalise(requestedHost).endsWith("." + name);
+            case CIDR -> address != null && (cidr.contains(checked) || (deny && cidr.contains(address)));
+            case SET -> {
+                if (address == null) {
+                    yield false;
+                }
+                Boolean in = sets.contains(name, checked);
+                yield in == null ? deny : in || (deny && !address.equals(checked) && Boolean.TRUE.equals(sets.contains(name, address)));
+            }
+        };
+    }
+
+    /** Whether a deny rule hides an address from {@code dns}: it applies on every port, to every protocol or to dns. */
+    public boolean hidesFromDns() {
+        return action == Action.DENY && ports.isEmpty() && (protocols.isEmpty() || protocols.contains(EgressProtocol.DNS));
+    }
+
     boolean opens(int port) {
         if (ports.isEmpty()) {
             return true;

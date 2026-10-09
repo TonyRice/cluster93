@@ -13,7 +13,7 @@ These come from the polyfill plan ([design](../design/isolate-polyfills.md), D-0
 3. **Per-job state dies with the job.** Open hashes, ciphers and compression streams belong to one execution and are dropped when it ends. Nothing is shared between jobs.
 4. **Unavailable means unavailable, clearly.**
    - **At publish:** importing a module the isolate doesn't have stops the publish, with the reason. A CommonJS `require()` of one is the exception: it throws when it runs, as a missing module does in Node, so code that tries it inside `try` and falls back still works ([bundling](#bundling)).
-   - **At run time:** a function that isn't implemented yet throws `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` or `ERR_NOT_SUPPORTED`, so it fails rather than half-working. Some modules exist only for the parts that don't connect or start anything (`http2.constants`, `tty.isatty`, `dns`'s names, `child_process`'s names): using the rest throws, with a message saying so.
+   - **At run time:** a function that isn't implemented yet throws `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` or `ERR_NOT_SUPPORTED`, so it fails rather than half-working. Some modules exist only for the parts that don't connect or start anything (`http2.constants`, `tty.isatty`, `child_process`'s names): using the rest throws, with a message saying so.
 5. **The isolate reports the Node release it's checked against ([D-115](../DECISIONS.md), replacing D-102).** `process.version` is `'v26.8.1'`. got won't load without a version, and jsonwebtoken allows PS256 only on versions it knows. `RealNpmPackagesTest` runs against that release, so the two move together.
 6. **Checked against real Node.** Behaviour is compared with real Node's output, not just with documentation; see [how it's verified](#how-compatibility-is-verified).
 
@@ -45,12 +45,12 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `http2` | The client, as Node's; no servers | The host's HTTP/2 connections, through the egress rules | D-109, D-117 |
 | `tty` | `isatty()` is false: a job has no terminal | JavaScript | D-109 |
 | `diagnostics_channel` | Complete: channels, `tracingChannel` | JavaScript | D-114 |
-| `dns`, `dns/promises` | Its names and constants; lookups are phase B4 | JavaScript | D-114 |
+| `dns`, `dns/promises` | As Node's; answers show only what the tenant could reach | The host's resolver: the operating system for `lookup`, DNS servers for the rest | D-114, D-122 |
 | `automately:kv`, `:bus`, `:jobs`, `:files`, `:secrets`, `:fetch`, `:log` | The host APIs as modules | The host | D-091 |
 
 **Refused:** `dgram`, `cluster`, `worker_threads`, `vm`, `v8`, `inspector`, `module`, `readline`, `repl`, `perf_hooks`, `async_hooks`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module), `constants` and `stream/web`.
 - **When:** importing one stops the publish ("Node's "dns" module isn't available in the isolate …"). A CommonJS `require()` of one throws when it runs instead, with a warning at publish.
-- **What's coming** ([network reach](../design/network-reach.md)): `dns` lookups (B4), `http.createServer` by hostname (B3), and WebSockets, all through the egress rules. `async_hooks` and `perf_hooks` come with B3, since the web frameworks need them.
+- **What's coming** ([network reach](../design/network-reach.md)): `http.createServer` by hostname (B3), and WebSockets, all through the egress rules. `async_hooks` and `perf_hooks` come with B3, since the web frameworks need them.
 - **The rest** need the Node runtime.
 
 ## Globals
@@ -474,15 +474,33 @@ Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts
   - both `state` objects
   - priorities and their warning
 
-## `tty`, `dns` and `child_process`
+## `dns` and `dns/promises`
 
-These have everything that doesn't start a process or need a terminal, and `dns` everything but lookups, so libraries that import them load (D-109, D-114, D-116).
+Node's (D-122), on the host's resolver: the one the egress gate uses for every connection, so a script sees the network as it can reach it. Arguments, answers and errors are Node 26's, checked against real Node by the dnsclient fixture.
+- **`lookup(hostname[, options], callback)`** asks the operating system, as Node's getaddrinfo does (hosts files, search domains, `*.localhost`), and keeps its order:
+  - **Options:** `family` (0, 4, 6, `'IPv4'`, `'IPv6'`), `hints` (`V4MAPPED` and `ALL` included), `all`, `order` (`verbatim` by default, `ipv4first`, `ipv6first`) and `verbatim`.
+  - **Answers:** an address needs no lookup. `util.promisify(dns.lookup)` gives `{ address, family }`.
+  - **Errors:** a missing or empty name throws, as in Node 26. Failures are `getaddrinfo ENOTFOUND <name>` (errno -3008) or `EAI_AGAIN`.
+- **The queries:** `resolve` (any type), `resolve4`/`resolve6` (with `{ ttl: true }`), `resolveAny`, `resolveCaa`, `resolveCname`, `resolveMx`, `resolveNaptr`, `resolveNs`, `resolvePtr`, `resolveSoa`, `resolveSrv`, `resolveTlsa`, `resolveTxt`, and `reverse`. They ask DNS servers as c-ares does: no search domains, no hosts file, each server in turn on each try, and TCP when an answer is truncated.
+  - **Answers:** Node 26's shapes and key order, including `type` on MX, SRV and CAA. `resolveAny` groups its records as c-ares does. TTLs are the real ones, and IPv6 is written compressed.
+  - **Errors:** `queryA ENOTFOUND <name>` and the rest: ENODATA, ESERVFAIL, EREFUSED, EFORMERR, ENOTIMP, ETIMEOUT, ECONNREFUSED, ECANCELLED.
+- **`Resolver` and `promises.Resolver`:** `timeout` and `tries`, `cancel()`, `getServers()`, `setServers()` and `setLocalAddress()`. The module's functions share one default resolver with `dns.promises`, as in Node.
+- **Servers:**
+  - **By default:** the cluster's, which is `AUTOMATELY_EGRESS_DNS` when an operator set it, else the system's.
+  - **A script's own (`setServers`):** each must pass the egress gate as a `dns` connection. A public resolver is fine; a server on a private network needs a rule (or the development switch), and a refused one fails the query with `ECONNREFUSED` and the reason.
+- **`lookupService(address, port)`:** the system's name for the address (or the address itself), and the service from `/etc/services`.
+- **What a script may see** (network-reach.md §8.2):
+  - **Internal names** answer `ENOTFOUND` unless a rule names them: single labels, `.local`, `.internal`, `.lan`, `.home.arpa`, `.localhost`, `.cluster.local`, `.svc`, and the zones in `AUTOMATELY_EGRESS_INTERNAL_DOMAINS`.
+  - **Addresses** are shown only if the tenant could connect to them on some port. An allow rule for one port is enough; a deny rule hides an address only if it covers every port and every protocol or `dns`.
+  - **Records naming internal hosts** (MX, SRV, CNAME, NS, SOA, NAPTR) are left out; an answer left empty is `ENODATA`.
+  - **`reverse` and `lookupService`** answer only for addresses the tenant could connect to.
+  - **The development switch** shows private addresses and internal names, as it opens them to connections.
+- **Limits:** 16 queries at once per run (more wait their turn), 10 s per query whatever the tries, answers up to a DNS message's 64 KB.
+
+## `tty` and `child_process`
+
+These have everything that doesn't start a process or need a terminal, so libraries that import them load (D-109, D-116).
 - **`tty`:** `isatty()` is always false, as for Node with its output piped, so libraries such as debug don't add colours. `ReadStream` and `WriteStream` throw: a job has no terminal.
-- **`dns` and `dns/promises`:**
-  - **There:** every name and constant Node has (`ADDRCONFIG`, `V4MAPPED`, `ALL`, the error codes), `Resolver` and `promises.Resolver`, and `get`/`setDefaultResultOrder`. Libraries that import it when they load, such as got's cacheable-lookup and ioredis, load.
-  - **Not yet:** every lookup (`lookup`, `resolve*`, `reverse`, `lookupService`) fails with `ERR_NOT_SUPPORTED`, through its callback or promise. `getServers()` is empty, and `setServers()` throws.
-  - **Coming in phase B4:** lookups answered through the egress rules (network-reach.md §6).
-  - **Never needed for connecting:** `fetch`, `http`, `https`, `net` and `tls` don't use it; the host resolves names through the gate.
 - **`child_process`:** its names (`exec`, `spawn`, `fork`, the `…Sync` forms, `ChildProcess`), so libraries that import it for an optional path load: nodemailer's sendmail transport, mongodb's encryption helper. Each function throws `ERR_NOT_SUPPORTED`, because scripts start no processes. Code that does needs the Node runtime.
 
 ## `diagnostics_channel`
@@ -520,6 +538,7 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
     - **ioredis:** Redis 7, pub/sub included
     - **MongoDB:** MongoDB 8.2
     - **nodemailer:** Mailpit, plain and STARTTLS, with an untrusted certificate refused
+    - **mongodb+srv:** the same MongoDB found through SRV and TXT records (D-122)
   - **The Node release:** the test checks that it runs against Node v26.8.1, the version the isolate reports (D-115).
   - **HTTP libraries** run against a local test server whose answers are fixed, reached by both real Node and the isolate (the test node uses the development switch, since loopback is the node itself).
   - **Fixtures for the stand-ins themselves:**
@@ -529,13 +548,15 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
     - `assert`, `querystring` and `timers/promises`
     - `node:http`/`https`: methods, headers (repeated ones included), whole and streamed and fixed-length bodies, auth, redirects, a 1 MB body, an unheard response, timeouts, aborts, hang-ups, refused connections, and the validators, with events in Node's order
     - `node:http2`, against TLS and h2c servers, and got with `http2: true`
+    - `node:dns`, against a local DNS server for every record type and failure, and the system's resolver for `lookup`. The mongodb driver also connects with `mongodb+srv://` through SRV and TXT records (D-122).
+    - the event loop's guaranteed orderings (`setImmediate`, ticks, microtasks)
     - `node:net`/`tls`, against local echo, TLS, STARTTLS and half-close servers: event order, held writes, half-close, async iteration, idle timeouts, every error, trusted, refused, unverified and wrong-name TLS, custom identity checks, the upgrade, and `checkServerIdentity` itself
   - **Refused at publish, as expected:** bcrypt and sharp (native).
 - **Against the standards:** the Java side is checked against its standards' test vectors:
   - **KDFs:** RFC 6070 (PBKDF2), 5869 (HKDF) and 7914 (scrypt)
   - **Ciphers:** the GCM spec and RFC 8439 (ChaCha20-Poly1305)
   - **Curves:** RFC 8032 (Ed25519) and 7748 (X25519)
-- **Always-on tests:** `NodeStandInsTest` runs in every build, checking each module's behaviour in the isolate, the caps, and what stays unavailable. `NodeNetworkStandInsTest` runs `node:http` against a local server, including the socket's real connection details over plain HTTP and over TLS (unverified and trusted). It also covers `diagnostics_channel`, `events.on`, `dns`'s names, unconnected sockets, the pure parts of `net`, `tls`, `http2` and `tty`, and the `fs` streams. `StreamedRequestTest` checks the host side of `http`: framing, TLS (verification, `ca`, opting out), refused requests, and the shared limit and its release. `NodeHttp2Test` and `Http2ClientTest` check HTTP/2 in the isolate and on the host (streams, trailers, resets, ping, settings, refusals, the shared limits, cleanup). `NodeSocketsTest` and `SocketClientTest` check sockets in the isolate and on the host: events, half-close, errors, TLS, the upgrade, the limits, cleanup at the end of a run, and that a socket nobody reads pushes back on its peer.
+- **Always-on tests:** `NodeStandInsTest` runs in every build, checking each module's behaviour in the isolate, the caps, and what stays unavailable. `NodeNetworkStandInsTest` runs `node:http` against a local server, including the socket's real connection details over plain HTTP and over TLS (unverified and trusted). It also covers `diagnostics_channel`, `events.on`, `dns` without the network, unconnected sockets, the pure parts of `net`, `tls`, `http2` and `tty`, and the `fs` streams. `StreamedRequestTest` checks the host side of `http`: framing, TLS (verification, `ca`, opting out), refused requests, and the shared limit and its release. `NodeHttp2Test` and `Http2ClientTest` check HTTP/2 in the isolate and on the host (streams, trailers, resets, ping, settings, refusals, the shared limits, cleanup). `NodeDnsTest`, `NodeDnsApiTest` and `DnsResolverTest` check `dns` in the isolate, what the filtering shows, and the resolver (every record type, compressed names, each failure, TCP after truncation) against a local DNS server. `NodeSocketsTest` and `SocketClientTest` check sockets in the isolate and on the host: events, half-close, errors, TLS, the upgrade, the limits, cleanup at the end of a run, and that a socket nobody reads pushes back on its peer.
 
 ## Known differences, in one list
 
@@ -557,6 +578,6 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 **Missing for now:**
 - **Globals:** `Blob`, `FormData`, `Headers`/`Request`/`Response`, Web Streams, `MessageChannel` and `WebSocket`.
 - **Crypto:** Brotli compression, AES-KW, classic Diffie-Hellman, and encrypted private keys.
-- **Network:** `dns` lookups (B4), `http.createServer` (B3), and WebSockets, in that order (network-reach.md §9).
+- **Network:** `http.createServer` (B3), then WebSockets (network-reach.md §9).
 
 Changes to any stand-in are recorded in the [changelog](../../CHANGELOG.md) and [decisions](../DECISIONS.md).

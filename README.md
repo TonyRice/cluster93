@@ -249,6 +249,8 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_INTERNAL_PORT` | `8090` | Node-to-node endpoint for proxied service traffic (cluster-only, secret-protected) |
 | `AUTOMATELY_ADVERTISE_HOST` | this host's address | How other nodes reach this node's internal endpoint |
 | `AUTOMATELY_EGRESS_ALLOW_PRIVATE` | `false` | Let every tenant's `fetch` reach private addresses (local development only; a node's own ports stay refused). For production, write rules in the cluster's or a tenant's egress policy |
+| `AUTOMATELY_EGRESS_DNS` | | DNS servers (`1.1.1.1, 8.8.8.8:53`) that answer scripts' lookups and connections instead of the system's resolver, for a split-horizon resolver that answers internal names (D-122) |
+| `AUTOMATELY_EGRESS_INTERNAL_DOMAINS` | | More internal zones (`corp.example, office.lan`) whose names scripts can't resolve unless a rule names them; `.local`, `.internal`, `.lan`, `.home.arpa`, `.localhost`, `.cluster.local`, `.svc` and single labels always are (D-122) |
 | `AUTOMATELY_EGRESS_POLICY_FILE` | | A JSON cluster egress policy (`posture`, `rules`, `addressSets`) stored at the cluster's first start only; after that, `PUT /v1/egress/cluster-policy` changes it (D-111) |
 | `AUTOMATELY_CLUSTERED` | `false` | |
 | `AUTOMATELY_CLUSTER_PORT` | `5701` | Ignite discovery (communication uses port + 100) |
@@ -299,7 +301,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
-| No tests | 904 unit tests (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress rules, files, packages, Node stand-ins, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture), 7 Docker integration tests that use real `SIGKILL`s, and real npm libraries checked against Node: 33 alone, plus 5 database and mail drivers against real servers | `./mvnw verify` |
+| No tests | 917 unit tests (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress rules, files, packages, Node stand-ins, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture), 7 Docker integration tests that use real `SIGKILL`s, and real npm libraries checked against Node: 34 alone, plus 5 database and mail drivers against real servers | `./mvnw verify` |
 | `callbackUrl`: one unsigned POST of `{success, error}` when a job finished, never retried | A signed POST of the result and your `data` for every way a job ends, retried through a durable queue | `CallbacksTest`, `CallbackDeliveryTest` |
 | `messagebus`: at most once, lost if nobody listened | The same bus, plus durable queues: at least once, leases, retries, dead letters, surviving a node's death | `QueueStoreContract` on both stores, a three-node failover test, the demo |
 | `Automately.startJob(..., waitForJob)` blocked a thread until the child finished | `jobs.run()` returns a handle whose `result()` is a promise; children stay in the tenant, with depth and rate limits | `JobsFromScriptsTest` |
@@ -328,7 +330,8 @@ Javet's native library is included for linux-x86_64 only for now.
      - ✅ `got`, with `req.socket` reporting the real connection; `diagnostics_channel`; the isolate reports Node 26.8.1 (D-114, D-115)
      - ✅ `net`/`tls` sockets, so pg, mysql2, ioredis, MongoDB and nodemailer work, each checked against real Node on a real server (D-116)
      - ✅ An `http2` client as Node 26 has it (request trailers, `state`, priorities, the real flags), and got with `http2: true` (D-117, D-118)
-     - **Next:** filtered `dns`; servers reached by hostname only, with listening ports intercepted (Express, Koa, Fastify; D-112); WebSockets. Raw TCP and UDP servers never run on core nodes.
+     - ✅ `dns` as Node's, through the gate's resolver: every record type with real TTLs, script-chosen servers checked by the gate, and only what the tenant could reach shown; `mongodb+srv://` works (D-122). The event loop runs Node's phases (D-121)
+     - **Next:** servers reached by hostname only, with listening ports intercepted (Express, Koa, Fastify; D-112); WebSockets. Raw TCP and UDP servers never run on core nodes.
 10. **The Node runtime:** native code and the rest of Node, in gVisor containers ([design](docs/design/node-runtime.md); accepted, not built). It starts after phase B, with its spikes: the runner's speed, rootless Podman with gVisor, and networking passed out through the runner. It reuses phase B's egress gate and routing.
 11. **Links:** your own devices and servers joining the cluster, and the only place raw TCP and UDP servers may run (design under review; [NOTES.md](NOTES.md)).
 12. **Then:** apps, the console, databases and Python.

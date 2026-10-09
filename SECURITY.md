@@ -74,6 +74,12 @@ Automately runs other people's code. This page describes who is trusted, what ea
   - every socket is closed when its run ends
 
   The host buffers only a few chunks a script hasn't read before pushing back on the peer, so a script can't make it hold a stream. TLS chains are judged on the host, and nothing the script writes is sent before the chain and host name check pass. Bytes are counted per tenant (`automately_egress_bytes_total`).
+- **Scripts' `dns`** (D-122) uses the gate's own resolver, so it can't answer differently from what a connection gets, and it shows only what the tenant could reach:
+  - **Internal names:** single labels, `.local`, `.internal`, `.lan`, `.home.arpa`, `.localhost`, `.cluster.local`, `.svc` and `AUTOMATELY_EGRESS_INTERNAL_DOMAINS` answer `ENOTFOUND` unless a rule names them.
+  - **Addresses** the tenant couldn't connect to are left out, as are records naming internal hosts.
+  - **Reverse lookups** only work for addresses it could reach.
+  - **A DNS server a script chooses** must pass the gate as a `dns` connection, so a private one needs a rule.
+  - **Split-horizon resolvers:** an operator whose system resolver answers internal records for public names sets `AUTOMATELY_EGRESS_DNS` to a public resolver, which then answers every script lookup and every connection's name.
 - **Nothing a script runs listens on a node:** TCP and UDP servers are refused, and HTTP servers are reached by hostname through the ingress (D-112).
 - Tenant S3 endpoints are still checked by the older address check, without the cluster-node rule; they move to the gate with phase B's next step.
 
@@ -116,6 +122,7 @@ Automately runs other people's code. This page describes who is trusted, what ea
 - [ ] TLS terminates in front of 8080 and 8000.
 - [ ] `AUTOMATELY_SECRETS_KEY` is set (at least 32 random characters) if tenants will use secrets or bring their own storage, and backed up.
 - [ ] `AUTOMATELY_EGRESS_ALLOW_PRIVATE` is left off in production.
+- [ ] If the nodes' resolver answers internal names (split-horizon DNS), `AUTOMATELY_EGRESS_DNS` points scripts at a public resolver, and `AUTOMATELY_EGRESS_INTERNAL_DOMAINS` lists your internal zones.
 - [ ] Tenant tokens are scoped to what each client needs, with expiry for CI tokens.
 - [ ] People use their own users (invites), and operators their own operator users; the admin token is kept for emergencies.
 - [ ] The audit log is exported (`AUTOMATELY_AUDIT_S3_BUCKET`) to a bucket the cluster's operators can't delete from (object lock or a separate account), and node clocks are kept in sync.

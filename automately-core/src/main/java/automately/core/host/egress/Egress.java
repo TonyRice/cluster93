@@ -6,7 +6,6 @@ import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 
 import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.util.List;
 import java.util.Set;
 
@@ -46,15 +45,39 @@ public final class Egress {
     public record Verdict(InetAddress address, Reason refused, EgressRule rule) {
     }
 
+    /** Names no script may resolve unless a rule names them (§8.2): special-use and conventional internal zones. */
+    public static final List<String> INTERNAL_SUFFIXES = List.of("local", "internal", "lan", "home.arpa", "localhost", "cluster.local", "svc");
+
     private final Vertx vertx;
     private final boolean allowPrivate;
     private final ClusterAddresses cluster;
     private final EgressPolicies policies;
+    private final automately.core.host.dns.DnsResolver resolver;
+    private final List<String> internalSuffixes;
 
     /**
      * @param allowPrivate the development switch, {@code AUTOMATELY_EGRESS_ALLOW_PRIVATE}
      */
     public Egress(Vertx vertx, boolean allowPrivate, ClusterAddresses cluster, EgressPolicies policies) {
+        this(vertx, allowPrivate, cluster, policies, new automately.core.host.dns.DnsResolver(vertx, List.of()), List.of());
+    }
+
+    /**
+     * @param resolver the one resolver for scripts (D-122)
+     * @param internalDomains {@code AUTOMATELY_EGRESS_INTERNAL_DOMAINS}: more internal zones, as {@code corp.example}
+     */
+    public Egress(Vertx vertx, boolean allowPrivate, ClusterAddresses cluster, EgressPolicies policies,
+                  automately.core.host.dns.DnsResolver resolver, List<String> internalDomains) {
+        this.resolver = resolver;
+        List<String> suffixes = new java.util.ArrayList<>(INTERNAL_SUFFIXES);
+        for (String domain : internalDomains) {
+            String lower = domain.trim().toLowerCase(java.util.Locale.ROOT);
+            lower = lower.startsWith("*.") ? lower.substring(2) : lower.startsWith(".") ? lower.substring(1) : lower;
+            if (!lower.isEmpty()) {
+                suffixes.add(lower);
+            }
+        }
+        this.internalSuffixes = List.copyOf(suffixes);
         this.vertx = vertx;
         this.allowPrivate = allowPrivate;
         this.cluster = cluster;
@@ -87,14 +110,111 @@ public final class Egress {
      */
     public Future<InetAddress> address(String tenant, String host, int port, EgressProtocol protocol, String what) {
         return cluster.current().compose(nodes -> policies.cluster().compose(clusterPolicy -> policies.of(tenant)
-                .compose(tenantPolicy -> vertx.<List<InetAddress>>executeBlocking(() -> {
-                    try {
-                        return List.of(InetAddress.getAllByName(host));
-                    } catch (UnknownHostException e) {
-                        throw new HostException("TypeError", "dns_failed", "Could not resolve " + host);
+                .compose(tenantPolicy -> resolver.addresses(host)
+                        .recover(err -> Future.failedFuture(new HostException("TypeError", "dns_failed", "Could not resolve " + host)))
+                        .compose(addresses -> settle(decide(host, addresses, port, protocol, nodes, allowPrivate, clusterPolicy,
+                                tenantPolicy), tenant, host, port, what)))));
+    }
+
+    /** The resolver the gate and {@code dns} share (D-122). */
+    public automately.core.host.dns.DnsResolver resolver() {
+        return resolver;
+    }
+
+    /**
+     * What {@code tenant}'s {@code dns} may show, under the policies as they are now (D-122): which addresses and names.
+     */
+    public Future<DnsView> dnsView(String tenant) {
+        return cluster.current().compose(nodes -> policies.cluster().compose(clusterPolicy -> policies.of(tenant)
+                .map(tenantPolicy -> new DnsView(nodes, allowPrivate, clusterPolicy, tenantPolicy, internalSuffixes))));
+    }
+
+    /**
+     * A DNS server a script chose ({@code setServers}): the gate checks it as a {@code dns} connection, so a public
+     * resolver is fine and one on a private network needs a rule (Tony, 2026-10-09).
+     */
+    public Future<java.net.InetSocketAddress> dnsServer(String tenant, java.net.InetSocketAddress server) {
+        return address(tenant, server.getAddress().getHostAddress(), server.getPort(), EgressProtocol.DNS, "dns")
+                .map(address -> new java.net.InetSocketAddress(address, server.getPort()));
+    }
+
+    /** What one tenant's {@code dns} may show (§8.2, D-122). */
+    public record DnsView(ClusterAddresses.Snapshot nodes, boolean allowPrivate, ClusterEgress cluster, TenantEgress tenant,
+                          List<String> internalSuffixes) {
+
+        /** Whether {@code address} (answered for {@code host}) may be shown: the tenant could connect to it somewhere. */
+        public boolean visible(String host, InetAddress address) {
+            return Egress.visible(host, address, nodes, allowPrivate, cluster, tenant);
+        }
+
+        /**
+         * Whether {@code name} is hidden: it's in an internal zone (single-label, a special-use suffix or one the
+         * operator lists), no allow rule names it, and the development switch is off.
+         */
+        public boolean hidden(String name) {
+            if (allowPrivate || !Egress.internal(name, internalSuffixes)) {
+                return false;
+            }
+            for (List<EgressRule> rules : List.of(tenant.rules(), cluster.rules())) {
+                for (EgressRule rule : rules) {
+                    if (rule.action() == EgressRule.Action.ALLOW && (rule.kind() == EgressRule.Kind.HOST || rule.kind() == EgressRule.Kind.SUFFIX)
+                            && rule.names(name, null, null, cluster.sets())) {
+                        return false;
                     }
-                }, false).compose(addresses -> settle(decide(host, addresses, port, protocol, nodes, allowPrivate, clusterPolicy,
-                        tenantPolicy), tenant, host, port, what)))));
+                }
+            }
+            return true;
+        }
+    }
+
+    /** Whether {@code name} is in an internal zone: one label, or under one of {@code suffixes}. */
+    static boolean internal(String name, List<String> suffixes) {
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        lower = lower.endsWith(".") ? lower.substring(0, lower.length() - 1) : lower;
+        if (!lower.contains(".")) {
+            return true;
+        }
+        for (String suffix : suffixes) {
+            if (lower.equals(suffix) || lower.endsWith("." + suffix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether {@code dns} may show {@code address} for {@code host} (D-122): a connection to it would be allowed on some
+     * port by some protocol. Cluster nodes never, unless the development switch is on; a deny rule hides it only if it
+     * applies on every port to every protocol or to dns; an allow rule shows it whatever its ports and protocols; then
+     * the development switch and the posture, as for connections.
+     */
+    public static boolean visible(String host, InetAddress address, ClusterAddresses.Snapshot nodes, boolean allowPrivate,
+                                  ClusterEgress cluster, TenantEgress tenant) {
+        InetAddress checked = checked(address);
+        if (nodes.isNode(address) || nodes.isNode(checked)) {
+            return allowPrivate;
+        }
+        AddressSets sets = cluster.sets();
+        for (List<EgressRule> rules : List.of(cluster.rules(), tenant.rules())) {
+            for (EgressRule rule : rules) {
+                if (rule.hidesFromDns() && rule.names(host, address, checked, sets)) {
+                    return false;
+                }
+            }
+        }
+        for (List<EgressRule> rules : List.of(tenant.rules(), cluster.rules())) {
+            for (EgressRule rule : rules) {
+                if (rule.action() == EgressRule.Action.ALLOW && rule.names(host, address, checked, sets)) {
+                    return true;
+                }
+            }
+        }
+        boolean isPublic = AddressSets.isPublic(checked);
+        if (allowPrivate && !isPublic) {
+            return true;
+        }
+        Posture posture = tenant.posture() != null ? tenant.posture() : cluster.posture();
+        return posture != Posture.ALLOW_LIST && isPublic;
     }
 
     private Future<InetAddress> settle(Verdict verdict, String tenant, String host, int port, String what) {

@@ -22,6 +22,8 @@ import java.util.UUID;
  * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
  * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
  * @param egressPolicyFile   a JSON cluster egress policy stored at the cluster's first start, or null (D-111)
+ * @param egressDnsServers   DNS servers that answer every script lookup and query, instead of the system's (D-122)
+ * @param egressInternalDomains more internal zones whose names scripts can't resolve unless a rule names them (D-122)
  * @param internalPort  this node's internal endpoint, where the ingress proxies service traffic (cluster-only)
  * @param advertiseHost the address other nodes use to reach the internal endpoint
  * @param ingressIdleTimeout how long a proxied request may go without a byte before it's closed
@@ -53,6 +55,8 @@ public record ServerConfig(
         String ingressDomain,
         boolean egressAllowPrivate,
         Path egressPolicyFile,
+        List<java.net.InetSocketAddress> egressDnsServers,
+        List<String> egressInternalDomains,
         int internalPort,
         String advertiseHost,
         Duration ingressIdleTimeout,
@@ -128,6 +132,12 @@ public record ServerConfig(
                 Boolean.parseBoolean(env.getOrDefault("AUTOMATELY_EGRESS_ALLOW_PRIVATE", "false")),
                 // Seeds the cluster's egress policy at its first start only (D-111); the API changes it after that.
                 blankToNull(env.get("AUTOMATELY_EGRESS_POLICY_FILE")) == null ? null : Path.of(env.get("AUTOMATELY_EGRESS_POLICY_FILE").trim()),
+                // Split-horizon resolvers: these servers answer scripts instead of the system's (§8.2, D-122).
+                automately.core.host.dns.DnsResolver.parseServers(env.get("AUTOMATELY_EGRESS_DNS")),
+                Arrays.stream(env.getOrDefault("AUTOMATELY_EGRESS_INTERNAL_DOMAINS", "").split(","))
+                        .map(String::trim)
+                        .filter(domain -> !domain.isEmpty())
+                        .toList(),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_INTERNAL_PORT", "8090")),
                 env.getOrDefault("AUTOMATELY_ADVERTISE_HOST", defaultAdvertiseHost()),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS", "60000"))),

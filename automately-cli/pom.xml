@@ -43,6 +43,14 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- The test DNS server from core's tests (D-122). -->
+        <dependency>
+            <groupId>automately</groupId>
+            <artifactId>automately-core</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <!-- Real databases for RealNpmPackagesTest's drivers (D-116), only when AUTOMATELY_TEST_REAL_SERVICES is set. -->
         <dependency>
             <groupId>org.testcontainers</groupId>
