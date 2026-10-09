@@ -1,5 +1,6 @@
-// A stand-in for Node's `process` (D-093): enough for npm code that checks its environment or defers work. It doesn't
-// claim to be Node: `process.versions.node` is undefined, so libraries that look for it take their non-Node path.
+// A stand-in for Node's `process` (D-093): enough for npm code that checks its environment or defers work. It reports
+// the Node release the isolate's stand-ins are checked against (D-115, replacing D-102), since libraries such as got
+// need one to load; RealNpmPackagesTest holds the two together.
 // `env` is exactly what the job declared (D-095), secrets already read, plus NODE_ENV; never the node's environment.
 // The runtime puts it here when the module loads, in place of the marker below.
 
@@ -11,8 +12,8 @@ const process = {
   execArgv: [],
   platform: 'linux',
   arch: 'x64',
-  version: '',
-  versions: {},
+  version: 'v26.8.1',
+  versions: { node: '26.8.1' },
   release: { name: 'automately' },
   pid: 1,
   ppid: 0,

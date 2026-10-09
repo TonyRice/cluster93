@@ -30,10 +30,14 @@ public final class FetchBinding {
 
     // --- requests whose body streams (node:http, D-109) ---
 
-    /** {@code request}: {@code {url, method, headers, chunked, timeoutMs, tls}}. Resolves with the request's id once connected. */
+    /**
+     * {@code request}: {@code {url, method, headers, chunked, timeoutMs, tls}}. Resolves once connected with the request's
+     * {@code id} and its {@code connection} (D-114), which the socket stand-in reports.
+     */
     @V8Function(name = "open")
     public V8ValuePromise open(V8Value request) throws JavetException {
-        return bridge.promise(() -> fetch.open(bridge.values().options(request)), bridge::addOutgoing);
+        return bridge.promise(() -> fetch.open(bridge.values().options(request)),
+                opened -> new io.vertx.core.json.JsonObject().put("id", bridge.addOutgoing(opened)).put("connection", opened.connection()));
     }
 
     /** Writes a body chunk; settles once the connection has taken it. */

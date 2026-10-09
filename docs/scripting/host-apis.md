@@ -140,7 +140,7 @@ export default async () => fetch(process.env.API_URL, { headers: { authorization
   - `service.env` in `automately.json` for `automately deploy`
   - `automately run … --env NAME=value --env-secret NAME=secret`
   - `jobs.run(script, input, { env: {...}, inheritEnv: true })`: a started job gets its parent's env only with `inheritEnv`.
-- **`process`** is a global, as in Node, and `node:process` gives the same object. It doesn't claim to be Node (`process.versions.node` is undefined); `exit`, `chdir` and `binding` throw.
+- **`process`** is a global, as in Node, and `node:process` gives the same object. It reports the Node release its stand-ins are checked against, `v26.8.1` (D-115); `exit`, `chdir` and `binding` throw.
 
 ## `crypto`
 

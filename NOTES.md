@@ -79,7 +79,7 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
 - **The console's "Network access" page** (Tony, 2026-10-08): tenants should see the rules that apply to them, meaning what's allowed by default, what's refused and why, and their operator-granted rules. `GET /v1/egress-policy` is written to be that page's data, with a reason for each item (docs/design/network-reach.md §3). Still to decide: whether a tenant can *request* a rule from the console, which an operator then approves, and whether recent refusals (`egress_denied`, with the host and reason) are shown there too.
 - **The same view for other policies:** the storage policy (D-057) and quotas could be explained to tenants the same way, in one "What this tenant may do" place.
 - ~~**Unhandled promise rejections**~~: done in D-110; they fail the job as in Node.
-- **`got`**: needs `http2-wrapper` and socket timing events (`connect`, `secureConnect`) the `http` stand-in doesn't emit. Worth a look once `net` has real sockets (B5).
+- ~~**`got`**~~: works over HTTP/1.1 (D-114); `http2: true` waits for the `http2` client step.
 
 ## Next after phase B (Tony, 2026-10-08)
 - **The shared execution layer and the gVisor Node containers:**

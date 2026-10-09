@@ -4,6 +4,7 @@
 - **B1, the egress gate and allow-lists:** ✅ built (D-108). Tony decided its shape on 2026-10-08 (D-095 §4.5).
 - **B2, the `http`/`https` client:** ✅ built (D-109), with axios and node-fetch matching real Node. Unhandled rejections fail jobs as in Node (D-110).
 - **Configurable address spaces (§10):** ✅ built (D-111, D-113).
+- **got and real socket details (§11):** ✅ built (D-114). The isolate reports a Node version so got loads (D-115).
 - **Servers reached by hostname with intercepted ports (§5, D-112):** accepted (Tony, 2026-10-08).
 - **The rest, accepted with Tony's answers in §8** (2026-10-08):
   - got and real socket details (§11)
@@ -294,8 +295,8 @@ GET /v1/egress-policy                     (the tenant, read-only)
 ## 9. Order and tests
 1. **B1:** ✅ (D-108).
 2. **B2:** ✅ (D-109, D-110).
-3. **Configurable address spaces (§10, D-111).**
-4. **got over HTTP/1.1** (§11).
+3. **Configurable address spaces (§10):** ✅ (D-111, D-113).
+4. **got over HTTP/1.1** (§11): ✅ (D-114, D-115).
 5. **B5: sockets** (§7).
 6. **The `http2` client** (§12).
 7. **B4: `dns`** (§6).
@@ -376,13 +377,21 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **Request sizes:** a tenant's policy can be up to 64 KB, the cluster's up to 4 MB.
 - **A tenant's posture** can be set back to the cluster's with `"posture": "inherit"`.
 
-## 11. got, and real socket details on `http` (accepted)
+## 11. got, and real socket details on `http` (built, D-114)
 - **`node:diagnostics_channel`,** which doesn't touch the network: channels, subscribing, publishing, and `tracingChannel`. got, mysql2, ioredis and Fastify import it.
 - **Real connection details on `req.socket`,** from Vert.x's connection:
   - **What it reports:** remote and local addresses, the family, and for TLS whether the certificate was trusted (and why not), the protocol, the cipher, ALPN and the peer certificate.
   - **The socket stand-in:** `connecting` stays true until the host has the connection. Then it emits `lookup` (the address the gate checked), `connect`, then `secureConnect`, in Node's order. A connection reused from the pool is already connected, as a keep-alive socket in Node is.
 - **What it gives got:** real timings.
 - **Tested:** a got fixture against real Node covering JSON, retries, timeouts, hooks, streams, `HTTPError`, redirects and pagination.
+
+**What building it took (D-114, D-115):**
+- **A Node version.** got reads `process.versions.node` when it loads, which D-102 had left undefined. Tony chose to report the release the stand-ins are checked against, `v26.8.1` (D-115). With it, all 31 library fixtures still match Node, and jsonwebtoken's PS256 works.
+- **`events.on`,** the async iterator, which got imports.
+- **`dns` with its names and constants, lookups refused until §6.** got's cacheable-lookup imports it when it loads (and uses it only if got's DNS cache is turned on).
+- **Unconnected sockets:** `new net.Socket()` and `new tls.TLSSocket(stream)` construct, as in Node. http2-wrapper builds a `TLSSocket` over a stream when it loads to reach a Node internal.
+- **Node's messages for refused connections and unknown hosts** (`connect ECONNREFUSED 127.0.0.1:9`), which got passes on.
+- **Found along the way:** the isolate's `ECDH.getPrivateKey()` kept leading zero bytes, which Node drops. One generated key in 256 came out a byte longer than Node's, which made the webcrypto fixture flaky. Fixed, and the fixture now checks the case directly.
 
 ## 12. The `http2` client (accepted; this replaces "never `http2`")
 - **A session is a Vert.x connection:** `http2.connect` goes through the gate, then `HttpClientAgent.connect`, which answers with an `HttpClientConnection`. That's exactly a Node session. Over TLS it negotiates `h2` with ALPN; for `http://` it uses h2c with prior knowledge.

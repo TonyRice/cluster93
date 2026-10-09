@@ -704,7 +704,10 @@ export class ECDH {
 
   getPrivateKey(encoding) {
     if (!this.#private) throw Object.assign(new Error('Failed to get ECDH private key'), { code: 'ERR_CRYPTO_ECDH_INVALID_PUBLIC_KEY' });
-    return asOutput(Buffer.from(this.#private), encoding);
+    // As OpenSSL's BN_bn2bin, which Node uses: no leading zero bytes, so a key can be shorter than the curve's size.
+    let start = 0;
+    while (start < this.#private.length - 1 && this.#private[start] === 0) start++;
+    return asOutput(Buffer.from(this.#private.subarray(start)), encoding);
   }
 
   getPublicKey(encoding, format) {

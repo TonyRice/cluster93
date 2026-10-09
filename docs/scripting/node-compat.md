@@ -26,11 +26,11 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 |---|---|---|---|
 | `fs`, `fs/promises` | Most of it, with `createReadStream`/`createWriteStream` | The tenant's files and the job's `/tmp` | D-079, D-109 |
 | `path`, `path/posix` | Complete (POSIX) | JavaScript | D-090 |
-| `events` | Complete | JavaScript | D-090 |
+| `events` | Complete, with `on` and `once` (signals included) | JavaScript | D-090, D-114 |
 | `buffer` | Nearly complete | JavaScript | D-090 |
 | `url` | Most of it | JavaScript | D-090 |
 | `util` | The common parts | JavaScript | D-090 |
-| `process` | A job-shaped subset; also a global | JavaScript | D-093, D-096 |
+| `process` | A job-shaped subset; also a global; reports Node 26.8.1 | JavaScript | D-093, D-096, D-115 |
 | `crypto` | Nearly complete | The JVM | D-097, D-101, D-104 |
 | `stream`, `stream/promises` | Complete (Node's own code) | Vendored `readable-stream` 4.8.0 | D-100 |
 | `string_decoder` | Complete (Node's own code) | Vendored `string_decoder` 1.3.0 | D-100 |
@@ -40,15 +40,17 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `timers`, `timers/promises` | Complete | The isolate's timers | D-103 |
 | `os` | Describes the job, not the machine | JavaScript | D-103 |
 | `http`, `https` | The client; `createServer` is phase B3 | The host's HTTP client, through the egress gate | D-108, D-109 |
-| `net` | Address checks (`isIP`, …); sockets are phase B5 | JavaScript | D-109 |
-| `tls` | Its defaults and names; sockets are phase B5 | JavaScript | D-109 |
+| `net` | Address checks (`isIP`, …) and unconnected sockets; connecting is phase B5 | JavaScript | D-109, D-114 |
+| `tls` | Its defaults and names, unconnected `TLSSocket`s; connecting is phase B5 | JavaScript | D-109, D-114 |
 | `http2` | Its constants only; HTTP/2 isn't supported | JavaScript | D-109 |
 | `tty` | `isatty()` is false: a job has no terminal | JavaScript | D-109 |
+| `diagnostics_channel` | Complete: channels, `tracingChannel` | JavaScript | D-114 |
+| `dns`, `dns/promises` | Its names and constants; lookups are phase B4 | JavaScript | D-114 |
 | `automately:kv`, `:bus`, `:jobs`, `:files`, `:secrets`, `:fetch`, `:log` | The host APIs as modules | The host | D-091 |
 
-**Refused:** `dns`, `dgram`, `child_process`, `cluster`, `worker_threads`, `vm`, `v8`, `inspector`, `module`, `readline`, `repl`, `perf_hooks`, `async_hooks`, `diagnostics_channel`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module), `constants` and `stream/web`.
+**Refused:** `dgram`, `child_process`, `cluster`, `worker_threads`, `vm`, `v8`, `inspector`, `module`, `readline`, `repl`, `perf_hooks`, `async_hooks`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module), `constants` and `stream/web`.
 - **When:** importing one stops the publish ("Node's "dns" module isn't available in the isolate …"). A CommonJS `require()` of one throws when it runs instead, with a warning at publish.
-- **What's coming** ([network reach](../design/network-reach.md)): `http.createServer` on `ctx.serve` (B3), `dns` (B4), and outbound `net`/`tls` sockets (B5), all through the egress gate.
+- **What's coming** ([network reach](../design/network-reach.md)): outbound `net`/`tls` sockets (B5), an `http2` client, `dns` lookups (B4), `http.createServer` by hostname (B3), and WebSockets, all through the egress rules. `async_hooks` and `perf_hooks` come with B3, since the web frameworks need them.
 - **The rest** need the Node runtime.
 
 ## Globals
@@ -117,7 +119,9 @@ POSIX paths, following Node's own algorithms: `join`, `resolve`, `normalize`, `r
 `EventEmitter`, as Node has it.
 - It's a constructor function, so `EventEmitter.call(this)` with `util.inherits` works, as well as `class extends`.
 - **API:** `on`/`addListener`, `once`, `off`/`removeListener`, `removeAllListeners`, `prependListener`/`prependOnceListener`, `emit`, `listeners`, `rawListeners`, `listenerCount`, `eventNames` and `setMaxListeners`/`getMaxListeners`, plus `errorMonitor`, `defaultMaxListeners` and `events.once(emitter, name)` (a promise).
-- **Not there:** `EventTarget`, `on(emitter, name)` as an async iterator, and `captureRejections`.
+- **`events.on(emitter, name, { signal, close })`** is an async iterator over the event's emissions, as in Node (D-114). It throws on an `error` event, ends on any `close` event or when the loop breaks, and rejects with an `AbortError` when the signal aborts. Emissions wait in a queue until the loop asks for them; Node's `highWaterMark` pausing isn't there.
+- **`events.once`** takes `{ signal }` too.
+- **Not there:** `captureRejections`. (`EventTarget` is a global; see [Globals](#globals).)
 
 ## `buffer`
 
@@ -155,7 +159,7 @@ A job-shaped `process`, also available as a global (D-096).
   - The full guide is in [host APIs](host-apis.md).
 - **There:** `nextTick` (a microtask; a throw in its callback fails the job, as an uncaught exception ends Node), `hrtime` and `hrtime.bigint`, `uptime`, `cwd()` (`/`), `platform` (`linux`), `arch` (`x64`), `argv` (`[]`), `pid` (1), `emitWarning`, and `stdout.write`/`stderr.write` (to the log). Also `on`/`emit` and the other listener methods. The only events emitted are `unhandledRejection` and `rejectionHandled`, as in Node (D-110): without an `unhandledRejection` listener, a promise rejected with no handler by the end of a turn fails the job.
 - **Differs:**
-  - `version` is `''` and `versions` is `{}` (D-102). `memoryUsage()` is zeros.
+  - `version` is `'v26.8.1'` and `versions` is `{ node: '26.8.1' }`: the Node release the stand-ins are checked against (D-115, replacing D-102). got won't load without one, and jsonwebtoken allows PS256 only on versions it knows. `RealNpmPackagesTest` fails if it's run with another release, so the two move together. Other `versions` entries (`v8`, `uv`, …) aren't there. `memoryUsage()` is zeros.
   - `Object.prototype.toString.call(process)` is `[object process]`, as in Node (D-109). axios checks it to choose its Node adapter.
   - `exit()`, `abort()`, `chdir()` and `binding()` throw: return from the script instead of exiting.
   - `hrtime` counts from the job's start, in milliseconds' precision.
@@ -175,7 +179,7 @@ Node's `crypto` on the JVM's own cryptography (D-097, D-101, D-104). The full li
 - **Signatures:** `sign`/`verify` and `createSign`/`createVerify`. RSA (PKCS#1 v1.5 and PSS), ECDSA on P-256/384/521 (DER or IEEE P1363) and Ed25519.
 - **Key generation:** `generateKeyPair(Sync)` for rsa, ec, ed25519 and x25519, and `generateKey(Sync)` for hmac and aes.
 - **RSA encryption:** `publicEncrypt`, `privateDecrypt`, `privateEncrypt` and `publicDecrypt`, with OAEP (any hash, a label), PKCS#1 v1.5 or no padding.
-- **Key agreement:** `createECDH` (every point encoding, plus `ECDH.convertKey`), and `diffieHellman()` for ECDH and X25519.
+- **Key agreement:** `createECDH` (every point encoding, plus `ECDH.convertKey`), and `diffieHellman()` for ECDH and X25519. `getPrivateKey()` drops leading zero bytes, as Node's does (D-114), so a generated key is sometimes a byte shorter than the curve's size.
 
 **Differs from Node:**
 - **`privateDecrypt` with PKCS#1 v1.5 padding is refused (D-104).**
@@ -288,7 +292,7 @@ Describes the job, never the machine (D-103):
 | `networkInterfaces()` | `{}` |
 | `userInfo()` | `{ username: 'automately', uid: -1, gid: -1, homedir: '/tmp', shell: null }` |
 | `platform()`, `type()`, `arch()`, `machine()`, `endianness()` | `linux`, `Linux`, `x64`, `x86_64`, `LE` |
-| `release()`, `version()` | `''` (D-102) |
+| `release()`, `version()` | `''`: no kernel is described |
 | `loadavg()` | `[0, 0, 0]` |
 | `uptime()` | seconds since the module loaded |
 
@@ -315,9 +319,14 @@ The client, as Node's, on the host's HTTP client (D-109). Every request goes thr
   - **`rejectUnauthorized: false`** is honoured (Tony's call): it only affects your own connection, and the job's log notes it once. `NODE_TLS_REJECT_UNAUTHORIZED=0` in the job's `env` does the same.
   - **Agents:** `https.Agent`'s TLS options apply to its requests.
 - **Differs from Node:**
-  - **No sockets.** The host connects; `req.socket` is a stand-in with the methods libraries call (`setTimeout`, `setNoDelay`, `setKeepAlive`, `ref`/`unref`, `destroy`). It has no addresses, and no `connect` or `secureConnect` events, so timing libraries that read socket phases see nothing.
+  - **No sockets of the script's own.** The host connects; `req.socket` is a stand-in with the methods libraries call (`setTimeout`, `setNoDelay`, `setKeepAlive`, `ref`/`unref`, `destroy`) and the real connection's details (D-114).
+    - **While connecting:** `connecting` is true until the host has the connection.
+    - **Then, in Node's order:** `lookup`, `connect`, `secureConnect` (HTTPS) and `ready`. `lookup` comes only for a host name, never an address, as in Node; it reports the address the egress gate checked. A connection reused from the host's pool sets `req.reusedSocket` and has no `lookup`.
+    - **Addresses:** `remoteAddress`, `remotePort`, `remoteFamily`, `localAddress`, `localPort` and `address()` are real.
+    - **TLS:** `authorized`, `authorizationError`, `getPeerCertificate(detailed)` (Node's shape: `subject`, `issuer`, `subjectaltname`, `valid_from`/`valid_to`, `serialNumber`, the fingerprints, `raw`, `pubkey`, `bits`, `modulus`/`exponent` or `asn1Curve`/`nistCurve`, `ext_key_usage`, `ca`, and the `issuerCertificate` chain), `getProtocol()` and `getCipher()`.
+    - **TLS differences:** `getCipher().name` is the IANA name (`TLS_AES_128_GCM_SHA256`, or `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256` where OpenSSL would say `ECDHE-RSA-AES128-GCM-SHA256`). With `rejectUnauthorized: false`, `authorized` says whether the JVM's trust store would have trusted the chain, without checking the host name, and `authorizationError` is one of `DEPTH_ZERO_SELF_SIGNED_CERT`, `SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE` or `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`. Sessions aren't reused (`isSessionReused()` is false).
   - **Agents don't pool.** `keepAlive` and `maxSockets` are accepted; the host pools connections per node.
-  - **Errors carry Node's codes** where there's one (`ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`). A refusal by the egress gate has `code: 'egress_denied'` and says why.
+  - **Errors carry Node's codes** where there's one (`ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`). A refused connection and an unknown host have Node's messages and fields too (`connect ECONNREFUSED 10.0.0.1:5432` with `address`, `port`, `syscall` and `errno`; `getaddrinfo ENOTFOUND db.example`) (D-114). A refusal by the egress gate has `code: 'egress_denied'` and says why.
   - **`maxHeaderSize`** is 64 KiB, the host's limit; Node's default is 16 KiB.
 - **Refused, with an error that says why:** `createConnection` (it would bypass the gate), `socketPath`, `CONNECT`, upgrades to WebSocket, `pfx`, `passphrase` (encrypted keys), and a custom `checkServerIdentity` (the isolate never sees the certificate; `tls.checkServerIdentity` itself is accepted).
 - **Ignored:** `lookup`, `family`, `localAddress`, `localPort` and `servername`. The gate does the resolving, and SNI is the request's host.
@@ -328,16 +337,38 @@ The client, as Node's, on the host's HTTP client (D-109). Every request goes thr
   - **Response headers:** 64 KiB.
   - **Redirects:** none are followed, which is Node's behaviour too. Libraries that follow them (axios, node-fetch) make each hop a new request, and each goes through the gate.
   - **Cleanup:** an unfinished request is aborted when the job ends.
-- **Proven with:** axios (its Node adapter: JSON, forms, gzip, redirects, timeouts, streams and binary bodies) and node-fetch 3, both giving real Node's results.
-- **Known gap:** `got` needs `http2-wrapper` and socket timing events, so it's untested and probably doesn't work.
+- **Proven with:** axios (its Node adapter: JSON, forms, gzip, redirects, timeouts, streams and binary bodies), node-fetch 3 and got 14 (D-114: JSON and form bodies, search params, auth, hooks, redirects, gzip, `HTTPError`, retries, `throwHttpErrors`, phase timeouts, refused connections, streams with progress, pagination, and which timing phases exist), all giving real Node's results.
+- **got's `http2: true`** needs an HTTP/2 client, which comes in phase B's `http2` step.
 
-## `net`, `tls`, `http2` and `tty`
+## `net`, `tls`, `http2`, `tty` and `dns`
 
-These exist for their pure parts, so libraries that import them load. They open nothing (D-109).
-- **`net`:** `isIP`, `isIPv4` and `isIPv6`, with Node's own patterns, and `get`/`setDefaultAutoSelectFamily`. `Socket`, `Server` and `Stream` exist for `instanceof` checks. `connect`, `createConnection`, `createServer` and `new Socket()` throw `ERR_NOT_SUPPORTED`. **Outbound sockets come in phase B5,** through the gate: every port but SMTP's (25, 465, 587), at most 120 new connections a minute per tenant per node.
-- **`tls`:** `DEFAULT_MIN_VERSION`/`MAX_VERSION`/`ECDH_CURVE`/`CIPHERS`, `getCiphers()`, `checkServerIdentity` (a marker `https` accepts), and the `TLSSocket`/`SecureContext`/`Server` classes. `rootCertificates` is empty: the host verifies against the JVM's trust store, which the isolate can't list. `connect`, `createServer` and `createSecureContext` throw until phase B5.
+These have everything that doesn't open a connection, so libraries that import them load (D-109, D-114). **Opening a connection isn't a restriction, it isn't built yet:** sockets come in phase B5 and lookups in B4, through the egress rules, and until then they throw `ERR_NOT_SUPPORTED` with a message that says so.
+- **`net`:**
+  - **Addresses:** `isIP`, `isIPv4` and `isIPv6`, with Node's own patterns, and `get`/`setDefaultAutoSelectFamily`.
+  - **Sockets can be made:** `new net.Socket()` is an unconnected `Duplex` with a socket's properties, as in Node, so libraries can build one and `instanceof` works. `Stream` is the same class.
+  - **Not yet:** `connect()` on it, `net.connect`/`createConnection`, and writing to an unconnected socket throw `ERR_NOT_SUPPORTED`. **Outbound sockets come in phase B5,** through the egress rules: SMTP's ports are refused by a default cluster rule, and at most 120 new connections a minute per tenant per node.
+  - **Never on the cluster:** `createServer` and `Server`. TCP servers run only on untrusted nodes, such as a link (D-112).
+- **`tls`:**
+  - **Values and functions:** `DEFAULT_MIN_VERSION`/`MAX_VERSION`/`ECDH_CURVE`/`CIPHERS`, `getCiphers()`, and `checkServerIdentity` (a marker `https` accepts).
+  - **`rootCertificates` is empty:** the host verifies against the JVM's trust store, which the isolate can't list.
+  - **`new tls.TLSSocket(stream)`** makes an unconnected TLS socket. Over a stream that isn't a socket, it has Node's internal `_handle._parentWrap`, which http2-wrapper (got's) reaches for when it loads.
+  - **Not yet:** `connect` and `createSecureContext` throw until phase B5.
+  - **Never on the cluster:** `createServer`.
 - **`http2`:** `constants` (all 240 of Node 26's) and `sensitiveHeaders`, so axios, which imports it for an optional HTTP/2 path, loads. `connect`, `createServer` and `createSecureServer` throw: HTTP/2 isn't supported.
 - **`tty`:** `isatty()` is always false, as for Node with its output piped, so libraries such as debug don't add colours. `ReadStream` and `WriteStream` throw: a job has no terminal.
+- **`dns` and `dns/promises`:**
+  - **There:** every name and constant Node has (`ADDRCONFIG`, `V4MAPPED`, `ALL`, the error codes), `Resolver` and `promises.Resolver`, and `get`/`setDefaultResultOrder`. So libraries that import it when they load, such as got's cacheable-lookup, load.
+  - **Not yet:** every lookup (`lookup`, `resolve*`, `reverse`, `lookupService`) fails with `ERR_NOT_SUPPORTED`, through its callback or promise. `getServers()` is empty, and `setServers()` throws.
+  - **Coming in phase B4:** lookups answered through the egress rules (network-reach.md §6).
+  - **Never needed by HTTP:** `fetch`, `http` and `https` don't use it; the host resolves names through the gate.
+
+## `diagnostics_channel`
+
+Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ioredis and Fastify import it.
+- **Channels:** `channel(name)` (one per name), `hasSubscribers`, `subscribe`/`unsubscribe` (on the module and on a channel) and `publish`.
+- **Tracing:** `tracingChannel(name or channels)`, with its `start`/`end`/`asyncStart`/`asyncEnd`/`error` channels and `traceSync`, `tracePromise` and `traceCallback`, publishing what Node publishes, in Node's order.
+- **Subscribers that throw:** the publisher carries on, and the error fails the job, as an uncaught exception ends Node.
+- **Stores:** `bindStore` and `runStores` run each store's `run`. `AsyncLocalStorage` can't carry a value across `await` in the isolate, though.
 
 ---
 
@@ -358,7 +389,8 @@ These exist for their pure parts, so libraries that import them load. They open 
 ## How compatibility is verified
 
 - **Against real Node:** `RealNpmPackagesTest` (run with `AUTOMATELY_TEST_REAL_NPM`) installs real libraries from a pinned lockfile, bundles them, runs each in the isolate, and requires **the same output as under real Node**.
-  - **Libraries:** lodash-es, date-fns, dayjs, zod, marked, js-yaml, yaml, ajv, semver, immer, rxjs, mustache, eventemitter3, validator, uuid, nanoid, papaparse, csv-parse, jsonwebtoken (HS256, RS256, ES256), axios and node-fetch.
+  - **Libraries:** lodash-es, date-fns, dayjs, zod, marked, js-yaml, yaml, ajv, semver, immer, rxjs, mustache, eventemitter3, validator, uuid, nanoid, papaparse, csv-parse, jsonwebtoken (HS256, RS256, ES256, PS256), axios, node-fetch and got.
+  - **The Node release:** the test checks that it runs against Node v26.8.1, the version the isolate reports (D-115).
   - **HTTP libraries** run against a local test server whose answers are fixed, reached by both real Node and the isolate (the test node uses the development switch, since loopback is the node itself).
   - **Fixtures for the stand-ins themselves:**
     - `node:crypto`: KDFs, ciphers, keys and signatures, with Node-made keys
@@ -371,15 +403,15 @@ These exist for their pure parts, so libraries that import them load. They open 
   - **KDFs:** RFC 6070 (PBKDF2), 5869 (HKDF) and 7914 (scrypt)
   - **Ciphers:** the GCM spec and RFC 8439 (ChaCha20-Poly1305)
   - **Curves:** RFC 8032 (Ed25519) and 7748 (X25519)
-- **Always-on tests:** `NodeStandInsTest` runs in every build, checking each module's behaviour in the isolate, the caps, and what stays unavailable. `NodeNetworkStandInsTest` runs `node:http` against a local server, and the pure parts of `net`, `tls`, `http2` and `tty` and the `fs` streams. `StreamedRequestTest` checks the host side of `http`: framing, TLS (verification, `ca`, opting out), refused requests, and the shared limit and its release.
+- **Always-on tests:** `NodeStandInsTest` runs in every build, checking each module's behaviour in the isolate, the caps, and what stays unavailable. `NodeNetworkStandInsTest` runs `node:http` against a local server, including the socket's real connection details over plain HTTP and over TLS (unverified and trusted). It also covers `diagnostics_channel`, `events.on`, `dns`'s names, unconnected sockets, the pure parts of `net`, `tls`, `http2` and `tty`, and the `fs` streams. `StreamedRequestTest` checks the host side of `http`: framing, TLS (verification, `ca`, opting out), refused requests, and the shared limit and its release.
 
 ## Known differences, in one list
 
 **Behaviour that differs from Node:**
-- **No Node version:** `process.version` is empty (D-102), so version-gated features in libraries stay off (jsonwebtoken's PS256).
+- **The Node version** is fixed at `v26.8.1`, the release the stand-ins are checked against (D-115), whatever V8 the isolate runs.
 - **PKCS#1 v1.5 decryption** is refused in `privateDecrypt`; use OAEP (D-104).
 - **Streams:** crypto classes aren't streams; `fetch` bodies and `files.stream` are async iterables, not Node streams. `fs` streams hold the whole file (32 MB).
-- **HTTP:** no real sockets behind `req.socket`; agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused.
+- **HTTP:** `req.socket` is a stand-in reporting the host's connection (D-114); agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused; TLS cipher names are IANA's, not OpenSSL's.
 - **Uncaught errors:** a throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` event listener, fails the job as it would end Node. So does a promise rejected with no handler by the end of the turn (D-110), unless `process.on('unhandledRejection')` has a listener; that one isn't a difference from Node.
 - **Approximate output:** `util.inspect` output and `assert`'s messages for structures.
 - **Compressed bytes** may differ from Node's (both are valid).
@@ -391,6 +423,6 @@ These exist for their pure parts, so libraries that import them load. They open 
 **Missing for now:**
 - **Globals:** `Blob`, `FormData`, `Headers`/`Request`/`Response`, Web Streams, `MessageChannel` and `WebSocket`.
 - **Crypto:** Brotli compression, AES-KW, classic Diffie-Hellman, and encrypted private keys.
-- **Network:** `http.createServer` (B3), `dns` (B4), `net`/`tls` sockets (B5), HTTP/2, and WebSockets.
+- **Network:** `net`/`tls` connections (B5), the `http2` client, `dns` lookups (B4), `http.createServer` (B3), and WebSockets, in that order (network-reach.md §9).
 
 Changes to any stand-in are recorded in the [changelog](../../CHANGELOG.md) and [decisions](../DECISIONS.md).

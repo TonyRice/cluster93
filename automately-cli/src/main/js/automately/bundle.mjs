@@ -27,7 +27,8 @@ const PROVIDED = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises', 'p
   'stream', 'node:stream', 'stream/promises', 'node:stream/promises', 'string_decoder', 'node:string_decoder',
   'zlib', 'node:zlib', 'assert', 'node:assert', 'assert/strict', 'node:assert/strict', 'querystring', 'node:querystring',
   'timers', 'node:timers', 'timers/promises', 'node:timers/promises', 'os', 'node:os', 'http', 'node:http', 'https', 'node:https',
-  'net', 'node:net', 'tls', 'node:tls', 'http2', 'node:http2', 'tty', 'node:tty']);
+  'net', 'node:net', 'tls', 'node:tls', 'http2', 'node:http2', 'tty', 'node:tty', 'diagnostics_channel', 'node:diagnostics_channel',
+  'dns', 'node:dns', 'dns/promises', 'node:dns/promises']);
 // Native extras some packages use only if they're there (ws uses the first two); left out, with a warning.
 const OPTIONAL = new Set(['bufferutil', 'utf-8-validate', 'fsevents']);
 // What gives a package away as needing a native build.

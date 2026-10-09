@@ -1,7 +1,8 @@
 // A stand-in for Node's `net` (D-109): address checks (isIP, isIPv4, isIPv6, as Node's), so libraries that import it for
-// those (node-fetch) or reference it at load (https-proxy-agent) work. Sockets aren't available yet: connecting or
-// serving throws ERR_NOT_SUPPORTED. Outbound sockets through the egress gate are phase B5 (docs/design/network-reach.md).
+// those (node-fetch) or reference it at load (https-proxy-agent) work, and unconnected sockets. Connecting or serving
+// throws ERR_NOT_SUPPORTED: outbound sockets through the egress gate are phase B5 (docs/design/network-reach.md).
 import { EventEmitter } from 'node:events';
+import { Duplex } from 'node:stream';
 
 // Node's own patterns (lib/internal/net.js).
 const v4Seg = '(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])';
@@ -29,9 +30,34 @@ function unsupported(what) {
   return err;
 }
 
-/** Exists so `instanceof net.Socket` checks work; making one throws. */
-export class Socket extends EventEmitter {
-  constructor() { super(); throw unsupported('net.Socket'); }
+/**
+ * An unconnected socket, as `new net.Socket()` makes one in Node: a Duplex with a socket's properties, so libraries can
+ * build one and `instanceof net.Socket` checks work (D-114). Connecting, or writing to one, throws ERR_NOT_SUPPORTED
+ * until phase B5.
+ */
+export class Socket extends Duplex {
+  constructor(options = {}) {
+    super({ allowHalfOpen: Boolean(options?.allowHalfOpen) });
+    this.connecting = false;
+    this.pending = true;
+    this.remoteAddress = undefined;
+    this.remotePort = undefined;
+    this.remoteFamily = undefined;
+    this.localAddress = undefined;
+    this.localPort = undefined;
+    this.bytesRead = 0;
+    this.bytesWritten = 0;
+  }
+  get readyState() { return 'closed'; }
+  connect() { throw unsupported('net.Socket.connect'); }
+  _read() {}
+  _write(chunk, encoding, callback) { callback(unsupported('Writing to a net.Socket')); }
+  setTimeout() { return this; }
+  setNoDelay() { return this; }
+  setKeepAlive() { return this; }
+  ref() { return this; }
+  unref() { return this; }
+  address() { return {}; }
 }
 export const Stream = Socket;
 export class Server extends EventEmitter {

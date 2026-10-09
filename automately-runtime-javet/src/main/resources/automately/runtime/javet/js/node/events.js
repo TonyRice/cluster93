@@ -184,25 +184,95 @@ proto.eventNames = function eventNames() {
 
 EventEmitter.listenerCount = (emitter, name) => emitter.listenerCount(name);
 
-/** Resolves with the event's arguments the next time it's emitted; rejects if 'error' comes first. */
-export function once(emitter, name) {
+function abortError(signal) {
+  const err = new Error('The operation was aborted', { cause: signal?.reason });
+  err.name = 'AbortError';
+  err.code = 'ABORT_ERR';
+  return err;
+}
+
+/**
+ * Resolves with the event's arguments the next time it's emitted; rejects if 'error' comes first, or if
+ * {@code options.signal} aborts.
+ */
+export function once(emitter, name, options = {}) {
+  const signal = options?.signal;
+  if (signal?.aborted) return Promise.reject(abortError(signal));
   return new Promise((resolve, reject) => {
-    const onError = (err) => {
+    const cleanup = () => {
       emitter.removeListener(name, onEvent);
-      reject(err);
+      if (name !== 'error') emitter.removeListener('error', onError);
+      signal?.removeEventListener('abort', onAbort);
     };
-    const onEvent = (...args) => {
-      if (name !== 'error') {
-        emitter.removeListener('error', onError);
-      }
-      resolve(args);
-    };
-    emitter.once(name, onEvent);
-    if (name !== 'error') {
-      emitter.once('error', onError);
-    }
+    const onError = (err) => { cleanup(); reject(err); };
+    const onEvent = (...args) => { cleanup(); resolve(args); };
+    const onAbort = () => { cleanup(); reject(abortError(signal)); };
+    emitter.on(name, onEvent);
+    if (name !== 'error') emitter.on('error', onError);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
+
+/**
+ * An async iterator over the event's arguments, each emission an array, as Node's {@code events.on} (D-114). It throws
+ * an 'error' event, ends on one of {@code options.close}'s events or when the loop breaks, and rejects with an
+ * AbortError if {@code options.signal} aborts. Emissions wait in a queue until the loop asks for them.
+ */
+export function on(emitter, name, options = {}) {
+  const signal = options?.signal;
+  if (signal?.aborted) throw abortError(signal);
+  const queue = [];
+  const waiting = [];
+  let error = null;
+  let finished = false;
+
+  const settle = () => {
+    while (waiting.length && (queue.length || error || finished)) {
+      const { resolve, reject } = waiting.shift();
+      if (queue.length) resolve({ value: queue.shift(), done: false });
+      else if (error) { const err = error; error = null; finished = true; reject(err); }
+      else resolve({ value: undefined, done: true });
+    }
+  };
+  const onEvent = (...args) => { queue.push(args); settle(); };
+  const onError = (err) => { error = err; cleanup(); settle(); };
+  const onClose = () => { finished = true; cleanup(); settle(); };
+  const onAbort = () => { error = abortError(signal); cleanup(); settle(); };
+  const cleanup = () => {
+    emitter.removeListener(name, onEvent);
+    if (name !== 'error') emitter.removeListener('error', onError);
+    for (const event of options?.close ?? []) emitter.removeListener(event, onClose);
+    signal?.removeEventListener('abort', onAbort);
+  };
+
+  emitter.on(name, onEvent);
+  if (name !== 'error') emitter.on('error', onError);
+  for (const event of options?.close ?? []) emitter.on(event, onClose);
+  signal?.addEventListener('abort', onAbort, { once: true });
+
+  return {
+    next() {
+      if (queue.length) return Promise.resolve({ value: queue.shift(), done: false });
+      if (error) { const err = error; error = null; finished = true; return Promise.reject(err); }
+      if (finished) return Promise.resolve({ value: undefined, done: true });
+      return new Promise((resolve, reject) => { waiting.push({ resolve, reject }); });
+    },
+    return() {
+      finished = true;
+      cleanup();
+      settle();
+      return Promise.resolve({ value: undefined, done: true });
+    },
+    throw(err) {
+      error = err;
+      cleanup();
+      settle();
+      return Promise.reject(err);
+    },
+    [Symbol.asyncIterator]() { return this; },
+  };
+}
+EventEmitter.on = on;
 EventEmitter.once = once;
 
 export const errorMonitor = EventEmitter.errorMonitor;

@@ -114,7 +114,10 @@ function nodeCases() {
     alice.computeSecret(bob.getPublicKey()).toString('hex'), bob.computeSecret(alice.getPublicKey(null, 'compressed')).toString('hex'),
     ECDH.convertKey(alice.getPublicKey('hex', 'compressed'), 'prime256v1', 'hex', 'hex', 'uncompressed') === alice.getPublicKey('hex')];
   const fresh = createECDH('secp384r1');
-  out.ecdhGenerated = [fresh.generateKeys().length, fresh.getPrivateKey().length];
+  // A generated private key's length varies (leading zero bytes are dropped); one with a leading zero shows it every time.
+  const leadingZero = createECDH('prime256v1');
+  leadingZero.setPrivateKey(Buffer.concat([Buffer.alloc(1), Buffer.alloc(31, 7)]));
+  out.ecdhGenerated = [fresh.generateKeys().length, fresh.getPrivateKey().length >= 46, leadingZero.getPrivateKey().length];
   try {
     alice.computeSecret(Buffer.from('04' + '00'.repeat(64), 'hex'));
     out.invalidPoint = 'accepted';

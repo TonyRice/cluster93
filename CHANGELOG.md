@@ -26,6 +26,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## got runs in the isolate; `http`'s socket reports the real connection (2026-10-08)
+
+### Added
+- **got 14 works over HTTP/1.1** (D-114) and gives real Node's results, as axios and node-fetch do. **Why:** phase B's next step.
+- **`req.socket` describes the connection the host made:**
+  - **events:** `lookup`, `connect`, `secureConnect` and `ready` in Node's order
+  - **addresses:** the real ones, and `reusedSocket` for pooled connections
+  - **TLS:** `authorized`/`authorizationError`, `getPeerCertificate(detailed)` in Node's shape, `getProtocol()` and `getCipher()`
+
+  got's timings come from these.
+- **`node:diagnostics_channel`,** complete: channels and tracing channels.
+- **`events.on`** (the async iterator), and `events.once` with `signal`.
+- **`node:dns` and `dns/promises`:** Node's names and constants. Lookups fail with `ERR_NOT_SUPPORTED` until phase B's dns step.
+
+### Changed
+- **The isolate reports Node `v26.8.1`** (D-115, replacing D-102), the release its stand-ins are checked against. got needs it to load, and jsonwebtoken's PS256 now works. `RealNpmPackagesTest` fails if run with another release.
+- **`new net.Socket()` and `new tls.TLSSocket(stream)` construct unconnected sockets,** as in Node, instead of throwing. Connecting still waits for phase B's socket step.
+- **Refused connections and unknown hosts** have Node's messages and fields (`connect ECONNREFUSED 127.0.0.1:9`).
+
+### Fixed
+- **`ECDH.getPrivateKey()` kept leading zero bytes** that Node drops, so one generated key in 256 differed from Node's. This made the webcrypto fixture flaky.
+
 ## Operators configure the address spaces scripts may reach (2026-10-08)
 
 ### Added

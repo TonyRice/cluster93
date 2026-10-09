@@ -97,6 +97,10 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("tls", "node:tls"), java.util.Map.entry("node:tls", "node:tls"),
             java.util.Map.entry("http2", "node:http2"), java.util.Map.entry("node:http2", "node:http2"),
             java.util.Map.entry("tty", "node:tty"), java.util.Map.entry("node:tty", "node:tty"),
+            java.util.Map.entry("diagnostics_channel", "node:diagnostics_channel"),
+            java.util.Map.entry("node:diagnostics_channel", "node:diagnostics_channel"),
+            java.util.Map.entry("dns", "node:dns"), java.util.Map.entry("node:dns", "node:dns"),
+            java.util.Map.entry("dns/promises", "node:dns/promises"), java.util.Map.entry("node:dns/promises", "node:dns/promises"),
             // The host APIs as modules (D-091), so packages can import them rather than rely on globals.
             java.util.Map.entry("automately:kv", "automately:kv"), java.util.Map.entry("automately:bus", "automately:bus"),
             java.util.Map.entry("automately:jobs", "automately:jobs"), java.util.Map.entry("automately:files", "automately:files"),
@@ -136,6 +140,12 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:tls", resource("node/tls.js")),
             java.util.Map.entry("node:http2", resource("node/http2.js")),
             java.util.Map.entry("node:tty", resource("node/tty.js")),
+            java.util.Map.entry("node:diagnostics_channel", resource("node/diagnostics_channel.js")),
+            java.util.Map.entry("node:dns", resource("node/dns.js")),
+            java.util.Map.entry("node:dns/promises", "import dns from 'node:dns'; export const { lookup, lookupService, Resolver, getServers, setServers, "
+                    + "getDefaultResultOrder, setDefaultResultOrder, resolve, resolve4, resolve6, resolveAny, resolveCaa, resolveCname, resolveMx, "
+                    + "resolveNaptr, resolveNs, resolvePtr, resolveSoa, resolveSrv, resolveTlsa, resolveTxt, reverse } = dns.promises; "
+                    + "export default dns.promises;"),
             java.util.Map.entry("automately:kv", hostModule("kv")),
             java.util.Map.entry("automately:bus", hostModule("bus")),
             java.util.Map.entry("automately:jobs", hostModule("jobs")),

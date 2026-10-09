@@ -46,7 +46,7 @@ class RealNpmPackagesTest {
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
             "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals");
     /** The HTTP libraries (D-109), published as a second package: one would be over a version's 10 MB. */
-    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch");
+    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got");
 
     private RunningNode node;
     /** The HTTP libraries' server (D-109), the same one for Node and the isolate: TEST_HTTP. */
@@ -63,6 +63,11 @@ class RealNpmPackagesTest {
         String work = System.getenv("AUTOMATELY_TEST_REAL_NPM");
         Assumptions.assumeTrue(work != null && !work.isBlank(), "Set AUTOMATELY_TEST_REAL_NPM to a work folder to run real npm packages");
         project = Path.of(work).toAbsolutePath().resolve("realworld");
+        // The isolate reports the Node release its stand-ins are checked against (D-115): compare against that one.
+        Process version = new ProcessBuilder("node", "--version").redirectErrorStream(true).start();
+        String nodeVersion = new String(version.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+        assertThat(nodeVersion).as("The isolate reports Node v26.8.1 (js/node/process.js): run this test with that release, "
+                + "or move process.version and this check together").isEqualTo("v26.8.1");
         install();
         serverVertx = io.vertx.core.Vertx.vertx();
         testHttp = "http://127.0.0.1:" + await(serverVertx.createHttpServer().requestHandler(this::serve)
@@ -145,7 +150,7 @@ class RealNpmPackagesTest {
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals", "httpclient", "axios", "nodefetch"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals", "httpclient", "axios", "nodefetch", "got"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
         JsonNode expected = Json.parse(underNode(lib));
         Path script = project.resolve("job-" + lib + ".mjs");
@@ -208,6 +213,13 @@ class RealNpmPackagesTest {
         } else if (path.startsWith("/status/")) {
             int status = Integer.parseInt(path.substring("/status/".length()));
             res.setStatusCode(status).putHeader("content-type", "text/plain").end("status " + status);
+        } else if (path.equals("/paged")) {
+            // Three pages linked by Link headers, for got's pagination.
+            int page = Integer.parseInt(java.util.Optional.ofNullable(req.getParam("page")).orElse("1"));
+            if (page < 3) {
+                res.putHeader("link", "<" + "/paged?page=" + (page + 1) + ">; rel=\"next\"");
+            }
+            res.putHeader("content-type", "application/json").end("[" + (page * 10 + 1) + "," + (page * 10 + 2) + "]");
         } else if (path.equals("/redirect")) {
             res.setStatusCode(302).putHeader("location", "/json").end();
         } else if (path.equals("/big")) {

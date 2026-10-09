@@ -88,26 +88,87 @@ class SocketStandIn extends EventEmitter {
     super();
     this._request = request;
     this.encrypted = encrypted;
-    this.authorized = encrypted;
-    this.connecting = false;
+    // Until the host has the connection, as a Node socket that's still connecting (D-114).
+    this.connecting = true;
+    this.pending = true;
+    this.authorized = false;
+    this.authorizationError = undefined;
+    this.alpnProtocol = false;
+    this.servername = encrypted && !/^[\d.]+$|:/.test(request.host) ? request.host : undefined;
     this.readable = true;
     this.writable = true;
     this.destroyed = false;
     this.remoteAddress = undefined;
-    this.remotePort = request._port;
+    this.remotePort = undefined;
     this.remoteFamily = undefined;
     this.localAddress = undefined;
     this.localPort = undefined;
     this.bytesRead = 0;
     this.bytesWritten = 0;
+    this._tls = null;
   }
+  get readyState() { return this.connecting ? 'opening' : this.destroyed ? 'closed' : 'open'; }
+
+  /** The host connected: take on its addresses and TLS details, then announce it in Node's order. */
+  _connected(info, host) {
+    if (!info || !this.connecting) return;
+    this.connecting = false;
+    this.pending = false;
+    this.remoteAddress = info.remoteAddress;
+    this.remotePort = info.remotePort;
+    this.remoteFamily = info.remoteFamily;
+    this.localAddress = info.localAddress;
+    this.localPort = info.localPort;
+    this._request.reusedSocket = Boolean(info.reused);
+    if (this.encrypted && info.tls) {
+      this._tls = info.tls;
+      this.authorized = Boolean(info.tls.authorized);
+      this.authorizationError = info.tls.authorizationError;
+      this.alpnProtocol = info.tls.alpnProtocol ?? false;
+    }
+    // Node looks up names only, never an address; and a socket from the pool was looked up for an earlier request.
+    if (!info.reused && this.remoteAddress && !/^[\d.]+$|:/.test(host)) {
+      this.emit('lookup', null, this.remoteAddress, this.remoteFamily === 'IPv6' ? 6 : 4, host);
+    }
+    this.emit('connect');
+    if (this.encrypted) this.emit('secureConnect');
+    this.emit('ready');
+  }
+
   setTimeout(ms, callback) { this._request.setTimeout(ms, callback); return this; }
   setNoDelay() { return this; }
   setKeepAlive() { return this; }
   ref() { return this; }
   unref() { return this; }
-  address() { return {}; }
-  getPeerCertificate() { return {}; }
+  address() {
+    return this.localAddress === undefined ? {} : { address: this.localAddress, family: this.remoteFamily, port: this.localPort };
+  }
+  getPeerCertificate(detailed) {
+    const chain = (this._tls?.peerCertificates ?? []).map((c) => ({
+      ...c, raw: c.raw === undefined ? undefined : Buffer.from(c.raw, 'base64'),
+      pubkey: c.pubkey === undefined ? undefined : Buffer.from(c.pubkey, 'base64'),
+    }));
+    if (!chain.length) return this.encrypted ? {} : null;
+    if (!detailed) return chain[0];
+    for (let i = 0; i < chain.length; i++) {
+      const next = chain[i + 1];
+      const selfSigned = JSON.stringify(chain[i].subject) === JSON.stringify(chain[i].issuer);
+      // As Node: a self-signed certificate is its own issuer; the chain ends where the peer stopped sending.
+      if (next) chain[i].issuerCertificate = next;
+      else if (selfSigned) chain[i].issuerCertificate = chain[i];
+    }
+    return chain[0];
+  }
+  getProtocol() { return this._tls?.protocol ?? null; }
+  getCipher() {
+    if (!this._tls?.cipher) return undefined;
+    return { name: this._tls.cipher, standardName: this._tls.cipher, version: this._tls.protocol };
+  }
+  getSession() { return undefined; }
+  isSessionReused() { return false; }
+  getEphemeralKeyInfo() { return {}; }
+  getFinished() { return undefined; }
+  getPeerFinished() { return undefined; }
   destroy(err) { this._request.destroy(err); return this; }
   end() { return this; }
 }
@@ -192,7 +253,11 @@ export class IncomingMessage extends Readable {
 // --- the request ---
 
 /** A host failure in Node's terms, so libraries that look at err.code (retries, axios, got) see the codes they expect. */
-function networkError(err) {
+/**
+ * A host failure as Node's error: its code, and for a refused connection or an unknown name Node's message and
+ * properties (`connect ECONNREFUSED 10.0.0.1:5432`, `getaddrinfo ENOTFOUND db.example`). {@code req} gives the target.
+ */
+function networkError(err, req) {
   if (!err || typeof err !== 'object') return nodeError(Error, 'ECONNRESET', String(err));
   const message = String(err.message ?? err);
   let code = err.code;
@@ -200,7 +265,17 @@ function networkError(err) {
   else if (code === 'timeout') code = 'ETIMEDOUT';
   else if (code === 'aborted') code = 'ECONNRESET';
   else if (code === 'network_error' || !code) code = /refused/i.test(message) ? 'ECONNREFUSED' : 'ECONNRESET';
-  const out = err instanceof Error ? err : new Error(message);
+  let out = err instanceof Error ? err : new Error(message);
+  if (req && code === 'ECONNREFUSED') {
+    // The host's message names the address it tried: the one the egress gate checked.
+    const tried = /\/([0-9a-fA-F.:]+):(\d+)\s*$/.exec(message);
+    const address = tried ? tried[1] : req.host;
+    const port = tried ? Number(tried[2]) : req._port;
+    out = Object.assign(new Error(`connect ECONNREFUSED ${address.includes(':') ? `[${address}]` : address}:${port}`),
+      { errno: -111, syscall: 'connect', address, port });
+  } else if (req && code === 'ENOTFOUND') {
+    out = Object.assign(new Error(`getaddrinfo ENOTFOUND ${req.host}`), { errno: -3008, syscall: 'getaddrinfo', hostname: req.host });
+  }
   try { out.code = code; } catch { /* frozen */ }
   return out;
 }
@@ -353,13 +428,14 @@ export class ClientRequest extends Writable {
     for (const { name, value } of this._headers.values()) headers[name] = Array.isArray(value) ? value.map(String) : String(value);
     const authority = this.host.includes(':') ? `[${this.host}]` : this.host;
     const url = `${this.protocol}//${authority}:${this._port}${this.path.startsWith('/') ? '' : '/'}${this.path}`;
-    this._opening = internals.open({ url, method: this.method, headers, chunked, tls: this._tls }).then((id) => {
+    this._opening = internals.open({ url, method: this.method, headers, chunked, tls: this._tls }).then(({ id, connection }) => {
       this._id = id;
       if (this.destroyed) { internals.abort(id); throw this._closedError(); }
-      internals.response(id).then(surfaced((r) => this._respond(r)), surfaced((err) => this.destroy(networkError(err))));
+      surfaced(() => this.socket._connected(connection, this.host))();
+      internals.response(id).then(surfaced((r) => this._respond(r)), surfaced((err) => this.destroy(networkError(err, this))));
       return id;
     });
-    this._opening.catch(surfaced((err) => this.destroy(networkError(err))));
+    this._opening.catch(surfaced((err) => this.destroy(networkError(err, this))));
     return this._opening;
   }
   _closedError() { return nodeError(Error, 'ECONNRESET', 'socket hang up'); }
@@ -397,13 +473,13 @@ export class ClientRequest extends Writable {
       this.socket.bytesWritten += bytes;
       this._touch();
       callback();
-    }), surfaced((err) => callback(networkError(err))));
+    }), surfaced((err) => callback(networkError(err, this))));
   }
 
   _final(callback) {
     this._ending = true;
     this._open(this._wroteBody && !this.hasHeader('content-length')).then((id) => internals.end(id))
-      .then(surfaced(() => callback()), surfaced((err) => callback(networkError(err))));
+      .then(surfaced(() => callback()), surfaced((err) => callback(networkError(err, this))));
   }
 
   end(chunk, encoding, callback) {

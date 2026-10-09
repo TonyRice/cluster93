@@ -33,6 +33,8 @@ class NodeNetworkStandInsTest {
     private static Vertx vertx;
     private static JavetScriptRuntime runtime;
     private static HttpServer server;
+    private static HttpServer tlsServer;
+    private static String tlsCa;
     private static NodeHostApis.Node node;
 
     @BeforeAll
@@ -48,6 +50,11 @@ class NodeNetworkStandInsTest {
             req.response().end(new JsonObject().put("method", req.method().name()).put("te", req.getHeader("transfer-encoding"))
                     .put("length", req.getHeader("content-length")).put("body", body.toString()).encode());
         })).listen(0, "127.0.0.1").toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+        io.vertx.core.net.SelfSignedCertificate certificate = io.vertx.core.net.SelfSignedCertificate.create("localhost");
+        tlsCa = java.nio.file.Files.readString(java.nio.file.Path.of(certificate.certificatePath()));
+        tlsServer = vertx.createHttpServer(new io.vertx.core.http.HttpServerOptions().setSsl(true).setKeyCertOptions(certificate.keyCertOptions()))
+                .requestHandler(req -> req.response().end("secure")).listen(0, "127.0.0.1")
+                .toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
         node = new NodeHostApis.Node(vertx, new SharedDataKvStore(vertx), new FetchClient(vertx, new EgressPolicy(true)), new ServeRegistry());
     }
 
@@ -150,6 +157,154 @@ class NodeNetworkStandInsTest {
                 """);
 
         assertThat(out).containsExactly("pha|,be|ta", "ENOENT");
+    }
+
+    @Test
+    void theSocketReportsTheRealConnectionInNodesOrder() throws Exception {
+        JsonArray out = run("""
+                import http from 'node:http';
+                const call = () => new Promise((resolve) => {
+                  const events = [];
+                  const req = http.get('http://127.0.0.1:%d/a', (res) => {
+                    res.resume();
+                    res.on('end', () => resolve({ events, reused: req.reusedSocket, remote: [req.socket.remoteAddress, req.socket.remotePort,
+                      req.socket.remoteFamily], local: typeof req.socket.localPort, connecting: req.socket.connecting }));
+                  });
+                  req.on('socket', (s) => {
+                    events.push('socket ' + s.connecting);
+                    for (const e of ['lookup', 'connect', 'secureConnect', 'ready']) s.on(e, () => events.push(e));
+                  });
+                });
+                export default async () => [await call(), await call()];
+                """.formatted(server.actualPort()));
+
+        JsonObject first = out.getJsonObject(0);
+        // An address is never looked up, as in Node; the connection is new, then the second request reuses it.
+        assertThat(first.getJsonArray("events")).containsExactly("socket true", "connect", "ready");
+        assertThat(first.getJsonArray("remote")).containsExactly("127.0.0.1", server.actualPort(), "IPv4");
+        assertThat(first.getString("local")).isEqualTo("number");
+        assertThat(first.getBoolean("reused")).isFalse();
+        assertThat(first.getBoolean("connecting")).isFalse();
+        assertThat(out.getJsonObject(1).getBoolean("reused")).isTrue();
+    }
+
+    @Test
+    void aTlsSocketReportsItsPeerAndWhetherItWasTrusted() throws Exception {
+        JsonArray out = run("""
+                import https from 'node:https';
+                import { Buffer } from 'node:buffer';
+                const call = (options) => new Promise((resolve) => {
+                  const req = https.get('https://localhost:%d/', options, (res) => {
+                    res.resume();
+                    const s = req.socket;
+                    const cert = s.getPeerCertificate(true);
+                    resolve({ authorized: s.authorized, error: s.authorizationError ?? null, protocol: s.getProtocol(),
+                      cipher: typeof s.getCipher().name, cn: cert.subject.CN, san: cert.subjectaltname, raw: Buffer.isBuffer(cert.raw),
+                      fingerprint: /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(cert.fingerprint256), selfIssued: cert.issuerCertificate === cert,
+                      from: /^[A-Z][a-z]{2} [ 0-9]\\d \\d\\d:\\d\\d:\\d\\d \\d{4} GMT$/.test(cert.valid_from) });
+                  });
+                  req.on('error', (e) => resolve({ error: e.code }));
+                });
+                export default async () => [await call({ rejectUnauthorized: false }), await call({ ca: %s })];
+                """.formatted(tlsServer.actualPort(), io.vertx.core.json.Json.encode(tlsCa)));
+
+        JsonObject unverified = out.getJsonObject(0);
+        assertThat(unverified.getBoolean("authorized")).isFalse();
+        assertThat(unverified.getString("error")).isEqualTo("DEPTH_ZERO_SELF_SIGNED_CERT");
+        assertThat(unverified.getString("protocol")).startsWith("TLSv1.");
+        assertThat(unverified.getString("cipher")).isEqualTo("string");
+        assertThat(unverified.getString("cn")).isEqualTo("localhost");
+        assertThat(unverified.getBoolean("raw")).isTrue();
+        assertThat(unverified.getBoolean("fingerprint")).isTrue();
+        assertThat(unverified.getBoolean("selfIssued")).isTrue();
+        assertThat(unverified.getBoolean("from")).isTrue();
+        JsonObject trusted = out.getJsonObject(1);
+        assertThat(trusted.getBoolean("authorized")).as(trusted.encode()).isTrue();
+        assertThat(trusted.getValue("error")).isNull();
+    }
+
+    @Test
+    void diagnosticsChannelsPublishAndTrace() throws Exception {
+        JsonArray out = run("""
+                import dc, { channel, subscribe, tracingChannel } from 'node:diagnostics_channel';
+                export default async () => {
+                  const seen = [];
+                  const ch = channel('app:work');
+                  const before = ch.hasSubscribers;
+                  subscribe('app:work', (message, name) => seen.push(name + ' ' + message.n));
+                  ch.publish({ n: 1 });
+                  const traced = tracingChannel('app:op');
+                  traced.subscribe({ start: () => seen.push('start'), end: () => seen.push('end'),
+                    asyncStart: (c) => seen.push('asyncStart ' + c.result), asyncEnd: () => seen.push('asyncEnd'), error: (c) => seen.push('error ' + c.error.message) });
+                  await traced.tracePromise(async () => 42, {});
+                  try { traced.traceSync(() => { throw new Error('boom'); }, {}); } catch (e) { seen.push('caught'); }
+                  return [before, ch.hasSubscribers, dc.hasSubscribers('nobody'), channel('app:work') === ch, seen];
+                };
+                """);
+
+        assertThat(out.getBoolean(0)).isFalse();
+        assertThat(out.getBoolean(1)).isTrue();
+        assertThat(out.getBoolean(2)).isFalse();
+        assertThat(out.getBoolean(3)).isTrue();
+        assertThat(out.getJsonArray(4)).containsExactly("app:work 1", "start", "end", "asyncStart 42", "asyncEnd", "start", "error boom", "end", "caught");
+    }
+
+    @Test
+    void eventsOnIteratesUntilCloseOrAbort() throws Exception {
+        JsonArray out = run("""
+                import { EventEmitter, on } from 'node:events';
+                export default async () => {
+                  const e = new EventEmitter();
+                  setTimeout(() => { e.emit('data', 1, 'a'); e.emit('data', 2, 'b'); e.emit('end'); }, 5);
+                  const got = [];
+                  for await (const args of on(e, 'data', { close: ['end'] })) got.push(args);
+                  const failing = new EventEmitter();
+                  setTimeout(() => failing.emit('error', new Error('bad')), 5);
+                  let error;
+                  try { for await (const _ of on(failing, 'data')) { /* nothing */ } } catch (err) { error = err.message; }
+                  const controller = new AbortController();
+                  setTimeout(() => controller.abort(), 5);
+                  let aborted;
+                  try { for await (const _ of on(new EventEmitter(), 'data', { signal: controller.signal })) { /* nothing */ } } catch (err) { aborted = err.name; }
+                  return [got, error, aborted, e.listenerCount('data'), e.listenerCount('end')];
+                };
+                """);
+
+        assertThat(out.encode()).isEqualTo("[[[1,\"a\"],[2,\"b\"]],\"bad\",\"AbortError\",0,0]");
+    }
+
+    @Test
+    void dnsHasNodesNamesAndRefusesLookupsUntilItsStep() throws Exception {
+        JsonArray out = run("""
+                import dns, { promises, Resolver, ADDRCONFIG, NOTFOUND } from 'node:dns';
+                import { lookup } from 'node:dns/promises';
+                export default async () => {
+                  const callback = await new Promise((resolve) => dns.lookup('example.com', (err) => resolve(err.code)));
+                  const promised = await lookup('example.com').catch((e) => e.code);
+                  const resolver = await new promises.Resolver().resolveSrv('_x._tcp.example.com').catch((e) => e.code);
+                  return [ADDRCONFIG, NOTFOUND, typeof Resolver, callback, promised, resolver, dns.getDefaultResultOrder()];
+                };
+                """);
+
+        assertThat(out).containsExactly(32, "ENOTFOUND", "function", "ERR_NOT_SUPPORTED", "ERR_NOT_SUPPORTED", "ERR_NOT_SUPPORTED", "verbatim");
+    }
+
+    @Test
+    void anUnconnectedSocketCanBeMadeButNotConnected() throws Exception {
+        JsonArray out = run("""
+                import net from 'node:net';
+                import tls from 'node:tls';
+                import { PassThrough, Duplex } from 'node:stream';
+                export default () => {
+                  const socket = new net.Socket();
+                  const wrapped = new tls.TLSSocket(new PassThrough());
+                  let connect;
+                  try { socket.connect(80, 'example.com'); } catch (e) { connect = e.code; }
+                  return [socket instanceof Duplex, socket.connecting, wrapped instanceof net.Socket, typeof wrapped._handle._parentWrap.constructor, connect];
+                };
+                """);
+
+        assertThat(out).containsExactly(true, false, true, "function", "ERR_NOT_SUPPORTED");
     }
 
     private static JsonArray run(String script) throws Exception {

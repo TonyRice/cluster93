@@ -285,8 +285,8 @@ class JavetScriptRuntimeTest {
                       typeof globalThis.__automately,
                       typeof globalThis.Java,
                       typeof globalThis.require,
-                      // process is a global (D-096), but plain JavaScript: no host object behind it, and it doesn't claim to be Node.
-                      Object.getPrototypeOf(process) === Object.prototype && process.versions.node === undefined,
+                      // process is a global (D-096), but plain JavaScript: no host object behind it, and it reports only Node's release (D-115).
+                      Object.getPrototypeOf(process) === Object.prototype && Object.keys(process.versions).join() === 'node',
                       Object.isFrozen(console),
                     ]
                     """);

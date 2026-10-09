@@ -23,7 +23,30 @@ export const rootCertificates = Object.freeze([]);
  */
 export function checkServerIdentity() { return undefined; }
 
-export class TLSSocket extends Socket {}
+/**
+ * Node wraps a stream that isn't a socket with an internal class; http2-wrapper reaches for it at load
+ * (`new tls.TLSSocket(stream)._handle._parentWrap.constructor`). It exists here so that load works; HTTP/1 over an
+ * HTTP/2 proxy, its only use, can't go through node:http's host connections anyway.
+ */
+class JSStreamSocket {
+  constructor(stream) { this.stream = stream; }
+}
+
+/** An unconnected TLS socket, as Node makes one (D-114); connecting throws until phase B5. */
+export class TLSSocket extends Socket {
+  constructor(socket, options = {}) {
+    super(options);
+    this.encrypted = true;
+    this.authorized = false;
+    this.alpnProtocol = false;
+    if (socket && !(socket instanceof Socket)) this._handle = { _parentWrap: new JSStreamSocket(socket) };
+  }
+  getPeerCertificate() { return null; }
+  getProtocol() { return null; }
+  getCipher() { return undefined; }
+  getSession() { return undefined; }
+  isSessionReused() { return false; }
+}
 export class SecureContext {}
 export class Server extends EventEmitter {
   constructor() { super(); throw unsupported('tls.Server'); }

@@ -1991,3 +1991,50 @@ It's written for people, because the console will show the same response as a "N
 - **`HostApisTest`:** across two nodes, a cluster deny beats a tenant allow with the note in the error; a cluster allow serves every tenant; an allow-list tenant can't reach a public address; tenants are refused the cluster API; unknown sets are refused. The second node sees a change without waiting for its cache.
 - **Also updated:** `ContractTest` (the new operations) and `CliTest` (both commands). The existing `EgressTest` (62) is unchanged and passing.
 
+### D-114 — got runs in the isolate, and `http`'s socket reports the real connection
+**Date:** 2026-10-08 · **Status:** Accepted. Phase B's got step (network-reach.md §11); Tony: "okay lets do it".
+
+**Decision:**
+- **`req.socket` reports the connection the host made.**
+  - **The host's side:** Vert.x hands over the connection with the request. `ConnectionInfo` describes it: the addresses, whether it came from the pool, and for TLS the protocol, cipher, peer chain, and whether the peer was trusted.
+  - **The socket:** it's `connecting` until then. It then emits `lookup` (names only, never addresses, as Node), `connect`, `secureConnect` and `ready`, and answers `getPeerCertificate(detailed)` in Node's shape, `getProtocol()` and `getCipher()`.
+  - **Pooled connections:** a pooled connection sets `reusedSocket` and has no `lookup`.
+  - **Trust without verification:** with `rejectUnauthorized: false`, `authorized` is whether the JVM's trust store accepts the chain. The host name isn't checked, and the error is one of four OpenSSL codes.
+- **`node:diagnostics_channel`,** complete and pure. got, mysql2, ioredis and Fastify import it.
+- **`events.on`** (the async iterator, with `close` and `signal`), and `once` with `signal`.
+- **`node:dns` and `dns/promises` with every name and constant;** each lookup fails with `ERR_NOT_SUPPORTED` until phase B4. got's cacheable-lookup imports it when it loads.
+- **Unconnected sockets construct:** `new net.Socket()` (a `Duplex`) and `new tls.TLSSocket(stream)`, as in Node. Connecting still throws until B5. http2-wrapper builds a `TLSSocket` over a stream when it loads, to reach Node's internal `JSStreamSocket`. Its only use is HTTP/1 over an HTTP/2 proxy, which can't apply here.
+- **Node's messages** for a refused connection (`connect ECONNREFUSED addr:port`, with `address`, `port`, `syscall` and `errno`) and an unknown host (`getaddrinfo ENOTFOUND`).
+- **`ECDH.getPrivateKey()` drops leading zero bytes,** as Node's does.
+  - **How it was found:** the webcrypto fixture failed about one run in 256, when Node's random key started with a zero.
+  - **The fixture:** it now checks a key with a leading zero directly.
+
+**Tested:**
+- **`RealNpmPackagesTest`:** got 14.6.6 matches real Node 26.8.1. It covers JSON and form bodies, search params, auth, hooks, redirects, gzip, `HTTPError`, retries, `throwHttpErrors`, phase timeouts, refused connections, streaming with progress, pagination, and which timing phases exist. So do the 30 other fixtures, jsonwebtoken now including PS256.
+- **`NodeNetworkStandInsTest`:**
+  - the socket's events, addresses and reuse
+  - TLS against a self-signed server: unverified (`DEPTH_ZERO_SELF_SIGNED_CERT`), then trusted through `ca`
+  - `diagnostics_channel` publishing and tracing order
+  - `events.on` with close, errors and abort
+  - `dns`'s names
+  - unconnected sockets
+
+**Not done:** got's `http2: true`, which waits for the `http2` client step.
+
+### D-115 — The isolate reports Node 26.8.1
+**Date:** 2026-10-08 · **Status:** Accepted (Tony chose "Report Node 26.8.1"). Replaces D-102.
+
+**Context:** D-102 left `process.version` empty, so libraries wouldn't take Node-only paths into what the isolate lacked. got 14 can't load without a version: it runs `process.versions.node.split('.')` when it loads. Since D-102, the isolate has gained:
+- `fs`, `http`/`https`, `crypto`, `stream` and `zlib`
+- native code, which is still refused when a package is published
+- sockets, which come next
+
+**The evidence:** with a version reported, all 31 real-library fixtures matched Node, and no other library's output changed.
+
+**Decision:**
+- **What's reported:** `process.version` is `'v26.8.1'` and `process.versions` is `{ node: '26.8.1' }`. That's the Node release the stand-ins are checked against, and nothing else (no `v8`, `uv` and so on).
+- **Kept in step with the tests:** `RealNpmPackagesTest` fails unless it's run with that release, so the reported version and the reference move together.
+- **Unchanged:** `os.release()`/`os.version()` stay empty, since there's no kernel to describe.
+
+**Consequences:** libraries that gate features on a version turn them on. jsonwebtoken's PS256 is one, and it works.
+

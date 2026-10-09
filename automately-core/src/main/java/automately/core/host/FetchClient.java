@@ -49,6 +49,9 @@ public final class FetchClient {
     private final Vertx vertx;
     private final HttpClient client;
     private volatile HttpClient insecure;
+    /** Connections requests have gone out on, so a script's socket can say when one was reused from the pool (D-114). */
+    private final java.util.Set<io.vertx.core.http.HttpConnection> seen =
+            java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>()));
     private final automately.core.host.egress.Egress egress;
 
     /** Through a gate that knows only this node and no tenant rules: for tests. */
@@ -225,8 +228,12 @@ public final class FetchClient {
                     .setConnectTimeout(Math.min(idleMs, DEFAULT_TIMEOUT_MS))
                     .setIdleTimeout(idleMs)
                     .setHeaders(headers);
+            boolean verified = !scheme.equals("https") || tls.getBoolean("rejectUnauthorized", true);
             return client.request(options).<OutgoingRequest>map(request -> {
                 Context context = vertx.getOrCreateContext();
+                io.vertx.core.http.HttpConnection connection = request.connection();
+                JsonObject described = connection == null ? new JsonObject()
+                        : ConnectionInfo.of(connection, !seen.add(connection), verified);
                 if (length != null) {
                     request.putHeader("Content-Length", length);
                 } else if (chunked) {
@@ -254,6 +261,11 @@ public final class FetchClient {
                     @Override
                     public Future<FetchedResponse> response() {
                         return response.future();
+                    }
+
+                    @Override
+                    public JsonObject connection() {
+                        return described;
                     }
 
                     @Override

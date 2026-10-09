@@ -20,4 +20,12 @@ public interface OutgoingRequest {
 
     /** Abandons the request and its response. Safe to call more than once, and after it ended. */
     void abort();
+
+    /**
+     * The connection it went out on, as {@link automately.core.host.ConnectionInfo} describes it for the script's socket
+     * (D-114): addresses, whether it was reused, and the TLS details. Empty if the host has none to give.
+     */
+    default io.vertx.core.json.JsonObject connection() {
+        return new io.vertx.core.json.JsonObject();
+    }
 }

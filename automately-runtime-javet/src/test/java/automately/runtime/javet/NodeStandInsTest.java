@@ -97,7 +97,7 @@ class NodeStandInsTest {
         Execution execution = new Execution("job-1", "tenant-a",
                 "import imported, { env } from 'node:process';"
                         + "export default () => [process.env.API_URL, process.env.NODE_ENV, Object.keys(process.env).sort().join(','),"
-                        + " imported === process, env === process.env, process.versions.node === undefined, typeof process.nextTick,"
+                        + " imported === process, env === process.env, process.versions.node === '26.8.1', typeof process.nextTick,"
                         + " 'PATH' in process.env, 'HOME' in process.env];",
                 new JsonObject(), Duration.ofSeconds(5), JobContext.firstAttempt("job-1", OrphanPolicy.FAIL), false,
                 automately.core.runtime.Packages.NONE, java.util.Map.of("API_URL", "https://api.example.com", "NODE_ENV", "production",
@@ -181,8 +181,8 @@ class NodeStandInsTest {
         assertThat(output("import os from 'node:os'; import { tmpdir, totalmem } from 'os'; import process from 'node:process';"
                 + " export default () => [tmpdir(), os.hostname(), os.cpus().length, totalmem() > 0, totalmem() === os.freemem(),"
                 + "   Object.keys(os.networkInterfaces()).length, os.userInfo().username, os.release(), process.version, process.versions.node ?? 'none'];"))
-                .as("never the host's name, network, users or kernel; and no Node version (D-102)")
-                .containsExactly("/tmp", "localhost", 1, true, true, 0, "automately", "", "", "none");
+                .as("never the host's name, network, users or kernel; and the Node release the stand-ins match (D-115)")
+                .containsExactly("/tmp", "localhost", 1, true, true, 0, "automately", "", "v26.8.1", "26.8.1");
     }
 
     @Test
