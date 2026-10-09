@@ -46,6 +46,7 @@ tags:
   - name: identity
   - name: audit
   - name: packages
+  - name: egress
 
 paths:
   /health:
@@ -326,6 +327,53 @@ paths:
                 allowPrivateEndpoints: { type: boolean }
       responses:
         '200': { $ref: '#/components/responses/StoragePolicy' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/tenants/{tenant}/egress-policy:
+    parameters:
+      - $ref: '#/components/parameters/tenant'
+    get:
+      operationId: getTenantEgressPolicy
+      tags: [admin, egress]
+      summary: Where a tenant's scripts may connect, defaults included (admin)
+      security:
+        - bearer: [admin]
+      responses:
+        '200': { $ref: '#/components/responses/EgressPolicy' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putTenantEgressPolicy
+      tags: [admin, egress]
+      summary: Let a tenant's scripts reach specific private addresses or hosts, on specific ports (admin; replaces the rules)
+      description: >-
+        Each rule is a CIDR or an exact host name, and the ports it opens. Public addresses need no rule. The cluster's
+        own nodes can never be allowed. At most 100 rules; an empty list removes them all (D-108).
+      security:
+        - bearer: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                allow:
+                  type: array
+                  maxItems: 100
+                  items: { $ref: '#/components/schemas/EgressRule' }
+      responses:
+        '200': { $ref: '#/components/responses/EgressPolicy' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/egress-policy:
+    get:
+      operationId: getEgressPolicy
+      tags: [egress]
+      summary: 'Where your scripts may connect: the defaults and why, your rules, and the limits'
+      security:
+        - bearer: ['jobs:read']
+      responses:
+        '200': { $ref: '#/components/responses/EgressPolicy' }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/storage:
@@ -2547,6 +2595,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/StoragePolicy' }
+    EgressPolicy:
+      description: The egress policy that applies to a tenant.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/EgressPolicy' }
     StorageProvider:
       description: A storage provider.
       content:
@@ -2683,6 +2736,44 @@ components:
           items: { type: string }
         diskAllotmentMb: { type: integer }
         allowPrivateEndpoints: { type: boolean }
+    EgressRule:
+      type: object
+      required: [to, ports]
+      properties:
+        to: { type: string, description: 'A CIDR (10.0.5.20/32, fd00::/8) or an exact host name' }
+        ports:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            oneOf:
+              - { type: integer, minimum: 1, maximum: 65535 }
+              - { type: string, pattern: '^[0-9]+(-[0-9]+)?$' }
+    EgressPolicy:
+      type: object
+      required: [tenant, allow, defaults, developmentSwitch, limits]
+      properties:
+        tenant: { type: string }
+        allow:
+          type: array
+          items: { $ref: '#/components/schemas/EgressRule' }
+        defaults:
+          type: array
+          items:
+            type: object
+            required: [to, access, why]
+            properties:
+              to: { type: string }
+              access: { type: string }
+              why: { type: string }
+        developmentSwitch: { type: boolean }
+        limits:
+          type: object
+          properties:
+            concurrentRequests: { type: integer }
+            requestBodyBytes: { type: integer }
+            timeoutMs: { type: integer }
+            followsRedirects: { type: boolean }
     StorageProvider:
       type: object
       required: [id, name, type, settings, hasSecret]

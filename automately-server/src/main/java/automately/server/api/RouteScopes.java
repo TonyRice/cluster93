@@ -85,6 +85,9 @@ final class RouteScopes {
             rule("POST", "/v1/cluster/nodes/" + SEG + "/revoke", "revokeNode", Who.ADMIN, null),
             rule("GET", "/v1/tenants/" + SEG + "/storage-policy", "getStoragePolicy", Who.ADMIN, null),
             json("PUT", "/v1/tenants/" + SEG + "/storage-policy", "putStoragePolicy", Who.ADMIN, null, SMALL),
+            rule("GET", "/v1/tenants/" + SEG + "/egress-policy", "getTenantEgressPolicy", Who.ADMIN, null),
+            json("PUT", "/v1/tenants/" + SEG + "/egress-policy", "putTenantEgressPolicy", Who.ADMIN, null, SMALL),
+            rule("GET", "/v1/egress-policy", "getEgressPolicy", Who.TENANT, Scopes.JOBS_READ),
 
             rule("GET", "/v1/storage", "getStorage", Who.TENANT, Scopes.STORAGE_READ),
             rule("GET", "/v1/storage/providers", "listStorageProviders", Who.TENANT, Scopes.STORAGE_READ),

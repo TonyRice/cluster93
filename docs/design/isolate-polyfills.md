@@ -49,6 +49,8 @@ The sandbox holds because a script can only do what a host API lets it, scoped t
 - `DiffieHellman` with custom groups (fine in principle, but rarely used).
 
 ## 3. Phase B: the cluster-backed modules (a review of their own, after A)
+**Now designed in [network-reach.md](network-reach.md)** (D-108): one egress gate for every connection, per-tenant allow-lists, then `http`/`https`, `createServer`, `dns`, and `net`/`tls`.
+
 From the earlier research:
 - **`http`/`https` client** over `fetch`, with egress and limits unchanged
 - **`http.createServer().listen()`** over `ctx.serve`, so Express, Fastify and Koa run in isolates

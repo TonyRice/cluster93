@@ -47,11 +47,14 @@ Automately runs other people's code. This page describes who is trusted, what ea
 - **Validation.** Requests are validated against the OpenAPI contract before any handler runs.
 - **Limits.** Per-tenant rate limits and storage quotas (D-043, D-051) bound what one tenant can take. Admission control refuses writes before disk or memory runs out, so uploads can't crash a node (D-038).
 
-**Outbound requests (`fetch`, completion callbacks, tenant S3 endpoints)** (D-026, D-062):
-- Private, loopback, link-local (including cloud metadata at 169.254.169.254), CGNAT and other reserved addresses are refused.
+**Outbound requests (`fetch`, completion callbacks, tenant S3 endpoints)** (D-026, D-062, D-108):
+- Private, loopback, link-local (including cloud metadata at 169.254.169.254), CGNAT and other reserved addresses are refused, including IPv6 forms that carry one (NAT64, 6to4, IPv4-mapped and IPv4-compatible).
+- **The cluster's own nodes are refused on every port,** even on public addresses: every address a live node advertises, and every address of the node's own interfaces (D-108). No rule can allow them.
 - The connection goes to the exact address that was checked, so DNS rebinding can't swap one in.
 - Redirects aren't followed.
-- Only the operator (`AUTOMATELY_EGRESS_ALLOW_PRIVATE`) or a tenant's storage policy can allow private addresses.
+- **Private addresses are allowed only by an operator:** per tenant, with an egress policy of CIDRs or exact host names on specific ports (`PUT /v1/tenants/{tenant}/egress-policy`, audited), or for tenant S3 endpoints by its storage policy. `AUTOMATELY_EGRESS_ALLOW_PRIVATE` opens them for every tenant and is for local development only; a node warns at every start while it's on.
+- Refusals are counted per tenant and reason (`automately_egress_denied_total`).
+- Tenant S3 endpoints are still checked by the older address check, without the cluster-node rule; they move to the gate with phase B's next step.
 
 **Secrets at rest:**
 - Tenants' storage credentials are encrypted with AES-256-GCM, using a key derived from `AUTOMATELY_SECRETS_KEY`, with the tenant and provider bound in as associated data. They're write-only in the API (D-057).

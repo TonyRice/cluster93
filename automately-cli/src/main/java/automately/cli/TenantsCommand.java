@@ -10,7 +10,7 @@ import java.util.List;
 
 @Command(name = "tenants", description = "Manage tenants and their tokens (admin token only).",
         subcommands = {TenantsCommand.Create.class, TenantsCommand.Ls.class, TenantsCommand.Rm.class, TenantsCommand.Token.class,
-                TenantsCommand.Tokens.class, TenantsCommand.Revoke.class, TenantsCommand.StoragePolicy.class})
+                TenantsCommand.Tokens.class, TenantsCommand.Revoke.class, TenantsCommand.StoragePolicy.class, TenantsCommand.Egress.class})
 final class TenantsCommand extends Base {
 
     @Override
@@ -130,6 +130,55 @@ final class TenantsCommand extends Base {
                     .put("allowPrivateEndpoints", allowPrivate != null ? allowPrivate : current.path("allowPrivateEndpoints").asBoolean());
             body.set("allow", types);
             Output.json(out(), api().put(path, body));
+            return 0;
+        }
+    }
+
+    @Command(name = "egress", description = "Show where a tenant's scripts may connect, or replace its rules with --allow or --none.")
+    static final class Egress extends Base {
+        @Parameters(paramLabel = "TENANT")
+        String tenant;
+
+        @Option(names = "--allow", paramLabel = "TO:PORTS", description = "Repeatable: a CIDR or host name, then ports, "
+                + "such as 10.0.5.20/32:5432, db.internal.example:5432,6379 or 10.1.0.0/16:8000-8099. Replaces the rules.")
+        List<String> allow;
+
+        @Option(names = "--none", description = "Remove every rule: only public addresses again.")
+        boolean none;
+
+        @Override
+        int execute() {
+            String path = "/v1/tenants/" + Api.segment(tenant) + "/egress-policy";
+            JsonNode policy;
+            if (allow == null && !none) {
+                policy = api().get(path);
+            } else {
+                com.fasterxml.jackson.databind.node.ArrayNode rules = Json.array();
+                for (String rule : none ? List.<String>of() : allow) {
+                    int colon = rule.lastIndexOf(':');
+                    if (colon <= 0 || colon == rule.length() - 1) {
+                        err().println("--allow takes TO:PORTS, such as 10.0.5.20/32:5432; got \"" + rule + "\"");
+                        return 2;
+                    }
+                    com.fasterxml.jackson.databind.node.ArrayNode ports = Json.array();
+                    for (String port : rule.substring(colon + 1).split(",")) {
+                        if (port.trim().matches("\\d{1,5}")) {
+                            ports.add(Integer.parseInt(port.trim()));
+                        } else {
+                            ports.add(port.trim());
+                        }
+                    }
+                    com.fasterxml.jackson.databind.node.ObjectNode entry = Json.object().put("to", rule.substring(0, colon));
+                    entry.set("ports", ports);
+                    rules.add(entry);
+                }
+                com.fasterxml.jackson.databind.node.ObjectNode body = Json.object();
+                body.set("allow", rules);
+                policy = api().put(path, body);
+            }
+            if (!printedJson(policy)) {
+                EgressCommand.print(this, policy);
+            }
             return 0;
         }
     }

@@ -17,19 +17,16 @@ import io.vertx.core.http.RequestOptions;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.SocketAddress;
 
-import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
 /**
- * Outbound HTTP for scripts ({@code fetch}). Resolves the host, refuses addresses the {@link EgressPolicy}
- * forbids, then connects to that exact address (keeping the {@code Host} header and TLS SNI), so the
+ * Outbound HTTP for scripts ({@code fetch}). The {@link automately.core.host.egress.Egress egress gate} resolves the
+ * host and picks an address the tenant may reach (D-108), then this connects to that exact address (keeping the {@code Host} header and TLS SNI), so the
  * checked address is the one used. No redirects are followed. The response body is streamed; the script's
  * {@code text()} and {@code json()} cap what they buffer.
  */
@@ -42,11 +39,16 @@ public final class FetchClient {
 
     private final Vertx vertx;
     private final HttpClient client;
-    private final EgressPolicy policy;
+    private final automately.core.host.egress.Egress egress;
 
+    /** Through a gate that knows only this node and no tenant rules: for tests. */
     public FetchClient(Vertx vertx, EgressPolicy policy) {
+        this(vertx, automately.core.host.egress.Egress.standalone(vertx, policy));
+    }
+
+    public FetchClient(Vertx vertx, automately.core.host.egress.Egress egress) {
         this.vertx = vertx;
-        this.policy = policy;
+        this.egress = egress;
         this.client = vertx.createHttpClient(new HttpClientOptions().setForceSni(true).setVerifyHost(true).setKeepAlive(true),
                 new PoolOptions().setHttp1MaxSize(64));
     }
@@ -57,6 +59,14 @@ public final class FetchClient {
      * ended, failed or been cancelled (or if the request fails).
      */
     public Future<FetchedResponse> fetch(JsonObject args, Runnable release) {
+        return fetch(null, args, null, release);
+    }
+
+    /**
+     * As {@link #fetch(JsonObject, Runnable)}, for {@code tenant}: its egress policy applies (D-108). {@code body}, when
+     * given, is sent as is, in place of {@code args.body}.
+     */
+    public Future<FetchedResponse> fetch(String tenant, JsonObject args, Buffer body, Runnable release) {
         URI uri;
         try {
             uri = new URI(args.getString("url", ""));
@@ -74,8 +84,9 @@ public final class FetchClient {
         if (!METHODS.contains(method)) {
             return Future.failedFuture(HostException.invalid("Unsupported method " + method));
         }
-        String body = args.getString("body");
-        if (body != null && body.getBytes(StandardCharsets.UTF_8).length > MAX_REQUEST_BYTES) {
+        Buffer payload = body != null ? body
+                : args.getString("body") == null ? null : Buffer.buffer(args.getString("body").getBytes(StandardCharsets.UTF_8));
+        if (payload != null && payload.length() > MAX_REQUEST_BYTES) {
             return Future.failedFuture(HostException.limit("Request body is over " + MAX_REQUEST_BYTES + " bytes"));
         }
         // Applies to connecting and to any pause between chunks, not to the whole download, so long streams work.
@@ -85,7 +96,7 @@ public final class FetchClient {
         String path = (uri.getRawPath() == null || uri.getRawPath().isEmpty() ? "/" : uri.getRawPath())
                 + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery());
 
-        return resolve(host).compose(address -> {
+        return egress.address(tenant, host, port, "fetch").compose(address -> {
             RequestOptions options = new RequestOptions()
                     .setMethod(HttpMethod.valueOf(method))
                     .setServer(SocketAddress.inetSocketAddress(port, address.getHostAddress()))
@@ -106,24 +117,11 @@ public final class FetchClient {
             headers.set("Host", uri.getPort() > 0 ? host + ":" + port : host);
             headers.add("User-Agent", "Automately/2");
             options.setHeaders(headers);
-            return exchange(options, body, uri.toString(), release);
+            return exchange(options, payload, uri.toString(), release);
         });
     }
 
-    private Future<InetAddress> resolve(String host) {
-        return vertx.<InetAddress>executeBlocking(() -> {
-            InetAddress[] all;
-            try {
-                all = InetAddress.getAllByName(host);
-            } catch (UnknownHostException e) {
-                throw new HostException("TypeError", "dns_failed", "Could not resolve " + host);
-            }
-            return Arrays.stream(all).filter(policy::allows).findFirst().orElseThrow(() ->
-                    new HostException("TypeError", "egress_denied", "fetch to " + host + " is not allowed: it resolves to a private or reserved address"));
-        }, false);
-    }
-
-    private Future<FetchedResponse> exchange(RequestOptions options, String body, String url, Runnable release) {
+    private Future<FetchedResponse> exchange(RequestOptions options, Buffer body, String url, Runnable release) {
         Context context = vertx.getOrCreateContext();
         Promise<FetchedResponse> result = Promise.promise();
         client.request(options).onFailure(err -> result.tryFail(networkError(err))).onSuccess(request -> {

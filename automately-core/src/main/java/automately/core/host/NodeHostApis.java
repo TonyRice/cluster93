@@ -79,7 +79,7 @@ public final class NodeHostApis implements HostApis {
         this.queue = new NodeQueueApi(scope, node.queues());
         this.jobs = new NodeJobsApi(scope, node.jobs());
         this.files = new NodeFilesApi(scope, node.files(), node.capacity(), node.quota(), node.room());
-        this.fetch = new NodeFetchApi(node.fetch());
+        this.fetch = new NodeFetchApi(node.fetch(), tenant);
         this.http = new NodeHttpApi(scope, node.serve());
         this.secrets = new NodeSecretsApi(scope, node.secrets(), node.jobs());
         this.fs = new NodeFsApi(scope, node.files(), node.tree(), node.capacity(), node.quota(), node.room(),

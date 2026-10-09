@@ -74,3 +74,7 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
 
 ## Parked from the request-hang fix (D-099)
 - **A request timeout in the CLI:** a server that never answers leaves the CLI waiting forever. The JDK client's per-request timeout runs until the response's headers, so it would also count a large upload's sending time. Options: a timeout only for requests without a body, or one that starts once the body is sent. Worth doing before the CLI ships widely.
+
+## Parked from phase B (network reach)
+- **The console's "Network access" page** (Tony, 2026-10-08): tenants should see the rules that apply to them, meaning what's allowed by default, what's refused and why, and their operator-granted rules. `GET /v1/egress-policy` is written to be that page's data, with a reason for each item (docs/design/network-reach.md §3). Still to decide: whether a tenant can *request* a rule from the console, which an operator then approves, and whether recent refusals (`egress_denied`, with the host and reason) are shown there too.
+- **The same view for other policies:** the storage policy (D-057) and quotas could be explained to tenants the same way, in one "What this tenant may do" place.

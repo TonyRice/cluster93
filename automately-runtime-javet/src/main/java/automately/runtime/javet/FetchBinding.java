@@ -17,10 +17,14 @@ public final class FetchBinding {
         this.fetch = fetch;
     }
 
-    /** {@code request}: {@code {url, method, headers, body, timeoutMs}}. Resolves with the status and headers, and the body's stream id. */
+    /**
+     * {@code request}: {@code {url, method, headers, timeoutMs}}; {@code body}: bytes, a string, or null/undefined.
+     * Resolves with the status and headers, and the body's stream id.
+     */
     @V8Function(name = "fetch")
-    public V8ValuePromise fetch(V8Value request) throws JavetException {
-        return bridge.promise(() -> fetch.fetch(bridge.values().options(request)),
+    public V8ValuePromise fetch(V8Value request, V8Value body) throws JavetException {
+        byte[] bytes = body == null || body.isNullOrUndefined() ? null : HostBridge.bytes(body);
+        return bridge.promise(() -> fetch.fetch(bridge.values().options(request), bytes),
                 response -> response.meta().copy().put("streamId", bridge.openStream(response.body())));
     }
 }

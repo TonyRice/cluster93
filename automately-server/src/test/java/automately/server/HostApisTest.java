@@ -223,6 +223,57 @@ class HostApisTest {
         assertThat(job.getJsonArray("output")).isEqualTo(new JsonArray().add("TypeError").add("egress_denied"));
     }
 
+    @Test
+    void anOperatorsRuleLetsATenantReachAPrivateAddressButNeverANode() throws Exception {
+        // 10.255.255.1 is private and unrouted: refused before connecting, or, once allowed, attempted and timed out.
+        String probe = """
+                export default async () => {
+                  const tries = [];
+                  for (const url of ['http://10.255.255.1:9/', 'http://10.255.255.1:10/', 'http://127.0.0.1:%d/health']) {
+                    try { await fetch(url, { timeoutMs: 300 }); tries.push('reached'); }
+                    catch (e) { tries.push(e.code === 'egress_denied' ? e.message.replace(/^.*resolves to /, '') : e.code); }
+                  }
+                  return tries;
+                }
+                """.formatted(nodeA.httpPort());
+        JsonArray before = runJob(nodeA, TENANT, probe).getJsonArray("output");
+        assertThat(before.getString(0)).startsWith("a private or reserved address");
+        assertThat(before.getString(2)).startsWith("one of the cluster's own nodes");
+
+        HttpResponse<Buffer> set = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("allow", new JsonArray()
+                        .add(new JsonObject().put("to", "10.255.255.0/24").put("ports", new JsonArray().add(9)))
+                        .add(new JsonObject().put("to", "127.0.0.1/32").put("ports", new JsonArray().add("1-65535"))))));
+        assertThat(set.statusCode()).as(set.bodyAsString()).isEqualTo(200);
+        try {
+            // The tenant sees the whole policy: the defaults and why, its rules, and the limits.
+            JsonObject view = get(nodeB, TENANT, "/v1/egress-policy").bodyAsJsonObject();
+            assertThat(view.getJsonArray("allow").getJsonObject(0).getString("to")).isEqualTo("10.255.255.0/24");
+            assertThat(view.getJsonArray("defaults").getJsonObject(2).getString("access")).isEqualTo("always refused");
+            assertThat(view.getBoolean("developmentSwitch")).isFalse();
+            assertThat(view.getJsonObject("limits").getInteger("concurrentRequests")).isEqualTo(16);
+            assertThat(get(nodeB, "globex", "/v1/egress-policy").bodyAsJsonObject().getJsonArray("allow")).isEmpty();
+
+            JsonArray after = runJob(nodeB, TENANT, probe).getJsonArray("output");
+            assertThat(after.getString(0)).isIn("timeout", "network_error");          // allowed, so it tried
+            assertThat(after.getString(1)).startsWith("a private or reserved address"); // another port
+            assertThat(after.getString(2)).startsWith("one of the cluster's own nodes"); // no rule reaches a node
+            assertThat(runJob(nodeB, "globex", probe).getJsonArray("output").getString(0)).startsWith("a private or reserved address");
+
+            HttpResponse<Buffer> bad = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                    .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("allow", new JsonArray()
+                            .add(new JsonObject().put("to", "0.0.0.0/4").put("ports", new JsonArray().add(80))))));
+            assertThat(bad.statusCode()).isEqualTo(400);
+            assertThat(bad.bodyAsString()).contains("prefix length must be from 8 to 32");
+            HttpResponse<Buffer> notAdmin = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("allow", new JsonArray())));
+            assertThat(notAdmin.statusCode()).isEqualTo(403);
+        } finally {
+            await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                    .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("allow", new JsonArray())));
+        }
+    }
+
     // --- HTTP hosting ---
 
     static final String WEB = """

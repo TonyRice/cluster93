@@ -83,6 +83,12 @@ public final class Metrics implements Shareable {
 
     // --- the API and storage ---
 
+    /** A script's connection refused by the egress gate (D-108), by tenant and reason. */
+    public void egressDenied(String tenant, String reason) {
+        Counter.builder("automately.egress.denied").description("Script connections refused by the egress gate")
+                .tag("tenant", tenant).tag("reason", reason).register(registry).increment();
+    }
+
     public void rateLimited(String tenant) {
         Counter.builder("automately.api.rate.limited").description("Requests refused with 429").tag("tenant", tenant).register(registry).increment();
     }

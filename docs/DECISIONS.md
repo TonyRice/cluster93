@@ -1746,3 +1746,63 @@ So every job starts about 30% faster than before, with the globals included.
 - **A script can't read its own log back;** `kv` and `files` are for that.
 - **Live log events have no rate limit.** A tight loop of `console.log` publishes as fast as the isolate runs; the per-line and per-attempt caps bound memory, not event-bus traffic.
 - **The Node runtime** (D-084, not built) will send the container's stdout and stderr into this same log, with the same limits.
+
+### D-108 — One egress gate for every connection a script causes, with per-tenant rules
+**Date:** 2026-10-08 · **Status:** Accepted. Phase B's first step ([network-reach.md](design/network-reach.md) §3); the shape is Tony's (D-095 §4.5)
+
+**Context:** phase B gives scripts Node's `http`, `net`, `tls` and `dns`. Before adding any reach, every connection needs one place that decides it. Tony's rule: "anything trying to open network access should not be able to access private things on our cluster unless explicitly allowed to". `fetch`'s check (D-026) refused private addresses, but it had two gaps:
+- **No way to open one:** the only way to reach a private address was `AUTOMATELY_EGRESS_ALLOW_PRIVATE`, which opens every private address for every tenant.
+- **No idea of the cluster:** a node on a public address was reachable like any website.
+
+**Decision:** one `Egress` gate in core. It gets the tenant, the requested name, its resolved addresses and the port, and answers the one address to connect to. For each resolved address, in order:
+1. **A cluster node is refused, on every port.**
+   - **What counts as a node:** any address a live node advertises (from the node registry, re-resolved at most every 10 s); any address of this node's interfaces; and loopback and wildcard addresses.
+   - **Why every port:** the event bus listens on a random port, and nothing on a node is meant for scripts.
+   - **The development exception:** with the development switch on, only the node's own ports are refused (API, ingress, internal, metrics, and the cluster's discovery and communication ranges), so a developer's `localhost:3000` still works.
+   - **No rule can allow a node.**
+2. **A public address is allowed.**
+3. **A private or reserved address** is allowed only by the development switch, or by a rule in the tenant's egress policy.
+
+The first allowed address is the one connected to, as D-026 requires.
+
+**What counts as reserved, added:**
+- **IPv4:** the documentation ranges (192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24), and 192.88.99.0/24.
+- **IPv6:** all of ::/8, NAT64 64:ff9b::/32, discard 100::/64, Teredo 2001::/32, documentation 2001:db8::/32, ORCHID 2001:10::/28, and 6to4 2002::/16.
+- **Embedded IPv4:** IPv4-mapped, IPv4-compatible, NAT64 (/96) and 6to4 addresses are judged by the IPv4 address they carry, for the public check, the cluster check and rules alike.
+
+**The tenant's egress policy:**
+- **Who sets it:** operators only, with `PUT /v1/tenants/{tenant}/egress-policy`. It's audited like every change (D-071), and kept in a `Records` collection (`EGRESS_POLICIES`).
+- **A rule** is a CIDR, or an exact host name, plus required ports or port ranges. There are at most 100 rules.
+  - **CIDRs:** prefixes of /8 or longer. Rules are parsed only as literals, so writing one never looks a name up.
+  - **Name rules:** they match only when the script asks for that name, and then allow what it resolves to. The operator is trusting that name's DNS; that's what Tony's "hosts or CIDRs" means.
+- **It's read only when it could change the answer:** when some address is private and not a node's.
+- **A deleted tenant's policy goes with it.**
+
+**The tenant's view** (Tony asked for it while this was being built): `GET /v1/egress-policy` (`jobs:read`) and `automately egress` show the whole policy that applies:
+- the defaults, each with a sentence saying why
+- the tenant's rules
+- whether the development switch is on
+- the limits
+
+It's written for people, because the console will show the same response as a "Network access" page (parked in NOTES).
+
+**Also:**
+- **Through the gate:** `fetch`, and completion callbacks as the job's tenant.
+- **Counted:** refusals, in `automately_egress_denied_total{tenant,reason}`.
+- **A warning:** a node warns at every start while the development switch is on.
+- **Binary bodies:** `fetch` sends a typed array or `ArrayBuffer` body as bytes. Before, it decoded the bytes as UTF-8, which corrupted binary uploads. `URLSearchParams` bodies are sent as forms.
+
+**Not yet:**
+- **Tenant S3 endpoints** still use the older check, governed by the storage policy's `allowPrivateEndpoints`, without the cluster-node rule. They move to the gate with phase B's next step.
+- **A node's actual listening ports:** the development exception uses the configured ports, so a node started on port 0 (as tests do) has none listed. That's harmless, since outside development a node is refused on every port anyway.
+
+**Tested:**
+- **`EgressTest`** (62 cases):
+  - every reserved range and embedded form
+  - rule parsing, including names that look like hex, invalid octets and short prefixes
+  - name and CIDR rules
+  - nodes on public addresses, including their NAT64 and IPv4-mapped forms
+  - the development exception
+- **`HostApisTest`:** on a two-node cluster, an operator's rule turns a refusal into a connection attempt, on that port only and for that tenant only, while a node stays refused under a rule covering it, and the tenant's view shows it all.
+- **`ContractTest`, `CliTest`, `NodeHostApisTest` and `HostBridgeTest`:** binary bodies, from the script to the wire.
+

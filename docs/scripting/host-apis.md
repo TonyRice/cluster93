@@ -204,7 +204,7 @@ A body can be read **once**: either as a stream, or with `text()`, `json()` or `
 const res = await fetch('https://api.example.com/items?page=2', {
   method: 'POST',
   headers: { authorization: `Bearer ${token}` },
-  body: { name: 'thing' },          // an object is sent as JSON; a string as is
+  body: { name: 'thing' },          // an object is sent as JSON; a string as is; bytes as bytes
   timeoutMs: 10_000,                // at most 30 s
 });
 res.status; res.ok; res.headers.get('content-type');
@@ -212,13 +212,19 @@ const data = await res.json();      // or res.text(), res.bytes(), or stream res
 ```
 
 - Only `http` and `https`.
-- **Private and reserved addresses are refused** (`code: 'egress_denied'`): loopback, 10/8, 172.16/12, 192.168/16, link-local (including the 169.254.169.254 cloud metadata endpoint), CGNAT, unique-local IPv6, and so on. The connection goes to the exact address that was checked, so DNS tricks can't get around this.
+- **Every connection goes through the egress gate** (D-108), and a refusal fails with `code: 'egress_denied'` and a message that says why:
+  - **Public addresses** are allowed.
+  - **Private and reserved addresses are refused:** loopback, 10/8, 172.16/12, 192.168/16, link-local (including the 169.254.169.254 cloud metadata endpoint), CGNAT, unique-local IPv6, the documentation ranges, and IPv6 forms that carry one of these (NAT64, 6to4, IPv4-mapped and IPv4-compatible). An operator can allow specific ones for your tenant: a CIDR or an exact host name, on specific ports.
+  - **The cluster's own nodes are always refused,** on every port and whatever their address, and no rule can allow them.
+  - **See your tenant's policy** with `GET /v1/egress-policy` or `automately egress`: the defaults and why, your rules, and the limits.
+- The connection goes to the exact address that was checked, so DNS tricks can't get around this.
 - Redirects are **not followed**: a 3xx comes back as is.
 - The response body streams (`res.body`), with no size limit when read as a stream. `text()`, `json()` and `bytes()` buffer it, up to 5 MB.
-- Request bodies are strings or JSON, up to 1 MB. Binary request bodies aren't supported yet.
+- Request bodies are strings, bytes (a `Uint8Array` or any typed array, or an `ArrayBuffer`), `URLSearchParams` (sent as a form) or JSON, up to 1 MB.
 - At most 16 fetches run at once per script, counting a fetch until its body has been read, cancelled, or the script ends. An unread body is cancelled when the script ends.
 - The timeout applies to connecting and to any pause between chunks, so long downloads work.
-- For local development, `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true` lifts the address check.
+- For local development, `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true` lifts the private-address check for every tenant. Even then, a node's own ports (the API, the ingress, the internal endpoint, metrics and the cluster's ports) stay refused.
+- Job completion callbacks go through the same gate, as the job's tenant.
 
 ## `log`: structured logging
 

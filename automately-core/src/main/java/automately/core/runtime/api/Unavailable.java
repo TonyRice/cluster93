@@ -203,7 +203,7 @@ final class Unavailable {
         }
     };
 
-    static final FetchApi FETCH = request -> fail("fetch");
+    static final FetchApi FETCH = (request, body) -> fail("fetch");
 
     static final JobsApi JOBS = new JobsApi() {
         @Override

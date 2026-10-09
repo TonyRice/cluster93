@@ -207,7 +207,7 @@ The API is **contract-first**: [`openapi.yaml`](automately-server/src/main/resou
 Each job gets a **new isolate**, which is closed when the job finishes. Nothing carries over between jobs, including globals and prototype pollution.
 
 - **No host access.** The script can reach only frozen, tenant-scoped APIs (`console`, timers, `ctx`, `kv`, `bus`, `fetch`, `log`). There is no `Java`, `require` or `process`.
-- **Egress.** `fetch` refuses private and reserved addresses (cloud metadata included), connects to the address it checked, and follows no redirects.
+- **Egress.** `fetch` refuses private and reserved addresses (cloud metadata included) and the cluster's own nodes, connects to the address it checked, and follows no redirects. An operator can let one tenant reach specific private addresses (D-108).
 - **Wall-clock timeout.** Enforced from the event loop with `terminateExecution()`. It also covers loops at module top level and loops after an `await`.
 - **Heap limit** (`AUTOMATELY_MAX_HEAP_MB`). When an isolate runs out of memory, V8 normally aborts the whole process. Here a near-heap-limit callback terminates the script instead and grants a little headroom so V8 can unwind, and the node keeps serving.
 
@@ -248,7 +248,7 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_MAX_REQUEST_BYTES` | `1073741824` | Largest request body the ingress accepts |
 | `AUTOMATELY_INTERNAL_PORT` | `8090` | Node-to-node endpoint for proxied service traffic (cluster-only, secret-protected) |
 | `AUTOMATELY_ADVERTISE_HOST` | this host's address | How other nodes reach this node's internal endpoint |
-| `AUTOMATELY_EGRESS_ALLOW_PRIVATE` | `false` | Let `fetch` reach private addresses (local development only) |
+| `AUTOMATELY_EGRESS_ALLOW_PRIVATE` | `false` | Let every tenant's `fetch` reach private addresses (local development only; a node's own ports stay refused). For production, grant a tenant specific addresses with `PUT /v1/tenants/{tenant}/egress-policy` |
 | `AUTOMATELY_CLUSTERED` | `false` | |
 | `AUTOMATELY_CLUSTER_PORT` | `5701` | Ignite discovery (communication uses port + 100) |
 | `AUTOMATELY_CLUSTER_MEMBERS` | `127.0.0.1` | Hosts to join (`host` or `host:port`) |

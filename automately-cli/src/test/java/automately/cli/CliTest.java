@@ -363,6 +363,25 @@ class CliTest {
     }
 
     @Test
+    void egressRulesFromTheCommandLine() throws Exception {
+        loginAsNewTenant("netty");
+        Result set = cli("--url", url, "--token", ADMIN, "tenants", "egress", "netty", "--allow", "10.0.5.20/32:5432",
+                "--allow", "db.internal.example:5432,8000-8099");
+        assertThat(set.code()).as(set.err()).isZero();
+        assertThat(set.out()).contains("10.0.5.20/32 on port 5432").contains("db.internal.example on ports 5432, 8000-8099");
+
+        Result mine = cli("egress");
+        assertThat(mine.code()).as(mine.err()).isZero();
+        assertThat(mine.out()).contains("Network access for netty").contains("the cluster's own nodes: always refused")
+                .contains("10.0.5.20/32 on port 5432");
+        assertThat(cli("--json", "egress").json().get("allow").size()).isEqualTo(2);
+
+        Result bad = cli("--url", url, "--token", ADMIN, "tenants", "egress", "netty", "--allow", "10.0.0.0/8");
+        assertThat(bad.code()).isEqualTo(2);
+        assertThat(cli("--url", url, "--token", ADMIN, "tenants", "egress", "netty", "--none").out()).contains("Rules: none");
+    }
+
+    @Test
     void storageProvidersAndRoutesFromTheCommandLine() throws Exception {
         loginAsNewTenant("stor");
         assertThat(cli("--url", url, "--token", ADMIN, "tenants", "storage-policy", "stor", "--allow", "disk", "--disk-mb", "5").code()).isZero();

@@ -42,6 +42,7 @@ class NodeHostApisTest {
                 case "/json" -> req.response().putHeader("content-type", "application/json").end("{\"hello\":\"world\"}");
                 case "/echo" -> req.body().onSuccess(body -> req.response().putHeader("x-method", req.method().name())
                         .end(req.getHeader("x-custom") + "|" + body));
+                case "/hex" -> req.body().onSuccess(body -> req.response().end(java.util.HexFormat.of().formatHex(body.getBytes())));
                 case "/redirect" -> req.response().setStatusCode(302).putHeader("location", "http://169.254.169.254/").end();
                 case "/big" -> {
                     // 20 MB in 64 KB chunks, honouring backpressure.
@@ -233,6 +234,15 @@ class NodeHostApisTest {
 
         assertThat(readAll(response)).isEqualTo("yes|payload");
         assertThat(response.meta().getJsonObject("headers").getString("x-method")).isEqualTo("POST");
+    }
+
+    @Test
+    void fetchSendsABinaryBodyAsItsBytes() throws Exception {
+        byte[] body = {(byte) 0xff, 0x00, (byte) 0x80, (byte) 0xc3, 0x28};   // not UTF-8: decoding it would change it
+        automately.core.runtime.FetchedResponse response = await(host("acme", true).fetch()
+                .fetch(new JsonObject().put("url", url("/hex")).put("method", "POST"), body));
+
+        assertThat(readAll(response)).isEqualTo("ff0080c328");
     }
 
     @Test

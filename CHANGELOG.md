@@ -26,6 +26,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## One egress gate; operators can open private addresses per tenant (2026-10-08)
+
+### Added
+- **Egress policies per tenant** (D-108). An operator lets one tenant's scripts reach specific private addresses or hosts, on specific ports: `PUT /v1/tenants/{tenant}/egress-policy` (audited) or `automately tenants egress acme --allow 10.0.5.20/32:5432`. A rule is a CIDR or an exact host name; ports are required; at most 100 rules. **Why:** Tony's rule, "anything trying to open network access should not be able to access private things on our cluster unless explicitly allowed to". Until now the only way was `AUTOMATELY_EGRESS_ALLOW_PRIVATE`, which opens everything for every tenant.
+- **Tenants see the whole policy that applies to them:** `GET /v1/egress-policy` and `automately egress` show the defaults and why, their rules, whether the development switch is on, and the limits (Tony: tenants should see the rules against their account; the console will show the same).
+- **`automately_egress_denied_total{tenant,reason}`:** refused connections, counted.
+- **`docs/design/network-reach.md`:** phase B's design, with its threat model and Tony's answers on raw TCP ports, DNS, TLS verification and `createServer`.
+
+### Changed
+- **The cluster's own nodes are refused on every port,** even on public addresses: every address a live node advertises and every address of the node's own interfaces (D-108). With the development switch on, only a node's own ports are refused, so `localhost:3000` still works for development.
+- **More reserved ranges are refused:** the documentation ranges, 6to4 relays, Teredo, ORCHID, discard, and IPv6 forms that carry an IPv4 address (NAT64, 6to4, IPv4-compatible), each judged by the IPv4 address it reaches.
+- **Job completion callbacks** go through the gate as the job's tenant, so its rules apply to them too.
+- **A node warns at every start** while `AUTOMATELY_EGRESS_ALLOW_PRIVATE` is on.
+
+### Fixed
+- **`fetch` corrupted binary request bodies:** a `Uint8Array` was decoded as UTF-8 before sending. Bytes are now sent as bytes, from any typed array or `ArrayBuffer`. `URLSearchParams` bodies are sent as forms, where before they became `{}`.
+
 ## Job logs bounded in size (2026-10-08)
 
 ### Fixed

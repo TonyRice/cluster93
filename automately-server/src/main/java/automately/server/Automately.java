@@ -238,6 +238,24 @@ public final class Automately {
         }).listen(config.metricsPort()).map(io.vertx.core.http.HttpServer::actualPort);
     }
 
+    /**
+     * This node's own ports, which scripts can't reach on a node's address even with the development switch on (D-108):
+     * the API, the ingress, the internal endpoint, metrics, and the cluster's discovery and communication ranges.
+     */
+    static java.util.Set<Integer> nodePorts(ServerConfig config) {
+        java.util.Set<Integer> ports = new java.util.HashSet<>(java.util.List.of(config.httpPort(), config.ingressPort(), config.internalPort()));
+        if (config.metricsPort() > 0) {
+            ports.add(config.metricsPort());
+        }
+        // IgniteCluster's ranges: discovery from the cluster port, communication 100 above it, 10 ports each.
+        for (int i = 0; i < 10; i++) {
+            ports.add(config.clusterPort() + i);
+            ports.add(config.clusterPort() + 100 + i);
+        }
+        ports.remove(0);
+        return ports;
+    }
+
     /** Tenants' own providers on top of the cluster's default (D-057). */
     static TenantBlobStores tenantStores(Vertx vertx, ServerConfig config, BlobStore primary, StorageConfigStore storage,
                                          java.util.concurrent.atomic.AtomicBoolean diskRootShared) {
@@ -309,11 +327,20 @@ public final class Automately {
         SecretBox secretBox = config.secretsKey() == null ? null : new SecretBox(config.secretsKey());
         CallbackSecrets callbackSecrets = new CallbackSecrets(stores.kv(), secretBox);
         automately.core.secrets.TenantSecrets tenantSecrets = new automately.core.secrets.TenantSecrets(stores.kv(), secretBox);
-        FetchClient fetch = new FetchClient(vertx, new EgressPolicy(config.egressAllowPrivate()));
         JobStateStore state = stores.state();
         ServiceStore services = stores.services();
         DomainStore domains = stores.domains();
         NodeRegistry nodes = new SharedDataNodeRegistry(vertx, config.heartbeat().multipliedBy(3));
+        // Every connection a script causes goes through one gate: never a cluster node, private addresses only by a
+        // tenant's rules (D-108).
+        automately.core.host.egress.EgressPolicies egressPolicies = new automately.core.host.egress.EgressPolicies(
+                stores.records().open(automately.core.host.egress.EgressPolicies.KIND));
+        if (config.egressAllowPrivate()) {
+            LOG.warn("AUTOMATELY_EGRESS_ALLOW_PRIVATE is on: every tenant's scripts may reach private and loopback addresses. "
+                    + "It's for local development only; grant a tenant specific addresses with its egress policy instead (D-108).");
+        }
+        FetchClient fetch = new FetchClient(vertx, new automately.core.host.egress.Egress(vertx, config.egressAllowPrivate(),
+                new automately.core.host.egress.ClusterAddresses(vertx, nodes, nodePorts(config)), egressPolicies));
         ScriptRuntime runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
         JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
         ServeRegistry serving = new ServeRegistry();
@@ -357,7 +384,7 @@ public final class Automately {
         ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, visibleFiles,
                 quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, packages, limiter,
+                queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, packages, limiter, egressPolicies,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
                 () -> readiness(nodes, instanceId, cluster));
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.

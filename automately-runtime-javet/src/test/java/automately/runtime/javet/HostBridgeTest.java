@@ -72,6 +72,7 @@ class HostBridgeTest {
         final List<Consumer<HttpExchange>> servers = new CopyOnWriteArrayList<>();
         /** What fetch returns: a status and the body chunks. */
         volatile List<String> fetchChunks = List.of("hello ", "world");
+        final List<JsonObject> fetchesSent = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<String> fetchesCancelled = new CopyOnWriteArrayList<>();
 
         private Future<Registration> register(Consumer<Inbound> listener) {
@@ -160,7 +161,8 @@ class HostBridgeTest {
 
         @Override
         public FetchApi fetch() {
-            return args -> {
+            return (args, body) -> {
+                fetchesSent.add(args.copy().put("bytes", body == null ? null : java.util.HexFormat.of().formatHex(body)));
                 JsonObject meta = new JsonObject().put("status", 200).put("statusText", "OK").put("url", args.getString("url"))
                         .put("headers", new JsonObject().put("content-type", "text/plain"));
                 return Future.succeededFuture(new FetchedResponse(meta, new ListStream(fetchChunks, () -> fetchesCancelled.add(args.getString("url")))));
@@ -562,6 +564,27 @@ class HostBridgeTest {
                 """, host);
 
         assertThat(result.output()).as(String.valueOf(result.error())).isEqualTo(new JsonArray().add(new JsonArray().add("a").add("b").add("c")).add("abc"));
+    }
+
+    @Test
+    void fetchSendsBytesAsBytesAndFormsAsForms() throws Exception {
+        FakeHost host = new FakeHost();
+        host.fetchChunks = List.of();
+
+        run("""
+                export default async () => {
+                  const whole = new Uint8Array([1, 2, 0xff, 0x00, 0x80, 9]);
+                  await fetch('https://x.test/bytes', { method: 'POST', body: whole.subarray(2, 5) });
+                  await fetch('https://x.test/text', { method: 'POST', body: 'hé' });
+                  await fetch('https://x.test/form', { method: 'POST', body: new URLSearchParams({ a: '1 2', b: 'x' }) });
+                }
+                """, host);
+
+        assertThat(host.fetchesSent).hasSize(3);
+        assertThat(host.fetchesSent.get(0).getString("bytes")).isEqualTo("ff0080");
+        assertThat(host.fetchesSent.get(1).getString("bytes")).isEqualTo("68c3a9");
+        assertThat(host.fetchesSent.get(2).getString("bytes")).isEqualTo(java.util.HexFormat.of().formatHex("a=1+2&b=x".getBytes()));
+        assertThat(host.fetchesSent.get(2).getJsonObject("headers").getString("content-type")).startsWith("application/x-www-form-urlencoded");
     }
 
     @Test

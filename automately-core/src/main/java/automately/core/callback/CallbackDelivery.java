@@ -65,7 +65,7 @@ public final class CallbackDelivery {
                         .put("automately-attempt", String.valueOf(attempt));
                 JsonObject request = new JsonObject().put("url", job.callback().getString("url")).put("method", "POST").put("headers", headers)
                         .put("body", body).put("timeoutMs", Callbacks.TIMEOUT_MS);
-                return http.fetch(request, () -> { }).map(response -> {
+                return http.fetch(job.tenant(), request, null, () -> { }).map(response -> {
                     response.body().cancel();
                     return response.meta().getInteger("status");
                 });

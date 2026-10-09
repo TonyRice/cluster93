@@ -203,6 +203,10 @@ class ContractTest {
         calls.check("putStoragePolicy", "PUT", "/v1/tenants/contract/storage-policy", admin,
                 new JsonObject().put("allow", new JsonArray().add("disk")).put("diskAllotmentMb", 10));
         calls.check("getStoragePolicy", "GET", "/v1/tenants/contract/storage-policy", admin, null);
+        calls.check("putTenantEgressPolicy", "PUT", "/v1/tenants/contract/egress-policy", admin, new JsonObject().put("allow",
+                new JsonArray().add(new JsonObject().put("to", "10.0.5.20/32").put("ports", new JsonArray().add(5432).add("8000-8099")))));
+        calls.check("getTenantEgressPolicy", "GET", "/v1/tenants/contract/egress-policy", admin, null);
+        calls.check("getEgressPolicy", "GET", "/v1/egress-policy", tenant, null);
         calls.check("putStorageProvider", "PUT", "/v1/storage/providers/local", tenant, new JsonObject().put("type", "disk"));
         calls.check("putMount", "PUT", "/v1/mounts/mnt/local", tenant, new JsonObject().put("provider", "local").put("readOnly", true));
         calls.check("listMounts", "GET", "/v1/mounts", tenant, null);

@@ -63,6 +63,7 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.auth.AuthStore authStore;
 
     private final automately.core.auth.RateLimiter limiter;
+    private final automately.core.host.egress.EgressPolicies egressPolicies;
     private final automately.core.files.Room room;
     private final StorageApi.Wiring storage;
     private final automately.core.queue.QueueService queues;
@@ -95,7 +96,8 @@ public final class ApiVerticle extends VerticleBase {
                        automately.core.secrets.TenantSecrets secrets, automately.core.identity.Identity identity,
                        automately.core.audit.AuditLog audit, automately.core.files.FileTree fileTree, automately.core.files.FileLinks fileLinks,
                        automately.core.packages.PackageStore packages,
-                       automately.core.auth.RateLimiter limiter, java.util.function.Function<String, Future<JsonObject>> revokeNode,
+                       automately.core.auth.RateLimiter limiter, automately.core.host.egress.EgressPolicies egressPolicies,
+                       java.util.function.Function<String, Future<JsonObject>> revokeNode,
                        java.util.function.Supplier<Future<List<String>>> notReady) {
         this.revokeNode = revokeNode;
         this.notReady = notReady;
@@ -111,6 +113,7 @@ public final class ApiVerticle extends VerticleBase {
         this.storage = storage;
         // Shared with the scripts' jobs API, so jobs started from scripts count toward the same limit (D-063).
         this.limiter = limiter;
+        this.egressPolicies = egressPolicies;
         this.authenticator = authenticator;
         this.authStore = authStore;
         this.files = files;
@@ -169,9 +172,11 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/v1/nodes").handler(this::listNodes);
         new McpRoutes(vertx, authenticator, limiter, () -> server.actualPort(), loopbackSecret).mount(router);
         new AuthRoutes(authStore, authenticator, identity, this::isEmpty, tenant -> storage.config().forget(tenant).compose(v -> secrets.forget(tenant))
-                .compose(v -> identity.forgetTenant(tenant)).compose(v -> packages.forget(tenant))).mount(router);
+                .compose(v -> identity.forgetTenant(tenant)).compose(v -> packages.forget(tenant))
+                .compose(v -> egressPolicies.put(automately.core.host.egress.TenantEgress.none(tenant)))).mount(router);
         new IdentityRoutes(identity, audit, authStore, authenticator, auditIds, config.secretsKey()).mount(router);
         new StorageApi(storage, files, authStore, quota).mount(router);
+        new EgressRoutes(egressPolicies, authStore, config.egressAllowPrivate()).mount(router);
         new FilesRoutes(files, quota, room, fileTree, fileLinks).mount(router);
         new BusRoutes(vertx).mount(router);
         new QueueRoutes(queues).mount(router);
