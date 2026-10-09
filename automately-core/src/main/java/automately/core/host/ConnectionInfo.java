@@ -52,25 +52,47 @@ public final class ConnectionInfo {
      * @param verified whether the host verified the peer (it does unless the request opted out)
      */
     public static JsonObject of(HttpConnection connection, boolean reused, boolean verified) {
+        return describe(connection.remoteAddress(), connection.localAddress(), connection.isSsl(), connection.isSsl() ? connection.sslSession() : null,
+                () -> connection.peerCertificates(), null, reused, verified, null);
+    }
+
+    /**
+     * A script's own socket (D-116), as {@link #of(HttpConnection, boolean, boolean)} describes a request's connection.
+     * The host completes every handshake and judges the chain here, against {@code ca} or the JVM's trust store, so a
+     * refusal carries OpenSSL's code as Node's does.
+     */
+    public static JsonObject of(io.vertx.core.net.NetSocket socket, List<String> ca) {
+        return describe(socket.remoteAddress(), socket.localAddress(), socket.isSsl(), socket.isSsl() ? socket.sslSession() : null,
+                socket::peerCertificates, socket.isSsl() ? socket.applicationLayerProtocol() : null, false, false, ca);
+    }
+
+    private interface Peers {
+        List<Certificate> get() throws SSLPeerUnverifiedException;
+    }
+
+    private static JsonObject describe(SocketAddress remote, SocketAddress local, boolean ssl, SSLSession session, Peers peers,
+                                       String alpn, boolean reused, boolean verified, List<String> ca) {
         JsonObject info = new JsonObject().put("reused", reused);
-        address(info, "remote", connection.remoteAddress());
-        address(info, "local", connection.localAddress());
-        if (!connection.isSsl()) {
+        address(info, "remote", remote);
+        address(info, "local", local);
+        if (!ssl) {
             return info;
         }
-        SSLSession session = connection.sslSession();
         JsonObject tls = new JsonObject();
         if (session != null) {
             tls.put("protocol", session.getProtocol()).put("cipher", session.getCipherSuite());
         }
+        if (alpn != null && !alpn.isEmpty()) {
+            tls.put("alpnProtocol", alpn);
+        }
         List<Certificate> chain;
         try {
-            chain = connection.peerCertificates();
+            chain = peers.get();
         } catch (SSLPeerUnverifiedException e) {
             chain = List.of();
         }
         tls.put("peerCertificates", certificates(chain));
-        String error = verified ? null : authorizationError(chain);
+        String error = verified ? null : authorizationError(chain, ca);
         tls.put("authorized", error == null);
         if (error != null) {
             tls.put("authorizationError", error);
@@ -86,19 +108,44 @@ public final class ConnectionInfo {
         info.put(side + "Address", host).put(side + "Port", address.port()).put(side + "Family", host.contains(":") ? "IPv6" : "IPv4");
     }
 
-    /**
-     * Why a chain wouldn't have been trusted, with OpenSSL's code as Node reports it, or null if the JVM's trust store
-     * trusts it. Only asked when the request turned verification off, so it can still say whether the peer was trusted.
-     */
+    /** OpenSSL's words for each verification failure, as Node's errors carry them. */
+    public static final Map<String, String> VERIFY_MESSAGES = Map.of(
+            "DEPTH_ZERO_SELF_SIGNED_CERT", "self-signed certificate",
+            "SELF_SIGNED_CERT_IN_CHAIN", "self-signed certificate in certificate chain",
+            "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "unable to get local issuer certificate",
+            "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "unable to verify the first certificate",
+            "UNABLE_TO_GET_ISSUER_CERT", "unable to get issuer certificate",
+            "CERT_HAS_EXPIRED", "certificate has expired",
+            "CERT_NOT_YET_VALID", "certificate is not yet valid");
+
+    /** As {@link #authorizationError(List, List)} against the JVM's trust store. */
     static String authorizationError(List<Certificate> chain) {
-        if (chain.isEmpty()) {
-            return "UNABLE_TO_GET_ISSUER_CERT";
-        }
+        return authorizationError(chain, null);
+    }
+
+    /**
+     * Why a chain isn't trusted, with OpenSSL's code as Node reports it, or null if it is. It's judged against the
+     * {@code ca} certificates (PEM) if given, as Node's {@code ca} option replaces the default roots, or else the JVM's
+     * trust store. The host name isn't part of it: that's {@code tls.checkServerIdentity}'s job.
+     */
+    public static String authorizationError(List<Certificate> chain, List<String> ca) {
         X509Certificate[] x509 = chain.stream().filter(X509Certificate.class::isInstance).map(X509Certificate.class::cast)
                 .toArray(X509Certificate[]::new);
+        if (x509.length == 0) {
+            return "UNABLE_TO_GET_ISSUER_CERT";
+        }
+        for (X509Certificate cert : x509) {
+            try {
+                cert.checkValidity();
+            } catch (java.security.cert.CertificateExpiredException e) {
+                return "CERT_HAS_EXPIRED";
+            } catch (java.security.cert.CertificateNotYetValidException e) {
+                return "CERT_NOT_YET_VALID";
+            }
+        }
         try {
             TrustManagerFactory factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-            factory.init((KeyStore) null);
+            factory.init(ca == null || ca.isEmpty() ? null : trustStore(ca));
             for (var manager : factory.getTrustManagers()) {
                 if (manager instanceof X509TrustManager trust) {
                     // "UNKNOWN" is what TLS 1.3 passes: the chain is judged, not the key exchange.
@@ -112,10 +159,23 @@ public final class ConnectionInfo {
                 return x509.length == 1 ? "DEPTH_ZERO_SELF_SIGNED_CERT" : "SELF_SIGNED_CERT_IN_CHAIN";
             }
             return x509.length == 1 ? "UNABLE_TO_VERIFY_LEAF_SIGNATURE" : "UNABLE_TO_GET_ISSUER_CERT_LOCALLY";
-        } catch (NoSuchAlgorithmException | java.security.KeyStoreException e) {
+        } catch (java.security.GeneralSecurityException | java.io.IOException e) {
             return "UNABLE_TO_GET_ISSUER_CERT_LOCALLY";
         }
         return "UNABLE_TO_GET_ISSUER_CERT_LOCALLY";
+    }
+
+    private static KeyStore trustStore(List<String> pems) throws java.security.GeneralSecurityException, java.io.IOException {
+        KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
+        store.load(null, null);
+        java.security.cert.CertificateFactory factory = java.security.cert.CertificateFactory.getInstance("X.509");
+        int n = 0;
+        for (String pem : pems) {
+            for (Certificate cert : factory.generateCertificates(new java.io.ByteArrayInputStream(pem.getBytes(java.nio.charset.StandardCharsets.US_ASCII)))) {
+                store.setCertificateEntry("ca-" + n++, cert);
+            }
+        }
+        return store;
     }
 
     /** The chain, leaf first, each as Node's {@code getPeerCertificate()} describes one (without the links between them). */

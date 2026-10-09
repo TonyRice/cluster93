@@ -146,7 +146,11 @@ final class EgressRoutes {
                         .put("concurrentRequests", FetchApi.MAX_CONCURRENT)
                         .put("requestBodyBytes", FetchClient.MAX_REQUEST_BYTES)
                         .put("timeoutMs", FetchClient.DEFAULT_TIMEOUT_MS)
-                        .put("followsRedirects", false));
+                        .put("followsRedirects", false)
+                        // Sockets (D-116): the cluster policy's limits; no idle timeout, as in Node.
+                        .put("socketsPerExecution", cluster.limits().socketsPerExecution())
+                        .put("socketsPerTenantPerNode", cluster.limits().socketsPerTenantPerNode())
+                        .put("connectsPerMinute", cluster.limits().connectsPerMinute()));
     }
 
     private static JsonObject step(String what, String access, String why) {

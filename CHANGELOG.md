@@ -26,6 +26,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## `net` and `tls` sockets; pg, mysql2, ioredis, MongoDB and nodemailer run (2026-10-09)
+
+### Added
+- **Outbound `net` and `tls` sockets, as Node's** (D-116):
+  - **Connecting:** `net.connect`, `tls.connect`, and upgrading a connected socket with `tls.connect({ socket })`.
+  - **Behaviour:** half-close, idle timeouts, and Node's events and errors.
+  - **TLS checks as Node does them:** the chain against the trust store or `ca`, then the host name with `tls.checkServerIdentity` or the script's own check.
+  - **`tls.createSecureContext` and `tls.rootCertificates`.**
+  - **Gated and limited:** every socket goes through the egress rules. The cluster policy gains `limits`: 120 new connections a minute and 256 sockets per tenant on each node, and 16 per script.
+  - **Why:** phase B's socket step, so database and mail drivers run.
+- **Real drivers give real Node's results against real servers:** pg (including TLS through Postgres's SSLRequest), mysql2, ioredis, MongoDB and nodemailer (STARTTLS). They run in containers when `AUTOMATELY_TEST_REAL_SERVICES` is set.
+- **`util/types` as a module,** and **`child_process`'s names** (starting a process throws), which pg, nodemailer and mongodb import.
+- **`automately egress`** shows the socket limits.
+
+### Fixed
+- **`emitter.once()`** now goes through `this.on()`, as Node's does. A stream with only a `once('data')` listener used to stall.
+- **The bundler** resolves `require()` with packages' `require` condition. It used to get the ES-module file, so pg's pool class came out as an object.
+- **`Buffer`:**
+  - **Statics and prototype methods are enumerable,** as Node's are. safer-buffer and mysql2 copy them with `for…in`.
+  - **`copy()` clamps as Node's does,** instead of throwing when the target is too short.
+- **The real-npm test** gives up on a fixture that never lets Node exit, after 2 minutes, instead of hanging.
+
 ## got runs in the isolate; `http`'s socket reports the real connection (2026-10-08)
 
 ### Added

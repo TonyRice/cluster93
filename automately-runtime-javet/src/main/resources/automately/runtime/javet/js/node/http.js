@@ -5,7 +5,7 @@ import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
 import { Readable, Writable } from 'node:stream';
 import { nextTick } from 'node:process';
-import { checkServerIdentity as defaultIdentityCheck } from 'node:tls';
+import { checkServerIdentity as defaultIdentityCheck, peerCertificate } from 'node:tls';
 
 const internals = globalThis[Symbol.for('automately.http')];
 const reportUncaught = globalThis[Symbol.for('automately.uncaught')];
@@ -143,22 +143,7 @@ class SocketStandIn extends EventEmitter {
   address() {
     return this.localAddress === undefined ? {} : { address: this.localAddress, family: this.remoteFamily, port: this.localPort };
   }
-  getPeerCertificate(detailed) {
-    const chain = (this._tls?.peerCertificates ?? []).map((c) => ({
-      ...c, raw: c.raw === undefined ? undefined : Buffer.from(c.raw, 'base64'),
-      pubkey: c.pubkey === undefined ? undefined : Buffer.from(c.pubkey, 'base64'),
-    }));
-    if (!chain.length) return this.encrypted ? {} : null;
-    if (!detailed) return chain[0];
-    for (let i = 0; i < chain.length; i++) {
-      const next = chain[i + 1];
-      const selfSigned = JSON.stringify(chain[i].subject) === JSON.stringify(chain[i].issuer);
-      // As Node: a self-signed certificate is its own issuer; the chain ends where the peer stopped sending.
-      if (next) chain[i].issuerCertificate = next;
-      else if (selfSigned) chain[i].issuerCertificate = chain[i];
-    }
-    return chain[0];
-  }
+  getPeerCertificate(detailed) { return this._tls ? peerCertificate(this._tls, detailed) : this.encrypted ? {} : null; }
   getProtocol() { return this._tls?.protocol ?? null; }
   getCipher() {
     if (!this._tls?.cipher) return undefined;
@@ -283,7 +268,7 @@ function networkError(err, req) {
 const REFUSED_OPTIONS = {
   createConnection: 'createConnection would bypass the egress gate',
   socketPath: 'Unix sockets are not available in the isolate',
-  checkServerIdentity: "custom certificate checks can't be run in the isolate; use the ca option",
+  checkServerIdentity: "a custom certificate check isn't supported for http requests yet; use the ca option (tls.connect takes one)",
   pfx: 'PFX bundles are not supported; pass PEM cert and key',
   passphrase: 'encrypted private keys are not supported; pass an unencrypted PEM key',
 };

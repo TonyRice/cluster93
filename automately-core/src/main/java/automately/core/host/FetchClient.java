@@ -49,6 +49,7 @@ public final class FetchClient {
     private final Vertx vertx;
     private final HttpClient client;
     private volatile HttpClient insecure;
+    private volatile SocketClient sockets;
     /** Connections requests have gone out on, so a script's socket can say when one was reused from the pool (D-114). */
     private final java.util.Set<io.vertx.core.http.HttpConnection> seen =
             java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>()));
@@ -279,6 +280,20 @@ public final class FetchClient {
                 };
             }).recover(err -> Future.failedFuture(networkError(err, "http.request")));
         }).onFailure(err -> done.run());
+    }
+
+    /** Scripts' TCP and TLS sockets (D-116), through the same gate as their HTTP requests. Made when first asked for. */
+    public SocketClient sockets() {
+        SocketClient made = sockets;
+        if (made == null) {
+            synchronized (this) {
+                if (sockets == null) {
+                    sockets = new SocketClient(vertx, egress);
+                }
+                made = sockets;
+            }
+        }
+        return made;
     }
 
     /**

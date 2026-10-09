@@ -107,14 +107,18 @@ proto.prependListener = function prependListener(name, listener) {
   return add(this, name, listener, true);
 };
 
+// Through this.on and this.prependListener, as Node does, so a subclass's override sees once-listeners too: a Readable
+// starts flowing on once('data') as on on('data') (D-116; before, a stream with only a once('data') listener stalled).
 proto.once = function once(name, listener) {
   checkListener(listener);
-  return add(this, name, onceWrapper(this, name, listener), false);
+  this.on(name, onceWrapper(this, name, listener));
+  return this;
 };
 
 proto.prependOnceListener = function prependOnceListener(name, listener) {
   checkListener(listener);
-  return add(this, name, onceWrapper(this, name, listener), true);
+  this.prependListener(name, onceWrapper(this, name, listener));
+  return this;
 };
 
 proto.removeListener = function removeListener(name, listener) {

@@ -70,6 +70,11 @@ public final class Egress {
         return allowPrivate;
     }
 
+    /** The cluster's egress policy, for its limits (D-116). */
+    public Future<ClusterEgress> cluster() {
+        return policies.cluster();
+    }
+
     /** As {@link #address(String, String, int, EgressProtocol, String)} for an HTTP request. */
     public Future<InetAddress> address(String tenant, String host, int port, String what) {
         return address(tenant, host, port, EgressProtocol.HTTP, what);

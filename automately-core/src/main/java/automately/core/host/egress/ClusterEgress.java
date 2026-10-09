@@ -11,9 +11,10 @@ import java.util.Set;
 
 /**
  * The cluster's egress policy, set by an operator (D-111): rules for every tenant, its own named address sets, and
- * the default posture. A cluster deny can't be overridden by a tenant; a cluster allow applies after the tenant's rules.
+ * the default posture, and the socket limits (D-116). A cluster deny can't be overridden by a tenant; a cluster allow
+ * applies after the tenant's rules.
  */
-public record ClusterEgress(Posture posture, List<EgressRule> rules, Map<String, List<Cidr>> addressSets) {
+public record ClusterEgress(Posture posture, List<EgressRule> rules, Map<String, List<Cidr>> addressSets, EgressLimits limits) {
 
     public static final int MAX_RULES = 500;
     public static final int MAX_SETS = 50;
@@ -23,7 +24,7 @@ public record ClusterEgress(Posture posture, List<EgressRule> rules, Map<String,
     public static final ClusterEgress DEFAULT = new ClusterEgress(Posture.PUBLIC, List.of(EgressRule.fromJson(new JsonObject()
             .put("action", "deny").put("to", "*").put("ports", new JsonArray().add("@smtp")).put("protocols", new JsonArray().add("tcp"))
             .put("note", "Mail ports (25, 465, 587) are closed to raw sockets: open SMTP from the cluster's addresses gets them blocklisted. "
-                    + "An operator can allow a mail service with a narrower rule."))), Map.of());
+                    + "An operator can allow a mail service with a narrower rule."))), Map.of(), EgressLimits.DEFAULT);
 
     public ClusterEgress {
         rules = List.copyOf(rules);
@@ -39,7 +40,7 @@ public record ClusterEgress(Posture posture, List<EgressRule> rules, Map<String,
         rules.forEach(rule -> list.add(rule.toJson()));
         JsonObject sets = new JsonObject();
         addressSets.forEach((name, ranges) -> sets.put(name, new JsonArray(ranges.stream().map(Cidr::toString).toList())));
-        return new JsonObject().put("posture", posture.code).put("rules", list).put("addressSets", sets);
+        return new JsonObject().put("posture", posture.code).put("rules", list).put("addressSets", sets).put("limits", limits.toJson());
     }
 
     /** Parses a stored or submitted policy; throws {@link IllegalArgumentException} with a message fit for the API. */
@@ -84,7 +85,7 @@ public record ClusterEgress(Posture posture, List<EgressRule> rules, Map<String,
             }
         }
         Object posture = json.getValue("posture");
-        return new ClusterEgress(posture == null ? Posture.PUBLIC : Posture.parse(posture), rules, sets);
+        return new ClusterEgress(posture == null ? Posture.PUBLIC : Posture.parse(posture), rules, sets, EgressLimits.fromJson(json.getValue("limits")));
     }
 
     /** The set names a tenant's rules may use: the built-in ones and the cluster's. */

@@ -209,6 +209,7 @@ class ContractTest {
         calls.check("getTenantEgressPolicy", "GET", "/v1/tenants/contract/egress-policy", admin, null);
         calls.check("getEgressPolicy", "GET", "/v1/egress-policy", tenant, null);
         calls.check("putClusterEgressPolicy", "PUT", "/v1/egress/cluster-policy", admin, new JsonObject().put("posture", "public")
+                .put("limits", new JsonObject().put("socketsPerExecution", 16).put("connectsPerMinute", 120))
                 .put("addressSets", new JsonObject().put("corp", new JsonArray().add("198.51.100.0/24")))
                 .put("rules", new JsonArray().add(new JsonObject().put("action", "deny").put("to", "@corp").put("protocols",
                         new JsonArray().add("tcp")).put("note", "ours")).add(new JsonObject().put("to", "*.partner.example")

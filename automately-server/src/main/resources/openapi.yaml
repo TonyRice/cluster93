@@ -413,6 +413,7 @@ paths:
                     minItems: 1
                     maxItems: 1000
                     items: { type: string }
+                limits: { $ref: '#/components/schemas/EgressLimits' }
       responses:
         '200': { $ref: '#/components/responses/ClusterEgressPolicy' }
         default: { $ref: '#/components/responses/Error' }
@@ -2848,6 +2849,16 @@ components:
             requestBodyBytes: { type: integer }
             timeoutMs: { type: integer }
             followsRedirects: { type: boolean }
+            socketsPerExecution: { type: integer }
+            socketsPerTenantPerNode: { type: integer }
+            connectsPerMinute: { type: integer }
+    EgressLimits:
+      type: object
+      description: How much of the network scripts may use (D-116); each field optional when setting it.
+      properties:
+        connectsPerMinute: { type: integer, minimum: 1, maximum: 100000 }
+        socketsPerExecution: { type: integer, minimum: 1, maximum: 1024 }
+        socketsPerTenantPerNode: { type: integer, minimum: 1, maximum: 65536 }
     ClusterEgressPolicy:
       type: object
       required: [posture, rules, addressSets, builtInSets]
@@ -2864,6 +2875,7 @@ components:
         builtInSets:
           type: object
           additionalProperties: { type: string }
+        limits: { $ref: '#/components/schemas/EgressLimits' }
     StorageProvider:
       type: object
       required: [id, name, type, settings, hasSecret]

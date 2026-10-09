@@ -299,10 +299,28 @@ export class Buffer extends Uint8Array {
     return n;
   }
 
-  copy(target, targetStart = 0, sourceStart = 0, sourceEnd = this.length) {
-    const part = this.subarray(sourceStart, Math.min(sourceEnd, sourceStart + target.length - targetStart));
-    target.set(part, targetStart);
-    return part.length;
+  // Node's rules: what fits is copied and the count returned; a start at or past the end copies nothing (D-116: before,
+  // that computed a negative length, which subarray() read from the end, and set() threw).
+  copy(target, targetStart, sourceStart, sourceEnd) {
+    const integer = (value, fallback) => (value === undefined ? fallback : Math.trunc(Number(value)) || 0);
+    targetStart = integer(targetStart, 0);
+    sourceStart = integer(sourceStart, 0);
+    sourceEnd = integer(sourceEnd, this.length);
+    if (targetStart < 0) {
+      throw Object.assign(new RangeError(`The value of "targetStart" is out of range. It must be >= 0. Received ${targetStart}`), { code: 'ERR_OUT_OF_RANGE' });
+    }
+    if (sourceStart < 0 || sourceStart > this.length) {
+      throw Object.assign(new RangeError(`The value of "sourceStart" is out of range. It must be >= 0 && <= ${this.length}. Received ${sourceStart}`),
+        { code: 'ERR_OUT_OF_RANGE' });
+    }
+    if (sourceEnd < 0) {
+      throw Object.assign(new RangeError(`The value of "sourceEnd" is out of range. It must be >= 0. Received ${sourceEnd}`), { code: 'ERR_OUT_OF_RANGE' });
+    }
+    sourceEnd = Math.min(sourceEnd, this.length);
+    if (targetStart >= target.length || sourceStart >= sourceEnd) return 0;
+    const count = Math.min(sourceEnd - sourceStart, target.length - targetStart);
+    target.set(this.subarray(sourceStart, sourceStart + count), targetStart);
+    return count;
   }
 
   fill(value, offset = 0, end = this.length, encoding) {
@@ -417,6 +435,22 @@ export function btoa(data) {
     }
   }
   return decode(encode(s, 'latin1'), 'base64');
+}
+
+// Node's Buffer statics are enumerable own properties (it assigns them, where a class defines them hidden), and code
+// copies them with for...in: safer-buffer (mysql2's) does, and fell back to calling Buffer() without new (D-116).
+for (const name of ['poolSize', 'from', 'copyBytesFrom', 'of', 'alloc', 'allocUnsafe', 'allocUnsafeSlow', 'isBuffer', 'compare',
+  'isEncoding', 'concat', 'byteLength']) {
+  const descriptor = Object.getOwnPropertyDescriptor(Buffer, name);
+  if (descriptor) Object.defineProperty(Buffer, name, { ...descriptor, enumerable: true });
+}
+// So are its prototype's methods: mysql2 sizes a packet by writing it to a zero-length Buffer whose methods it swaps for
+// no-ops with for...in over Buffer.prototype (D-116).
+for (const name of Object.getOwnPropertyNames(Buffer.prototype)) {
+  const descriptor = Object.getOwnPropertyDescriptor(Buffer.prototype, name);
+  if (name !== 'constructor' && typeof descriptor.value === 'function') {
+    Object.defineProperty(Buffer.prototype, name, { ...descriptor, enumerable: true });
+  }
 }
 
 export default { Buffer, kMaxLength, kStringMaxLength, constants, INSPECT_MAX_BYTES, atob, btoa };

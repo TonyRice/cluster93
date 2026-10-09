@@ -92,8 +92,8 @@ class PackageImportsTest {
                 .contains("it has no files beside it");
         assertThat(run("import x from 'https://esm.sh/x'; export default () => x;").error())
                 .contains("it's a path or URL");
-        assertThat(run("import c from 'child_process'; export default () => c;").error())
-                .contains("Node's \"child_process\" module isn't available");
+        assertThat(run("import w from 'worker_threads'; export default () => w;").error())
+                .contains("Node's \"worker_threads\" module isn't available");
         assertThat(run("import { x } from 'strings/missing'; export default () => x;", STRINGS).error())
                 .contains("strings@1.4.0 doesn't export \"./missing\"");
     }

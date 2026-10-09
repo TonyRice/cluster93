@@ -5,6 +5,7 @@
 - **B2, the `http`/`https` client:** ✅ built (D-109), with axios and node-fetch matching real Node. Unhandled rejections fail jobs as in Node (D-110).
 - **Configurable address spaces (§10):** ✅ built (D-111, D-113).
 - **got and real socket details (§11):** ✅ built (D-114). The isolate reports a Node version so got loads (D-115).
+- **B5, `net` and `tls` sockets (§7):** ✅ built (D-116), with pg, mysql2, ioredis, MongoDB and nodemailer matching real Node against real servers.
 - **Servers reached by hostname with intercepted ports (§5, D-112):** accepted (Tony, 2026-10-08).
 - **The rest, accepted with Tony's answers in §8** (2026-10-08):
   - got and real socket details (§11)
@@ -216,7 +217,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
   - **Not offered:** `resolveCaa`, `resolveNaptr`, `resolveSoa` and `resolveAny`, which are refused with `ENOTIMP`.
 - **What it unlocks:** `mongodb+srv://` (SRV and TXT records), tested with a Netty DNS test server against a MongoDB container.
 
-## 7. B5: outbound `net` and `tls` (accepted)
+## 7. B5: outbound `net` and `tls` (built, D-116)
 **What it is:** real sockets on Vert.x's `NetClient`. The functionality is all of Node's; the only restrictions are where a socket may go (the gate) and how much it may use (limits).
 
 **The host:**
@@ -270,6 +271,26 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - `tls.createServer`
 - `http2`
 
+**What building it settled (D-116):**
+- **The host judges the chain; the script checks the name.**
+  - **The handshake always completes.** The host then judges the chain against the JVM's trust store, or `ca`, and refuses with OpenSSL's code and message, as Node's error has them. The JVM's own refusal names no reason ("PKIX path building failed").
+  - **The host name** is checked by `tls.checkServerIdentity`, Node's algorithm, or the script's own check.
+  - **Nothing the script writes goes until both pass.**
+  - **No reach is added:** the script's own connection is the only thing that could be affected, and `rejectUnauthorized: false` already lets a script skip verification for it.
+- **The limits live in the cluster policy** (`limits`: 120 connections a minute and 256 sockets per tenant on each node, 16 per script), as §10 planned, and show in the tenant's view.
+- **Half-close:** `end()` shuts the TCP output (Netty's `shutdownOutput`) once what was written has gone, and keeps reading. Over TLS, `end()` closes.
+- **Backpressure:** the host holds about 8 unread chunks per socket, then stops reading, and TCP pushes back on the peer. Tested with a 64 MB sender and a script that doesn't read.
+- **An upgrade hands over the connection:** `tls.connect({ socket })` takes over the plain socket's stream, including a read already in flight. The plain socket closes with the TLS one, so pg, which listens for `'close'` on it, sees the end.
+- **What real drivers needed beyond sockets:**
+  - `util/types`, as a module (pg)
+  - `child_process`'s names, each function throwing (nodemailer, mongodb)
+  - `Buffer` statics and prototype methods enumerable, as Node's (safer-buffer and mysql2 copy them with `for…in`)
+  - `Buffer.copy` clamping as Node's does
+- **Two older bugs found and fixed:**
+  - **`emitter.once()` bypassed `this.on()`,** so a stream with only a `once('data')` listener never flowed.
+  - **The bundler applied the `import` condition to `require()`,** so pg's `require('pg-pool')` got the ES module's namespace object.
+- **Testing against real servers:** pg (Postgres 18, plain and TLS), mysql2 (MySQL 8.4), ioredis (Redis 7), mongodb (MongoDB 8.2; MongoDB 8.0 refuses Linux 6.19 and newer) and nodemailer (Mailpit, STARTTLS). They run in containers, with `AUTOMATELY_TEST_REAL_SERVICES`, and every result matches real Node 26.8.1.
+
 ## 8. Tony's answers (2026-10-08)
 1. **Raw TCP to the public internet (B5): every port except SMTP.**
    - **SMTP:** 25, 465 and 587 are refused unless an operator allows them per tenant, since open SMTP from the cluster's addresses gets them blocklisted.
@@ -297,7 +318,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 2. **B2:** ✅ (D-109, D-110).
 3. **Configurable address spaces (§10):** ✅ (D-111, D-113).
 4. **got over HTTP/1.1** (§11): ✅ (D-114, D-115).
-5. **B5: sockets** (§7).
+5. **B5: sockets** (§7): ✅ (D-116).
 6. **The `http2` client** (§12).
 7. **B4: `dns`** (§6).
 8. **B3: routes and ports, then `createServer`** (§5).

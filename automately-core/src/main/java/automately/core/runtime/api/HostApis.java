@@ -29,6 +29,11 @@ public interface HostApis {
 
     /** The tenant's secrets, if this execution may read them (D-068). */
     /** The file system (D-079), where the node offers it. */
+    /** {@code net} and {@code tls} sockets (D-116). */
+    default SocketApi sockets() {
+        return SocketApi.UNAVAILABLE;
+    }
+
     default FsApi fs() {
         return Unavailable.FS;
     }

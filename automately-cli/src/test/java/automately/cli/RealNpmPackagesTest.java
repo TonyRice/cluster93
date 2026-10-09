@@ -17,6 +17,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,12 +47,24 @@ class RealNpmPackagesTest {
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
             "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals");
     /** The HTTP libraries (D-109), published as a second package: one would be over a version's 10 MB. */
-    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got");
+    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets");
+    /**
+     * Database and mail drivers (D-116), run against real servers in containers: two more packages, since together
+     * they'd be over a version's 10 MB.
+     */
+    private static final List<String> DRIVERS = List.of("pg", "mysql2", "ioredis", "nodemailer");
+    private static final List<String> MONGO = List.of("mongodb");
+    /** Set to run the drivers: they need Docker for their servers. */
+    private static final boolean SERVICES = System.getenv("AUTOMATELY_TEST_REAL_SERVICES") != null;
+    private final List<org.testcontainers.containers.GenericContainer<?>> containers = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
     private RunningNode node;
     /** The HTTP libraries' server (D-109), the same one for Node and the isolate: TEST_HTTP. */
     private io.vertx.core.Vertx serverVertx;
     private String testHttp;
+    /** What both Node and the isolate are given: the servers' addresses, and the TLS servers' CA (D-116). */
+    private final Map<String, String> testEnv = new java.util.LinkedHashMap<>();
+    private ServerSocket halfClose;
     private Path project;
     private Path config;
 
@@ -72,6 +85,11 @@ class RealNpmPackagesTest {
         serverVertx = io.vertx.core.Vertx.vertx();
         testHttp = "http://127.0.0.1:" + await(serverVertx.createHttpServer().requestHandler(this::serve)
                 .listen(0, "127.0.0.1")).actualPort();
+        testEnv.put("TEST_HTTP", testHttp);
+        startSocketServers();
+        if (SERVICES) {
+            startServices();
+        }
         node = await(Automately.start(ServerConfig.fromEnv(Map.ofEntries(
                 Map.entry("AUTOMATELY_NODE_ID", "real-npm"),
                 Map.entry("AUTOMATELY_ADMIN_TOKEN", ADMIN),
@@ -113,6 +131,27 @@ class RealNpmPackagesTest {
         Files.writeString(net.resolve("automately.json"), "{\"name\": \"realworld-net\", \"version\": \"1.0.0\", \"exports\": {" + netExports + "}}");
         Result publishedNet = cli("packages", "publish", net.toString());
         assertThat(publishedNet.code()).as(publishedNet.err()).isZero();
+        if (SERVICES) {
+            publishVariant("realworld-db", DRIVERS);
+            publishVariant("realworld-mongo", MONGO);
+        }
+    }
+
+    /** Publishes {@code libs} as one package of their own, sharing the installed node_modules. */
+    private void publishVariant(String name, List<String> libs) throws IOException {
+        Path dir = project.resolve("variant-" + name);
+        Files.createDirectories(dir.resolve("src"));
+        StringBuilder exports = new StringBuilder();
+        for (String lib : libs) {
+            Files.copy(project.resolve("src/" + lib + ".js"), dir.resolve("src/" + lib + ".js"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            exports.append(exports.isEmpty() ? "" : ", ").append("\"./").append(lib).append("\": \"src/").append(lib).append(".js\"");
+        }
+        if (!Files.exists(dir.resolve("node_modules"))) {
+            Files.createSymbolicLink(dir.resolve("node_modules"), project.resolve("node_modules"));
+        }
+        Files.writeString(dir.resolve("automately.json"), "{\"name\": \"" + name + "\", \"version\": \"1.0.0\", \"exports\": {" + exports + "}}");
+        Result published = cli("packages", "publish", dir.toString());
+        assertThat(published.code()).as(name + ": " + published.err()).isZero();
     }
 
     /** Copies the fixture and installs its pinned lockfile, unless the same lockfile is already installed there. */
@@ -147,16 +186,35 @@ class RealNpmPackagesTest {
         if (serverVertx != null) {
             await(serverVertx.close());
         }
+        if (halfClose != null) {
+            halfClose.close();
+        }
+        containers.forEach(org.testcontainers.containers.GenericContainer::stop);
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals", "httpclient", "axios", "nodefetch", "got"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals", "httpclient", "axios", "nodefetch", "got", "sockets"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
+        sameAsNode(lib);
+    }
+
+    @ParameterizedTest(name = "{0} talks to a real server as it does under Node")
+    @ValueSource(strings = {"pg", "mysql2", "ioredis", "mongodb", "nodemailer"})
+    void aDriverTalksToItsServerAsItDoesUnderNode(String lib) throws Exception {
+        Assumptions.assumeTrue(SERVICES, "Set AUTOMATELY_TEST_REAL_SERVICES (and have Docker) to run the drivers against real servers");
+        sameAsNode(lib);
+    }
+
+    /** The library's fixture gives the same JSON in the isolate as under real Node. */
+    private void sameAsNode(String lib) throws Exception {
         JsonNode expected = Json.parse(underNode(lib));
         Path script = project.resolve("job-" + lib + ".mjs");
-        String pkg = NETWORK.contains(lib) ? "realworld-net" : "realworld";
+        String pkg = MONGO.contains(lib) ? "realworld-mongo" : DRIVERS.contains(lib) ? "realworld-db" : NETWORK.contains(lib) ? "realworld-net" : "realworld";
         Files.writeString(script, "import { run } from '" + pkg + "/" + lib + "'; export default async () => run();\n");
-        Result ran = cli("run", "--env", "TEST_HTTP=" + testHttp, script.toString());
+        List<String> args = new java.util.ArrayList<>(List.of("run"));
+        testEnv.forEach((name, value) -> args.addAll(List.of("--env", name + "=" + value)));
+        args.add(script.toString());
+        Result ran = cli(args.toArray(String[]::new));
         assertThat(ran.code()).as(lib + ": " + ran.err()).isZero();
         assertThat(Json.parse(ran.out())).as(lib).isEqualTo(expected);
     }
@@ -186,6 +244,90 @@ class RealNpmPackagesTest {
     }
 
     // --- helpers ---
+
+    /**
+     * The drivers' servers (D-116), in containers: Postgres with TLS on (a self-signed certificate for localhost, whose
+     * CA is TEST_PG_CA), MySQL, Redis, MongoDB, and Mailpit for SMTP with STARTTLS. Their addresses go to Node and the
+     * isolate alike.
+     */
+    private void startServices() throws Exception {
+        io.vertx.core.net.SelfSignedCertificate pgCert = io.vertx.core.net.SelfSignedCertificate.create("localhost");
+        testEnv.put("TEST_PG_CA", Files.readString(Path.of(pgCert.certificatePath())));
+        var postgres = new org.testcontainers.containers.GenericContainer<>("postgres:18-alpine")
+                .withEnv("POSTGRES_USER", "app").withEnv("POSTGRES_PASSWORD", "secret").withEnv("POSTGRES_DB", "app")
+                .withCopyToContainer(org.testcontainers.utility.MountableFile.forHostPath(pgCert.certificatePath()), "/tmp/server.crt")
+                .withCopyToContainer(org.testcontainers.utility.MountableFile.forHostPath(pgCert.privateKeyPath()), "/tmp/server.key")
+                // Postgres reads its key only if it owns it and nobody else can read it.
+                .withCommand("sh", "-c", "cp /tmp/server.crt /tmp/server.key /var/lib/postgresql/ && chown postgres /var/lib/postgresql/server.* "
+                        + "&& chmod 600 /var/lib/postgresql/server.key && exec docker-entrypoint.sh postgres -c ssl=on "
+                        + "-c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key")
+                .withExposedPorts(5432)
+                .waitingFor(org.testcontainers.containers.wait.strategy.Wait.forLogMessage(".*ready to accept connections.*", 2));
+        var mysql = new org.testcontainers.containers.GenericContainer<>("mysql:8.4")
+                .withEnv("MYSQL_ROOT_PASSWORD", "secret").withEnv("MYSQL_DATABASE", "app").withEnv("MYSQL_USER", "app")
+                .withEnv("MYSQL_PASSWORD", "secret").withExposedPorts(3306)
+                .waitingFor(org.testcontainers.containers.wait.strategy.Wait.forLogMessage(".*ready for connections.*port: 3306.*", 1)
+                        .withStartupTimeout(java.time.Duration.ofMinutes(3)));
+        var redis = new org.testcontainers.containers.GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
+        var mongo = new org.testcontainers.containers.GenericContainer<>("mongo:8.2").withExposedPorts(27017)
+                .waitingFor(org.testcontainers.containers.wait.strategy.Wait.forLogMessage(".*Waiting for connections.*", 1));
+        var mailpit = new org.testcontainers.containers.GenericContainer<>("axllent/mailpit:latest")
+                .withEnv("MP_SMTP_TLS_CERT", "sans:localhost").withEnv("MP_SMTP_TLS_KEY", "sans:localhost")
+                .withExposedPorts(1025, 8025);
+        java.util.stream.Stream.of(postgres, mysql, redis, mongo, mailpit).parallel().forEach(c -> {
+            c.start();
+            containers.add(c);
+        });
+        testEnv.put("TEST_PG", "postgres://app:secret@127.0.0.1:" + postgres.getMappedPort(5432) + "/app");
+        testEnv.put("TEST_MYSQL", "mysql://app:secret@127.0.0.1:" + mysql.getMappedPort(3306) + "/app");
+        testEnv.put("TEST_REDIS", "redis://127.0.0.1:" + redis.getMappedPort(6379));
+        testEnv.put("TEST_MONGO", "mongodb://127.0.0.1:" + mongo.getMappedPort(27017));
+        testEnv.put("TEST_SMTP", String.valueOf(mailpit.getMappedPort(1025)));
+    }
+
+    /**
+     * The sockets fixture's servers (D-116), the same ones for Node and the isolate: an echo server, a TLS echo server
+     * and one that switches to TLS when asked (both with a self-signed certificate for localhost, whose CA is TEST_CA),
+     * and a server that answers only once the client has finished sending.
+     */
+    private void startSocketServers() throws Exception {
+        io.vertx.core.net.SelfSignedCertificate certificate = io.vertx.core.net.SelfSignedCertificate.create("localhost");
+        testEnv.put("TEST_CA", Files.readString(Path.of(certificate.certificatePath())));
+        io.vertx.core.net.NetServer echo = await(serverVertx.createNetServer().connectHandler(socket -> socket.handler(socket::write))
+                .listen(0, "127.0.0.1"));
+        testEnv.put("TEST_TCP", String.valueOf(echo.actualPort()));
+        io.vertx.core.net.NetServer tls = await(serverVertx.createNetServer(new io.vertx.core.net.NetServerOptions().setSsl(true)
+                        .setKeyCertOptions(certificate.keyCertOptions()))
+                .connectHandler(socket -> socket.handler(data -> socket.write(io.vertx.core.buffer.Buffer.buffer("tls:").appendBuffer(data))))
+                .listen(0, "127.0.0.1"));
+        testEnv.put("TEST_TLS", String.valueOf(tls.actualPort()));
+        io.vertx.core.net.NetServer starttls = await(serverVertx.createNetServer(new io.vertx.core.net.NetServerOptions()
+                        .setKeyCertOptions(certificate.keyCertOptions()))
+                .connectHandler(socket -> socket.handler(data -> {
+                    if (data.toString().equals("STARTTLS")) {
+                        // As a real server does: stop reading, answer, switch, then read again (as TLS).
+                        socket.pause();
+                        socket.write("OK").compose(v -> socket.upgradeToSsl()).onComplete(v -> socket.resume());
+                    } else {
+                        socket.write(io.vertx.core.buffer.Buffer.buffer(socket.isSsl() ? "secure:" : "plain:").appendBuffer(data));
+                    }
+                })).listen(0, "127.0.0.1"));
+        testEnv.put("TEST_STARTTLS", String.valueOf(starttls.actualPort()));
+        halfClose = new ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress());
+        testEnv.put("TEST_HALFCLOSE", String.valueOf(halfClose.getLocalPort()));
+        Thread acceptor = new Thread(() -> {
+            while (!halfClose.isClosed()) {
+                try (java.net.Socket peer = halfClose.accept()) {
+                    byte[] got = peer.getInputStream().readAllBytes();
+                    peer.getOutputStream().write(("got " + new String(got, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8));
+                } catch (IOException e) {
+                    // Closed at the end, or a client that left: the next one is served.
+                }
+            }
+        }, "real-npm-half-close");
+        acceptor.setDaemon(true);
+        acceptor.start();
+    }
 
     /** The HTTP libraries' server: fixed answers, so Node and the isolate can be compared. */
     private void serve(io.vertx.core.http.HttpServerRequest req) {
@@ -272,9 +414,17 @@ class RealNpmPackagesTest {
         ProcessBuilder node = new ProcessBuilder("node", "--input-type=module", "-e",
                 "const m = await import('./src/" + lib + ".js'); console.log(JSON.stringify(await m.run()));")
                 .directory(project.toFile()).redirectErrorStream(true);
-        node.environment().put("TEST_HTTP", testHttp);
+        node.environment().putAll(testEnv);
         Process started = node.start();
-        String out = new String(started.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+        // A fixture that never lets Node exit fails here instead of hanging the suite.
+        java.util.concurrent.ScheduledExecutorService timer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        timer.schedule(started::destroyForcibly, 2, TimeUnit.MINUTES);
+        String out;
+        try {
+            out = new String(started.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+        } finally {
+            timer.shutdownNow();
+        }
         assertThat(started.waitFor()).as(lib + " under node: " + out).isZero();
         return out;
     }

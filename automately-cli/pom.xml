@@ -43,6 +43,12 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Real databases for RealNpmPackagesTest's drivers (D-116), only when AUTOMATELY_TEST_REAL_SERVICES is set. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

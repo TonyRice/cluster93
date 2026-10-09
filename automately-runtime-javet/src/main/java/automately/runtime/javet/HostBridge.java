@@ -89,6 +89,7 @@ public final class HostBridge {
     private final Map<Integer, HttpExchange> exchanges = new ConcurrentHashMap<>();
     private final Map<Integer, FileWriter> writers = new ConcurrentHashMap<>();
     private final Map<Integer, automately.core.runtime.OutgoingRequest> outgoing = new ConcurrentHashMap<>();
+    private final Map<Integer, automately.core.runtime.OutgoingSocket> sockets = new ConcurrentHashMap<>();
     private final AtomicInteger nextReplyId = new AtomicInteger(1);
     private final AtomicInteger nextId = new AtomicInteger(1);
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -323,6 +324,26 @@ public final class HostBridge {
         return writers.remove(id);
     }
 
+    // --- sockets (net, tls; D-116) ---
+
+    int addSocket(automately.core.runtime.OutgoingSocket socket) {
+        int id = nextId.getAndIncrement();
+        if (closed.get()) {
+            socket.destroy();
+        } else {
+            sockets.put(id, socket);
+        }
+        return id;
+    }
+
+    automately.core.runtime.OutgoingSocket socket(int id) {
+        return sockets.get(id);
+    }
+
+    automately.core.runtime.OutgoingSocket removeSocket(int id) {
+        return sockets.remove(id);
+    }
+
     // --- outgoing HTTP requests (node:http, D-109) ---
 
     int addOutgoing(automately.core.runtime.OutgoingRequest request) {
@@ -379,6 +400,9 @@ public final class HostBridge {
         writers.clear();
         outgoing.values().forEach(automately.core.runtime.OutgoingRequest::abort);
         outgoing.clear();
+        // A run's sockets close with it, whatever it left open (D-116).
+        sockets.values().forEach(automately.core.runtime.OutgoingSocket::destroy);
+        sockets.clear();
         awaitingReply.values().forEach(inbound -> inbound.fail(503, "The script ended before it answered"));
         awaitingReply.clear();
         apis.close();

@@ -63,6 +63,33 @@ class NodeStandInsTest {
     }
 
     @Test
+    void onceGoesThroughOnSoAStreamFlows() throws Exception {
+        // Node's once() adds its listener with this.on(): a Readable starts flowing on once('data') (D-116).
+        assertThat(output("import { EventEmitter } from 'node:events'; import { Readable } from 'node:stream';"
+                + "class Watch extends EventEmitter { on(name, fn) { seen.push('on ' + name); return super.on(name, fn); } }"
+                + "const seen = [];"
+                + "export default async () => { new Watch().once('w', () => {}); new Watch().prependOnceListener('p', () => {});"
+                + " const stream = Readable.from(['first', 'second']);"
+                + " seen.push(await new Promise((resolve) => stream.once('data', (chunk) => resolve('data ' + chunk))));"
+                + " return seen; };"))
+                .containsExactly("on w", "data first");
+    }
+
+    @Test
+    void bufferCopiesAndEnumeratesAsNodes() throws Exception {
+        // Values from real Node 26 (D-116): copy clamps to the target and copies nothing from past its end, and Buffer's
+        // statics and prototype methods are enumerable, as safer-buffer and mysql2 rely on.
+        assertThat(output("import { Buffer } from 'node:buffer';"
+                + "export default () => { const a = Buffer.from('hello world'); const t = Buffer.alloc(4); const out = [];"
+                + " out.push(a.copy(t, 0), t.toString(), a.copy(t, 2, 0), t.toString(), a.copy(t, 10), a.copy(t, 0, 8, 100), t.toString(), a.copy(t, 0, 5, 2));"
+                + " for (const bad of [() => a.copy(t, -1), () => a.copy(t, 0, -1)]) { try { bad(); } catch (e) { out.push(e.code); } }"
+                + " const proto = []; for (const name in Buffer.prototype) proto.push(name);"
+                + " out.push(Object.keys(Buffer).includes('from'), Object.keys(Buffer).includes('alloc'), proto.includes('writeUInt32LE'), proto.includes('constructor'));"
+                + " return out; };"))
+                .containsExactly(4, "hell", 2, "hehe", 0, 3, "rlde", 0, "ERR_OUT_OF_RANGE", "ERR_OUT_OF_RANGE", true, true, true, false);
+    }
+
+    @Test
     void buffer() throws Exception {
         assertThat(output("import { Buffer } from 'buffer'; import buf from 'node:buffer';"
                 + "export default () => { const b = Buffer.from('héllo'); const n = Buffer.alloc(4); n.writeUInt32BE(0xdeadbeef);"

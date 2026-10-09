@@ -47,7 +47,7 @@ Automately runs other people's code. This page describes who is trusted, what ea
 - **Validation.** Requests are validated against the OpenAPI contract before any handler runs.
 - **Limits.** Per-tenant rate limits and storage quotas (D-043, D-051) bound what one tenant can take. Admission control refuses writes before disk or memory runs out, so uploads can't crash a node (D-038).
 
-**Outbound requests (`fetch`, completion callbacks, tenant S3 endpoints)** (D-026, D-062, D-108):
+**Outbound connections (`fetch`, `http`/`https`, `net`/`tls` sockets, completion callbacks, tenant S3 endpoints)** (D-026, D-062, D-108, D-116):
 - Private, loopback, link-local (including cloud metadata at 169.254.169.254), CGNAT and other reserved addresses are refused, including IPv6 forms that carry one (NAT64, 6to4, IPv4-mapped and IPv4-compatible).
 - **The cluster's own nodes are refused on every port,** even on public addresses: every address a live node advertises, and every address of the node's own interfaces (D-108). No rule can allow them.
 - The connection goes to the exact address that was checked, so DNS rebinding can't swap one in.
@@ -68,6 +68,13 @@ Automately runs other people's code. This page describes who is trusted, what ea
   - **The development switch:** `AUTOMATELY_EGRESS_ALLOW_PRIVATE` opens private and reserved addresses for every tenant (still after the deny rules) and is for local development only; a node warns at every start while it's on.
   - **Tenant S3 endpoints:** allowed by the tenant's storage policy.
 - Refusals are counted per tenant and reason (`automately_egress_denied_total`).
+- **Scripts' sockets** (D-116) go through the same rules as `tcp`, and the cluster policy's limits apply:
+  - at most 120 new connections a minute and 256 open sockets per tenant on each node
+  - 16 open sockets per script
+  - every socket is closed when its run ends
+
+  The host buffers only a few chunks a script hasn't read before pushing back on the peer, so a script can't make it hold a stream. TLS chains are judged on the host, and nothing the script writes is sent before the chain and host name check pass. Bytes are counted per tenant (`automately_egress_bytes_total`).
+- **Nothing a script runs listens on a node:** TCP and UDP servers are refused, and HTTP servers are reached by hostname through the ingress (D-112).
 - Tenant S3 endpoints are still checked by the older address check, without the cluster-node rule; they move to the gate with phase B's next step.
 
 **Secrets at rest:**

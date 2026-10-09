@@ -2038,3 +2038,49 @@ It's written for people, because the console will show the same response as a "N
 
 **Consequences:** libraries that gate features on a version turn them on. jsonwebtoken's PS256 is one, and it works.
 
+### D-116 — Outbound `net` and `tls` sockets; real database drivers run in the isolate
+**Date:** 2026-10-09 · **Status:** Accepted. Phase B's socket step (B5, network-reach.md §7), as planned and approved (Tony: "okay let's move forward").
+
+**Decision:**
+- **Scripts get Node's `net` and `tls`,** on Vert.x's `NetClient`.
+  - **Gated:** every connection goes through the egress rules as `tcp` (D-111), to the address the gate checked.
+  - **Limited by the cluster policy's new `limits`:** 120 new connections a minute and 256 open sockets per tenant on each node, and 16 per script. They show in the tenant's view.
+  - **No idle timeout,** as in Node. Sockets close when their run ends.
+  - **No servers:** TCP and UDP servers are refused (D-112).
+- **The host's side, `SocketClient`:**
+  - **Data:** a paused stream the script reads through the existing chunk flow. About 8 unread chunks, then the host stops reading, and TCP pushes back.
+  - **Writes** complete when the connection takes them.
+  - **`end()`** half-closes plain TCP (`shutdownOutput`) once writes have gone. Over TLS, it closes.
+  - **`upgradeTls`** runs `upgradeToSsl` on the live connection.
+  - **TCP keepalive** is on for every socket.
+  - **Bytes are counted** per tenant (`automately_egress_bytes_total`).
+- **TLS verification as Node does it:**
+  - **The chain:** the handshake always completes. The host then judges the chain against the JVM's trust store, or the script's `ca`, which replaces it as in Node. A refusal carries OpenSSL's code and message, Node 26's `--use-system-ca` hint included.
+  - **The host name:** checked by `tls.checkServerIdentity`, Node's algorithm reimplemented, or the script's own check.
+  - **Ordering:** the script's writes wait until both checks pass, and a failed chain closes the connection on the host.
+  - **Why not let the JVM refuse:** its refusal says only "PKIX path building failed", for every kind of bad chain, and the error codes are what Node code checks.
+  - **No reach is added:** the script's own connection is the only one affected, and `rejectUnauthorized: false` already lets it skip verification.
+  - **`fetch`/`https`** still verify in the JVM.
+- **`tls.connect({ socket })`** upgrades a connected `net.Socket` in place. The new `TLSSocket` takes over its stream, including a read already in flight, and the old socket closes with it, as in Node.
+- **What the drivers needed besides sockets:**
+  - `util/types` as a module (pg)
+  - `child_process`'s names, every function throwing `ERR_NOT_SUPPORTED` (nodemailer's sendmail transport and mongodb import it)
+  - `Buffer`'s statics and prototype methods enumerable, as Node assigns them: safer-buffer copies them with `for…in`, and mysql2 sizes packets on a mock built the same way
+  - `Buffer.copy` with Node's clamping
+- **Two older bugs, found by the drivers:**
+  - **`EventEmitter.once()` didn't go through `this.on()`,** so a `Readable` with only a `once('data')` listener never flowed. Every stream was affected.
+  - **The bundler named the `import` condition explicitly,** which esbuild then applied to `require()` too. pg's `require('pg-pool')` got the package's ES-module namespace instead of its class.
+
+**Tested:**
+- **`SocketClientTest` (8):** data both ways, half-close, TLS (refused with Node's code, trusted through `ca`, unverified), an upgrade, the SMTP rule, all three limits, Node's errors, and the roots.
+- **`NodeSocketsTest` (8):** event order, held writes, half-close, Node's errors, TLS cases and custom identity checks, the upgrade, the per-script limit with cleanup at the run's end, Node's `checkServerIdentity`, and backpressure on a 64 MB sender. It passes repeatedly and under CPU load.
+- **`RealNpmPackagesTest`, against real Node 26.8.1:**
+  - **A `sockets` fixture,** matching exactly against local echo, TLS, STARTTLS and half-close servers.
+  - **Five drivers against real servers in containers** (with `AUTOMATELY_TEST_REAL_SERVICES`): pg (Postgres 18, plain and TLS through SSLRequest), mysql2 (MySQL 8.4), ioredis (Redis 7, pub/sub), mongodb (MongoDB 8.2) and nodemailer (Mailpit, STARTTLS). All 37 fixtures match.
+- **`NodeStandInsTest`:** `once` through `on`, and `Buffer.copy` and enumerability, against Node's values.
+
+**Not done:**
+- **`https-proxy-agent`:** not tested yet. It should work, since it uses `net` plus `tls.connect({ socket })`.
+- **`infoAccess` in peer certificates:** always `undefined`.
+- **MongoDB 8.0** doesn't start on Linux 6.19 or newer (MongoDB's SERVER-121912), so the tests use 8.2.
+

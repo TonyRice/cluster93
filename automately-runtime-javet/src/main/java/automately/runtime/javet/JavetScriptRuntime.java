@@ -79,6 +79,8 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("buffer", "node:buffer"), java.util.Map.entry("node:buffer", "node:buffer"),
             java.util.Map.entry("url", "node:url"), java.util.Map.entry("node:url", "node:url"),
             java.util.Map.entry("util", "node:util"), java.util.Map.entry("node:util", "node:util"),
+            java.util.Map.entry("util/types", "node:util/types"), java.util.Map.entry("node:util/types", "node:util/types"),
+            java.util.Map.entry("child_process", "node:child_process"), java.util.Map.entry("node:child_process", "node:child_process"),
             java.util.Map.entry("process", "node:process"), java.util.Map.entry("node:process", "node:process"),
             java.util.Map.entry("crypto", "node:crypto"), java.util.Map.entry("node:crypto", "node:crypto"),
             java.util.Map.entry("stream", "node:stream"), java.util.Map.entry("node:stream", "node:stream"),
@@ -118,6 +120,12 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:buffer", resource("node/buffer.js")),
             java.util.Map.entry("node:url", resource("node/url.js")),
             java.util.Map.entry("node:util", resource("node/util.js")),
+            java.util.Map.entry("node:util/types", "import { types } from 'node:util'; export const { isDate, isRegExp, isPromise, isMap, isSet, "
+                    + "isWeakMap, isWeakSet, isNativeError, isArrayBuffer, isSharedArrayBuffer, isAnyArrayBuffer, isArrayBufferView, isDataView, "
+                    + "isTypedArray, isUint8Array, isUint8ClampedArray, isUint16Array, isUint32Array, isInt8Array, isInt16Array, isInt32Array, "
+                    + "isFloat32Array, isFloat64Array, isBigInt64Array, isBigUint64Array, isAsyncFunction, isGeneratorFunction, isGeneratorObject, "
+                    + "isBoxedPrimitive, isSymbolObject, isProxy } = types; export default types;"),
+            java.util.Map.entry("node:child_process", resource("node/child_process.js")),
             java.util.Map.entry("node:process", resource("node/process.js")),
             java.util.Map.entry("node:crypto", resource("node/crypto.js")),
             // Vendored readable-stream and string_decoder (D-100); rebuilt by scripts/vendor-stream.
@@ -389,6 +397,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 bindApi(v8, hostObject, "jobs", new JobsBinding(bridge, host.jobs()), callbacks);
                 bindApi(v8, hostObject, "files", new FilesBinding(bridge, host.files()), callbacks);
                 bindApi(v8, hostObject, "fetch", new FetchBinding(bridge, host.fetch()), callbacks);
+                bindApi(v8, hostObject, "sockets", new SocketBinding(bridge, host.sockets()), callbacks);
                 bindApi(v8, hostObject, "http", new HttpBinding(bridge), callbacks);
                 bindApi(v8, hostObject, "secrets", new SecretsBinding(bridge, host.secrets()), callbacks);
                 bindApi(v8, hostObject, "fs", new FsBinding(bridge, host.fs()), callbacks);

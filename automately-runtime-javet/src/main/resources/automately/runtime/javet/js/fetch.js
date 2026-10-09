@@ -38,3 +38,23 @@ Object.defineProperty(globalThis, Symbol.for('automately.http'), {
     abort: (id) => httpHost.abort(id),
   }),
 });
+
+// node:net's and node:tls's way to the host (D-116): sockets through the egress gate and the cluster's limits. A
+// socket's data arrives as a stream; after a TLS upgrade, the same stream carries the decrypted data.
+const socketHost = host.sockets;
+Object.defineProperty(globalThis, Symbol.for('automately.sockets'), {
+  value: Object.freeze({
+    connect: async (request) => {
+      const r = await socketHost.connect(request);
+      return { id: r.id, info: r.info, body: readable(r.streamId) };
+    },
+    write: (id, bytes) => socketHost.write(id, bytes),
+    end: (id) => socketHost.end(id),
+    upgrade: (id, tls) => socketHost.upgrade(id, tls),
+    setNoDelay: (id, value) => socketHost.setNoDelay(id, value),
+    setKeepAlive: (id, value) => socketHost.setKeepAlive(id, value),
+    destroy: (id) => socketHost.destroy(id),
+    rootCertificates: () => JSON.parse(socketHost.rootCertificates()),
+  }),
+});
+

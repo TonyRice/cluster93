@@ -89,6 +89,18 @@ public final class Metrics implements Shareable {
                 .tag("tenant", tenant).tag("reason", reason).register(registry).increment();
     }
 
+    /** Bytes a script's socket sent or received (D-116); {@code direction} is {@code out} or {@code in}. */
+    public void egressBytes(String tenant, String direction, long bytes) {
+        Counter.builder("automately.egress.bytes").description("Bytes scripts' sockets sent and received").baseUnit("bytes")
+                .tag("tenant", tenant).tag("direction", direction).register(registry).increment(bytes);
+    }
+
+    /** A socket a script opened (D-116). */
+    public void socketOpened(String tenant, boolean tls) {
+        Counter.builder("automately.egress.sockets").description("Sockets scripts opened").tag("tenant", tenant)
+                .tag("tls", String.valueOf(tls)).register(registry).increment();
+    }
+
     public void rateLimited(String tenant) {
         Counter.builder("automately.api.rate.limited").description("Requests refused with 429").tag("tenant", tenant).register(registry).increment();
     }

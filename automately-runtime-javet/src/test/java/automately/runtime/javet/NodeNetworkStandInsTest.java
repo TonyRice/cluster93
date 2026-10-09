@@ -131,12 +131,13 @@ class NodeNetworkStandInsTest {
                 const code = (fn) => { try { fn(); return 'ran'; } catch (e) { return e.code; } };
                 export default () => [
                   net.isIP('10.0.0.1'), net.isIP('::1'), net.isIP('01.1.1.1'), net.isIPv6('fe80::1%eth0'),
-                  code(() => net.connect(80, 'example.com')), code(() => tls.connect(443, 'example.com')),
+                  code(() => net.createServer()), code(() => tls.createServer()),
                   http2.constants.HTTP2_HEADER_STATUS, code(() => http2.connect('https://example.com')),
                   tty.isatty(1), tls.DEFAULT_MIN_VERSION,
                 ];
                 """);
 
+        // Servers never run on the cluster's nodes (D-112); connecting is NodeSocketsTest's (D-116).
         assertThat(out).containsExactly(4, 6, 0, true, "ERR_NOT_SUPPORTED", "ERR_NOT_SUPPORTED", ":status", "ERR_NOT_SUPPORTED", false, "TLSv1.2");
     }
 
@@ -290,7 +291,7 @@ class NodeNetworkStandInsTest {
     }
 
     @Test
-    void anUnconnectedSocketCanBeMadeButNotConnected() throws Exception {
+    void anUnconnectedSocketCanBeMade() throws Exception {
         JsonArray out = run("""
                 import net from 'node:net';
                 import tls from 'node:tls';
@@ -298,13 +299,12 @@ class NodeNetworkStandInsTest {
                 export default () => {
                   const socket = new net.Socket();
                   const wrapped = new tls.TLSSocket(new PassThrough());
-                  let connect;
-                  try { socket.connect(80, 'example.com'); } catch (e) { connect = e.code; }
-                  return [socket instanceof Duplex, socket.connecting, wrapped instanceof net.Socket, typeof wrapped._handle._parentWrap.constructor, connect];
+                  return [socket instanceof Duplex, socket.connecting, socket.readyState, wrapped instanceof net.Socket,
+                    typeof wrapped._handle._parentWrap.constructor];
                 };
                 """);
 
-        assertThat(out).containsExactly(true, false, true, "function", "ERR_NOT_SUPPORTED");
+        assertThat(out).containsExactly(true, false, "open", true, "function");
     }
 
     private static JsonArray run(String script) throws Exception {

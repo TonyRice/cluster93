@@ -35,7 +35,9 @@ public final class Imports {
             "http", "node:http", "https", "node:https",
             // Their pure parts; connecting throws until phase B5 (net, tls), or always (http2, tty).
             "net", "node:net", "tls", "node:tls", "http2", "node:http2", "tty", "node:tty",
-            "diagnostics_channel", "node:diagnostics_channel",
+            "diagnostics_channel", "node:diagnostics_channel", "util/types", "node:util/types",
+            // Its names only: starting a process throws (D-116).
+            "child_process", "node:child_process",
             // Its names and constants; lookups throw until phase B's dns step.
             "dns", "node:dns", "dns/promises", "node:dns/promises",
             // The host APIs as modules (D-091).
@@ -97,7 +99,7 @@ public final class Imports {
         String bare = specifier.startsWith("node:") ? specifier.substring(5) : specifier;
         String module = bare.contains("/") ? bare.substring(0, bare.indexOf('/')) : bare;
         if (specifier.startsWith("node:") || NODE_MODULES.contains(module)) {
-            return "Node's \"" + module + "\" module isn't available in the isolate (fs, path, events, buffer, url, util, process, crypto, stream, string_decoder, zlib, assert, querystring, timers, os, http, https, net, tls, http2, tty, diagnostics_channel and dns are; see docs/scripting/node-compat.md); run code that needs it with \"runtime\": \"node\"";
+            return "Node's \"" + module + "\" module isn't available in the isolate (fs, path, events, buffer, url, util, process, crypto, stream, string_decoder, zlib, assert, querystring, timers, os, http, https, net, tls, http2, tty, diagnostics_channel, dns and child_process (names only) are; see docs/scripting/node-compat.md); run code that needs it with \"runtime\": \"node\"";
         }
         if (specifier.startsWith("automately:")) {
             return "There's no built-in module named \"" + specifier + "\"";

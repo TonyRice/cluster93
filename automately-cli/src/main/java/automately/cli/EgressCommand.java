@@ -50,6 +50,9 @@ final class EgressCommand extends Base {
             }
             out().println("Cluster egress policy:");
             out().println("  Posture: " + Json.text(policy, "posture"));
+            JsonNode limits = policy.path("limits");
+            out().println("  Socket limits: " + limits.path("socketsPerExecution").asInt() + " per job, " + limits.path("socketsPerTenantPerNode").asInt()
+                    + " per tenant on each node, " + limits.path("connectsPerMinute").asInt() + " new connections a minute per tenant on each node");
             printRules(out(), policy.path("rules"), "  Rules (for every tenant):");
             JsonNode sets = policy.path("addressSets");
             if (!sets.isEmpty()) {
@@ -82,6 +85,10 @@ final class EgressCommand extends Base {
         out.println("Limits: " + limits.path("concurrentRequests").asInt() + " requests at once per job, request bodies up to "
                 + StorageCommand.mb(limits.path("requestBodyBytes").asLong()) + ", " + limits.path("timeoutMs").asLong() / 1000
                 + " s to connect and between chunks, redirects not followed");
+        if (limits.has("socketsPerExecution")) {
+            out.println("Sockets: " + limits.path("socketsPerExecution").asInt() + " open per job, " + limits.path("socketsPerTenantPerNode").asInt()
+                    + " per tenant on each node, " + limits.path("connectsPerMinute").asInt() + " new connections a minute per tenant on each node");
+        }
     }
 
     static void printRules(java.io.PrintStream out, JsonNode rules, String title) {
