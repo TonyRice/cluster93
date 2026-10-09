@@ -16,6 +16,12 @@ define('setInterval', (fn, delay, ...args) => schedule(fn, delay, args, true));
 define('clearTimeout', clear);
 define('clearInterval', clear);
 
+// A throw in a callback the script didn't call itself (a microtask, process.nextTick, an http event) ends the job, as
+// an uncaught exception ends Node, rather than vanishing into a promise (D-109). Node modules find this under a symbol;
+// a script that calls it only fails its own job.
+const reportUncaught = (e, where) => host.uncaught(`Uncaught error in ${where}: ${errorText(e)}`);
+Object.defineProperty(globalThis, Symbol.for('automately.uncaught'), { value: reportUncaught });
+
 // Called by the event loop when timer `id` is due.
 const fire = (id) => {
   const timer = timers.get(id);

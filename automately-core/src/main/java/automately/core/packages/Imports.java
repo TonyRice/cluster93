@@ -31,6 +31,10 @@ public final class Imports {
             "stream", "node:stream", "stream/promises", "node:stream/promises", "string_decoder", "node:string_decoder",
             "zlib", "node:zlib", "assert", "node:assert", "assert/strict", "node:assert/strict", "querystring", "node:querystring",
             "timers", "node:timers", "timers/promises", "node:timers/promises", "os", "node:os",
+            // Phase B (D-109): the HTTP client, through the egress gate.
+            "http", "node:http", "https", "node:https",
+            // Their pure parts; connecting throws until phase B5 (net, tls), or always (http2, tty).
+            "net", "node:net", "tls", "node:tls", "http2", "node:http2", "tty", "node:tty",
             // The host APIs as modules (D-091).
             "automately:kv", "automately:bus", "automately:jobs", "automately:files", "automately:secrets", "automately:fetch", "automately:log");
 
@@ -90,7 +94,7 @@ public final class Imports {
         String bare = specifier.startsWith("node:") ? specifier.substring(5) : specifier;
         String module = bare.contains("/") ? bare.substring(0, bare.indexOf('/')) : bare;
         if (specifier.startsWith("node:") || NODE_MODULES.contains(module)) {
-            return "Node's \"" + module + "\" module isn't available in the isolate (fs, path, events, buffer, url, util, process, crypto, stream, string_decoder, zlib, assert, querystring, timers and os are); run code that needs it with \"runtime\": \"node\"";
+            return "Node's \"" + module + "\" module isn't available in the isolate (fs, path, events, buffer, url, util, process, crypto, stream, string_decoder, zlib, assert, querystring, timers, os, http, https, net, tls, http2 and tty are); run code that needs it with \"runtime\": \"node\"";
         }
         if (specifier.startsWith("automately:")) {
             return "There's no built-in module named \"" + specifier + "\"";

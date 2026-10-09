@@ -26,16 +26,10 @@ final class NodeFetchApi implements FetchApi {
 
     @Override
     public Future<FetchedResponse> fetch(JsonObject request, byte[] body) {
-        if (inFlight.incrementAndGet() > MAX_CONCURRENT) {
-            inFlight.decrementAndGet();
+        Runnable release = take();
+        if (release == null) {
             return Future.failedFuture(HostException.limit("Too many concurrent fetches (limit " + MAX_CONCURRENT + ")"));
         }
-        AtomicBoolean released = new AtomicBoolean();
-        Runnable release = () -> {
-            if (released.compareAndSet(false, true)) {
-                inFlight.decrementAndGet();
-            }
-        };
         try {
             return client.fetch(tenant, request, body == null ? null : io.vertx.core.buffer.Buffer.buffer(body), release)
                     .onFailure(err -> release.run());
@@ -43,5 +37,34 @@ final class NodeFetchApi implements FetchApi {
             release.run();
             return Future.failedFuture(e);
         }
+    }
+
+    @Override
+    public Future<automately.core.runtime.OutgoingRequest> open(JsonObject request) {
+        Runnable release = take();
+        if (release == null) {
+            return Future.failedFuture(HostException.limit("Too many concurrent requests (limit " + MAX_CONCURRENT
+                    + ", fetches and HTTP requests together)"));
+        }
+        try {
+            return client.open(tenant, request, release);
+        } catch (RuntimeException e) {
+            release.run();
+            return Future.failedFuture(e);
+        }
+    }
+
+    /** One of the {@value #MAX_CONCURRENT} places, and how to give it back once; or null if none is free. */
+    private Runnable take() {
+        if (inFlight.incrementAndGet() > MAX_CONCURRENT) {
+            inFlight.decrementAndGet();
+            return null;
+        }
+        AtomicBoolean released = new AtomicBoolean();
+        return () -> {
+            if (released.compareAndSet(false, true)) {
+                inFlight.decrementAndGet();
+            }
+        };
     }
 }

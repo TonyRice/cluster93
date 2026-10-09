@@ -22,3 +22,19 @@ define('fetch', async (input, init = {}) => {
     json: async () => JSON.parse(utf8Decode(await collect(stream, FETCH_BUFFER_LIMIT, 'The response body'))),
   });
 });
+
+// node:http's way to the host (D-109): a request whose body streams, through the same gate and limits as fetch.
+// No global, only a symbol node:http (js/node/http.js) finds, as zlib's.
+const httpHost = host.fetch;
+Object.defineProperty(globalThis, Symbol.for('automately.http'), {
+  value: Object.freeze({
+    open: (request) => httpHost.open(request),
+    write: (id, bytes) => httpHost.write(id, bytes),
+    end: (id) => httpHost.end(id),
+    response: async (id) => {
+      const r = await httpHost.response(id);
+      return { meta: r, body: readable(r.streamId) };
+    },
+    abort: (id) => httpHost.abort(id),
+  }),
+});

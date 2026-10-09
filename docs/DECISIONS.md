@@ -1806,3 +1806,57 @@ It's written for people, because the console will show the same response as a "N
 - **`HostApisTest`:** on a two-node cluster, an operator's rule turns a refusal into a connection attempt, on that port only and for that tenant only, while a node stays refused under a rule covering it, and the tenant's view shows it all.
 - **`ContractTest`, `CliTest`, `NodeHostApisTest` and `HostBridgeTest`:** binary bodies, from the script to the wire.
 
+### D-109 — Node's `http` and `https` clients, on a streaming host request through the egress gate
+**Date:** 2026-10-08 · **Status:** Accepted. Phase B's step 2 ([network-reach.md](design/network-reach.md) §4); Tony said "let's do it", with `rejectUnauthorized: false` honoured (his answer in §8)
+
+**Decision:** `node:http` and `node:https` provide Node's client.
+- **The host side: a request whose body streams.**
+  - **`FetchApi.open`** checks the request, passes it through the gate (D-108), and connects. The script then writes chunks with backpressure, ends the body, and gets the response with its body as a stream.
+  - **It counts against `fetch`'s 16 per execution** until its response is read, it's aborted, or the job ends, when it's aborted.
+  - **Framing:** a `Content-Length` the script sets is sent as is; otherwise a body written in parts is chunked.
+  - **Timeouts:** connecting takes at most 30 s, and a request can sit idle (no data either way) for up to 5 min. Long polls need that, where `fetch` allows 30 s.
+  - **Response headers:** up to 64 KiB, on every client, `fetch`'s included.
+- **TLS:**
+  - **By default,** certificates are verified against the JVM's trust store, with host-name checking.
+  - **`rejectUnauthorized: false`** uses a shared client that doesn't verify. That only affects the tenant's own connection, and the job's log says so once.
+  - **`ca`, or a client `cert` and `key` (PEM):** the request gets a client of its own, closed with it, so no connection carrying a tenant's certificate is ever pooled.
+- **Responses carry `rawHeaders`** (also for `fetch`), so `set-cookie` and other repeated headers survive. Node's joining rules are applied in the isolate.
+- **The JavaScript:** `ClientRequest` is a `Writable` and `IncomingMessage` a `Readable`, both from the vendored `readable-stream`.
+  - **The request opens lazily,** on the first write or the end, so headers can change until then.
+  - **One body given whole to `end()`** is sent with its length, as Node does.
+  - **Events come in Node's order:** `socket`, `finish`, `response`. When the body is ending, the response is held until `finish`.
+  - **`req.socket`** is a stand-in with the methods libraries call.
+  - **Errors carry Node's codes:** `ECONNREFUSED`, `ECONNRESET` ("socket hang up"), `ETIMEDOUT` and `ENOTFOUND`.
+  - **A response's errors go only to an `error` listener;** otherwise it emits `aborted`, as Node's `IncomingMessage` does. follow-redirects relies on that.
+- **Refused:** `createConnection`, `socketPath`, `CONNECT`, `pfx`, `passphrase`, and a custom `checkServerIdentity`.
+- **Ignored, not refused** (a change from the design): `lookup`, `family`, `localAddress` and `servername`. The gate does the resolving; refusing them would only break libraries that pass their own.
+
+**What making real libraries work required** (axios 1.20 and node-fetch 3.3.2 now match real Node):
+1. **Stand-ins for `net`, `tls`, `http2` and `tty`, for their pure parts.** axios imports `http2` at load for an optional HTTP/2 path. Its proxy agent requires `net` and `tls`, node-fetch imports `net.isIP`, and debug requires `tty`. Each module has what's computation (Node's IP patterns, all 240 `http2.constants`, `isatty()` false) and throws `ERR_NOT_SUPPORTED` on anything that would connect. `net` and `tls` get real sockets in B5.
+2. **A CommonJS `require()` of a missing built-in throws when it runs,** instead of stopping the publish; the publish warns.
+   - **Why:** bundling made every `require()` of a built-in a static import (D-093), so a `require()` inside `try` that falls back couldn't fall back.
+   - **Missing ones now:** the bundler emits a module that throws `MODULE_NOT_FOUND` when required, which is what Node does. fetch-blob then uses its bundled Web Streams polyfill, and node-domexception never reaches its `worker_threads` path.
+   - **An `import` of a missing module still stops the publish:** an ES import can't be caught.
+3. **`fs.createReadStream` and `fs.createWriteStream`,** which fetch-blob imports. They're Node streams over file handles, so they hold the whole file and are limited to 32 MB as handles are, and a write stream publishes the file when it closes. `files.stream` and `files.write` remain the way to stream large files.
+4. **`process[Symbol.toStringTag]` is `'process'`,** as in Node. axios uses its Node adapter only when `Object.prototype.toString.call(process)` says so; otherwise it picks a browser adapter that can't work here.
+   - **Checked for fallout:** this could change other libraries' paths too, so all 24 earlier real-npm fixtures were rerun. All still match Node.
+5. **A throw in a `queueMicrotask` or `process.nextTick` callback, or an `http` listener, fails the job,** as an uncaught exception ends Node.
+   - **The bug:** both ran the callback inside a promise, so the error became a rejection nobody saw, and the job sat until "never settles" or its timeout. `fetch`, timers and listeners already reported their errors.
+   - **The fix:** a hidden reporter under `Symbol.for('automately.uncaught')`. A script that calls it only fails its own job.
+   - **Not changed:** unhandled promise rejections still don't fail a job, unlike Node 15+. That needs its own decision (NOTES).
+
+**Testing it required:**
+- **The development switch on the real-npm test node:** the test server is on loopback, which is the node itself, and no rule can reach a node (D-108). The design had planned a policy rule.
+- **A second fixture package (`realworld-net`),** because one package would have been over a version's 10 MB.
+
+**Tested:**
+- **`RealNpmPackagesTest`:** a `node:http` fixture, axios and node-fetch match real Node 26.8.1, and the 24 earlier fixtures still do.
+- **`NodeNetworkStandInsTest`** (in every build): requests in the isolate against a local server; error codes; the pure parts of `net`, `tls`, `http2` and `tty`; and the `fs` streams.
+- **`StreamedRequestTest`:** chunking, `Content-Length`, repeated headers, TLS (refused by default, then a `ca`, then opting out), invalid requests refused before connecting, and the shared limit and its release.
+- **`HostApisTest`:** `node:http` gets the same refusals as `fetch`, both for a private address and for a cluster node.
+- **`JavetScriptRuntimeTest`:** throws in `queueMicrotask` and `nextTick` fail the job.
+
+**Not done:**
+- **`got`** isn't tested; it needs `http2-wrapper` and socket timing events.
+- **Servers** (`createServer`) are B3.
+

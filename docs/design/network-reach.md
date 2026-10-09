@@ -2,7 +2,7 @@
 
 **Status:**
 - **B1, the egress gate and allow-lists:** ✅ built (D-108). Tony decided its shape on 2026-10-08 (D-095 §4.5).
-- **B2, the `http`/`https` client:** accepted, since it adds no reach beyond `fetch`. Next.
+- **B2, the `http`/`https` client:** ✅ built (D-109), with axios and node-fetch matching real Node.
 - **B3 to B5:** accepted with Tony's answers in §8 (2026-10-08).
 
 **Where it comes from:** [isolate-polyfills.md](isolate-polyfills.md) §3. Phase A gave the isolate pure computation (D-095 to D-106). Phase B gives it the network: Node's `http`, `https`, `net`, `tls` and `dns`. Those are what database drivers (`pg`, `mysql2`, `ioredis`), HTTP clients (axios, got, node-fetch) and web frameworks (Express, Koa, Fastify) are written against.
@@ -96,16 +96,22 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **Client certificates (`cert`/`key`):** accepted too, held for the request only.
 
 **Refused, with an error that says so:**
-- `createConnection`, `lookup` and `localAddress` options (they'd bypass the gate)
+- `createConnection` (it would bypass the gate)
 - `CONNECT`, and upgrades to WebSocket
 - `socketPath` (Unix sockets)
-- `insecureHTTPParser`
+- `pfx`, `passphrase`, and a custom `checkServerIdentity`
 
-**Proven against real Node** by `RealNpmPackagesTest`, against a local test server:
-- `http.get`/`request`
-- axios (its Node adapter)
-- node-fetch
-- `got`, if its HTTP/2 wrapper loads; otherwise a documented gap
+**Ignored (changed while building, D-109):** `lookup`, `family`, `localAddress` and `servername`. The host never calls a script's `lookup`, so ignoring it bypasses nothing, and libraries that pass their own (got's `cacheable-lookup`) still load. Refusing them would only break those libraries.
+
+**Proven against real Node** by `RealNpmPackagesTest`, against a local test server: `http.get`/`request`, axios (its Node adapter) and node-fetch all match. `got` isn't tested: it needs `http2-wrapper` and socket timing events (a documented gap).
+
+**What building it added (D-109):**
+- **Stand-ins for `net`, `tls`, `http2` and `tty`, for their pure parts,** because axios and its proxy agent import them at load. Connecting through them throws until B5 (`net`, `tls`) or always (`http2`, `tty`).
+- **A missing built-in that CommonJS `require()`s throws when required,** instead of stopping the publish. Libraries try optional modules and fall back (fetch-blob's `stream/web`, node-domexception's `worker_threads`).
+- **`fs.createReadStream`/`createWriteStream`,** which fetch-blob imports.
+- **A throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` listener, fails the job,** as in Node. Before, it vanished into a promise, and the job looked hung.
+- **`process` reports itself as `[object process]`,** which is how axios picks its Node adapter.
+- **Tests use the development switch,** not a policy rule as planned: the test server is on loopback, which is the node itself, and no rule can reach a node.
 
 ## 5. B3: `http.createServer` over `ctx.serve` (proposed)
 **What it is:** `createServer(handler)` and `server.listen(port?, cb)` in a service bind the handler to `ctx.serve`. The port is ignored: a service is reached at its ingress host (D-028).

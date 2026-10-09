@@ -26,6 +26,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Node's `http` and `https` in the isolate; axios and node-fetch run (2026-10-08)
+
+### Added
+- **`node:http` and `node:https` as clients** (D-109): `request`, `get`, `ClientRequest`, `IncomingMessage`, `Agent`, `METHODS`, `STATUS_CODES` and the header validators, with request bodies that stream and responses built with Node's header rules. Every request goes through the egress gate (D-108) and shares `fetch`'s 16 requests per script. HTTPS verifies certificates, and accepts `ca`, client `cert`/`key`, and `rejectUnauthorized: false` (Tony's call; noted in the job's log). **Why:** phase B's step 2; most npm HTTP code is written against `http`.
+- **axios and node-fetch** give real Node's results (`RealNpmPackagesTest`, against a local test server), as does a fixture for `node:http` itself: headers, streamed and fixed-length bodies, redirects, timeouts, aborts, hang-ups and events in Node's order.
+- **`net`, `tls`, `http2` and `tty`, for their pure parts:** `net.isIP` and friends (Node's own patterns), `tls`'s defaults, all of `http2.constants`, and `tty.isatty()` (false). Connecting throws `ERR_NOT_SUPPORTED`. **Why:** axios and its proxy agent import them at load; sockets come in phase B5.
+- **`fs.createReadStream` and `fs.createWriteStream`,** as Node streams over file handles (32 MB). fetch-blob imports them.
+- **`NodeNetworkStandInsTest`** and **`StreamedRequestTest`**, in every build.
+
+### Changed
+- **A CommonJS `require()` of a Node module the isolate lacks throws when it runs,** as in Node, and the publish only warns. Before, it stopped the publish, which refused libraries that try an optional module and fall back (fetch-blob's `stream/web`, node-domexception's `worker_threads`). An `import` of one still stops the publish.
+- **`process` reports itself as `[object process]`,** as Node's does. axios checks it to use `http` rather than a browser adapter. Every other real-npm fixture was rerun and still matches Node.
+- **The publish refusal for Node built-ins** points at `docs/scripting/node-compat.md` instead of listing modules (its list was out of date).
+
+### Fixed
+- **A throw in a `queueMicrotask` or `process.nextTick` callback vanished** into a promise, so the job looked hung until its timeout. It now fails the job ("Uncaught error in process.nextTick callback: …"), as an uncaught exception ends Node. The same goes for a throw in an `http` event listener.
+
+### Docs
+- `docs/scripting/node-compat.md`: sections for `http`/`https` and for `net`/`tls`/`http2`/`tty`, the `fs` streams, the new rules on missing modules and uncaught errors, and the updated lists. It also corrects one stale line: Web Crypto's errors have been `DOMException`s since D-106.
+- `docs/design/network-reach.md`: B2 marked built, with what building it changed.
+
 ## One egress gate; operators can open private addresses per tenant (2026-10-08)
 
 ### Added

@@ -471,8 +471,8 @@ final class PackagesCommand extends Base {
             result.path("builtins").forEach(b -> builtins.add(b.asText()));
             if (!builtins.isEmpty()) {
                 throw new CliException("These Node built-ins aren't available to packages:\n  " + String.join("\n  ", builtins)
-                        + "\nPackages run in the isolate, which provides fs, path, events, buffer, url, util and the automately:* modules; "
-                        + "for the rest of Node, set \"runtime\": \"node\" (D-084).");
+                        + "\nPackages run in the isolate, which provides most of Node's modules and the automately:* ones (each, with its "
+                        + "limits, is in docs/scripting/node-compat.md); for the rest of Node, set \"runtime\": \"node\" (D-084).");
             }
             Map<String, Path> files = new TreeMap<>();
             result.path("files").forEach(f -> files.put(f.asText(), outdir.resolve(f.asText())));

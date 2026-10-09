@@ -26,7 +26,8 @@ const PROVIDED = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises', 'p
   'events', 'node:events', 'buffer', 'node:buffer', 'url', 'node:url', 'util', 'node:util', 'process', 'node:process', 'crypto', 'node:crypto',
   'stream', 'node:stream', 'stream/promises', 'node:stream/promises', 'string_decoder', 'node:string_decoder',
   'zlib', 'node:zlib', 'assert', 'node:assert', 'assert/strict', 'node:assert/strict', 'querystring', 'node:querystring',
-  'timers', 'node:timers', 'timers/promises', 'node:timers/promises', 'os', 'node:os']);
+  'timers', 'node:timers', 'timers/promises', 'node:timers/promises', 'os', 'node:os', 'http', 'node:http', 'https', 'node:https',
+  'net', 'node:net', 'tls', 'node:tls', 'http2', 'node:http2', 'tty', 'node:tty']);
 // Native extras some packages use only if they're there (ws uses the first two); left out, with a warning.
 const OPTIONAL = new Set(['bufferutil', 'utf-8-validate', 'fsevents']);
 // What gives a package away as needing a native build.
@@ -61,6 +62,13 @@ const plugin = {
         out.warnings.push(name + ' (an optional native extra, imported by ' + rel(args.importer) + ') is left out');
         return { path: name, namespace: 'automately-stub' };
       }
+      if (isBuiltin(name) && args.kind === 'require-call') {
+        // CommonJS code requiring a built-in the isolate lacks: often inside try/catch, with a fallback (fetch-blob's
+        // stream/web) or for a path never taken (node-domexception's worker_threads). The require() throws when it
+        // runs, as a missing module does in Node, rather than stopping the publish (D-109).
+        out.warnings.push(name.replace(/^node:/, '') + " (required by " + rel(args.importer) + ") isn't available in the isolate; requiring it throws");
+        return { path: name, namespace: 'automately-missing' };
+      }
       if (isBuiltin(name)) {
         out.builtins.push(name.replace(/^node:/, '') + ' (imported by ' + rel(args.importer) + ')');
         return { path: name, external: true };
@@ -72,6 +80,9 @@ const plugin = {
       return undefined;
     });
     build.onLoad({ filter: /.*/, namespace: 'automately-stub' }, () => ({ contents: 'export default undefined;', loader: 'js' }));
+    build.onLoad({ filter: /.*/, namespace: 'automately-missing' }, (args) => ({
+      contents: 'const e = new Error(' + JSON.stringify("Cannot find module '" + args.path + "': Node's \"" + args.path.replace(/^node:/, '')
+        + "\" module isn't available in the isolate") + '); e.code = "MODULE_NOT_FOUND"; throw e;', loader: 'js' }));
     build.onLoad({ filter: /.*/, namespace: 'automately-require' }, (args) => ({
       contents: 'module.exports = require(' + JSON.stringify(REQUIRED_PREFIX + args.path) + ').default;', loader: 'js' }));
     build.onLoad({ filter: /.*/, namespace: 'automately-esm' }, (args) => ({

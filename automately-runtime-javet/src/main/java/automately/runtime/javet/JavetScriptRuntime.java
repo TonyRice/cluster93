@@ -91,15 +91,22 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("timers", "node:timers"), java.util.Map.entry("node:timers", "node:timers"),
             java.util.Map.entry("timers/promises", "node:timers/promises"), java.util.Map.entry("node:timers/promises", "node:timers/promises"),
             java.util.Map.entry("os", "node:os"), java.util.Map.entry("node:os", "node:os"),
+            java.util.Map.entry("http", "node:http"), java.util.Map.entry("node:http", "node:http"),
+            java.util.Map.entry("https", "node:https"), java.util.Map.entry("node:https", "node:https"),
+            java.util.Map.entry("net", "node:net"), java.util.Map.entry("node:net", "node:net"),
+            java.util.Map.entry("tls", "node:tls"), java.util.Map.entry("node:tls", "node:tls"),
+            java.util.Map.entry("http2", "node:http2"), java.util.Map.entry("node:http2", "node:http2"),
+            java.util.Map.entry("tty", "node:tty"), java.util.Map.entry("node:tty", "node:tty"),
             // The host APIs as modules (D-091), so packages can import them rather than rely on globals.
             java.util.Map.entry("automately:kv", "automately:kv"), java.util.Map.entry("automately:bus", "automately:bus"),
             java.util.Map.entry("automately:jobs", "automately:jobs"), java.util.Map.entry("automately:files", "automately:files"),
             java.util.Map.entry("automately:secrets", "automately:secrets"), java.util.Map.entry("automately:fetch", "automately:fetch"),
             java.util.Map.entry("automately:log", "automately:log"));
 
-    /** Each built-in module's source: fs re-exports the global; the others are stand-ins for Node's (js/node/). */
+    /** Each built-in module's source: fs is the global plus its streams; the others are stand-ins for Node's (js/node/). */
     static final java.util.Map<String, String> BUILT_IN_SOURCES = java.util.Map.ofEntries(
-            java.util.Map.entry("node:fs", "export default globalThis.fs; export const { " + FS_NAMES + " } = globalThis.fs;"),
+            // The global fs as a module, plus createReadStream and createWriteStream (D-109).
+            java.util.Map.entry("node:fs", resource("node/fs.js").replace("/* automately:fs-names */", FS_NAMES)),
             java.util.Map.entry("node:fs/promises", "export default globalThis.fs.promises; export const { " + FS_PROMISES_NAMES
                     + " } = globalThis.fs.promises;"),
             java.util.Map.entry("node:path", resource("node/path.js")),
@@ -121,6 +128,14 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:timers", resource("node/timers.js")),
             java.util.Map.entry("node:timers/promises", resource("node/timers_promises.js")),
             java.util.Map.entry("node:os", resource("node/os.js")),
+            // Phase B (D-109): the HTTP client on a host request through the egress gate.
+            java.util.Map.entry("node:http", resource("node/http.js")),
+            java.util.Map.entry("node:https", resource("node/https.js")),
+            // Pure parts only: connecting throws (net and tls until phase B5; http2 and tty always).
+            java.util.Map.entry("node:net", resource("node/net.js")),
+            java.util.Map.entry("node:tls", resource("node/tls.js")),
+            java.util.Map.entry("node:http2", resource("node/http2.js")),
+            java.util.Map.entry("node:tty", resource("node/tty.js")),
             java.util.Map.entry("automately:kv", hostModule("kv")),
             java.util.Map.entry("automately:bus", hostModule("bus")),
             java.util.Map.entry("automately:jobs", hostModule("jobs")),

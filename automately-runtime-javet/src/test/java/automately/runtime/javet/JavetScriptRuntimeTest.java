@@ -526,6 +526,22 @@ class JavetScriptRuntimeTest {
             assertThat(result.error()).contains("Uncaught error in timer callback").contains("tick exploded");
         }
 
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+                "queueMicrotask(() => { throw new Error('micro exploded'); })|queueMicrotask callback",
+                "process.nextTick(() => { throw new Error('micro exploded'); })|process.nextTick callback"})
+        void anErrorThrownInAMicrotaskOrNextTickFailsTheRunAsInNode(String schedule, String where) throws Exception {
+            ExecutionResult result = run("""
+                    export default (input, ctx) => {
+                      %s;
+                      return ctx.sleep(1000);
+                    }
+                    """.formatted(schedule));
+
+            assertThat(result.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(result.error()).contains("Uncaught error in " + where).contains("micro exploded");
+        }
+
         @Test
         void timerCountIsLimited() throws Exception {
             ExecutionResult result = run("""

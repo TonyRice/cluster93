@@ -88,6 +88,7 @@ public final class HostBridge {
     private final Map<Integer, StreamState> streams = new HashMap<>();
     private final Map<Integer, HttpExchange> exchanges = new ConcurrentHashMap<>();
     private final Map<Integer, FileWriter> writers = new ConcurrentHashMap<>();
+    private final Map<Integer, automately.core.runtime.OutgoingRequest> outgoing = new ConcurrentHashMap<>();
     private final AtomicInteger nextReplyId = new AtomicInteger(1);
     private final AtomicInteger nextId = new AtomicInteger(1);
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -322,6 +323,26 @@ public final class HostBridge {
         return writers.remove(id);
     }
 
+    // --- outgoing HTTP requests (node:http, D-109) ---
+
+    int addOutgoing(automately.core.runtime.OutgoingRequest request) {
+        int id = nextId.getAndIncrement();
+        if (closed.get()) {
+            request.abort();
+        } else {
+            outgoing.put(id, request);
+        }
+        return id;
+    }
+
+    automately.core.runtime.OutgoingRequest outgoing(int id) {
+        return outgoing.get(id);
+    }
+
+    automately.core.runtime.OutgoingRequest removeOutgoing(int id) {
+        return outgoing.remove(id);
+    }
+
     /**
      * Bytes from a typed array, or a string as UTF-8. Javet's {@code toBytes()} copies the array's whole buffer, not the
      * view: a {@code Buffer} slice, or one whose buffer was allocated bigger than it, came out with the wrong bytes. So
@@ -356,6 +377,8 @@ public final class HostBridge {
         exchanges.clear();
         writers.values().forEach(FileWriter::abort);
         writers.clear();
+        outgoing.values().forEach(automately.core.runtime.OutgoingRequest::abort);
+        outgoing.clear();
         awaitingReply.values().forEach(inbound -> inbound.fail(503, "The script ended before it answered"));
         awaitingReply.clear();
         apis.close();

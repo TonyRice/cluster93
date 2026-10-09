@@ -42,7 +42,9 @@ const process = {
   }, { bigint: () => BigInt(Math.floor(performanceNow() * 1e6)) }),
   memoryUsage: () => ({ rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0 }),
   nextTick: (fn, ...args) => {
-    Promise.resolve().then(() => fn(...args));
+    Promise.resolve().then(() => {
+      try { fn(...args); } catch (e) { globalThis[Symbol.for('automately.uncaught')](e, 'process.nextTick callback'); }
+    });
   },
   emitWarning: (warning) => console.warn(typeof warning === 'string' ? 'Warning: ' + warning : String(warning)),
   exit: (code) => {
@@ -64,6 +66,8 @@ const process = {
   binding: () => {
     throw new Error('process.binding() is not supported in the isolate');
   },
+  // As Node's: Object.prototype.toString.call(process) is "[object process]". axios looks for it to use node:http (D-109).
+  [Symbol.toStringTag]: 'process',
 };
 
 const started = Date.now();

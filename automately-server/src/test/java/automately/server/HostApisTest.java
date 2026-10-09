@@ -274,6 +274,22 @@ class HostApisTest {
         }
     }
 
+    @Test
+    void nodeHttpGoesThroughTheSameGate() throws Exception {
+        JsonObject job = runJob(nodeA, TENANT, """
+                import http from 'node:http';
+                const attempt = (url) => new Promise((resolve) => {
+                  const req = http.get(url, () => resolve('answered'));
+                  req.on('error', (e) => resolve([e.code, e.message.replace(/^.*resolves to /, '').slice(0, 30)]));
+                });
+                export default async () => [await attempt('http://10.255.255.1:9/'), await attempt('http://127.0.0.1:%d/health')];
+                """.formatted(nodeA.httpPort()));
+
+        assertThat(job.getJsonArray("output").getJsonArray(0).getString(0)).isEqualTo("egress_denied");
+        assertThat(job.getJsonArray("output").getJsonArray(0).getString(1)).startsWith("a private or reserved address");
+        assertThat(job.getJsonArray("output").getJsonArray(1).getString(1)).startsWith("one of the cluster's own nodes");
+    }
+
     // --- HTTP hosting ---
 
     static final String WEB = """

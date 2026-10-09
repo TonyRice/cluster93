@@ -338,7 +338,9 @@ define('structuredClone', (value, options) => {
 
 define('queueMicrotask', (callback) => {
   if (typeof callback !== 'function') throw new TypeError('The "callback" argument must be of type function');
-  Promise.resolve().then(callback);
+  Promise.resolve().then(() => {
+    try { callback(); } catch (e) { reportUncaught(e, 'queueMicrotask callback'); }
+  });
 });
 
 define('setImmediate', (callback, ...args) => setTimeout(callback, 0, ...args));

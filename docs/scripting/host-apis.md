@@ -225,6 +225,7 @@ const data = await res.json();      // or res.text(), res.bytes(), or stream res
 - The timeout applies to connecting and to any pause between chunks, so long downloads work.
 - For local development, `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true` lifts the private-address check for every tenant. Even then, a node's own ports (the API, the ingress, the internal endpoint, metrics and the cluster's ports) stay refused.
 - Job completion callbacks go through the same gate, as the job's tenant.
+- **Node's `http` and `https`** (and libraries built on them, such as axios) go through the same gate and share the 16 requests per script. Their request bodies stream, so they aren't limited to 1 MB ([Node compatibility](node-compat.md#http-and-https)).
 
 ## `log`: structured logging
 
