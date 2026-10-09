@@ -228,6 +228,17 @@ log.info('order placed', { orderId: 7, total: 19.5 });   // also debug, warn, er
 
 Each call is a log line (`order placed {"orderId":7,"total":19.5}`). The live event stream carries `message` and `fields` separately. `console.log` still works too.
 
+**Where a job's log goes** (`console.*` and `log.*` alike):
+- **Live:** each line is an event on the job's stream (`GET /v1/jobs/{id}/events`, `automately jobs logs`, `services logs`, MCP `job_logs`), with its level and a sequence number. A client that connects mid-run first gets the recent lines, then the live ones, with none repeated.
+- **Kept:** when the attempt ends, its log is stored on the job record (`GET /v1/jobs/{id}` → `logs`) until the job is deleted by retention (`AUTOMATELY_JOB_RETENTION_DAYS`, 7 by default).
+- **Limits (D-107):**
+  - **Per line:** about 16 KiB. A longer line is cut, and ends with `… [N more characters]`. A `log.*` call whose fields are over 16 KiB keeps the message and replaces the fields with `{"fieldsOmitted": "N characters"}`.
+  - **Per attempt:** the last 1,000 lines, and at most 1 MiB of them. Older lines are dropped as new ones arrive.
+- **Each attempt starts a new log.** A retried or resumed job keeps only its last attempt's lines.
+- **Stored lines lose their level;** the live events have it.
+- **Secrets** declared in `env` are masked as `[secret:name]` before a line is kept or sent (D-096).
+- **A script can't read its own log back.** Keep what you need in `kv` or `files`.
+
 ## `files`: file storage
 
 ```js

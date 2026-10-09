@@ -53,7 +53,7 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | Global | Notes |
 |---|---|
 | `globalThis` | `global` is rewritten to `globalThis` when code is bundled; at run time there's no `global`. |
-| `console` | `log`, `info`, `warn`, `error`, `debug`, `dir`, `table`, `trace` (with the caller's stack), `assert`, `group`/`groupEnd` (indenting), `time`/`timeLog`/`timeEnd` and `count`/`countReset` (D-105). Lines go to the job's log, and secrets declared in `env` are masked in it (D-096). `table` and `dir` print JSON, not a table. |
+| `console` | `log`, `info`, `warn`, `error`, `debug`, `dir`, `table`, `trace` (with the caller's stack), `assert`, `group`/`groupEnd` (indenting), `time`/`timeLog`/`timeEnd` and `count`/`countReset` (D-105). Lines go to the job's log, and secrets declared in `env` are masked in it (D-096). A line is cut at about 16 KiB, and an attempt keeps its last 1,000 lines up to 1 MiB (D-107; see [where a job's log goes](host-apis.md#log-structured-logging)). `table` and `dir` print JSON, not a table. |
 | `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval` | The isolate's event loop; at most 10,000 pending timers; the shortest delay is 1 ms. |
 | `process` | The `process` stand-in (D-096); see [process](#process). |
 | `crypto`, `CryptoKey` | Web Crypto; see [Web Crypto](#web-crypto-the-global-crypto). |

@@ -2,9 +2,16 @@
 // The rest of console's methods too (D-105): libraries call them, and a missing one threw. trace adds the caller's
 // stack; group indents what follows; time and count keep their labels for this job only.
 let indent = '';
+// A line is clipped here, before it's copied to the host, and again there (D-107): the job keeps about 16 KiB per line.
+const MAX_LINE_CHARS = 16384;
+const clip = (text) => {
+  if (text.length <= MAX_LINE_CHARS) return text;
+  const end = (text.charCodeAt(MAX_LINE_CHARS - 1) & 0xfc00) === 0xd800 ? MAX_LINE_CHARS - 1 : MAX_LINE_CHARS;
+  return text.slice(0, end) + ' … [' + (text.length - end) + ' more characters]';
+};
 const consoleTimers = new Map();
 const consoleCounts = new Map();
-const indented = (level) => (...args) => host.log(level, indent + args.map(show).join(' '));
+const indented = (level) => (...args) => host.log(level, clip(indent + args.map(show).join(' ')));
 globalThis.console = Object.freeze({
   log: indented('info'), info: indented('info'), warn: indented('warn'), error: indented('error'), debug: indented('debug'),
   dir: (value) => indented('info')(value),
@@ -36,7 +43,9 @@ globalThis.console = Object.freeze({
 
 const fieldsJson = (fields) => {
   if (fields === undefined || fields === null) return 'null';
-  try { return JSON.stringify(fields); } catch { return JSON.stringify({ fields: String(fields) }); }
+  let json;
+  try { json = JSON.stringify(fields); } catch { json = JSON.stringify({ fields: String(fields) }); }
+  return json.length > MAX_LINE_CHARS ? JSON.stringify({ fieldsOmitted: json.length + ' characters' }) : json;
 };
-const structured = (level) => (message, fields) => host.logFields(level, show(message), fieldsJson(fields));
+const structured = (level) => (message, fields) => host.logFields(level, clip(show(message)), fieldsJson(fields));
 define('log', Object.freeze({ debug: structured('debug'), info: structured('info'), warn: structured('warn'), error: structured('error') }));

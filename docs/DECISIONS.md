@@ -1727,3 +1727,22 @@ So every job starts about 30% faster than before, with the globals included.
 **Checked against real Node:** a real-npm fixture's output equals real Node's. It covers URL parsing and search params, event dispatch (`once`, `handleEvent`, `stopImmediatePropagation`, `preventDefault`), and abort ordering and reasons, including `AbortSignal.timeout`/`any` and `node:stream`'s `pipeline` stopped by a signal. It also covers `structuredClone` of Maps, Sets, typed arrays, errors, cycles and class instances, its `DataCloneError`, `atob`/`btoa` errors, and the order of microtasks, promises, immediates and timers.
 
 **Not done:** user packages' modules could be cached the same way, keyed by package version and file; that's for when packages are large enough to matter.
+
+### D-107 — A job's log is bounded in characters, not only lines
+**Date:** 2026-10-08 · **Status:** Accepted
+
+**Context:** Tony asked how console output is piped and kept. Tracing it found the path sound but unbounded in size:
+- **The path:** `console.*` and `log.*` → the host's `LogSink` → secrets masked (D-096) → the attempt's `LogBook` (its last 1,000 lines) and a live event on the job's stream → stored on the job record when the attempt ends, and deleted with the job by retention.
+- **The gap:** a line had no length limit, and `LogBook` lives on the node's Java heap, outside the isolate's limit. A script logging 1,000 lines of 10 MB each held 10 GB on the node, then wrote it to the job record.
+
+**Decision:**
+- **Per line:** cut at 16,384 characters, with `… [N more characters]` appended. The prelude cuts first, so a huge string isn't copied to the host; the host cuts again as the authority, leaving room for the prelude's marker so a line isn't cut twice.
+- **`log.*` fields** over 16,384 characters (as JSON) become `{"fieldsOmitted": "N characters"}`, and a cut line's live event has no separate fields.
+- **Per attempt:** the last 1,000 lines and at most 1,048,576 characters, dropping the oldest. So a running job holds at most about 1 MiB of log on its node, and a job record at most that.
+
+**Not changed, and noted for later:**
+- **Durable logs beyond the last 1 MiB,** such as a long-running service's whole history, would need a log store (for example appended chunks in `files`, or shipping to an external sink). Nothing asks for it yet.
+- **Levels** are on live events but not on stored lines.
+- **A script can't read its own log back;** `kv` and `files` are for that.
+- **Live log events have no rate limit.** A tight loop of `console.log` publishes as fast as the isolate runs; the per-line and per-attempt caps bound memory, not event-bus traffic.
+- **The Node runtime** (D-084, not built) will send the container's stdout and stderr into this same log, with the same limits.

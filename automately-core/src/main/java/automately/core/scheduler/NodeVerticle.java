@@ -335,10 +335,12 @@ public final class NodeVerticle extends VerticleBase {
             public void log(String level, String unmasked, JsonObject unmaskedFields) {
                 String message = env.mask(unmasked);
                 JsonObject fields = unmaskedFields == null || env.secretsByValue().isEmpty() ? unmaskedFields : new JsonObject(env.mask(unmaskedFields.encode()));
-                String line = fields == null || fields.isEmpty() ? message : message + " " + fields.encode();
+                String whole = fields == null || fields.isEmpty() ? message : message + " " + fields.encode();
+                String line = LogBook.clip(whole);
                 long seq = logs.add(line);
                 JsonObject event = new JsonObject().put("type", "log").put("level", level).put("line", line).put("seq", seq);
-                if (fields != null && !fields.isEmpty()) {
+                // A clipped line's fields would carry what was cut, so the event has only the line.
+                if (fields != null && !fields.isEmpty() && line == whole) {
                     event.put("message", message).put("fields", fields);
                 }
                 publish(jobId, event);

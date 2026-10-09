@@ -26,6 +26,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Job logs bounded in size (2026-10-08)
+
+### Fixed
+- **A job's log had no size limit** (D-107). It is kept on the node's Java heap, outside the isolate's memory limit, and stored on the job record, so 1,000 huge lines could take gigabytes. A line is now cut at about 16 KiB (ending `… [N more characters]`), by the prelude before it's copied to the host and again by the host, and an attempt keeps its last 1,000 lines up to 1 MiB.
+
+### Docs
+- **Where a job's log goes:** live events, the job record, retention, the limits, and what a script can't do (read its own log back). In `docs/scripting/host-apis.md`, linked from `node-compat.md`. `SECURITY.md` no longer says script output appears in node logs; it doesn't.
+
 ## Web and Node globals; jobs start 30% faster (2026-10-08)
 
 ### Added

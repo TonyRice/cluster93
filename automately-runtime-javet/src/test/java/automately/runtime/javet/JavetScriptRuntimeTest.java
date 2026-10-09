@@ -152,6 +152,22 @@ class JavetScriptRuntimeTest {
         }
 
         @Test
+        void aHugeLineIsClippedBeforeItReachesTheHost() throws Exception {
+            List<String> logs = new CopyOnWriteArrayList<>();
+            run("""
+                    export default () => {
+                      console.log('x'.repeat(5_000_000));
+                      log.info('y'.repeat(20_000), { big: 'z'.repeat(20_000) });
+                    }
+                    """, new JsonObject(), Duration.ofSeconds(5), logs);
+
+            assertThat(logs).hasSize(2);
+            assertThat(logs.get(0)).isEqualTo("info:" + "x".repeat(16384) + " … [" + (5_000_000 - 16384) + " more characters]");
+            assertThat(logs.get(1)).startsWith("info:" + "y".repeat(16384) + " … [3616 more characters]")
+                    .endsWith("{\"fieldsOmitted\":\"20010 characters\"}");
+        }
+
+        @Test
         void undefinedResultBecomesNull() throws Exception {
             ExecutionResult result = run("export default () => {}");
 
