@@ -1,5 +1,5 @@
 // The Web and Node globals libraries expect (D-106), pure JavaScript with no reach: atob/btoa, DOMException, Event,
-// CustomEvent, EventTarget, AbortController/AbortSignal, structuredClone, queueMicrotask, setImmediate/clearImmediate
+// CustomEvent, EventTarget, AbortController/AbortSignal, structuredClone, queueMicrotask
 // and a coarse performance (whole milliseconds, as Date.now(): nothing finer for timing attacks).
 
 // --- atob and btoa ---
@@ -343,8 +343,6 @@ define('queueMicrotask', (callback) => {
   });
 });
 
-define('setImmediate', (callback, ...args) => setTimeout(callback, 0, ...args));
-define('clearImmediate', (id) => clearTimeout(id));
 
 const timeOrigin = Date.now();
 const marks = [];

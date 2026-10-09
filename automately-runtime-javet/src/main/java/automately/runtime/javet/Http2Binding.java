@@ -83,6 +83,13 @@ public final class Http2Binding {
         return bridge.promise(() -> stream == null ? closed() : stream.trailers());
     }
 
+    /** The network read the stream's next body chunk came in (D-121); -1 if unknown. */
+    @V8Function(name = "chunkRead")
+    public double chunkRead(int id) {
+        OutgoingHttp2Stream stream = bridge.http2Stream(id);
+        return stream == null ? -1 : stream.nextChunkRead();
+    }
+
     /** The script's stream has closed. */
     @V8Function(name = "release")
     public void release(int id) {

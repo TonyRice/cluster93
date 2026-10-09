@@ -14,7 +14,6 @@ import io.netty.handler.codec.http2.Http2Stream;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 
-import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,6 +36,13 @@ final class NettyHttp2 {
     private final Http2ConnectionHandler handler;
     /** Each stream's HEADERS frames' flags, in the order they arrived: the response's, then the trailers'. */
     private final Map<Integer, Queue<Integer>> headerFlags = new ConcurrentHashMap<>();
+    /**
+     * The connection's network reads so far, and the read each stream's DATA frames came in (D-121). Node handles each
+     * read as one I/O callback, so the isolate hands a new read to the script on a later turn than the one before.
+     */
+    private volatile long reads;
+    private final Map<Integer, Queue<Long>> headerReads = new ConcurrentHashMap<>();
+    private final Map<Integer, Queue<Long>> dataReads = new ConcurrentHashMap<>();
 
     private NettyHttp2(ChannelHandlerContext ctx, Http2ConnectionHandler handler) {
         this.ctx = ctx;
@@ -56,7 +62,23 @@ final class NettyHttp2 {
         }
         NettyHttp2 netty = new NettyHttp2(ctx, handler);
         netty.recordHeaders();
+        netty.countReads();
         return netty;
+    }
+
+    /** Counts each network read once its frames are decoded: a frame's read is the count before its read completes. */
+    private void countReads() {
+        var http2 = ctx.pipeline().context(handler);
+        if (http2 == null) {
+            return;
+        }
+        ctx.pipeline().addBefore(http2.name(), "automately-reads", new io.netty.channel.ChannelInboundHandlerAdapter() {
+            @Override
+            public void channelReadComplete(ChannelHandlerContext c) {
+                reads++;
+                c.fireChannelReadComplete();
+            }
+        });
     }
 
     private void recordHeaders() {
@@ -75,11 +97,36 @@ final class NettyHttp2 {
                 record(streamId, END_HEADERS | PRIORITY | (endOfStream ? END_STREAM : 0) | (padding > 0 ? PADDED : 0));
                 super.onHeadersRead(c, streamId, headers, streamDependency, weight, exclusive, padding, endOfStream);
             }
+
+            @Override
+            public int onDataRead(ChannelHandlerContext c, int streamId, io.netty.buffer.ByteBuf data, int padding, boolean endOfStream)
+                    throws Http2Exception {
+                // Only DATA that reaches the script as a chunk: an empty frame that just ends the stream makes none.
+                if (data.isReadable()) {
+                    dataReads.computeIfAbsent(streamId, id -> new java.util.concurrent.ConcurrentLinkedQueue<>()).add(reads);
+                }
+                return super.onDataRead(c, streamId, data, padding, endOfStream);
+            }
         });
     }
 
     private void record(int streamId, int flags) {
-        headerFlags.computeIfAbsent(streamId, id -> new ArrayDeque<>()).add(flags);
+        headerFlags.computeIfAbsent(streamId, id -> new java.util.concurrent.ConcurrentLinkedQueue<>()).add(flags);
+        headerReads.computeIfAbsent(streamId, id -> new java.util.concurrent.ConcurrentLinkedQueue<>()).add(reads);
+    }
+
+    /** The read the stream's next HEADERS frame came in, in arrival order; -1 if unknown. */
+    long nextHeaderRead(int streamId) {
+        Queue<Long> queue = headerReads.get(streamId);
+        Long read = queue == null ? null : queue.poll();
+        return read == null ? -1 : read;
+    }
+
+    /** The read the stream's next chunk of DATA came in; -1 if unknown. */
+    long nextDataRead(int streamId) {
+        Queue<Long> queue = dataReads.get(streamId);
+        Long read = queue == null ? null : queue.poll();
+        return read == null ? -1 : read;
     }
 
     /** The next HEADERS frame's flags for the stream, in arrival order; {@code fallback} if none was recorded. */
@@ -91,6 +138,8 @@ final class NettyHttp2 {
 
     void forget(int streamId) {
         headerFlags.remove(streamId);
+        headerReads.remove(streamId);
+        dataReads.remove(streamId);
     }
 
     /**

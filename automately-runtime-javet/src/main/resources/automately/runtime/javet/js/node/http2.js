@@ -424,7 +424,6 @@ export class ClientHttp2Stream extends Duplex {
     this._submitTurn = null;
     this._endTurn = null;
     this._unacknowledged = 0;
-    this._windowUpdated = false;
     this._remoteClosed = false;
     // A request with no body: the writable side ends at once, as Node ends it.
     if (this._endStream) this.end();
@@ -477,17 +476,19 @@ export class ClientHttp2Stream extends Duplex {
   }
 
   /**
-   * A DATA frame reached the script. Once half the window has arrived nghttp2 sends WINDOW_UPDATE, after the frame's
-   * callbacks: the script sees the window it filled, and the next frame the refilled one.
+   * A DATA frame reached the script. Once half a window has arrived nghttp2 sends WINDOW_UPDATE: the connection's
+   * before the frame's handlers (they see it queued, and the session's window refilled), the stream's after them and
+   * their ticks (they see the stream's window filled; by the next turn it's refilled and the update written).
    */
   _received(length) {
     this.session._inputArrived();
-    if (this._windowUpdated) {
-      this._unacknowledged = 0;
-      this._windowUpdated = false;
-    }
+    this.session._receivedData(length);
     this._unacknowledged += length;
-    if (this._unacknowledged >= Math.floor(this.session._streamWindow() / 2)) this._windowUpdated = true;
+    if (this._unacknowledged >= Math.floor(this.session._streamWindow() / 2)) this.session._refillAfterWrite(this);
+  }
+
+  _refilled() {
+    this._unacknowledged = 0;
   }
 
   /** The script has seen the peer's END_STREAM; nghttp2 applies it after the callbacks that showed it. */
@@ -502,7 +503,8 @@ export class ClientHttp2Stream extends Duplex {
     this._streamId = streamId;
     for (const go of this._waiting.splice(0)) go();
     // The answer comes after what asked for it was written, as over a network: never in the turn that queued it.
-    internals.response(id).then((head) => this.session._afterWrite(() => this._answered(head)), surfaced((err) => this._fail(err)));
+    internals.response(id).then((head) => this.session._afterWrite(() => this.session._inRead(head.read, () => this._answered(head))),
+      surfaced((err) => this._fail(err)));
   }
 
   _answered({ rawHeaders, status, flags, body }) {
@@ -529,11 +531,15 @@ export class ClientHttp2Stream extends Duplex {
     if (this._pulling || !this._iterator) { this._wantsRead = !this._iterator; return; }
     this._pulling = true;
     this._iterator.next().then(surfaced(({ value, done }) => {
-      this._pulling = false;
-      if (done) { this._finish(); return; }
-      this._touch();
-      this._received(value.byteLength);
-      this.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+      if (done) { this._pulling = false; this._finish(); return; }
+      // As Node handles each network read: a chunk from a later read reaches the script on a later turn.
+      this.session._inRead(internals.chunkRead(this._id), () => {
+        this._pulling = false;
+        if (this.destroyed) return;
+        this._touch();
+        this._received(value.byteLength);
+        this.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+      });
     }), surfaced((err) => { this._pulling = false; this._fail(err); }));
   }
 
@@ -726,6 +732,17 @@ export class ClientHttp2Session extends EventEmitter {
     // Node's writes: one at the end of each turn with something to send. Streams' states count them (D-120).
     this._writeTurn = 0;
     this._nextStreamID = 1;
+    // The connection's receive window, nghttp2's default, less the DATA received since its last WINDOW_UPDATE; and
+    // the streams whose WINDOW_UPDATE goes with the next write.
+    this._connectionWindow = 65535;
+    this._connectionUnacknowledged = 0;
+    this._refills = new Set();
+    // Input in the order of the network reads it came in (D-121): the last read handed to the script, whether this
+    // turn may start another, and what waits for a later turn.
+    this._lastRead = null;
+    this._freshTurn = true;
+    this._reads = [];
+    this._readsWaiting = false;
     this._waiting = [];
     this._closing = false;
     this._timer = null;
@@ -741,7 +758,54 @@ export class ClientHttp2Session extends EventEmitter {
   /** Node's session.state, from the host's connection, with the outbound queue as Node's; {} until connected and once destroyed. */
   get state() {
     if (this._id === null || this.destroyed) return {};
-    return { ...internals.sessionState(this._id), nextStreamID: this._nextStreamID, outboundQueueSize: this._outbound };
+    return { ...internals.sessionState(this._id), effectiveLocalWindowSize: this._connectionWindow,
+      effectiveRecvDataLength: this._connectionUnacknowledged, nextStreamID: this._nextStreamID,
+      localWindowSize: this._connectionWindow - this._connectionUnacknowledged, outboundQueueSize: this._outbound };
+  }
+
+  /** DATA arrived: once half the connection's window has, its WINDOW_UPDATE is queued at once (D-121). */
+  _receivedData(length) {
+    this._connectionUnacknowledged += length;
+    if (this._connectionUnacknowledged >= Math.floor(this._connectionWindow / 2)) {
+      this._connectionUnacknowledged = 0;
+      this._queueFrame();
+    }
+  }
+
+  /**
+   * Hands input from network read `read` to the script: at once if it's the read being handled, or the first; else on
+   * a later turn than the read before it, after that turn's immediates, as Node's loop handles reads. In read order.
+   */
+  _inRead(read, go) {
+    this._reads.push([read, go]);
+    if (!this._readsWaiting) this._handleReads();
+  }
+
+  _handleReads() {
+    while (this._reads.length) {
+      const [read, go] = this._reads[0];
+      if (read >= 0 && this._lastRead !== null && read !== this._lastRead && !this._freshTurn) {
+        this._readsWaiting = true;
+        globalThis[Symbol.for("automately.nextTurn")](() => {
+          this._readsWaiting = false;
+          this._freshTurn = true;
+          this._handleReads();
+        });
+        return;
+      }
+      this._reads.shift();
+      if (read >= 0) {
+        this._freshTurn = false;
+        this._lastRead = read;
+      }
+      surfaced(go)();
+    }
+  }
+
+  /** A stream's WINDOW_UPDATE, queued after the frame's handlers and written with the next write. */
+  _refillAfterWrite(stream) {
+    this._refills.add(stream);
+    this._scheduleWrite();
   }
 
   /** The window each stream starts with: ours, as the peer acknowledged it. */
@@ -794,6 +858,8 @@ export class ClientHttp2Session extends EventEmitter {
 
   _written() {
     this._writeTurn++;
+    for (const stream of this._refills) stream._refilled();
+    this._refills.clear();
     this._outbound = 0;
     this._unsentHeaders.clear();
   }

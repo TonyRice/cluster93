@@ -556,9 +556,27 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 return null;
             }
 
+            // As Node's loop (D-121): I/O callbacks (posted tasks), then the check phase (immediates), then timers,
+            // with microtasks and the rejection check after each callback.
             boolean worked = false;
+            for (int id : loop.takeNextTurn()) {
+                js.fireTimer(id);
+                worked = true;
+                drainMicrotasks(v8, promise, control);
+                checkRejections(v8, promise, js, control);
+            }
             for (EventLoop.Task task = loop.pollTask(); task != null; task = loop.pollTask()) {
                 task.run(js);
+                worked = true;
+                drainMicrotasks(v8, promise, control);
+                checkRejections(v8, promise, js, control);
+            }
+            if (loop.immediatesPending()) {
+                for (int i = js.startImmediates(); i > 0 && control.killedWith() == null && loop.uncaught() == null; i--) {
+                    js.runImmediate();
+                    drainMicrotasks(v8, promise, control);
+                    checkRejections(v8, promise, js, control);
+                }
                 worked = true;
             }
             for (int id = loop.pollDue(); id >= 0; id = loop.pollDue()) {

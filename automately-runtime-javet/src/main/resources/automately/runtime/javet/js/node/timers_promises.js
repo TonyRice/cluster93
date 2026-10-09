@@ -4,7 +4,7 @@ function abortError(signal) {
   return Object.assign(new Error('The operation was aborted'), { name: 'AbortError', code: 'ABORT_ERR', cause: signal?.reason });
 }
 
-function delayed(delay, value, options, schedule) {
+function delayed(delay, value, options, schedule, cancel = clearTimeout) {
   const signal = options?.signal;
   if (signal?.aborted) return Promise.reject(abortError(signal));
   return new Promise((resolve, reject) => {
@@ -13,7 +13,7 @@ function delayed(delay, value, options, schedule) {
       resolve(value);
     }, delay);
     function onAbort() {
-      clearTimeout(id);
+      cancel(id);
       reject(abortError(signal));
     }
     signal?.addEventListener?.('abort', onAbort, { once: true });
@@ -25,7 +25,7 @@ export function setTimeout(delay, value, options) {
 }
 
 export function setImmediate(value, options) {
-  return delayed(0, value, options, (fn) => globalThis.setTimeout(fn, 0));
+  return delayed(0, value, options, (fn) => globalThis.setImmediate(fn), (immediate) => globalThis.clearImmediate(immediate));
 }
 
 export async function* setInterval(delay, value, options) {

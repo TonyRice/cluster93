@@ -15,6 +15,8 @@ final class ScriptEntryPoints implements AutoCloseable {
 
     final V8ValueFunction invoke;
     private final V8ValueFunction fire;
+    private final V8ValueFunction startImmediates;
+    private final V8ValueFunction runImmediate;
     private final V8ValueFunction requestStop;
     private final V8ValueFunction deliver;
     private final V8ValueFunction request;
@@ -32,6 +34,8 @@ final class ScriptEntryPoints implements AutoCloseable {
         this.streamError = prelude.get("streamError");
         this.invoke = prelude.get("invoke");
         this.fire = prelude.get("fire");
+        this.startImmediates = prelude.get("startImmediates");
+        this.runImmediate = prelude.get("runImmediate");
         this.requestStop = prelude.get("requestStop");
         this.deliver = prelude.get("deliver");
         this.rejected = prelude.get("rejected");
@@ -58,6 +62,15 @@ final class ScriptEntryPoints implements AutoCloseable {
 
     void fireTimer(int id) throws JavetException {
         fire.callVoid(null, id);
+    }
+
+    /** Begins a check phase: how many immediates it runs (those queued before it). */
+    int startImmediates() throws JavetException {
+        return startImmediates.callInteger(null);
+    }
+
+    void runImmediate() throws JavetException {
+        runImmediate.callVoid(null);
     }
 
     void requestStop(String reason) throws JavetException {
@@ -97,6 +110,8 @@ final class ScriptEntryPoints implements AutoCloseable {
         streamError.close();
         invoke.close();
         fire.close();
+        startImmediates.close();
+        runImmediate.close();
         requestStop.close();
         deliver.close();
         rejected.close();

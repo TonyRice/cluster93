@@ -16,6 +16,18 @@ public final class HostTimers {
         loop.schedule(id, delayMs);
     }
 
+    /** Runs timer {@code id}'s callback among the next turn's I/O callbacks (D-121). */
+    @V8Function(name = "nextTurn")
+    public void nextTurn(int id) {
+        loop.deferToNextTurn(id);
+    }
+
+    /** Whether immediates are queued for the loop's next check phase. */
+    @V8Function(name = "immediates")
+    public void immediates(boolean pending) {
+        loop.immediatesPending(pending);
+    }
+
     @V8Function(name = "clearTimer")
     public void clearTimer(int id) {
         loop.clear(id);

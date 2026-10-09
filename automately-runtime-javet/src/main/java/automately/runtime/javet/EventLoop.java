@@ -40,6 +40,9 @@ final class EventLoop {
     private int callsInFlight;
     private int listeners;
     private int openStreams;
+    private boolean immediatesPending;
+    /** Callbacks (timer ids) for the next turn's I/O phase, as a network read Node handles then (D-121). */
+    private java.util.List<Integer> nextTurn = new java.util.ArrayList<>();
 
     // --- isolate thread only ---
 
@@ -80,6 +83,25 @@ final class EventLoop {
     /** Waits for a posted task, at most {@code nanos} (or indefinitely if negative). */
     Task awaitTask(long nanos) throws InterruptedException {
         return nanos < 0 ? tasks.take() : tasks.poll(nanos, TimeUnit.NANOSECONDS);
+    }
+
+    void deferToNextTurn(int id) {
+        nextTurn.add(id);
+    }
+
+    /** The callbacks deferred to this turn; any deferred while they run wait for the next. */
+    java.util.List<Integer> takeNextTurn() {
+        java.util.List<Integer> due = nextTurn;
+        nextTurn = new java.util.ArrayList<>();
+        return due;
+    }
+
+    void immediatesPending(boolean pending) {
+        immediatesPending = pending;
+    }
+
+    boolean immediatesPending() {
+        return immediatesPending;
     }
 
     /** The script looked at {@code ctx.stopRequested}, so a stop is something it can be waiting for. */

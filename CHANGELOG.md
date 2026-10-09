@@ -26,6 +26,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## The event loop runs Node's phases; HTTP/2 flow control matched exactly (2026-10-09)
+
+### Changed
+- **The isolate's event loop runs Node's phases** (D-121):
+  - **The order:** I/O callbacks, then `setImmediate`'s check phase, then timers.
+  - **Microtasks:** they now run after every callback, not after a batch of them.
+  - **`setImmediate`:** it returns an `Immediate`, and immediates queued during the check phase wait for the next turn.
+
+  **Why:** `setImmediate` was a 1ms timer, and orderings Node guarantees didn't hold. A new fixture checks them against Node.
+
+### Fixed
+- **HTTP/2 flow control is now exact, and the session's receive window is no longer read live** (D-121):
+  - **The windows:** the connection's WINDOW_UPDATE goes before the handlers of the frame that brings it to half, and the stream's after them.
+  - **Network reads:** they reach the script one turn apart, as Node handles them.
+
+  **Why:** the session's values raced with the script's events. Under a paced server, where Node is deterministic, the isolate now matches it frame by frame.
+
 ## `http2` stream state worked out as Node's nghttp2 holds it (2026-10-09)
 
 ### Fixed

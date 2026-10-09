@@ -440,6 +440,10 @@ GET /v1/egress-policy                     (the tenant, read-only)
   - **A stream's** is worked out in the isolate (D-120), from what it has written and what the script has seen, as nghttp2 holds it for Node. Reading it from the network raced with the script's events.
 - **Priorities, as Node 26:** RFC 9113 deprecated them, so nothing is sent and Node's DEP0194 warning is emitted once.
 - **`outboundQueueSize` (D-119)** is nghttp2's queue of unwritten control frames. The isolate keeps it and empties it on the next turn, as Node does.
+- **Flow control, exactly (D-121):**
+  - **Both receive windows are modelled:** the connection's refills before the handlers of the frame that brings it to half, the stream's after them.
+  - **Network reads stay apart:** the host records which read each frame came in, and the isolate hands a later read to the script on a later turn.
+  - **Proved against Node:** a paced test server (fixed frames, each in its own read) makes Node deterministic, and the isolate matches it frame by frame.
 
 ## 13. WebSockets (accepted)
 - **The ingress** passes `Upgrade: websocket` through to the service's node, then its internal endpoint. Frames are bridged both ways with backpressure. Today it strips `Upgrade`, so WebSockets don't pass.

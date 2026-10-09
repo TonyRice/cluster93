@@ -73,7 +73,7 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `DOMException` | With `name`, `code`, the legacy constants (`ABORT_ERR`, …) and `cause`. Web Crypto and aborts use it. |
 | `structuredClone` | Plain objects and arrays, Date, RegExp, Map, Set, ArrayBuffer, typed arrays, DataView, errors (name, message, stack, cause), boxed primitives, BigInt and cycles. Class instances become plain objects. Functions, symbols, promises and weak collections throw a `DataCloneError`. `transfer` detaches ArrayBuffers where V8 can. |
 | `atob`, `btoa` | With the standard's errors (`InvalidCharacterError`). |
-| `queueMicrotask`, `setImmediate`, `clearImmediate` | `setImmediate` is a zero-delay timer, so it runs after microtasks, as in Node. A throw in a `queueMicrotask` callback fails the job, as an uncaught exception ends Node (D-109). |
+| `queueMicrotask`, `setImmediate`, `clearImmediate` | `setImmediate` runs in the event loop's check phase, as Node's (D-121); see [the event loop](#the-event-loop). A throw in a `queueMicrotask` callback fails the job, as an uncaught exception ends Node (D-109). |
 | `performance` | `now()` (whole milliseconds since the job started, deliberately coarse), `timeOrigin`, `mark`/`measure`/`getEntries…`/`clear…` (at most 10,000 entries). |
 | `WebAssembly`, `SharedArrayBuffer`, `Atomics`, `WeakRef`, `FinalizationRegistry`, `Intl` | V8's own. `Intl` has full ICU data (D-093). WebAssembly runs inside the same isolate and limits; there are no threads to share memory with. |
 
@@ -275,12 +275,27 @@ All of `assert`: `ok`, `equal`/`notEqual`, `strictEqual`/`notStrictEqual`, `deep
 - at most 1,000 keys unless `maxKeys` says otherwise
 - malformed escapes decode the way Node decodes them
 
+## The event loop
+
+Each turn runs as Node's does (D-121):
+1. **I/O callbacks:** the host's answers, network reads and messages.
+2. **The check phase:** the `setImmediate` callbacks queued before it began. Those queued during it wait for the next turn.
+3. **Timers** that are due.
+
+`process.nextTick` callbacks and microtasks run after every callback, and so does the unhandled-rejection check (D-110).
+
+**Network reads are kept apart, as Node keeps them:**
+- **What the host records:** which read each HTTP/2 frame arrived in.
+- **What the script sees:** a later read reaches it on a later turn, after the immediates the earlier one queued. Frames that came in together are still handled together.
+
+A fixture compares Node's guaranteed orderings with real Node.
+
 ## `timers` and `timers/promises`
 
 - **`timers`:** `setTimeout`, `setInterval`, `setImmediate` and their `clear…`.
 - **`timers/promises`:** `setTimeout`, `setImmediate`, `setInterval` (an async iterator) and `scheduler.wait`/`yield`. All of them accept a `signal` (D-103).
+- **`setImmediate`** returns an `Immediate` (`ref`, `unref`, `hasRef`) and runs in the check phase, as Node's (D-121).
 - **Differs:**
-  - **`setImmediate`** is a zero-delay timer; there's no separate check phase.
   - **Timers return numbers,** not `Timeout` objects, so `ref`/`unref`/`refresh` don't exist.
   - **Signals:** `AbortController`'s, or any object shaped like an `AbortSignal`.
 
@@ -419,7 +434,8 @@ Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts
     - **After `request()`:** 1 more, its HEADERS, until the next turn.
     - **At `remoteSettings`:** their ACK.
     - **Closing a stream whose HEADERS haven't gone:** adds nothing.
-    - **Where it can still differ:** inside `data` handlers, Node's count rises and falls with the WINDOW_UPDATEs nghttp2 queues, and that depends on how TCP splits the bytes into reads. It isn't modelled, so the isolate shows 0 there. At `remoteSettings`, Node shows 1 or 2 depending on whether the peer's SETTINGS arrive before or after it wrote that turn's frames; the isolate shows them arriving after.
+    - **During `data`:** the connection's WINDOW_UPDATE is counted once half its window has arrived, and is visible in that frame's handler and its ticks. The stream's never shows, since it's queued after them and written by the next turn (D-121).
+    - **Where Node itself varies:** at `remoteSettings`, Node shows 1 or 2 depending on whether the peer's SETTINGS arrive before or after it wrote that turn's frames; the isolate shows them arriving after.
 - **`ClientHttp2Stream`,** a `Duplex`:
   - **Events:** `response` (headers with `:status`, the HEADERS frame's real flags, raw headers), `trailers` (with its frame's flags), `wantTrailers`, `data`, `end`, `close` and `error`.
   - **State:** `id`, `rstCode`, `sentHeaders`, `sentTrailers`, `pending`, `closed`.
@@ -427,7 +443,8 @@ Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts
     - **Before its HEADERS are written:** IDLE (1), with weight 0 and window 0. Node writes on the next turn of the event loop.
     - **Then:** OPEN (2) with weight 16, and half-closed local (5, `localClose` 1) once END_STREAM has been written. `end()` doesn't change it until then.
     - **The peer's END_STREAM** takes effect only after the handlers that showed it, as in Node: `remoteClose` is still 0 in `response`, `data` and `end`, and becomes 1 on the next turn (state 6 if our side is still open).
-    - **The window** goes down by each DATA frame the script receives. After a frame brings it to half, it refills before the next one, as nghttp2's WINDOW_UPDATE does.
+    - **The window** goes down by each DATA frame the script receives. Once half of it has arrived, nghttp2's WINDOW_UPDATE refills it after that frame's handlers and ticks, by the next turn (D-121).
+  - **`session.state`'s `effectiveRecvDataLength` and `localWindowSize`** are the connection's receive window as nghttp2 keeps it. Its WINDOW_UPDATE goes out *before* the handlers of the frame that brings it to half (D-121).
     - **`{}`** before the stream is submitted and once it has closed.
   - **`ready` and `id`** come as the stream is submitted, as in Node, with the id nghttp2 would give (odd, in order). On a connected session that's inside `request()`, before a listener can be added.
   - **Answers arrive on a later turn than the write they answer,** as over a network, however quickly the host answered.
@@ -528,13 +545,13 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 - **Streams:** crypto classes aren't streams; `fetch` bodies and `files.stream` are async iterables, not Node streams. `fs` streams hold the whole file (32 MB).
 - **HTTP:** `req.socket` is a stand-in reporting the host's connection (D-114); agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused for `http`/`https` (`tls.connect` takes one); TLS cipher names are IANA's, not OpenSSL's.
 - **Sockets:** `ref`/`unref` change nothing, a job doesn't wait for open sockets, TLS sessions aren't reused, and over TLS `end()` closes (D-116).
-- **HTTP/2:** no server push, a `createConnection` socket replaced by the host's own connection (D-117), `session.state.outboundQueueSize` not counting the WINDOW_UPDATEs Node queues during `data` (D-119), and a large body's `stream.state.localWindowSize` per `data` event, which follows how the server cut its frames (D-120).
+- **HTTP/2:** no server push, a `createConnection` socket replaced by the host's own connection (D-117), and a large body's `data` events and the windows they show. Both follow how the server cut its frames and how TCP split them into reads, which varies between runs of Node itself. Given the same frames in the same reads they match Node exactly (D-121).
 - **Uncaught errors:** a throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` event listener, fails the job as it would end Node. So does a promise rejected with no handler by the end of the turn (D-110), unless `process.on('unhandledRejection')` has a listener; that one isn't a difference from Node.
 - **Approximate output:** `util.inspect` output and `assert`'s messages for structures.
 - **Compressed bytes** may differ from Node's (both are valid).
 - **URLs:** no punycode, and IPv6 isn't normalised.
 - **`TextDecoder`:** keeps a leading byte-order mark, and has no `stream`/`fatal` options.
-- **`setImmediate`** is a zero-delay timer; timers are numbers.
+- **Timers** (`setTimeout`, `setInterval`) return numbers.
 - **`os` and `process`** describe the job: `/tmp`, one CPU, the heap limit, no host details.
 
 **Missing for now:**

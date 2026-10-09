@@ -2218,3 +2218,36 @@ It's written for people, because the console will show the same response as a "N
 
 **Differs:** a large body's `localWindowSize` per `data` event. The server cuts frames according to when the client's WINDOW_UPDATEs reach it, and Node's `data` chunks follow TCP reads, so neither side's sequence is fixed.
 
+### D-121 — HTTP/2 flow control matched exactly, and the event loop runs Node's phases
+**Date:** 2026-10-09 · **Status:** Accepted. Tony asked to address what D-120 left: a large body's windows, and the outbound count while data arrives.
+
+**Why it couldn't be compared before:** Node itself gave different answers from run to run.
+- **Frame sizes:** a server cuts a body into frames as the client's WINDOW_UPDATEs reach it.
+- **'data' events:** Node fires one per piece of a TCP read.
+
+**Making it comparable:** `RealNpmPackagesTest` gains a paced h2c server, written at the frame level.
+- **What it sends:** the same frames to every client (18 of 16384 bytes, then 5000), each followed by a PING whose ACK shows the client has read it.
+- **What that gives:** every frame arrives in its own read, and Node 26.8.1 then gives identical output every run.
+- **What it showed about nghttp2:**
+  - **The connection's WINDOW_UPDATE** is queued *before* the handlers of the frame that brings it to half its window. The handler and its ticks see it queued (count 1) and the session's window refilled.
+  - **The stream's WINDOW_UPDATE** is queued after the handler's ticks and written by the next turn. It's never counted, and the stream's window is full again by then.
+
+**Decision:**
+- **The isolate models both windows that way.** The session's `effectiveRecvDataLength` and `localWindowSize` are now computed in the isolate too: they were read live from Netty, which raced like the stream's state did.
+- **Network reads stay apart:**
+  - **On the host:** each HEADERS and DATA frame is tagged with the network read it came in (a count of `channelReadComplete`).
+  - **In the isolate:** a later read is handed to the script on a later turn, among that turn's I/O callbacks and after the immediates the earlier read queued. Frames that came in together are still handled together, so bulk transfers aren't slowed.
+  - **Why:** without this, the host's eagerly buffered frames reached the script in one turn, where Node handles one read per turn.
+- **The event loop runs Node's phases:**
+  - **The order:** I/O callbacks, then the check phase, then timers.
+  - **Microtasks and the rejection check** run after every callback. Before, posted tasks ran as a batch with microtasks only after it.
+  - **`setImmediate`:** it's a real check-phase queue and returns an `Immediate`. It used to be a 1ms timer that ran with the timers. Immediates queued during the check phase wait for the next turn.
+  - **A next-turn queue** is the isolate's own, used for the reads above.
+
+**Tested:**
+- **`http2client`:** compares every `data` event from the paced server with real Node, plus its tick and the next turn: the stream window, the session window, the received count and the outbound queue.
+- **A new `immediates` fixture:** checks the orderings Node guarantees from an I/O callback (ticks and microtasks, then immediates in order with their own microtasks, cleared ones skipped, new ones next turn) and the `Immediate` handle.
+- **Under load and the full suite:** both pass 4 times out of 4 under full CPU load, and the full local suite passes.
+
+**What still varies, by nature:** with a real server and a real network, the frames and reads, and so the windows per event, differ between runs of Node itself. Given the same frames in the same reads, the isolate now gives Node's values.
+

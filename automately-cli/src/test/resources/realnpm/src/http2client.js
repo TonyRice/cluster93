@@ -179,6 +179,26 @@ export async function run() {
     });
   });
 
+  // Flow control, exactly (D-121): the paced server sends the same frames to every client, each in its own read, so
+  // nghttp2's windows and queued WINDOW_UPDATEs are the same in every run. Each 'data' handler, its ticks and the next
+  // turn see them.
+  out.flowControl = await new Promise((resolve) => {
+    const s = http2.connect(process.env.TEST_H2_PACED);
+    const seen = [];
+    const r = s.request({ ':path': '/' });
+    const snap = (label) => {
+      const st = r.state;
+      const ss = s.state;
+      seen.push([label, st.localWindowSize ?? '{}', ss.outboundQueueSize, ss.effectiveRecvDataLength, ss.localWindowSize]);
+    };
+    r.on('data', (c) => {
+      snap('data ' + c.length);
+      process.nextTick(() => snap(' its tick'));
+      setImmediate(() => snap(' the next turn'));
+    });
+    r.on('end', () => setImmediate(() => setImmediate(() => { s.close(); resolve(seen); })));
+  });
+
   // nghttp2's outbound queue: control frames submitted and not yet written, which Node does on the next turn.
   out.outboundQueue = await new Promise((resolve) => {
     const seen = [];

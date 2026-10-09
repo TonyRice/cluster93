@@ -16,6 +16,56 @@ define('setInterval', (fn, delay, ...args) => schedule(fn, delay, args, true));
 define('clearTimeout', clear);
 define('clearInterval', clear);
 
+// The isolate's own: runs `fn` among the I/O callbacks of the event loop's next turn, as Node handles a network read
+// that comes after this one (D-121).
+Object.defineProperty(globalThis, Symbol.for('automately.nextTurn'), {
+  value: (fn) => {
+    const id = nextTimerId++;
+    timers.set(id, { fn, args: [], repeat: false, ms: 0 });
+    host.nextTurn(id);
+  },
+});
+
+// setImmediate, as Node's check phase (D-121): after each turn's I/O callbacks, the event loop runs the immediates
+// queued before the phase began, one at a time with microtasks after each; those queued meanwhile wait for the next
+// turn. Not a zero-delay timer, which waits a millisecond and runs with the timers.
+class Immediate {
+  constructor(fn, args) { this._onImmediate = fn; this._args = args; this._cleared = false; }
+  ref() { return this; }
+  unref() { return this; }
+  hasRef() { return true; }
+}
+const immediates = [];
+let immediateBatch = 0;
+define('setImmediate', (fn, ...args) => {
+  if (typeof fn !== 'function') {
+    const err = new TypeError(`The "callback" argument must be of type function. Received ${fn === null ? 'null' : typeof fn}`);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  if (immediates.length >= 10000) throw new RangeError('Too many pending immediates (limit 10000)');
+  const immediate = new Immediate(fn, args);
+  if (immediates.length === 0) host.immediates(true);
+  immediates.push(immediate);
+  return immediate;
+});
+define('clearImmediate', (immediate) => { if (immediate instanceof Immediate) immediate._cleared = true; });
+// Called by the event loop: how many immediates this check phase runs, then each in turn.
+const startImmediates = () => (immediateBatch = immediates.length);
+const runImmediate = () => {
+  if (immediateBatch <= 0) return;
+  immediateBatch--;
+  const immediate = immediates.shift();
+  if (immediates.length === 0) host.immediates(false);
+  if (immediate._cleared) return;
+  immediate._cleared = true;
+  try {
+    immediate._onImmediate(...immediate._args);
+  } catch (e) {
+    host.uncaught(`Uncaught error in setImmediate callback: ${errorText(e)}`);
+  }
+};
+
 // A throw in a callback the script didn't call itself (a microtask, process.nextTick, an http event) ends the job, as
 // an uncaught exception ends Node, rather than vanishing into a promise (D-109). Node modules find this under a symbol;
 // a script that calls it only fails its own job.

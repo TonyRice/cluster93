@@ -411,7 +411,8 @@ public final class Http2Client {
                 response.headers().forEach(h -> raw.add(h.getKey().toLowerCase(Locale.ROOT)).add(h.getValue()));
                 int id = (int) request.streamId();
                 int flags = netty == null ? NettyHttp2.END_HEADERS : netty.nextHeaderFlags(id, NettyHttp2.END_HEADERS);
-                head.tryComplete(new JsonObject().put("rawHeaders", raw).put("status", response.statusCode()).put("flags", flags));
+                head.tryComplete(new JsonObject().put("rawHeaders", raw).put("status", response.statusCode()).put("flags", flags)
+                        .put("read", netty == null ? -1 : netty.nextHeaderRead(id)));
                 response.end().onComplete(ended -> {
                     JsonArray rawTrailers = new JsonArray();
                     response.trailers().forEach(t -> rawTrailers.add(t.getKey().toLowerCase(Locale.ROOT)).add(t.getValue()));
@@ -489,6 +490,11 @@ public final class Http2Client {
         @Override
         public JsonObject state() {
             return netty == null ? new JsonObject() : netty.streamState(id());
+        }
+
+        @Override
+        public long nextChunkRead() {
+            return netty == null ? -1 : netty.nextDataRead(id());
         }
 
         @Override

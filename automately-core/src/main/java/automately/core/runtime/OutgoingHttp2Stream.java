@@ -36,4 +36,12 @@ public interface OutgoingHttp2Stream {
 
     /** Resets the stream (RST_STREAM) with this code. Safe to call more than once. */
     void reset(long code);
+
+    /**
+     * The network read the body's next chunk came in, counted per connection, in the order chunks are delivered; -1 if
+     * unknown. The isolate hands a new read to the script on a later turn, as Node handles each read (D-121).
+     */
+    default long nextChunkRead() {
+        return -1;
+    }
 }

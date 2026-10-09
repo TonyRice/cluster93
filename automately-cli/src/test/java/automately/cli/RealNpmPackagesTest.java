@@ -45,7 +45,7 @@ class RealNpmPackagesTest {
 
     /** Libraries that run in the isolate, one module each in src/; the parameterized test below names the same. */
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
-            "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals");
+            "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals", "immediates");
     /** The HTTP libraries (D-109), published as a second package: one would be over a version's 10 MB. */
     private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets", "http2client", "gothttp2");
     /**
@@ -193,7 +193,7 @@ class RealNpmPackagesTest {
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "http2client", "gothttp2"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "immediates", "http2client", "gothttp2"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
         sameAsNode(lib);
     }
@@ -321,6 +321,8 @@ class RealNpmPackagesTest {
         io.vertx.core.http.HttpServer h2c = await(serverVertx.createHttpServer(new io.vertx.core.http.HttpServerOptions().setHttp2ClearTextEnabled(true))
                 .requestHandler(h2).listen(0, "127.0.0.1"));
         testEnv.put("TEST_H2C", "http://127.0.0.1:" + h2c.actualPort());
+        io.vertx.core.net.NetServer paced = await(serverVertx.createNetServer().connectHandler(PacedHttp2::serve).listen(0, "127.0.0.1"));
+        testEnv.put("TEST_H2_PACED", "http://127.0.0.1:" + paced.actualPort());
         halfClose = new ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress());
         testEnv.put("TEST_HALFCLOSE", String.valueOf(halfClose.getLocalPort()));
         Thread acceptor = new Thread(() -> {
@@ -424,6 +426,143 @@ class RealNpmPackagesTest {
                 throws io.netty.handler.codec.http2.Http2Exception {
             keep(streamId, headers, endOfStream);
             super.onHeadersRead(ctx, streamId, headers, dependency, weight, exclusive, padding, endOfStream);
+        }
+    }
+
+    /**
+     * An h2c server at the frame level (D-121), for comparing flow control exactly. It answers every request with the
+     * same DATA frames (18 of 16384 bytes, then 5000), one at a time, each followed by a PING whose ACK says the client
+     * has read it. So each frame arrives in its own read and the frames are cut the same way for every client, which a
+     * real server leaves to timing. It keeps to the client's windows.
+     */
+    static final class PacedHttp2 {
+        static final int[] FRAMES = java.util.stream.IntStream.concat(java.util.stream.IntStream.generate(() -> 16384).limit(18),
+                java.util.stream.IntStream.of(5000)).toArray();
+
+        private final io.vertx.core.net.NetSocket socket;
+        private io.vertx.core.buffer.Buffer pending = io.vertx.core.buffer.Buffer.buffer();
+        private boolean preface;
+        private long connectionWindow = 65535;
+        private long initialWindow = 65535;
+        private final java.util.Map<Integer, Long> streamWindows = new java.util.HashMap<>();
+        private final java.util.List<java.util.function.BooleanSupplier> waiting = new java.util.ArrayList<>();
+        private final java.util.Map<Integer, io.vertx.core.Promise<Void>> pings = new java.util.HashMap<>();
+        private int pingCount;
+
+        private PacedHttp2(io.vertx.core.net.NetSocket socket) {
+            this.socket = socket;
+        }
+
+        static void serve(io.vertx.core.net.NetSocket socket) {
+            PacedHttp2 connection = new PacedHttp2(socket);
+            socket.handler(connection::read);
+        }
+
+        private void frame(int type, int flags, int stream, io.vertx.core.buffer.Buffer payload) {
+            io.vertx.core.buffer.Buffer header = io.vertx.core.buffer.Buffer.buffer(9 + payload.length())
+                    .appendUnsignedByte((short) (payload.length() >>> 16)).appendUnsignedShort(payload.length() & 0xffff)
+                    .appendUnsignedByte((short) type).appendUnsignedByte((short) flags).appendInt(stream);
+            socket.write(header.appendBuffer(payload));
+        }
+
+        private io.vertx.core.Future<Void> ping() {
+            io.vertx.core.Promise<Void> acked = io.vertx.core.Promise.promise();
+            pings.put(++pingCount, acked);
+            frame(6, 0, 0, io.vertx.core.buffer.Buffer.buffer().appendInt(0).appendInt(pingCount));
+            return acked.future();
+        }
+
+        private io.vertx.core.Future<Void> windowFor(int stream, int size) {
+            io.vertx.core.Promise<Void> open = io.vertx.core.Promise.promise();
+            java.util.function.BooleanSupplier check = () -> {
+                if (connectionWindow >= size && streamWindows.get(stream) >= size) {
+                    open.complete();
+                    return true;
+                }
+                return false;
+            };
+            if (!check.getAsBoolean()) {
+                waiting.add(check);
+            }
+            return open.future();
+        }
+
+        private void answer(int stream) {
+            streamWindows.put(stream, initialWindow);
+            frame(1, 4, stream, io.vertx.core.buffer.Buffer.buffer(new byte[] {(byte) 0x88})); // :status 200, from HPACK's static table
+            io.vertx.core.Future<Void> sent = ping();
+            for (int i = 0; i < FRAMES.length; i++) {
+                int size = FRAMES[i];
+                boolean last = i == FRAMES.length - 1;
+                sent = sent.compose(v -> windowFor(stream, size)).compose(v -> {
+                    connectionWindow -= size;
+                    streamWindows.merge(stream, (long) -size, Long::sum);
+                    byte[] data = new byte[size];
+                    java.util.Arrays.fill(data, (byte) 'x');
+                    frame(0, last ? 1 : 0, stream, io.vertx.core.buffer.Buffer.buffer(data));
+                    return ping();
+                });
+            }
+        }
+
+        private void read(io.vertx.core.buffer.Buffer data) {
+            pending = pending.copy().appendBuffer(data);
+            if (!preface) {
+                if (pending.length() < 24) {
+                    return;
+                }
+                pending = pending.getBuffer(24, pending.length());
+                preface = true;
+                frame(4, 0, 0, io.vertx.core.buffer.Buffer.buffer());
+            }
+            while (pending.length() >= 9) {
+                int length = pending.getUnsignedMedium(0);
+                if (pending.length() < 9 + length) {
+                    return;
+                }
+                int type = pending.getUnsignedByte(3);
+                int flags = pending.getUnsignedByte(4);
+                int stream = pending.getInt(5) & 0x7fffffff;
+                io.vertx.core.buffer.Buffer payload = pending.getBuffer(9, 9 + length);
+                pending = pending.getBuffer(9 + length, pending.length());
+                switch (type) {
+                    case 4 -> {
+                        if ((flags & 1) == 0) {
+                            for (int i = 0; i + 6 <= payload.length(); i += 6) {
+                                if (payload.getUnsignedShort(i) == 4) {
+                                    long value = payload.getUnsignedInt(i + 2);
+                                    streamWindows.replaceAll((id, window) -> window + value - initialWindow);
+                                    initialWindow = value;
+                                }
+                            }
+                            frame(4, 1, 0, io.vertx.core.buffer.Buffer.buffer());
+                        }
+                    }
+                    case 1 -> answer(stream);
+                    case 8 -> {
+                        long increment = payload.getUnsignedInt(0) & 0x7fffffffL;
+                        if (stream == 0) {
+                            connectionWindow += increment;
+                        } else {
+                            streamWindows.merge(stream, increment, Long::sum);
+                        }
+                        waiting.removeIf(java.util.function.BooleanSupplier::getAsBoolean);
+                    }
+                    case 6 -> {
+                        if ((flags & 1) != 0) {
+                            io.vertx.core.Promise<Void> acked = pings.remove(payload.getInt(4));
+                            if (acked != null) {
+                                acked.complete();
+                            }
+                        } else {
+                            frame(6, 1, 0, payload);
+                        }
+                    }
+                    default -> {
+                        // Anything else (RST_STREAM, GOAWAY, PRIORITY) needs nothing from this server.
+                    }
+                }
+            }
         }
     }
 
