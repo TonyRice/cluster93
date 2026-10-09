@@ -2180,3 +2180,41 @@ It's written for people, because the console will show the same response as a "N
 - **`RealNpmPackagesTest`'s `http2client`:** compares 14 points of the queue with real Node. At `remoteSettings` it compares only that the ACK is queued, since Node's own value there varies.
 - **Under load:** both suites pass 4 times out of 4 under full CPU load.
 
+### D-120 — `stream.state` worked out in the isolate, as nghttp2 holds it for Node
+**Date:** 2026-10-09 · **Status:** Accepted. Replaces D-118's per-frame snapshot (Tony: "how can we fix this?", about state 7 showing under load).
+
+**Why the snapshot wasn't enough:**
+- **How it worked:** D-118 read Netty's live state and fell back to a snapshot when Netty had closed the stream.
+- **The flaw:** a live read is the network's state *now*, which can be ahead of the event the script is handling. Under load it showed CLOSED where Node shows half-closed local.
+
+**What Node shows,** probed on Node 26.8.1 (the same in every run):
+- **Writing happens on the next turn of the event loop:**
+  - A stream is IDLE, with weight 0 and window 0, until its HEADERS are written.
+  - `end()` changes nothing until END_STREAM is written.
+- **Handlers run inside nghttp2's frame callbacks:** in `response`, `data` and `end`, the peer's END_STREAM hasn't taken effect, so `remoteClose` is 0. It shows on the next turn.
+- **`ready`** is emitted inside `request()` on a connected session.
+- **The window:** it drops by each DATA frame, and refills after the handler of the frame that brought it to half.
+
+**Decision:**
+- **The isolate works the state out from the stream's history,** with no live read at all:
+  - the turns the session writes in (the same queue as D-119)
+  - when HEADERS and END_STREAM were submitted
+  - the DATA frames the script has had (each reaches it as one chunk)
+  - the peer's END_STREAM, applied the turn after the script saw it
+
+  `nextStreamID` and the stream's `id` are counted as nghttp2 numbers streams, as they're submitted.
+- **Ordering, as a network imposes it:** an answer from the host is handed over only on a turn after the write it answers, however quickly the host answered. Input arriving means what was queued has been written.
+- **The host's `state()` is Netty's live state again,** for host callers. The binding the isolate used for it is gone.
+
+**Found while testing, and fixed:**
+- **A stream's host side was let go when its response ended,** though the script's side could still be open. The script's later `end()` failed with "The session has been destroyed". It's now let go when the script's stream closes.
+- **`end()` on a socket the peer had already closed failed with Netty's `ClosedChannelException`.** That escaped as an uncaught error in one full run's pg fixture, since postgres closes after pg's Terminate. Node treats this as done (its shutdown takes ENOTCONN as success), and so does the host now. `SocketClientTest` reproduces it.
+
+**Tested:**
+- **`NodeHttp2Test` (6):** a stream's state turn by turn, and the queue rules from D-119.
+- **`RealNpmPackagesTest`'s `http2client`:** walks a stream through its life against real Node: request, the next turn, response with our side open, data, end, the turn after, `end()`, and close. For a 300 KB download it compares the states, and that the window stays in bounds.
+  - **Where comparing absolute values stopped making sense:** Node's own outbound count at input-driven points varies under load, so from there the fixture compares what the script adds.
+- **Under load:** both pass 4 times out of 4 under full CPU load.
+
+**Differs:** a large body's `localWindowSize` per `data` event. The server cuts frames according to when the client's WINDOW_UPDATEs reach it, and Node's `data` chunks follow TCP reads, so neither side's sequence is fixed.
+

@@ -180,6 +180,17 @@ class SocketClientTest {
     }
 
     @Test
+    void endingAConnectionThePeerClosedIsDone() throws Exception {
+        io.vertx.core.net.NetServer closing = await(vertx.createNetServer().connectHandler(io.vertx.core.net.NetSocket::close).listen(0, "127.0.0.1"));
+        OutgoingSocket socket = await(client.connect("acme", new JsonObject().put("host", "127.0.0.1").put("port", closing.actualPort()),
+                new AtomicInteger()));
+        Reader reader = new Reader(socket);
+        reader.toEnd();
+        Thread.sleep(200); // Netty closes our side on the peer's FIN
+        await(socket.end());
+    }
+
+    @Test
     void mailPortsAreRefusedByDefault() {
         assertThatThrownBy(() -> await(client.connect("acme", new JsonObject().put("host", "127.0.0.1").put("port", 25), new AtomicInteger())))
                 .cause().isInstanceOf(HostException.class).hasMessageContaining("a cluster rule denies it").hasMessageContaining("blocklisted");

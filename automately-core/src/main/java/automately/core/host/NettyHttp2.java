@@ -37,11 +37,6 @@ final class NettyHttp2 {
     private final Http2ConnectionHandler handler;
     /** Each stream's HEADERS frames' flags, in the order they arrived: the response's, then the trailers'. */
     private final Map<Integer, Queue<Integer>> headerFlags = new ConcurrentHashMap<>();
-    /**
-     * Each stream's state as its last frame left it. Node reads nghttp2's state while it handles the frame; here the
-     * script's event comes later, when Netty may have closed the stream and let it go.
-     */
-    private final Map<Integer, JsonObject> lastState = new ConcurrentHashMap<>();
 
     private NettyHttp2(ChannelHandlerContext ctx, Http2ConnectionHandler handler) {
         this.ctx = ctx;
@@ -80,27 +75,11 @@ final class NettyHttp2 {
                 record(streamId, END_HEADERS | PRIORITY | (endOfStream ? END_STREAM : 0) | (padding > 0 ? PADDED : 0));
                 super.onHeadersRead(c, streamId, headers, streamDependency, weight, exclusive, padding, endOfStream);
             }
-
-            @Override
-            public int onDataRead(ChannelHandlerContext c, int streamId, io.netty.buffer.ByteBuf data, int padding, boolean endOfStream)
-                    throws Http2Exception {
-                snapshot(streamId);
-                return super.onDataRead(c, streamId, data, padding, endOfStream);
-            }
         });
     }
 
     private void record(int streamId, int flags) {
         headerFlags.computeIfAbsent(streamId, id -> new ArrayDeque<>()).add(flags);
-        snapshot(streamId);
-    }
-
-    /** Netty calls the listener before it closes a stream the frame ended, so this is the state Node shows for the frame. */
-    private void snapshot(int streamId) {
-        JsonObject state = liveState(streamId);
-        if (state != null) {
-            lastState.put(streamId, state);
-        }
     }
 
     /** The next HEADERS frame's flags for the stream, in arrival order; {@code fallback} if none was recorded. */
@@ -112,7 +91,6 @@ final class NettyHttp2 {
 
     void forget(int streamId) {
         headerFlags.remove(streamId);
-        lastState.remove(streamId);
     }
 
     /**
@@ -174,17 +152,12 @@ final class NettyHttp2 {
     }
 
     /**
-     * Node's {@code stream.state}: live while Netty has the stream, then as its last frame left it, and {} once
-     * forgotten, as Node's. Weight is fixed: Node 26 sends no priorities.
+     * The stream's state in nghttp2's terms, as Netty has it now; {} once it's gone. The isolate keeps Node's view of
+     * its own streams (D-120), which follows the script's events rather than the network.
      */
     JsonObject streamState(int streamId) {
         JsonObject live = liveState(streamId);
-        // A stream Netty has closed but not yet let go is past anything a Node script sees: its last frame says it.
-        if (live != null && live.getInteger("state") != nghttp2State(Http2Stream.State.CLOSED)) {
-            return live;
-        }
-        JsonObject last = lastState.get(streamId);
-        return last == null ? new JsonObject() : last.copy();
+        return live == null ? new JsonObject() : live;
     }
 
     private JsonObject liveState(int streamId) {

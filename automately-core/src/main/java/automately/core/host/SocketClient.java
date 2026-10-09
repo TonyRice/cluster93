@@ -431,7 +431,9 @@ public final class SocketClient {
                     return shut.future();
                 }
                 return socket.end();
-            });
+            }).recover(err -> err instanceof java.nio.channels.ClosedChannelException
+                    // As Node's: ending a connection the peer has already closed is done, not an error (ENOTCONN).
+                    ? Future.succeededFuture() : Future.failedFuture(err));
         }
 
         @Override

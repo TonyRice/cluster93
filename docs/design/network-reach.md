@@ -435,7 +435,9 @@ GET /v1/egress-policy                     (the tenant, read-only)
 **Completing Node's client (D-118):** what Vert.x doesn't expose is read from the Netty connection beneath it (`NettyHttp2`).
 - **Flags:** the response's and the trailers' flags are their HEADERS frames' own, recorded by a listener on Netty's decoder. Node reports nghttp2's flags as they are: a Node server sends 4 (END_HEADERS), and Vert.x's server adds PRIORITY.
 - **Request trailers** go through Vert.x's own HTTP/2 stream (`writeHeaders(trailers, end)`), so Vert.x knows the request ended. A frame written past it on the Netty encoder left the response never ending.
-- **`state`** comes from Netty's connection, flow controllers and HPACK tables. A stream's state during an event is a snapshot taken as its frame was read, since Netty has often closed the stream by the time the script runs.
+- **`state`:**
+  - **The session's** comes from Netty's connection, flow controllers and HPACK tables.
+  - **A stream's** is worked out in the isolate (D-120), from what it has written and what the script has seen, as nghttp2 holds it for Node. Reading it from the network raced with the script's events.
 - **Priorities, as Node 26:** RFC 9113 deprecated them, so nothing is sent and Node's DEP0194 warning is emitted once.
 - **`outboundQueueSize` (D-119)** is nghttp2's queue of unwritten control frames. The isolate keeps it and empties it on the next turn, as Node does.
 

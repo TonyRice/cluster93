@@ -26,6 +26,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## `http2` stream state worked out as Node's nghttp2 holds it (2026-10-09)
+
+### Fixed
+- **`stream.state` follows what the stream wrote and what the script saw, not the network's state at that moment** (D-120). The rules:
+  - IDLE until its HEADERS are written on the next turn, and half-closed local once END_STREAM is
+  - the peer's END_STREAM applied after the handlers that showed it
+  - the window refilled as nghttp2 refills it
+  - `ready` and `id` given as the stream is submitted, and answers handed over on a turn after the write they answer
+
+  **Why:** D-118's live read could be ahead of the event being handled, and under load it showed a closed stream where Node shows half-closed local. Matches real Node at every point in a stream's life.
+- **A stream's host side was let go when its response ended,** so a later `end()` failed while the request was still open. **Why:** a server may answer before the request's body ends.
+- **`end()` on a TCP socket the peer had already closed failed** with an uncaught `ClosedChannelException`. Node treats that as done, and so does the host now. **Why:** pg's `end()` races postgres closing the connection, and one full run failed on it.
+
 ## `http2` session's outbound queue as Node's (2026-10-09)
 
 ### Fixed

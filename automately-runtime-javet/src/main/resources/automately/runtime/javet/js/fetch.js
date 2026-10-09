@@ -76,7 +76,7 @@ Object.defineProperty(globalThis, Symbol.for('automately.http2'), {
     },
     trailers: (id) => http2Host.trailers(id),
     sendTrailers: (id, trailers) => http2Host.sendTrailers(id, trailers),
-    streamState: (id) => http2Host.streamState(id),
+    release: (id) => http2Host.release(id),
     sessionState: (sessionId) => http2Host.sessionState(sessionId),
     reset: (id, code) => http2Host.reset(id, code),
     ping: (sessionId, payload) => http2Host.ping(sessionId, payload),

@@ -61,13 +61,6 @@ public final class Http2Binding {
         return bridge.promise(() -> stream == null ? closed() : stream.sendTrailers(headers).map(v -> JsValues.UNDEFINED));
     }
 
-    /** Node's {@code stream.state}; {} once the stream is done with. */
-    @V8Function(name = "streamState")
-    public V8Value streamState(int id) throws JavetException {
-        OutgoingHttp2Stream stream = bridge.http2Stream(id);
-        return bridge.values().toJs(stream == null ? new JsonObject() : stream.state());
-    }
-
     /** Node's {@code session.state}; {} once the session is closed. */
     @V8Function(name = "sessionState")
     public V8Value sessionState(int sessionId) throws JavetException {
@@ -83,11 +76,17 @@ public final class Http2Binding {
                 head -> head.copy().put("bodyId", bridge.openStream(stream.body())));
     }
 
-    /** Resolves with {@code rawTrailers} once the body has ended; the stream is done with then. */
+    /** Resolves with {@code rawTrailers} once the body has ended. Our side may still be open: release() lets it go. */
     @V8Function(name = "trailers")
     public V8ValuePromise trailers(int id) throws JavetException {
         OutgoingHttp2Stream stream = bridge.http2Stream(id);
-        return bridge.promise(() -> stream == null ? closed() : stream.trailers().onComplete(done -> bridge.removeHttp2Stream(id)));
+        return bridge.promise(() -> stream == null ? closed() : stream.trailers());
+    }
+
+    /** The script's stream has closed. */
+    @V8Function(name = "release")
+    public void release(int id) {
+        bridge.removeHttp2Stream(id);
     }
 
     @V8Function(name = "reset")

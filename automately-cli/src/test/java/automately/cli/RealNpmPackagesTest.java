@@ -341,6 +341,11 @@ class RealNpmPackagesTest {
     private void serveHttp2(io.vertx.core.http.HttpServerRequest req) {
         io.vertx.core.http.HttpServerResponse res = req.response();
         java.util.Map<Integer, io.vertx.core.json.JsonObject> trailers = RequestTrailers.of(req.connection());
+        if (req.path().equals("/now")) {
+            // Answers without waiting for the request's body, which stays open.
+            res.end("x".repeat(100));
+            return;
+        }
         req.body().onSuccess(body -> {
             switch (req.path()) {
                 case "/request-trailers" -> res.putHeader("content-type", "application/json").end(new io.vertx.core.json.JsonObject()

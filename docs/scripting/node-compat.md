@@ -413,7 +413,7 @@ Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts
   - **Control:** `ping(payload, callback)` (8 bytes, or Node's default), `settings(settings, callback)` (acknowledged before the callback), `goaway(code, lastStreamID, data)`, `close(callback)` (after open streams), `destroy`, `setTimeout`.
   - **Events:** `connect`, `remoteSettings`, `localSettings`, `goaway`, `close`, `error`, `timeout`.
   - **State:** `alpnProtocol` (`h2` or `h2c`), `encrypted`, `type`, `closed`, `destroyed`, `connecting`, `localSettings`, `remoteSettings`, `originSet`, `pendingSettingsAck`, and `socket` (the connection's addresses and TLS details).
-  - **`state`,** as Node's (D-118), read from the connection: `effectiveLocalWindowSize`, `effectiveRecvDataLength`, `nextStreamID`, `localWindowSize`, `lastProcStreamID`, `remoteWindowSize`, `outboundQueueSize`, and the HPACK tables' sizes (`deflateDynamicTableSize`, `inflateDynamicTableSize`). It's `{}` until connected and once destroyed.
+  - **`state`,** as Node's (D-118), read from the connection, with `nextStreamID` counted as streams are submitted (D-120): `effectiveLocalWindowSize`, `effectiveRecvDataLength`, `nextStreamID`, `localWindowSize`, `lastProcStreamID`, `remoteWindowSize`, `outboundQueueSize`, and the HPACK tables' sizes (`deflateDynamicTableSize`, `inflateDynamicTableSize`). It's `{}` until connected and once destroyed.
   - **`outboundQueueSize` is nghttp2's queue, as Node reports it (D-119):** control frames (HEADERS, SETTINGS, PING, GOAWAY, RST_STREAM, trailers; not DATA) submitted and not yet written. Node writes them out on the next turn of the event loop, and the isolate keeps the same queue with the same flush:
     - **At `connect`:** 1, the client's SETTINGS.
     - **After `request()`:** 1 more, its HEADERS, until the next turn.
@@ -423,7 +423,14 @@ Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts
 - **`ClientHttp2Stream`,** a `Duplex`:
   - **Events:** `response` (headers with `:status`, the HEADERS frame's real flags, raw headers), `trailers` (with its frame's flags), `wantTrailers`, `data`, `end`, `close` and `error`.
   - **State:** `id`, `rstCode`, `sentHeaders`, `sentTrailers`, `pending`, `closed`.
-  - **`state`,** as Node's (D-118): `state` (nghttp2's numbers, as `constants.NGHTTP2_STREAM_STATE_*`), `weight` (16), `sumDependencyWeight` (0), `localClose`, `remoteClose` and `localWindowSize`. During an event, it's the stream as the frame behind the event left it, as nghttp2 reports it to Node. It's `{}` before the stream opens and once it closes.
+  - **`state`,** as Node's (D-118, D-120): `state` (nghttp2's numbers, as `constants.NGHTTP2_STREAM_STATE_*`), `weight`, `sumDependencyWeight` (0), `localClose`, `remoteClose` and `localWindowSize`. The isolate works it out as nghttp2 holds it when the script looks, never from the network's state at that moment:
+    - **Before its HEADERS are written:** IDLE (1), with weight 0 and window 0. Node writes on the next turn of the event loop.
+    - **Then:** OPEN (2) with weight 16, and half-closed local (5, `localClose` 1) once END_STREAM has been written. `end()` doesn't change it until then.
+    - **The peer's END_STREAM** takes effect only after the handlers that showed it, as in Node: `remoteClose` is still 0 in `response`, `data` and `end`, and becomes 1 on the next turn (state 6 if our side is still open).
+    - **The window** goes down by each DATA frame the script receives. After a frame brings it to half, it refills before the next one, as nghttp2's WINDOW_UPDATE does.
+    - **`{}`** before the stream is submitted and once it has closed.
+  - **`ready` and `id`** come as the stream is submitted, as in Node, with the id nghttp2 would give (odd, in order). On a connected session that's inside `request()`, before a listener can be added.
+  - **Answers arrive on a later turn than the write they answer,** as over a network, however quickly the host answered.
   - **Request trailers (D-118):** with `waitForTrailers: true`, a request with a body emits `wantTrailers` once the body has gone, and `sendTrailers(headers)` ends the stream with them. Node's errors apply:
     - `ERR_HTTP2_TRAILERS_NOT_READY` before `wantTrailers`
     - `ERR_HTTP2_TRAILERS_ALREADY_SENT` on a second call
@@ -521,7 +528,7 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 - **Streams:** crypto classes aren't streams; `fetch` bodies and `files.stream` are async iterables, not Node streams. `fs` streams hold the whole file (32 MB).
 - **HTTP:** `req.socket` is a stand-in reporting the host's connection (D-114); agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused for `http`/`https` (`tls.connect` takes one); TLS cipher names are IANA's, not OpenSSL's.
 - **Sockets:** `ref`/`unref` change nothing, a job doesn't wait for open sockets, TLS sessions aren't reused, and over TLS `end()` closes (D-116).
-- **HTTP/2:** no server push, a `createConnection` socket replaced by the host's own connection (D-117), and `session.state.outboundQueueSize` not counting the WINDOW_UPDATEs Node queues during `data` (D-119).
+- **HTTP/2:** no server push, a `createConnection` socket replaced by the host's own connection (D-117), `session.state.outboundQueueSize` not counting the WINDOW_UPDATEs Node queues during `data` (D-119), and a large body's `stream.state.localWindowSize` per `data` event, which follows how the server cut its frames (D-120).
 - **Uncaught errors:** a throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` event listener, fails the job as it would end Node. So does a promise rejected with no handler by the end of the turn (D-110), unless `process.on('unhandledRejection')` has a listener; that one isn't a difference from Node.
 - **Approximate output:** `util.inspect` output and `assert`'s messages for structures.
 - **Compressed bytes** may differ from Node's (both are valid).

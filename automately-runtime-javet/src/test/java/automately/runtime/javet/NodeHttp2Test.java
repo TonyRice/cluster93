@@ -198,6 +198,36 @@ class NodeHttp2Test {
     }
 
     @Test
+    void streamStateFollowsWhatWasWrittenAndWhatTheScriptSaw() throws Exception {
+        JsonArray out = run("""
+                import http2 from 'node:http2';
+                const pick = (st) => st.state === undefined ? '{}' : `${st.state} ${st.localClose}${st.remoteClose} ${st.localWindowSize} ${st.weight}`;
+                export default () => new Promise((resolve) => {
+                  const seen = [];
+                  const s = http2.connect('http://127.0.0.1:%d', () => {
+                    const r = s.request({ ':method': 'POST', ':path': '/echo' });
+                    r.on('ready', () => seen.push('ready ' + pick(r.state)));
+                    seen.push('request() ' + pick(r.state) + ' id ' + r.id);
+                    setImmediate(() => {
+                      seen.push('next turn ' + pick(r.state));
+                      r.end('abc');
+                      seen.push('end() ' + pick(r.state));
+                      setImmediate(() => seen.push('written ' + pick(r.state)));
+                    });
+                    r.on('response', () => seen.push('response ' + pick(r.state)));
+                    r.on('data', () => seen.push('data ' + pick(r.state)));
+                    r.on('close', () => { seen.push('close ' + pick(r.state)); s.close(); resolve(seen); });
+                  });
+                });
+                """.formatted(clear.actualPort()));
+
+        // Idle until its HEADERS are written; local side closed once END_STREAM is; the window less what arrived
+        // ("POST /echo abc"). On a connected session 'ready' fires inside request(), before a listener can be added.
+        assertThat(out).containsExactly("request() 1 00 0 0 id 1", "next turn 2 00 65535 16", "end() 2 00 65535 16",
+                "written 5 10 65535 16", "response 5 10 65535 16", "data 5 10 65521 16", "close {}");
+    }
+
+    @Test
     void h2cAndRefusals() throws Exception {
         JsonArray out = run("""
                 import http2 from 'node:http2';

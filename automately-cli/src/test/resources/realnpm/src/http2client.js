@@ -139,6 +139,46 @@ export async function run() {
   out.closedSessionState = h2c.state;
   out.warnings = warnings;
 
+  // stream.state through a stream's life (D-120): written on the next turn, the peer's END_STREAM applied after the
+  // script saw it, the window less what arrived since the last WINDOW_UPDATE.
+  out.streamState = await new Promise((resolve) => {
+    const seen = [];
+    const pick = (st) => st.state === undefined ? '{}' : `${st.state} ${st.localClose}${st.remoteClose} ${st.localWindowSize} ${st.weight}`;
+    const s = http2.connect(process.env.TEST_H2C);
+    s.on('connect', () => {
+      const a = s.request({ ':method': 'POST', ':path': '/now' });
+      seen.push(['request()', pick(a.state), a.id, s.state.nextStreamID]);
+      a.on('ready', () => seen.push(['ready', pick(a.state), a.id]));
+      setImmediate(() => seen.push(['the next turn', pick(a.state)]));
+      a.on('response', () => seen.push(['response, our side open', pick(a.state)]));
+      a.on('data', (c) => seen.push(['data ' + c.length, pick(a.state)]));
+      a.on('end', () => {
+        seen.push(['end', pick(a.state)]);
+        setImmediate(() => {
+          seen.push(['the turn after end', pick(a.state)]);
+          a.end();
+          seen.push(['end() in that turn', pick(a.state)]);
+        });
+      });
+      a.on('close', () => {
+        seen.push(['close', pick(a.state)]);
+        const b = s.request({ ':path': '/big' });
+        seen.push(['second request()', b.id, s.state.nextStreamID]);
+        // How a large body's frames are cut depends on when the client's WINDOW_UPDATEs reach the server, and Node's
+        // 'data' chunks on TCP reads: the states are compared, and that the window stays in its bounds.
+        const states = new Set();
+        let inBounds = true;
+        b.on('data', () => {
+          const st = b.state;
+          states.add(`${st.state} ${st.localClose}${st.remoteClose} ${st.weight}`);
+          inBounds &&= st.localWindowSize > 0 && st.localWindowSize <= 65535;
+        });
+        b.on('end', () => seen.push(['big body', [...states], inBounds]));
+        b.on('close', () => { seen.push(['big close', pick(b.state)]); s.close(); resolve(seen); });
+      });
+    });
+  });
+
   // nghttp2's outbound queue: control frames submitted and not yet written, which Node does on the next turn.
   out.outboundQueue = await new Promise((resolve) => {
     const seen = [];
@@ -155,16 +195,19 @@ export async function run() {
         q('the next turn', s);
         const r = s.request({ ':path': '/json' });
         q('request()', s);
-        r.on('response', () => q('response', s));
+        // While input is handled, Node's count also holds what that input queued (an ACK, a WINDOW_UPDATE), which
+        // under load varies: from there, what the script adds is compared.
+        r.on('response', () => seen.push(['response', s.state.outboundQueueSize >= 0]));
         r.resume();
         r.on('close', () => {
-          q('stream closed', s);
+          const base = s.state.outboundQueueSize;
+          const added = (label) => seen.push([label, s.state.outboundQueueSize - base]);
           s.settings({ initialWindowSize: 70000 });
-          q('settings()', s);
+          added('settings() adds');
           s.request({ ':path': '/json' }).close(NGHTTP2_CANCEL);
-          q('request() closed in the same turn', s);
+          added('and a request() closed in the same turn');
           s.ping(() => {});
-          q('ping()', s);
+          added('and ping()');
           setImmediate(() => {
             q('the turn after', s);
             const slow = s.request({ ':path': '/slow' });

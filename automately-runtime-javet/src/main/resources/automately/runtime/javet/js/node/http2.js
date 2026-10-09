@@ -418,6 +418,14 @@ export class ClientHttp2Stream extends Duplex {
     this._endStream = options.endStream;
     this._waitForTrailers = Boolean(options.waitForTrailers);
     this._trailersReady = false;
+    // nghttp2's view of the stream, kept as Node shows it (D-120): the turn its HEADERS were submitted and the turn
+    // END_STREAM was, each written when the session next writes; the DATA the script has had since the last
+    // WINDOW_UPDATE; and the peer's END_STREAM, which takes effect after the script has seen it.
+    this._submitTurn = null;
+    this._endTurn = null;
+    this._unacknowledged = 0;
+    this._windowUpdated = false;
+    this._remoteClosed = false;
     // A request with no body: the writable side ends at once, as Node ends it.
     if (this._endStream) this.end();
     if (options.signal) {
@@ -431,29 +439,86 @@ export class ClientHttp2Stream extends Duplex {
   // Node's Http2Stream has its own: closed once RST_STREAM went or came, or it ended both ways.
   get closed() { return this._closed; }
   get bufferSize() { return this.writableLength; }
-  /** Node's stream.state, from the host's view of the stream; {} before it opens and once it's gone, as Node's. */
-  get state() { return this._id === null || this.destroyed ? {} : internals.streamState(this._id); }
+  /**
+   * Node's stream.state, as nghttp2 holds it when the script looks: idle until its HEADERS are written, its local
+   * side closed once END_STREAM is written, its remote side once the script has seen the peer's END_STREAM, and the
+   * window less the DATA received since the last WINDOW_UPDATE. {} before it's submitted and once it's closed.
+   */
+  get state() {
+    if (this._submitTurn === null || this.destroyed || this._closed) return {};
+    const written = this.session._writeTurn;
+    if (written <= this._submitTurn) {
+      return { state: constants.NGHTTP2_STREAM_STATE_IDLE, weight: 0, sumDependencyWeight: 0, localClose: 0, remoteClose: 0, localWindowSize: 0 };
+    }
+    const localClose = this._endTurn !== null && written > Math.max(this._endTurn, this._submitTurn) ? 1 : 0;
+    const remoteClose = this._remoteClosed ? 1 : 0;
+    const state = localClose && remoteClose ? constants.NGHTTP2_STREAM_STATE_CLOSED
+      : localClose ? constants.NGHTTP2_STREAM_STATE_HALF_CLOSED_LOCAL
+        : remoteClose ? constants.NGHTTP2_STREAM_STATE_HALF_CLOSED_REMOTE : constants.NGHTTP2_STREAM_STATE_OPEN;
+    return { state, weight: 16, sumDependencyWeight: 0, localClose, remoteClose,
+      localWindowSize: this.session._streamWindow() - this._unacknowledged };
+  }
+
+  /** The session submitted the HEADERS: Node's stream has its id, and is ready, from now. */
+  _submitted(streamId) {
+    this._submitTurn = this.session._writeTurn;
+    this._streamId = streamId;
+    this.pending = false;
+    if (this._endStream) this._endTurn = this._submitTurn;
+    // As Node's: at once, so on a connected session it's over before request() returns.
+    this.emit("ready");
+  }
+
+  /** END_STREAM is submitted; it's written with the session's next write. */
+  _ending() {
+    if (this._endTurn !== null) return;
+    this._endTurn = this.session._writeTurn;
+    this.session._scheduleWrite();
+  }
+
+  /**
+   * A DATA frame reached the script. Once half the window has arrived nghttp2 sends WINDOW_UPDATE, after the frame's
+   * callbacks: the script sees the window it filled, and the next frame the refilled one.
+   */
+  _received(length) {
+    this.session._inputArrived();
+    if (this._windowUpdated) {
+      this._unacknowledged = 0;
+      this._windowUpdated = false;
+    }
+    this._unacknowledged += length;
+    if (this._unacknowledged >= Math.floor(this.session._streamWindow() / 2)) this._windowUpdated = true;
+  }
+
+  /** The script has seen the peer's END_STREAM; nghttp2 applies it after the callbacks that showed it. */
+  _remoteEnded() {
+    globalThis.setImmediate(() => { this._remoteClosed = true; });
+  }
 
   /** The host opened the stream: its headers have gone. */
   _opened(id, streamId) {
     this._id = id;
+    // The connection numbers streams in the order they're made, as the session predicted.
     this._streamId = streamId;
-    this.pending = false;
-    this.emit("ready");
     for (const go of this._waiting.splice(0)) go();
-    internals.response(id).then(surfaced(({ rawHeaders, status, flags, body }) => {
-      if (this.destroyed) { body.cancel(); return; }
-      const headers = toHeaderObject(rawHeaders);
-      this._iterator = body[Symbol.asyncIterator]();
-      this._body = body;
-      const informational = status >= 100 && status < 200;
-      // The HEADERS frame's own flags, as nghttp2 reports them to Node.
-      this.endAfterHeaders = Boolean(flags & constants.NGHTTP2_FLAG_END_STREAM);
-      this._touch();
-      this.emit(informational ? "headers" : "response", headers, flags, rawHeaders);
-      if (this._wantsRead) { this._wantsRead = false; this._pull(); }
-    }), surfaced((err) => this._fail(err)));
+    // The answer comes after what asked for it was written, as over a network: never in the turn that queued it.
+    internals.response(id).then((head) => this.session._afterWrite(() => this._answered(head)), surfaced((err) => this._fail(err)));
   }
+
+  _answered({ rawHeaders, status, flags, body }) {
+    if (this.destroyed) { body.cancel(); return; }
+    const headers = toHeaderObject(rawHeaders);
+    this._iterator = body[Symbol.asyncIterator]();
+    this._body = body;
+    this.session._inputArrived();
+    const informational = status >= 100 && status < 200;
+    // The HEADERS frame's own flags, as nghttp2 reports them to Node.
+    this.endAfterHeaders = Boolean(flags & constants.NGHTTP2_FLAG_END_STREAM);
+    this._touch();
+    this.emit(informational ? "headers" : "response", headers, flags, rawHeaders);
+    if (this._wantsRead) { this._wantsRead = false; this._pull(); }
+  }
+
 
   _whenOpen(go) {
     if (this._id !== null) go();
@@ -467,6 +532,7 @@ export class ClientHttp2Stream extends Duplex {
       this._pulling = false;
       if (done) { this._finish(); return; }
       this._touch();
+      this._received(value.byteLength);
       this.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
     }), surfaced((err) => { this._pulling = false; this._fail(err); }));
   }
@@ -474,7 +540,9 @@ export class ClientHttp2Stream extends Duplex {
   /** The body has ended: trailers first, as Node emits them, then the end. */
   _finish() {
     internals.trailers(this._id).then(surfaced(({ rawTrailers, flags }) => {
+      this.session._inputArrived();
       if (rawTrailers.length) this.emit("trailers", toHeaderObject(rawTrailers), flags);
+      this._remoteEnded();
       this.push(null);
     }), surfaced(() => this.push(null)));
   }
@@ -502,6 +570,12 @@ export class ClientHttp2Stream extends Duplex {
 
   _write(chunk, encoding, callback) {
     this._whenOpen(() => internals.write(this._id, chunk).then(surfaced(() => { this._touch(); callback(); }), surfaced((err) => callback(err))));
+  }
+
+  end(...args) {
+    // END_STREAM is submitted as end() is called (after the DATA before it), not when the writes are done here.
+    if (!this._waitForTrailers && !this._endStream && !this.writableEnded) this._ending();
+    return super.end(...args);
   }
 
   _final(callback) {
@@ -534,6 +608,7 @@ export class ClientHttp2Stream extends Duplex {
     this._trailersReady = false;
     // As Node's: with no trailers, an empty DATA frame ends the stream instead of a HEADERS frame.
     if (Object.keys(sent).length) this.session._queueFrame();
+    this._ending();
     const sending = Object.keys(sent).length ? internals.sendTrailers(this._id, sent) : internals.end(this._id);
     sending.then(surfaced(() => this._touch()), surfaced((err) => this._fail(err)));
   }
@@ -547,6 +622,7 @@ export class ClientHttp2Stream extends Duplex {
       internals.reset(this._id, this.rstCode === constants.NGHTTP2_NO_ERROR && !this.readableEnded ? constants.NGHTTP2_CANCEL : this.rstCode);
     }
     this._body?.cancel();
+    if (this._id !== null) internals.release(this._id);
     this.session._streams.delete(this);
     callback(err);
     nextTick(() => { this.emit("close"); this.session._maybeClose(); });
@@ -644,6 +720,12 @@ export class ClientHttp2Session extends EventEmitter {
     this._outbound = 0;
     this._unsentHeaders = new Set();
     this._flushScheduled = false;
+    // Answers waiting for the write they answer, and those whose write has gone, handed over on the next turn.
+    this._afterWrites = [];
+    this._answers = null;
+    // Node's writes: one at the end of each turn with something to send. Streams' states count them (D-120).
+    this._writeTurn = 0;
+    this._nextStreamID = 1;
     this._waiting = [];
     this._closing = false;
     this._timer = null;
@@ -659,22 +741,59 @@ export class ClientHttp2Session extends EventEmitter {
   /** Node's session.state, from the host's connection, with the outbound queue as Node's; {} until connected and once destroyed. */
   get state() {
     if (this._id === null || this.destroyed) return {};
-    return { ...internals.sessionState(this._id), outboundQueueSize: this._outbound };
+    return { ...internals.sessionState(this._id), nextStreamID: this._nextStreamID, outboundQueueSize: this._outbound };
+  }
+
+  /** The window each stream starts with: ours, as the peer acknowledged it. */
+  _streamWindow() {
+    return this.localSettings.initialWindowSize ?? 65535;
   }
 
   /** A control frame joins the queue; Node writes the queue out on the next turn, and so it empties then. */
   _queueFrame(stream) {
     this._outbound++;
     if (stream) this._unsentHeaders.add(stream);
+    this._scheduleWrite();
+  }
+
+  /** Something waits to be written: Node writes it at the end of the turn. */
+  _scheduleWrite() {
     if (this._flushScheduled) return;
     this._flushScheduled = true;
     globalThis.setImmediate(() => {
       this._flushScheduled = false;
       this._written();
+      // Answers to what was just written come in on a later turn, as from a network: after whatever else this turn
+      // queued, and never before it, however quickly the host answered.
+      if (!this._answers) {
+        this._answers = [];
+        globalThis.setImmediate(() => {
+          const answers = this._answers;
+          this._answers = null;
+          for (const go of answers) surfaced(go)();
+        });
+      }
+      this._answers.push(...this._afterWrites.splice(0));
     });
   }
 
+  /** Runs `go` once what's queued now has been written and a turn has passed; at once if nothing is waiting. */
+  _afterWrite(go) {
+    if (this._flushScheduled) this._afterWrites.push(go);
+    else if (this._answers) this._answers.push(go);
+    else surfaced(go)();
+  }
+
+  /**
+   * Something came from the peer. Over a network it can only answer what was written, and Node writes before it reads:
+   * what this turn queued has gone.
+   */
+  _inputArrived() {
+    if (this._flushScheduled) this._written();
+  }
+
   _written() {
+    this._writeTurn++;
     this._outbound = 0;
     this._unsentHeaders.clear();
   }
@@ -725,6 +844,7 @@ export class ClientHttp2Session extends EventEmitter {
     try {
       for await (const chunk of this._hostEvents) {
         const event = JSON.parse(Buffer.from(chunk).toString("utf8"));
+        this._inputArrived();
         if (event.type === "remoteSettings") {
           this.remoteSettings = event.settings;
           this._queueFrame();
@@ -773,6 +893,9 @@ export class ClientHttp2Session extends EventEmitter {
     this._whenConnected(() => {
       if (stream.destroyed) return;
       this._queueFrame(stream);
+      // nghttp2 numbers a stream as it's submitted: odd, in order.
+      stream._submitted(this._nextStreamID);
+      this._nextStreamID += 2;
       internals.request(this._id, sent, Boolean(endStream)).then(surfaced(({ id, streamId }) => {
         if (stream.destroyed) { internals.reset(id, constants.NGHTTP2_CANCEL); return; }
         stream._opened(id, streamId);
