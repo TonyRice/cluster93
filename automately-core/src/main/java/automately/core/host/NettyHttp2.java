@@ -167,6 +167,7 @@ final class NettyHttp2 {
                 .put("localWindowSize", window)
                 .put("lastProcStreamID", connection.remote().lastStreamCreated())
                 .put("remoteWindowSize", remote.windowSize(root))
+                // Netty's unflushed writes. The isolate reports nghttp2's queue in its place, which it keeps itself (D-119).
                 .put("outboundQueueSize", outbound == null ? 0 : outbound.size())
                 .put("deflateDynamicTableSize", hpackSize(handler.encoder().frameWriter(), "headersEncoder", "hpackEncoder"))
                 .put("inflateDynamicTableSize", hpackSize(frameReader(), "headersDecoder", "hpackDecoder"));
@@ -178,7 +179,8 @@ final class NettyHttp2 {
      */
     JsonObject streamState(int streamId) {
         JsonObject live = liveState(streamId);
-        if (live != null) {
+        // A stream Netty has closed but not yet let go is past anything a Node script sees: its last frame says it.
+        if (live != null && live.getInteger("state") != nghttp2State(Http2Stream.State.CLOSED)) {
             return live;
         }
         JsonObject last = lastState.get(streamId);

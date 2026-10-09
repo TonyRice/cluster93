@@ -533,6 +533,7 @@ export class ClientHttp2Stream extends Duplex {
     this.sentTrailers = copy;
     this._trailersReady = false;
     // As Node's: with no trailers, an empty DATA frame ends the stream instead of a HEADERS frame.
+    if (Object.keys(sent).length) this.session._queueFrame();
     const sending = Object.keys(sent).length ? internals.sendTrailers(this._id, sent) : internals.end(this._id);
     sending.then(surfaced(() => this._touch()), surfaced((err) => this._fail(err)));
   }
@@ -541,8 +542,10 @@ export class ClientHttp2Stream extends Duplex {
     this._clearTimer();
     this._closed = true;
     if (this.rstCode === undefined) this.rstCode = err ? constants.NGHTTP2_INTERNAL_ERROR : constants.NGHTTP2_NO_ERROR;
-    if (this._id !== null && !this.readableEnded) internals.reset(this._id, this.rstCode === constants.NGHTTP2_NO_ERROR && !this.readableEnded
-      ? constants.NGHTTP2_CANCEL : this.rstCode);
+    if (this._id !== null && !this.readableEnded) {
+      this._queueReset();
+      internals.reset(this._id, this.rstCode === constants.NGHTTP2_NO_ERROR && !this.readableEnded ? constants.NGHTTP2_CANCEL : this.rstCode);
+    }
     this._body?.cancel();
     this.session._streams.delete(this);
     callback(err);
@@ -557,9 +560,17 @@ export class ClientHttp2Stream extends Duplex {
     if (callback) this.once("close", callback);
     if (this._closed) return;
     this.rstCode = code;
+    this._queueReset();
     if (this._id !== null) internals.reset(this._id, code);
     this._body?.cancel();
     this.destroy();
+  }
+
+  /** RST_STREAM joins the session's queue once; not when the HEADERS haven't gone yet, as nghttp2 then drops both. */
+  _queueReset() {
+    if (this._resetQueued) return;
+    this._resetQueued = true;
+    if (!this.session._unsentHeaders.has(this)) this.session._queueFrame();
   }
 
   /** Ignored, as in Node 26, which no longer signals priorities. */
@@ -628,6 +639,11 @@ export class ClientHttp2Session extends EventEmitter {
     this._id = null;
     this._info = null;
     this._streams = new Set();
+    // nghttp2's outbound queue as Node reports it: control frames (not DATA) submitted since Node last wrote, which it
+    // does on the next turn of the event loop. The streams whose HEADERS are among them.
+    this._outbound = 0;
+    this._unsentHeaders = new Set();
+    this._flushScheduled = false;
     this._waiting = [];
     this._closing = false;
     this._timer = null;
@@ -640,8 +656,28 @@ export class ClientHttp2Session extends EventEmitter {
     if (this.encrypted) this.originSet = [`${this._scheme}://${this._authority}`];
   }
 
-  /** Node's session.state, from the host's connection; {} until connected and once destroyed. */
-  get state() { return this._id === null || this.destroyed ? {} : internals.sessionState(this._id); }
+  /** Node's session.state, from the host's connection, with the outbound queue as Node's; {} until connected and once destroyed. */
+  get state() {
+    if (this._id === null || this.destroyed) return {};
+    return { ...internals.sessionState(this._id), outboundQueueSize: this._outbound };
+  }
+
+  /** A control frame joins the queue; Node writes the queue out on the next turn, and so it empties then. */
+  _queueFrame(stream) {
+    this._outbound++;
+    if (stream) this._unsentHeaders.add(stream);
+    if (this._flushScheduled) return;
+    this._flushScheduled = true;
+    globalThis.setImmediate(() => {
+      this._flushScheduled = false;
+      this._written();
+    });
+  }
+
+  _written() {
+    this._outbound = 0;
+    this._unsentHeaders.clear();
+  }
 
   _connect(tlsOptions) {
     const request = { authority: `${this._scheme}://${this._authority.includes(":") ? this._authority : `${this._authority}:${this.encrypted ? 443 : 80}`}` };
@@ -668,10 +704,19 @@ export class ClientHttp2Session extends EventEmitter {
       }
       this._listen();
       this._touch();
+      // The client's SETTINGS are queued as Node connects; the peer's arrive after, and their ACK joins the queue.
+      this._queueFrame();
       // Node passes the TLS socket itself; session.socket is a proxy over it, so the two differ.
       this.emit("connect", this, new SocketProxy(this));
-      this.emit("remoteSettings", { ...settings });
       for (const go of this._waiting.splice(0)) go();
+      // The peer's SETTINGS arrive on the next turn, before anything else from it, as input read after Node has written
+      // what was queued: the queue then holds their ACK. (Node's own count here depends on when they arrive.)
+      globalThis.setImmediate(surfaced(() => {
+        if (this.destroyed) return;
+        this._written();
+        this._queueFrame();
+        this.emit("remoteSettings", { ...settings });
+      }));
     }), surfaced((err) => this.destroy(sessionError(err, this._host))));
   }
 
@@ -682,6 +727,7 @@ export class ClientHttp2Session extends EventEmitter {
         const event = JSON.parse(Buffer.from(chunk).toString("utf8"));
         if (event.type === "remoteSettings") {
           this.remoteSettings = event.settings;
+          this._queueFrame();
           surfaced(() => this.emit("remoteSettings", { ...event.settings }))();
         } else if (event.type === "goaway") {
           surfaced(() => this.emit("goaway", event.errorCode, event.lastStreamID, Buffer.from(event.opaqueData, "base64")))();
@@ -726,6 +772,7 @@ export class ClientHttp2Session extends EventEmitter {
     this._streams.add(stream);
     this._whenConnected(() => {
       if (stream.destroyed) return;
+      this._queueFrame(stream);
       internals.request(this._id, sent, Boolean(endStream)).then(surfaced(({ id, streamId }) => {
         if (stream.destroyed) { internals.reset(id, constants.NGHTTP2_CANCEL); return; }
         stream._opened(id, streamId);
@@ -741,9 +788,12 @@ export class ClientHttp2Session extends EventEmitter {
     }
     // Node's default payload: the time it was sent, as 8 bytes.
     const bytes = payload === undefined ? (() => { const b = Buffer.alloc(8); b.writeDoubleLE(Date.now()); return b; })() : Buffer.from(payload);
-    this._whenConnected(() => internals.ping(this._id, bytes).then(surfaced(({ duration, payload: ack }) => {
-      if (callback) callback(null, duration, Buffer.from(ack, "base64"));
-    }), surfaced((err) => callback?.(sessionError(err, this._host)))));
+    this._whenConnected(() => {
+      this._queueFrame();
+      internals.ping(this._id, bytes).then(surfaced(({ duration, payload: ack }) => {
+        if (callback) callback(null, duration, Buffer.from(ack, "base64"));
+      }), surfaced((err) => callback?.(sessionError(err, this._host))));
+    });
     return true;
   }
 
@@ -753,16 +803,22 @@ export class ClientHttp2Session extends EventEmitter {
     }
     this.pendingSettingsAck = true;
     const started = Date.now();
-    this._whenConnected(() => internals.settings(this._id, settings).then(surfaced(() => {
-      this.pendingSettingsAck = false;
-      Object.assign(this.localSettings, settings);
-      this.emit("localSettings", { ...this.localSettings });
-      callback?.(null, { ...this.localSettings }, Date.now() - started);
-    }), surfaced((err) => { this.pendingSettingsAck = false; callback?.(err); })));
+    this._whenConnected(() => {
+      this._queueFrame();
+      internals.settings(this._id, settings).then(surfaced(() => {
+        this.pendingSettingsAck = false;
+        Object.assign(this.localSettings, settings);
+        this.emit("localSettings", { ...this.localSettings });
+        callback?.(null, { ...this.localSettings }, Date.now() - started);
+      }), surfaced((err) => { this.pendingSettingsAck = false; callback?.(err); }));
+    });
   }
 
   goaway(code = constants.NGHTTP2_NO_ERROR, lastStreamID = 0, opaqueData) {
-    this._whenConnected(() => internals.goaway(this._id, code, lastStreamID, opaqueData === undefined ? undefined : Buffer.from(opaqueData)));
+    this._whenConnected(() => {
+      this._queueFrame();
+      internals.goaway(this._id, code, lastStreamID, opaqueData === undefined ? undefined : Buffer.from(opaqueData));
+    });
   }
 
   /** Stops new streams, and closes once the open ones are done, as Node's close(). */

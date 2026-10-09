@@ -165,6 +165,39 @@ class NodeHttp2Test {
     }
 
     @Test
+    void theOutboundQueueIsNghttp2sAsNodeReportsIt() throws Exception {
+        JsonArray out = run("""
+                import http2 from 'node:http2';
+                export default () => new Promise((resolve) => {
+                  const seen = [];
+                  const q = (s) => seen.push(s.state.outboundQueueSize);
+                  const s = http2.connect('http://127.0.0.1:%d');
+                  s.once('remoteSettings', () => q(s));
+                  s.on('connect', () => {
+                    q(s);
+                    setImmediate(() => {
+                      q(s);
+                      const r = s.request({ ':path': '/hello' });
+                      q(s);
+                      r.resume();
+                      r.on('close', () => {
+                        s.settings({ initialWindowSize: 70000 });
+                        s.request({ ':path': '/hello' }).close(http2.constants.NGHTTP2_CANCEL);
+                        s.ping(() => {});
+                        q(s);
+                        setImmediate(() => { q(s); s.destroy(); resolve(seen); });
+                      });
+                    });
+                  });
+                });
+                """.formatted(clear.actualPort()));
+
+        // connect: our SETTINGS; next turn: written; request: HEADERS; remoteSettings: their ACK alone;
+        // SETTINGS + HEADERS + PING (a stream closed before its HEADERS went adds no RST_STREAM); then written.
+        assertThat(out).containsExactly(1, 0, 1, 1, 3, 0);
+    }
+
+    @Test
     void h2cAndRefusals() throws Exception {
         JsonArray out = run("""
                 import http2 from 'node:http2';

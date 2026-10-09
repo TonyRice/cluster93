@@ -26,6 +26,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## `http2` session's outbound queue as Node's (2026-10-09)
+
+### Fixed
+- **`session.state.outboundQueueSize` is now nghttp2's queue, as Node reports it** (D-119): control frames submitted this turn and not yet written. The isolate keeps the queue and empties it on the next turn, as Node does. **Why:** it was Netty's unflushed writes, 0 where Node shows 1 or more. Only the WINDOW_UPDATEs during `data`, whose count depends on TCP even in Node, aren't counted.
+- **`stream.state` during `response` under CPU load** could report a closed stream (7) where Node shows 5. **Why:** Netty had closed it but not let it go yet; the frame's snapshot answers now.
+
 ## HTTP/2 as Node 26 has it: trailers, state, priorities, real flags (2026-10-09)
 
 ### Added

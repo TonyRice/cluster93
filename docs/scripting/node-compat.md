@@ -414,6 +414,12 @@ Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts
   - **Events:** `connect`, `remoteSettings`, `localSettings`, `goaway`, `close`, `error`, `timeout`.
   - **State:** `alpnProtocol` (`h2` or `h2c`), `encrypted`, `type`, `closed`, `destroyed`, `connecting`, `localSettings`, `remoteSettings`, `originSet`, `pendingSettingsAck`, and `socket` (the connection's addresses and TLS details).
   - **`state`,** as Node's (D-118), read from the connection: `effectiveLocalWindowSize`, `effectiveRecvDataLength`, `nextStreamID`, `localWindowSize`, `lastProcStreamID`, `remoteWindowSize`, `outboundQueueSize`, and the HPACK tables' sizes (`deflateDynamicTableSize`, `inflateDynamicTableSize`). It's `{}` until connected and once destroyed.
+  - **`outboundQueueSize` is nghttp2's queue, as Node reports it (D-119):** control frames (HEADERS, SETTINGS, PING, GOAWAY, RST_STREAM, trailers; not DATA) submitted and not yet written. Node writes them out on the next turn of the event loop, and the isolate keeps the same queue with the same flush:
+    - **At `connect`:** 1, the client's SETTINGS.
+    - **After `request()`:** 1 more, its HEADERS, until the next turn.
+    - **At `remoteSettings`:** their ACK.
+    - **Closing a stream whose HEADERS haven't gone:** adds nothing.
+    - **Where it can still differ:** inside `data` handlers, Node's count rises and falls with the WINDOW_UPDATEs nghttp2 queues, and that depends on how TCP splits the bytes into reads. It isn't modelled, so the isolate shows 0 there. At `remoteSettings`, Node shows 1 or 2 depending on whether the peer's SETTINGS arrive before or after it wrote that turn's frames; the isolate shows them arriving after.
 - **`ClientHttp2Stream`,** a `Duplex`:
   - **Events:** `response` (headers with `:status`, the HEADERS frame's real flags, raw headers), `trailers` (with its frame's flags), `wantTrailers`, `data`, `end`, `close` and `error`.
   - **State:** `id`, `rstCode`, `sentHeaders`, `sentTrailers`, `pending`, `closed`.
@@ -436,7 +442,6 @@ Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts
 - **`createConnection`:** http2-wrapper (got's `http2: true`) opens its own TLS socket and hands it to `http2.connect`. If the socket is one of the isolate's own `net`/`tls` sockets, it already went through the egress rules, so the session closes it and opens its own connection to the same origin. Anything else is refused, since it would bypass the rules.
 - **Differs:**
   - **Server push is off** (`enablePush: false`), as browsers have it now.
-  - **`outboundQueueSize`** counts the connection's unflushed writes in Netty, not nghttp2's frame queue, so right after connecting it's 0 where Node shows 1.
 - **Refused:** `CONNECT` tunnels, `pfx`, and servers (`createServer`, `createSecureServer`). HTTP/2 servers never run on the cluster's nodes; the ingress serves clients.
 - **Proven with:** a fixture against real Node over TLS and h2c, and got with `http2: true`. The fixture covers:
   - headers, bodies, parallel streams, response trailers, every kind of reset, ping, settings and refusals
@@ -516,7 +521,7 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 - **Streams:** crypto classes aren't streams; `fetch` bodies and `files.stream` are async iterables, not Node streams. `fs` streams hold the whole file (32 MB).
 - **HTTP:** `req.socket` is a stand-in reporting the host's connection (D-114); agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused for `http`/`https` (`tls.connect` takes one); TLS cipher names are IANA's, not OpenSSL's.
 - **Sockets:** `ref`/`unref` change nothing, a job doesn't wait for open sockets, TLS sessions aren't reused, and over TLS `end()` closes (D-116).
-- **HTTP/2:** no server push, a `createConnection` socket replaced by the host's own connection (D-117), and `session.state.outboundQueueSize` counting Netty's writes (D-118).
+- **HTTP/2:** no server push, a `createConnection` socket replaced by the host's own connection (D-117), and `session.state.outboundQueueSize` not counting the WINDOW_UPDATEs Node queues during `data` (D-119).
 - **Uncaught errors:** a throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` event listener, fails the job as it would end Node. So does a promise rejected with no handler by the end of the turn (D-110), unless `process.on('unhandledRejection')` has a listener; that one isn't a difference from Node.
 - **Approximate output:** `util.inspect` output and `assert`'s messages for structures.
 - **Compressed bytes** may differ from Node's (both are valid).

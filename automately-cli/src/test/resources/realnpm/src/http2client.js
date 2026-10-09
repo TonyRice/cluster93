@@ -77,7 +77,7 @@ export async function run() {
   const h2c = (await session(process.env.TEST_H2C)).s;
   const fresh = h2c.state;
   out.sessionState = { keys: Object.keys(fresh), nextStreamID: fresh.nextStreamID, lastProcStreamID: fresh.lastProcStreamID,
-    effectiveRecvDataLength: fresh.effectiveRecvDataLength };
+    effectiveRecvDataLength: fresh.effectiveRecvDataLength, outboundQueueSize: fresh.outboundQueueSize };
   out.uploadTrailers = await new Promise((resolve) => {
     const events = [];
     const req = h2c.request({ ':method': 'POST', ':path': '/request-trailers' }, { waitForTrailers: true });
@@ -138,6 +138,49 @@ export async function run() {
   await new Promise((resolve) => h2c.on('close', resolve));
   out.closedSessionState = h2c.state;
   out.warnings = warnings;
+
+  // nghttp2's outbound queue: control frames submitted and not yet written, which Node does on the next turn.
+  out.outboundQueue = await new Promise((resolve) => {
+    const seen = [];
+    const q = (label, s) => seen.push([label, s.state.outboundQueueSize]);
+    const s = http2.connect(process.env.TEST_H2C);
+    q('before connect', s);
+    // Node's count here depends on whether the peer's SETTINGS arrive before or after it wrote this turn's frames
+    // (1 or 2 in runs against the same server): what holds is that their ACK is queued.
+    s.once('remoteSettings', () => seen.push(['remoteSettings: their ACK queued', s.state.outboundQueueSize >= 1]));
+    s.on('connect', () => {
+      q('connect', s);
+      queueMicrotask(() => q('connect, then a microtask', s));
+      setImmediate(() => {
+        q('the next turn', s);
+        const r = s.request({ ':path': '/json' });
+        q('request()', s);
+        r.on('response', () => q('response', s));
+        r.resume();
+        r.on('close', () => {
+          q('stream closed', s);
+          s.settings({ initialWindowSize: 70000 });
+          q('settings()', s);
+          s.request({ ':path': '/json' }).close(NGHTTP2_CANCEL);
+          q('request() closed in the same turn', s);
+          s.ping(() => {});
+          q('ping()', s);
+          setImmediate(() => {
+            q('the turn after', s);
+            const slow = s.request({ ':path': '/slow' });
+            slow.on('error', () => {});
+            setImmediate(() => {
+              slow.close(NGHTTP2_CANCEL);
+              q('close() on a stream already sent', s);
+              s.goaway(0);
+              q('goaway()', s);
+              setImmediate(() => { q('last turn', s); s.destroy(); resolve(seen); });
+            });
+          });
+        });
+      });
+    });
+  });
 
   out.untrusted = (await session(process.env.TEST_H2)).error;
   out.wrongName = (await session(process.env.TEST_H2.replace('localhost', '127.0.0.1'), { ca })).error;

@@ -437,6 +437,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **Request trailers** go through Vert.x's own HTTP/2 stream (`writeHeaders(trailers, end)`), so Vert.x knows the request ended. A frame written past it on the Netty encoder left the response never ending.
 - **`state`** comes from Netty's connection, flow controllers and HPACK tables. A stream's state during an event is a snapshot taken as its frame was read, since Netty has often closed the stream by the time the script runs.
 - **Priorities, as Node 26:** RFC 9113 deprecated them, so nothing is sent and Node's DEP0194 warning is emitted once.
+- **`outboundQueueSize` (D-119)** is nghttp2's queue of unwritten control frames. The isolate keeps it and empties it on the next turn, as Node does.
 
 ## 13. WebSockets (accepted)
 - **The ingress** passes `Upgrade: websocket` through to the service's node, then its internal endpoint. Frames are bridged both ways with backpressure. Today it strips `Upgrade`, so WebSockets don't pass.

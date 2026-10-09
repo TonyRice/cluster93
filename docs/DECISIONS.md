@@ -2149,5 +2149,34 @@ It's written for people, because the console will show the same response as a "N
   - **The fix:** each ALPN list gets its own trust-all options instance (at most 64 kept; past that the map starts over, which only costs new contexts). `SocketClientTest` checks `h2`, then none, then `http/1.1`, then `h2` again on one client.
 - **`http.request` takes its expected protocol from its agent, or else from `_defaultAgent`, as Node's `ClientRequest` does.** http2-wrapper falls back to HTTP/1.1 that way.
 
-**Differs:** `session.state.outboundQueueSize` counts Netty's unflushed writes, not nghttp2's frame queue.
+**Differs:** `session.state.outboundQueueSize` counts Netty's unflushed writes, not nghttp2's frame queue. (Closed by D-119.)
+
+### D-119 — `session.state.outboundQueueSize` is nghttp2's queue, kept in the isolate
+**Date:** 2026-10-09 · **Status:** Accepted. Closes D-118's remaining difference (Tony: "lets address the remaining difference").
+
+**What Node's number is,** found by probing Node 26.8.1:
+- **It's nghttp2's outbound queue:** control frames (HEADERS, SETTINGS, PING, GOAWAY, RST_STREAM, trailers; not DATA) submitted and not yet written. Node writes them out on the next turn of its event loop, so the count goes back to 0 then.
+- **What it shows at each point:**
+  - 1 at `connect` (the client's SETTINGS)
+  - 1 more for each `request()`, `settings()`, `ping()` and `goaway()` in the same turn
+  - nothing for closing a stream whose HEADERS haven't gone (nghttp2 drops both)
+  - one more for closing one that's already open
+  - the peer's SETTINGS ACK at `remoteSettings`
+- **Two places where it isn't deterministic, even in Node:**
+  - **Inside `data` handlers:** the WINDOW_UPDATEs nghttp2 queues show (0, 1, 2, 2, 1, …), following how TCP splits the bytes into reads.
+  - **At `remoteSettings`:** 1 or 2 against the same server, depending on whether the peer's SETTINGS arrive before or after Node wrote that turn's frames.
+
+**Decision:**
+- **The isolate keeps the same queue with Node's flush:** each control frame the script submits adds 1, and a `setImmediate` empties it.
+  - **Why this isn't a made-up number:** those frames really are still in the isolate then, on their way to the host.
+- **The peer's SETTINGS are delivered on the turn after `connect`,** as input read after that turn's frames were written. They come before anything else from the peer, as on the wire.
+- **WINDOW_UPDATEs during `data` aren't modelled,** since even Node's value there depends on how reads are split. The isolate shows 0, as Node does once it has written.
+- **The host still reports Netty's unflushed writes** in its own `state`; the isolate puts nghttp2's queue in its place.
+
+**Also fixed:** under CPU load, `stream.state` could read state 7 (CLOSED) during `response`, where Node shows 5. Netty had closed the stream but not yet let it go. A stream in that state now answers with its last frame's snapshot (D-118), since a Node script never sees one.
+
+**Tested:**
+- **`NodeHttp2Test` (5):** the queue through connect, a request, the settings ACK, and several frames in one turn.
+- **`RealNpmPackagesTest`'s `http2client`:** compares 14 points of the queue with real Node. At `remoteSettings` it compares only that the ACK is queued, since Node's own value there varies.
+- **Under load:** both suites pass 4 times out of 4 under full CPU load.
 
