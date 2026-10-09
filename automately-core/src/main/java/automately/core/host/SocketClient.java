@@ -219,8 +219,10 @@ public final class SocketClient {
     static ClientSSLOptions sslOptions(JsonObject tls) {
         // The handshake always completes; the chain is judged afterwards (ConnectionInfo), so a refusal has Node's code,
         // and nothing the script wrote has gone yet. The host name is checked by the script's tls.checkServerIdentity.
+        JsonArray alpn = tls.getJsonArray("ALPNProtocols");
+        List<String> protocols = alpn == null ? List.of() : alpn.stream().map(String::valueOf).toList();
         ClientSSLOptions options = new ClientSSLOptions()
-                .setTrustAll(true)
+                .setTrustOptions(trustAll(protocols))
                 .setHostnameVerificationAlgorithm("")
                 .setSslHandshakeTimeout(CONNECT_TIMEOUT_MS).setSslHandshakeTimeoutUnit(TimeUnit.MILLISECONDS);
         String cert = tls.getString("cert");
@@ -231,9 +233,8 @@ public final class SocketClient {
             }
             options.setKeyCertOptions(new PemKeyCertOptions().setCertValue(Buffer.buffer(cert)).setKeyValue(Buffer.buffer(key)));
         }
-        JsonArray alpn = tls.getJsonArray("ALPNProtocols");
-        if (alpn != null && !alpn.isEmpty()) {
-            options.setUseAlpn(true).setApplicationLayerProtocols(alpn.stream().map(String::valueOf).toList());
+        if (!protocols.isEmpty()) {
+            options.setUseAlpn(true).setApplicationLayerProtocols(protocols);
         }
         // Node's names; TLS 1.0 and 1.1 are below what the JVM allows, so a range starting there starts at 1.2.
         int from = NODE_VERSIONS.indexOf(tls.getString("minVersion", "TLSv1.2"));
@@ -243,6 +244,38 @@ public final class SocketClient {
         }
         options.setEnabledSecureTransportProtocols(new LinkedHashSet<>(NODE_VERSIONS.subList(Math.max(from, 2), to + 1)));
         return options;
+    }
+
+    /**
+     * Trusts every chain (it's judged afterwards), with one instance per ALPN list. Vert.x keeps one TLS context per
+     * client certificate and trust options, made with the ALPN list of the first connection that needed it; with its
+     * shared trust-all, every later connection offered that first list (an h2 session got http/1.1). Bounded: past
+     * {@link #TRUST_ALL_KEPT} lists it starts again, which only costs new contexts.
+     */
+    static io.vertx.core.net.TrustOptions trustAll(List<String> protocols) {
+        if (TrustAll.BY_PROTOCOLS.size() > TRUST_ALL_KEPT) {
+            TrustAll.BY_PROTOCOLS.clear();
+        }
+        return TrustAll.BY_PROTOCOLS.computeIfAbsent(protocols, p -> io.vertx.core.net.TrustOptions.wrap(new TrustAll()));
+    }
+
+    static final int TRUST_ALL_KEPT = 64;
+
+    private static final class TrustAll extends io.netty.handler.ssl.util.SimpleTrustManagerFactory {
+        static final Map<List<String>, io.vertx.core.net.TrustOptions> BY_PROTOCOLS = new java.util.concurrent.ConcurrentHashMap<>();
+
+        @Override
+        protected void engineInit(KeyStore keyStore) {
+        }
+
+        @Override
+        protected void engineInit(javax.net.ssl.ManagerFactoryParameters parameters) {
+        }
+
+        @Override
+        protected javax.net.ssl.TrustManager[] engineGetTrustManagers() {
+            return io.netty.handler.ssl.util.InsecureTrustManagerFactory.INSTANCE.getTrustManagers();
+        }
     }
 
     /** The certificates the JVM trusts, as PEM: {@code tls.rootCertificates}. */

@@ -72,9 +72,12 @@ Object.defineProperty(globalThis, Symbol.for('automately.http2'), {
     end: (id) => http2Host.end(id),
     response: async (id) => {
       const r = await http2Host.response(id);
-      return { rawHeaders: r.rawHeaders, status: r.status, body: readable(r.bodyId) };
+      return { rawHeaders: r.rawHeaders, status: r.status, flags: r.flags, body: readable(r.bodyId) };
     },
     trailers: (id) => http2Host.trailers(id),
+    sendTrailers: (id, trailers) => http2Host.sendTrailers(id, trailers),
+    streamState: (id) => http2Host.streamState(id),
+    sessionState: (sessionId) => http2Host.sessionState(sessionId),
     reset: (id, code) => http2Host.reset(id, code),
     ping: (sessionId, payload) => http2Host.ping(sessionId, payload),
     settings: (sessionId, settings) => http2Host.settings(sessionId, settings),

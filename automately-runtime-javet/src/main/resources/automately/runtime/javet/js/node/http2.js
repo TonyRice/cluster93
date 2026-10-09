@@ -274,6 +274,14 @@ const CODE_NAMES = Object.fromEntries(Object.entries(constants)
 
 export const sensitiveHeaders = Symbol("nodejs.http2.sensitiveHeaders");
 
+// Node 26 no longer signals priorities (RFC 9113): a request's weight and priority() are ignored, with one warning.
+let priorityWarned = false;
+function warnPriority() {
+  if (priorityWarned) return;
+  priorityWarned = true;
+  globalThis[Symbol.for("automately.process")].emitWarning("Priority signaling has been deprecated as of RFC 9113.", "DeprecationWarning", "DEP0194");
+}
+
 // --- settings ---
 
 const DEFAULT_SETTINGS = { headerTableSize: 4096, enablePush: true, initialWindowSize: 65535, maxFrameSize: 16384,
@@ -368,6 +376,23 @@ function requestHeaders(headers, session) {
   return out;
 }
 
+/** Trailers for the host, as Node checks them: no pseudo-headers, no connection-specific headers. */
+function trailerHeaders(headers) {
+  const out = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+    const lower = String(name).toLowerCase();
+    if (lower.startsWith(":")) {
+      throw nodeError(TypeError, "ERR_HTTP2_INVALID_PSEUDOHEADER", `"${lower}" is an invalid pseudoheader or is used incorrectly`);
+    }
+    if (CONNECTION_HEADERS.has(lower) && !(lower === "te" && String(value) === "trailers")) {
+      throw nodeError(TypeError, "ERR_HTTP2_INVALID_CONNECTION_HEADERS", `HTTP/1 Connection specific headers are forbidden: "${lower}"`);
+    }
+    out[lower] = Array.isArray(value) ? value.map(String) : String(value);
+  }
+  return out;
+}
+
 // --- streams ---
 
 const NO_PAYLOAD = new Set(["DELETE", "GET", "HEAD"]);
@@ -383,7 +408,6 @@ export class ClientHttp2Stream extends Duplex {
     this._closed = false;
     this.pending = true;
     this.endAfterHeaders = false;
-    this.state = {};
     this.timeout = 0;
     this._id = null;
     this._streamId = undefined;
@@ -392,6 +416,8 @@ export class ClientHttp2Stream extends Duplex {
     this._waiting = [];
     this._timer = null;
     this._endStream = options.endStream;
+    this._waitForTrailers = Boolean(options.waitForTrailers);
+    this._trailersReady = false;
     // A request with no body: the writable side ends at once, as Node ends it.
     if (this._endStream) this.end();
     if (options.signal) {
@@ -405,6 +431,8 @@ export class ClientHttp2Stream extends Duplex {
   // Node's Http2Stream has its own: closed once RST_STREAM went or came, or it ended both ways.
   get closed() { return this._closed; }
   get bufferSize() { return this.writableLength; }
+  /** Node's stream.state, from the host's view of the stream; {} before it opens and once it's gone, as Node's. */
+  get state() { return this._id === null || this.destroyed ? {} : internals.streamState(this._id); }
 
   /** The host opened the stream: its headers have gone. */
   _opened(id, streamId) {
@@ -413,15 +441,13 @@ export class ClientHttp2Stream extends Duplex {
     this.pending = false;
     this.emit("ready");
     for (const go of this._waiting.splice(0)) go();
-    internals.response(id).then(surfaced(({ rawHeaders, status, body }) => {
+    internals.response(id).then(surfaced(({ rawHeaders, status, flags, body }) => {
       if (this.destroyed) { body.cancel(); return; }
       const headers = toHeaderObject(rawHeaders);
       this._iterator = body[Symbol.asyncIterator]();
       this._body = body;
       const informational = status >= 100 && status < 200;
-      // Node's flags: PRIORITY and END_HEADERS, as nghttp2 reports them, and END_STREAM when the answer has no body.
-      const flags = constants.NGHTTP2_FLAG_PRIORITY | constants.NGHTTP2_FLAG_END_HEADERS
-        | (this.sentHeaders[":method"] === "HEAD" || status === 204 || status === 304 ? constants.NGHTTP2_FLAG_END_STREAM : 0);
+      // The HEADERS frame's own flags, as nghttp2 reports them to Node.
       this.endAfterHeaders = Boolean(flags & constants.NGHTTP2_FLAG_END_STREAM);
       this._touch();
       this.emit(informational ? "headers" : "response", headers, flags, rawHeaders);
@@ -447,8 +473,8 @@ export class ClientHttp2Stream extends Duplex {
 
   /** The body has ended: trailers first, as Node emits them, then the end. */
   _finish() {
-    internals.trailers(this._id).then(surfaced(({ rawTrailers }) => {
-      if (rawTrailers.length) this.emit("trailers", toHeaderObject(rawTrailers), constants.NGHTTP2_FLAG_END_STREAM | constants.NGHTTP2_FLAG_END_HEADERS);
+    internals.trailers(this._id).then(surfaced(({ rawTrailers, flags }) => {
+      if (rawTrailers.length) this.emit("trailers", toHeaderObject(rawTrailers), flags);
       this.push(null);
     }), surfaced(() => this.push(null)));
   }
@@ -480,7 +506,35 @@ export class ClientHttp2Stream extends Duplex {
 
   _final(callback) {
     if (this._endStream) { callback(); return; }
+    if (this._waitForTrailers) {
+      // As Node: the body is done and the stream stays open for trailers. With no one to send them, empty ones end it.
+      this._whenOpen(() => {
+        this._trailersReady = true;
+        if (!this.emit("wantTrailers")) this.sendTrailers({});
+        callback();
+      });
+      return;
+    }
     this._whenOpen(() => internals.end(this._id).then(surfaced(() => callback()), surfaced((err) => callback(err))));
+  }
+
+  /** Ends the stream with trailing headers, once 'wantTrailers' was emitted, as Node's. */
+  sendTrailers(headers) {
+    if (this.destroyed || this._closed) throw nodeError(Error, "ERR_HTTP2_INVALID_STREAM", "The stream has been destroyed");
+    if (this.sentTrailers) throw nodeError(Error, "ERR_HTTP2_TRAILERS_ALREADY_SENT", "Trailing headers have already been sent");
+    if (!this._trailersReady) {
+      throw nodeError(Error, "ERR_HTTP2_TRAILERS_NOT_READY", "Trailing headers cannot be sent until after the wantTrailers event is emitted");
+    }
+    if (headers === null || typeof headers !== "object" || Array.isArray(headers)) {
+      throw nodeError(TypeError, "ERR_INVALID_ARG_TYPE", `The "headers" argument must be of type object. Received ${headers === null ? "null" : typeof headers}`);
+    }
+    const copy = Object.assign({ __proto__: null }, headers);
+    const sent = trailerHeaders(copy);
+    this.sentTrailers = copy;
+    this._trailersReady = false;
+    // As Node's: with no trailers, an empty DATA frame ends the stream instead of a HEADERS frame.
+    const sending = Object.keys(sent).length ? internals.sendTrailers(this._id, sent) : internals.end(this._id);
+    sending.then(surfaced(() => this._touch()), surfaced((err) => this._fail(err)));
   }
 
   _destroy(err, callback) {
@@ -508,8 +562,8 @@ export class ClientHttp2Stream extends Duplex {
     this.destroy();
   }
 
-  priority() {}
-  sendTrailers() { throw unsupported("sendTrailers", "request trailers aren't supported yet"); }
+  /** Ignored, as in Node 26, which no longer signals priorities. */
+  priority() { warnPriority(); }
 
   setTimeout(ms, callback) {
     this.timeout = Number(ms) || 0;
@@ -569,7 +623,6 @@ export class ClientHttp2Session extends EventEmitter {
     this.localSettings = getDefaultSettings();
     this.localSettings.enablePush = false;
     this.remoteSettings = undefined;
-    this.state = {};
     this.socket = new SocketProxy(this);
     this.timeout = 0;
     this._id = null;
@@ -586,6 +639,9 @@ export class ClientHttp2Session extends EventEmitter {
     this._servername = options.servername ?? (isIP(this._host) ? undefined : this._host);
     if (this.encrypted) this.originSet = [`${this._scheme}://${this._authority}`];
   }
+
+  /** Node's session.state, from the host's connection; {} until connected and once destroyed. */
+  get state() { return this._id === null || this.destroyed ? {} : internals.sessionState(this._id); }
 
   _connect(tlsOptions) {
     const request = { authority: `${this._scheme}://${this._authority.includes(":") ? this._authority : `${this._authority}:${this.encrypted ? 443 : 80}`}` };
@@ -658,6 +714,7 @@ export class ClientHttp2Session extends EventEmitter {
   request(headers = {}, options = {}) {
     if (this.closed && !this.destroyed) throw nodeError(Error, "ERR_HTTP2_GOAWAY_SESSION", "New streams cannot be created after receiving a GOAWAY");
     const sent = requestHeaders(headers, this);
+    if (options.weight !== undefined) warnPriority();
     if (this.destroyed) {
       // As Node: the stream is made, and fails at once.
       const dead = new ClientHttp2Stream(this, sent, { ...options, endStream: true });
@@ -669,7 +726,7 @@ export class ClientHttp2Session extends EventEmitter {
     this._streams.add(stream);
     this._whenConnected(() => {
       if (stream.destroyed) return;
-      internals.request(this._id, sent, Boolean(endStream && !options.waitForTrailers)).then(surfaced(({ id, streamId }) => {
+      internals.request(this._id, sent, Boolean(endStream)).then(surfaced(({ id, streamId }) => {
         if (stream.destroyed) { internals.reset(id, constants.NGHTTP2_CANCEL); return; }
         stream._opened(id, streamId);
       }), surfaced((err) => stream._fail(err)));

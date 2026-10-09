@@ -165,6 +165,18 @@ class SocketClientTest {
                 .put("tls", new JsonObject().put("ca", ca).put("ALPNProtocols", new JsonArray().add("h2").add("http/1.1"))), new AtomicInteger()));
         assertThat(socket.info().getJsonObject("tls").getString("alpnProtocol")).isEqualTo("h2");
         socket.destroy();
+
+        // A connection without ALPN, or with other protocols, first: each connection still offers its own.
+        await(client.connect("acme", new JsonObject().put("host", "localhost").put("port", h2.actualPort())
+                .put("tls", new JsonObject().put("ca", ca)), new AtomicInteger())).destroy();
+        OutgoingSocket http1 = await(client.connect("acme", new JsonObject().put("host", "localhost").put("port", h2.actualPort())
+                .put("tls", new JsonObject().put("ca", ca).put("ALPNProtocols", new JsonArray().add("http/1.1"))), new AtomicInteger()));
+        assertThat(http1.info().getJsonObject("tls").getString("alpnProtocol")).isEqualTo("http/1.1");
+        http1.destroy();
+        OutgoingSocket again = await(client.connect("acme", new JsonObject().put("host", "localhost").put("port", h2.actualPort())
+                .put("tls", new JsonObject().put("ca", ca).put("ALPNProtocols", new JsonArray().add("h2").add("http/1.1"))), new AtomicInteger()));
+        assertThat(again.info().getJsonObject("tls").getString("alpnProtocol")).isEqualTo("h2");
+        again.destroy();
     }
 
     @Test

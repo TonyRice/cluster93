@@ -2114,3 +2114,40 @@ It's written for people, because the console will show the same response as a "N
 - `state`
 - `END_STREAM` in response flags beyond what the status implies
 
+### D-118 — HTTP/2 completed as Node 26 has it: request trailers, `state`, priorities, real flags
+**Date:** 2026-10-09 · **Status:** Accepted. Closes what D-117 left out (Tony: "lets address all these … our polyfills should be matching node btw").
+
+**Decision:**
+- **What Vert.x doesn't expose is read from the Netty connection beneath it** (`NettyHttp2`): Vert.x's codec connection and its `Http2ConnectionHandler`. If that isn't there, the flags fall back and `state` is `{}`.
+- **Flags are the frames' own.** A listener on Netty's decoder records each HEADERS frame's flags in arrival order: the response's, then the trailers'. This replaces D-117's guess (PRIORITY always, END_STREAM from the status), which was wrong against a Node server, which sends 4.
+- **Request trailers, as Node's:**
+  - `waitForTrailers`, `wantTrailers` after the body, then `sendTrailers`, with Node's errors and checks
+  - empty trailers when nobody listens
+  - an empty DATA frame for empty trailers
+  - `waitForTrailers` ignored on a request with no body
+
+  The trailers go through Vert.x's own HTTP/2 stream, reached by reflection, since its client has no public way to send them. A HEADERS frame written on the Netty encoder reached the server, but Vert.x never saw its request end, and the response never ended.
+- **`session.state` and `stream.state`, as Node's** (nghttp2's meanings), from Netty's connection, flow controllers and HPACK tables. The HPACK sizes are read by reflection and are 0 if a Netty release moves them.
+  - **A stream's state during an event** is a snapshot taken as its frame was read: Node reads nghttp2 while it handles the frame, and by the time the script runs Netty has often closed the stream.
+  - **The snapshot is forgotten** once the script has the trailers or resets the stream.
+- **Priorities as Node 26:** RFC 9113 deprecated priority signalling. `priority()` does nothing, a request's `weight` isn't sent, and either emits `DEP0194` once; `stream.state.weight` is 16.
+- **`process.emitWarning` is now Node's:**
+  - **The warning:** an `Error` named after its type, with its `code` and `detail`.
+  - **Delivery:** `warning` on the next tick, and Node's `(node:1) [CODE] Name: message` line in the log.
+  - **Switches:** `noDeprecation` and `throwDeprecation`.
+  - **`util.deprecate`** goes through it with its code.
+
+**Tested:**
+- **`Http2ClientTest` (5):** request trailers reaching the server, the real flags of an empty response and of trailers, and both state objects.
+- **`NodeHttp2Test` (4):** the trailer events and errors in order, `state` during and after a stream, and both warnings. Both suites pass under CPU load; the stream-state test first failed there, and that failure led to the snapshot.
+- **`RealNpmPackagesTest`'s `http2client`:** extended with trailers (event order, every error, what the server received, no listener, a `GET`), the state objects, flags and priorities. It matches real Node 26.8.1. The harness now runs Node with `--no-warnings`, since warnings went into its JSON on stderr; the `warning` events are still compared.
+
+**Found while testing, and fixed:**
+- **TLS sockets offered the first connection's ALPN list.**
+  - **The cause:** Vert.x caches a client's TLS context provider by client certificate, trust options and CRLs, and creates it with the ALPN list of the connection that first needed it. Every script socket used Vert.x's single trust-all options, so all of them shared one provider.
+  - **How it showed:** in a full run, got's ALPN check got `http/1.1` from a server that offers `h2`.
+  - **The fix:** each ALPN list gets its own trust-all options instance (at most 64 kept; past that the map starts over, which only costs new contexts). `SocketClientTest` checks `h2`, then none, then `http/1.1`, then `h2` again on one client.
+- **`http.request` takes its expected protocol from its agent, or else from `_defaultAgent`, as Node's `ClientRequest` does.** http2-wrapper falls back to HTTP/1.1 that way.
+
+**Differs:** `session.state.outboundQueueSize` counts Netty's unflushed writes, not nghttp2's frame queue.
+

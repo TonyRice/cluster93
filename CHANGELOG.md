@@ -26,6 +26,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## HTTP/2 as Node 26 has it: trailers, state, priorities, real flags (2026-10-09)
+
+### Added
+- **Request trailers in `http2`** (D-118): `waitForTrailers`, `wantTrailers` and `sendTrailers`, with Node's errors and rules.
+- **`session.state` and `stream.state`,** as Node's, from the connection's flow control and HPACK tables.
+- **`process.emitWarning` as Node's:** the `warning` event, codes and details, Node's log line, `noDeprecation` and `throwDeprecation`. `util.deprecate` takes a code and uses it.
+- **Why:** D-117 left these out, and Tony wants the polyfills to match Node.
+
+### Changed
+- **`http2` priorities as Node 26:** `priority()` and a request's `weight` do nothing and emit DEP0194 once. **Why:** Node 26 deprecated priority signalling (RFC 9113).
+
+### Fixed
+- **`http2` flags** on `response` and `trailers` are now the HEADERS frames' real flags. **Why:** D-117 always reported PRIORITY and guessed END_STREAM from the status, so they differed from Node against a Node server.
+- **TLS sockets offered the ALPN protocols of the first TLS connection the node made, not their own.**
+  - **The cause:** Vert.x keeps one TLS context per client certificate and trust options, and every connection shared its single trust-all options.
+  - **The fix:** each ALPN list now has its own.
+  - **Why:** in a full test run, got's `http2: true` negotiated HTTP/1.1 after an earlier socket had asked for that.
+- **`http.request` takes its protocol from its agent or `_defaultAgent`, as Node's does,** so `https:` through `http.request` with an https agent works. **Why:** http2-wrapper falls back to HTTP/1.1 that way, and ours refused it.
+
 ## Node's `http2` client; got with `http2: true` (2026-10-09)
 
 ### Added

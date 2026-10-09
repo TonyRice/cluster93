@@ -114,6 +114,57 @@ class NodeHttp2Test {
     }
 
     @Test
+    void requestTrailersStateAndPriorityAsNode26() throws Exception {
+        JsonArray out = run("""
+                import http2 from 'node:http2';
+                import util from 'node:util';
+                const warnings = [];
+                process.on('warning', (w) => warnings.push([w.name, w.code, w.message]));
+                export default () => new Promise((resolve) => {
+                  const session = http2.connect('http://127.0.0.1:%d', () => {
+                    const out = [Object.keys(session.state).length, session.state.nextStreamID];
+                    const req = session.request({ ':method': 'POST', ':path': '/upload' }, { waitForTrailers: true, weight: 99 });
+                    const events = [];
+                    try { req.sendTrailers({}); } catch (e) { events.push(e.code); }
+                    req.priority({ weight: 1 });
+                    req.on('wantTrailers', () => {
+                      events.push('wantTrailers');
+                      try { req.sendTrailers({ ':status': '1' }); } catch (e) { events.push(e.code); }
+                      req.sendTrailers({ 'X-Sum': 42 });
+                      try { req.sendTrailers({}); } catch (e) { events.push(e.code); }
+                    });
+                    req.on('finish', () => events.push('finish'));
+                    req.on('response', (h, flags) => events.push(['response', flags & 4, req.state.state, req.state.weight]));
+                    let text = '';
+                    req.setEncoding('utf8');
+                    req.on('data', (c) => { text += c; });
+                    req.on('close', () => {
+                      util.deprecate(() => {}, 'old', 'DEP0999')();
+                      out.push(events, text, req.sentTrailers['X-Sum'], JSON.stringify(req.state), session.state.nextStreamID);
+                      session.close(() => setTimeout(() => resolve([...out, JSON.stringify(session.state), warnings]), 0));
+                    });
+                    req.write('a');
+                    req.end('b');
+                  });
+                });
+                """.formatted(clear.actualPort()));
+
+        assertThat(out.getInteger(0)).isEqualTo(9);
+        assertThat(out.getInteger(1)).isEqualTo(1);
+        assertThat(out.getJsonArray(2).encode()).isEqualTo(
+                "[\"ERR_HTTP2_TRAILERS_NOT_READY\",\"wantTrailers\",\"ERR_HTTP2_INVALID_PSEUDOHEADER\",\"ERR_HTTP2_TRAILERS_ALREADY_SENT\","
+                        + "\"finish\",[\"response\",4,5,16]]");
+        // The server answered once the trailers ended the request.
+        assertThat(out.getString(3)).isEqualTo("POST /upload ab");
+        assertThat(out.getInteger(4)).isEqualTo(42);
+        assertThat(out.getString(5)).isEqualTo("{}");
+        assertThat(out.getInteger(6)).isEqualTo(3);
+        assertThat(out.getString(7)).isEqualTo("{}");
+        assertThat(out.getJsonArray(8).encode()).isEqualTo("[[\"DeprecationWarning\",\"DEP0194\",\"Priority signaling has been deprecated as of RFC 9113.\"],"
+                + "[\"DeprecationWarning\",\"DEP0999\",\"old\"]]");
+    }
+
+    @Test
     void h2cAndRefusals() throws Exception {
         JsonArray out = run("""
                 import http2 from 'node:http2';

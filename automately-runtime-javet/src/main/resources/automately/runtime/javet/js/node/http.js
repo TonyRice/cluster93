@@ -281,6 +281,7 @@ export class ClientRequest extends Writable {
     // Not destroyed on 'finish' as a plain Writable is: the response comes after the body is sent.
     super({ decodeStrings: true, autoDestroy: false });
     if (typeof options === 'function') { callback = options; options = undefined; }
+    defaults = agentDefaults(input, options, defaults);
     const target = mergeTarget(input, options, defaults);
     for (const [name, why] of Object.entries(REFUSED_OPTIONS)) {
       if (name === 'checkServerIdentity' && target[name] === defaultIdentityCheck) continue;
@@ -534,6 +535,20 @@ function tlsOptions(target) {
   if (target.cert !== undefined) out.cert = pem(Array.isArray(target.cert) ? target.cert[0] : target.cert);
   if (target.key !== undefined) out.key = pem(Array.isArray(target.key) ? target.key[0] : target.key);
   return out;
+}
+
+/**
+ * As Node's ClientRequest: the protocol expected is the agent's, or else `_defaultAgent`'s (http2-wrapper, and so got,
+ * sends https requests through http.request with https's agent as `_defaultAgent`).
+ */
+function agentDefaults(input, options, defaults) {
+  const given = options && typeof options === 'object' ? options
+    : input && typeof input === 'object' && !(input instanceof URL) ? input : null;
+  const agent = given?.agent && typeof given.agent === 'object' && given.agent.protocol ? given.agent
+    : given?._defaultAgent?.protocol ? given._defaultAgent : null;
+  if (!agent || agent.protocol === defaults.protocol || (agent.protocol !== 'http:' && agent.protocol !== 'https:')) return defaults;
+  return { protocol: agent.protocol, defaultPort: agent.defaultPort ?? (agent.protocol === 'https:' ? 443 : 80),
+    tls: agent.protocol === 'https:', agent };
 }
 
 const HTTP = { protocol: 'http:', defaultPort: 80, tls: false, get agent() { return globalAgent; } };

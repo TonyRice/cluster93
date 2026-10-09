@@ -160,7 +160,9 @@ A job-shaped `process`, also available as a global (D-096).
 - **`env`:** exactly what the job declared, plus `NODE_ENV=production`. It's never the node's environment.
   - Secrets are referenced by name (`{"secret": "stripe-live"}`), read when the run starts, and only for tokens with `secrets:use` (D-068). Their values are masked in the job's log.
   - The full guide is in [host APIs](host-apis.md).
-- **There:** `nextTick` (a microtask; a throw in its callback fails the job, as an uncaught exception ends Node), `hrtime` and `hrtime.bigint`, `uptime`, `cwd()` (`/`), `platform` (`linux`), `arch` (`x64`), `argv` (`[]`), `pid` (1), `emitWarning`, and `stdout.write`/`stderr.write` (to the log). Also `on`/`emit` and the other listener methods. The only events emitted are `unhandledRejection` and `rejectionHandled`, as in Node (D-110): without an `unhandledRejection` listener, a promise rejected with no handler by the end of a turn fails the job.
+- **There:** `nextTick` (a microtask; a throw in its callback fails the job, as an uncaught exception ends Node), `hrtime` and `hrtime.bigint`, `uptime`, `cwd()` (`/`), `platform` (`linux`), `arch` (`x64`), `argv` (`[]`), `pid` (1), and `stdout.write`/`stderr.write` (to the log). Also `on`/`emit` and the other listener methods.
+- **`emitWarning(warning[, type | options][, code][, ctor])`, as Node's (D-118):** it makes the warning an `Error` named after its type, with its `code` and `detail`, and emits it as `warning` on the next tick. It writes Node's line to the log, `(node:1) [DEP0194] DeprecationWarning: …`. `noDeprecation` drops deprecations, `throwDeprecation` throws them, and `noProcessWarnings` keeps the line out of the log. `util.deprecate(fn, message, code)` goes through it once.
+- **Events emitted:** `warning`, `unhandledRejection` and `rejectionHandled`, as in Node (D-110). Without an `unhandledRejection` listener, a promise rejected with no handler by the end of a turn fails the job.
 - **Differs:**
   - `version` is `'v26.8.1'` and `versions` is `{ node: '26.8.1' }`: the Node release the stand-ins are checked against (D-115, replacing D-102). got won't load without one, and jsonwebtoken allows PS256 only on versions it knows. `RealNpmPackagesTest` fails if it's run with another release, so the two move together. Other `versions` entries (`v8`, `uv`, …) aren't there. `memoryUsage()` is zeros.
   - `Object.prototype.toString.call(process)` is `[object process]`, as in Node (D-109). axios checks it to choose its Node adapter.
@@ -312,7 +314,7 @@ The client, as Node's, on the host's HTTP client (D-109). Every request goes thr
   - **Validators:** `validateHeaderName` and `validateHeaderValue`.
 - **Requests:**
   - **Headers:** `setHeader`/`getHeader`/`removeHeader`/`hasHeader`, `appendHeader`, `getHeaders`, `getHeaderNames`/`getRawHeaderNames`, `flushHeaders` and `headersSent`. Values are checked as Node checks them (`ERR_INVALID_CHAR`).
-  - **Options:** `method`, `headers` (an object, or Node's raw `[name, value, …]` list), `auth` and a URL's user and password, `timeout` and `setTimeout` (they emit `timeout` without aborting, as in Node), `signal`, `setHost` and `agent`.
+  - **Options:** `method`, `headers` (an object, or Node's raw `[name, value, …]` list), `auth` and a URL's user and password, `timeout` and `setTimeout` (they emit `timeout` without aborting, as in Node), `signal`, `setHost` and `agent`. The protocol expected is the agent's, or else `_defaultAgent`'s, as in Node, so `http.request` with an https agent makes an https request (D-118).
   - **Bodies stream** with backpressure. One body given whole to `end()` is sent with its `Content-Length`, as Node does; S3 and other servers need that. Written in parts, it's sent in chunks unless you set `Content-Length` yourself.
   - **Events:** `socket`, `finish`, `response`, `timeout`, `abort`, `error` and `close`, in Node's order. `abort()` and `destroy()` work at any point. A request destroyed before its response fails with `ECONNRESET` "socket hang up", as in Node.
 - **Responses:** `statusCode`, `statusMessage`, `httpVersion`, `headers` (built with Node's rules: `set-cookie` is a list, `cookie` is joined with `; `, and the single-valued headers keep their first value), `headersDistinct`, `rawHeaders`, `complete` and `aborted`. A response nobody listens for is read and dropped, as in Node. Its errors go only to an `error` listener; without one it emits `aborted`, as Node's does.
@@ -411,9 +413,22 @@ Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts
   - **Control:** `ping(payload, callback)` (8 bytes, or Node's default), `settings(settings, callback)` (acknowledged before the callback), `goaway(code, lastStreamID, data)`, `close(callback)` (after open streams), `destroy`, `setTimeout`.
   - **Events:** `connect`, `remoteSettings`, `localSettings`, `goaway`, `close`, `error`, `timeout`.
   - **State:** `alpnProtocol` (`h2` or `h2c`), `encrypted`, `type`, `closed`, `destroyed`, `connecting`, `localSettings`, `remoteSettings`, `originSet`, `pendingSettingsAck`, and `socket` (the connection's addresses and TLS details).
+  - **`state`,** as Node's (D-118), read from the connection: `effectiveLocalWindowSize`, `effectiveRecvDataLength`, `nextStreamID`, `localWindowSize`, `lastProcStreamID`, `remoteWindowSize`, `outboundQueueSize`, and the HPACK tables' sizes (`deflateDynamicTableSize`, `inflateDynamicTableSize`). It's `{}` until connected and once destroyed.
 - **`ClientHttp2Stream`,** a `Duplex`:
-  - **Events:** `response` (headers with `:status`, Node's flags, raw headers), `trailers`, `data`, `end`, `close` and `error`.
-  - **State:** `id`, `rstCode`, `sentHeaders`, `pending`, `closed`.
+  - **Events:** `response` (headers with `:status`, the HEADERS frame's real flags, raw headers), `trailers` (with its frame's flags), `wantTrailers`, `data`, `end`, `close` and `error`.
+  - **State:** `id`, `rstCode`, `sentHeaders`, `sentTrailers`, `pending`, `closed`.
+  - **`state`,** as Node's (D-118): `state` (nghttp2's numbers, as `constants.NGHTTP2_STREAM_STATE_*`), `weight` (16), `sumDependencyWeight` (0), `localClose`, `remoteClose` and `localWindowSize`. During an event, it's the stream as the frame behind the event left it, as nghttp2 reports it to Node. It's `{}` before the stream opens and once it closes.
+  - **Request trailers (D-118):** with `waitForTrailers: true`, a request with a body emits `wantTrailers` once the body has gone, and `sendTrailers(headers)` ends the stream with them. Node's errors apply:
+    - `ERR_HTTP2_TRAILERS_NOT_READY` before `wantTrailers`
+    - `ERR_HTTP2_TRAILERS_ALREADY_SENT` on a second call
+    - `ERR_HTTP2_INVALID_STREAM` once closed
+    - `ERR_HTTP2_INVALID_PSEUDOHEADER` and `ERR_HTTP2_INVALID_CONNECTION_HEADERS` for headers that can't be trailers
+
+    As in Node:
+    - with no `wantTrailers` listener, the stream ends with empty trailers
+    - empty trailers go as an empty DATA frame that ends the stream
+    - a request with no body (`GET`, or `endStream`) ignores `waitForTrailers`
+  - **Priorities, as Node 26 has them:** `priority()` does nothing and returns `undefined`, and a request's `weight` isn't sent (RFC 9113 deprecated priority signalling). Either emits Node's warning once, `DEP0194` "Priority signaling has been deprecated as of RFC 9113.". `parent` and `exclusive` alone don't.
   - **Control:** `close(code)` sends RST_STREAM, and `setTimeout`.
   - **Headers follow Node's rules** (`set-cookie` a list, repeats joined, single-value headers keep the first).
   - **A reset from the peer:** `NO_ERROR` and `CANCEL` end the stream quietly. Any other code fails it with `ERR_HTTP2_STREAM_ERROR` "Stream closed with error code NGHTTP2_REFUSED_STREAM", as in Node.
@@ -421,11 +436,14 @@ Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts
 - **`createConnection`:** http2-wrapper (got's `http2: true`) opens its own TLS socket and hands it to `http2.connect`. If the socket is one of the isolate's own `net`/`tls` sockets, it already went through the egress rules, so the session closes it and opens its own connection to the same origin. Anything else is refused, since it would bypass the rules.
 - **Differs:**
   - **Server push is off** (`enablePush: false`), as browsers have it now.
-  - **`END_STREAM` in the response flags** is reported for HEAD, 204 and 304; a 200 whose body happens to be empty reports it without.
-  - **Not supported:** `sendTrailers` (request trailers) and stream priorities (`priority()` does nothing).
-  - **`state`** is an empty object.
+  - **`outboundQueueSize`** counts the connection's unflushed writes in Netty, not nghttp2's frame queue, so right after connecting it's 0 where Node shows 1.
 - **Refused:** `CONNECT` tunnels, `pfx`, and servers (`createServer`, `createSecureServer`). HTTP/2 servers never run on the cluster's nodes; the ingress serves clients.
-- **Proven with:** a fixture against real Node over TLS and h2c (headers, bodies, parallel streams, trailers, every kind of reset, ping, settings, refusals), and got with `http2: true`.
+- **Proven with:** a fixture against real Node over TLS and h2c, and got with `http2: true`. The fixture covers:
+  - headers, bodies, parallel streams, response trailers, every kind of reset, ping, settings and refusals
+  - request trailers with their errors and event order
+  - the real flags
+  - both `state` objects
+  - priorities and their warning
 
 ## `tty`, `dns` and `child_process`
 
@@ -498,7 +516,7 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 - **Streams:** crypto classes aren't streams; `fetch` bodies and `files.stream` are async iterables, not Node streams. `fs` streams hold the whole file (32 MB).
 - **HTTP:** `req.socket` is a stand-in reporting the host's connection (D-114); agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused for `http`/`https` (`tls.connect` takes one); TLS cipher names are IANA's, not OpenSSL's.
 - **Sockets:** `ref`/`unref` change nothing, a job doesn't wait for open sockets, TLS sessions aren't reused, and over TLS `end()` closes (D-116).
-- **HTTP/2:** no server push, no request trailers or priorities, `END_STREAM` reported only where the status implies it, and a `createConnection` socket replaced by the host's own connection (D-117).
+- **HTTP/2:** no server push, a `createConnection` socket replaced by the host's own connection (D-117), and `session.state.outboundQueueSize` counting Netty's writes (D-118).
 - **Uncaught errors:** a throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` event listener, fails the job as it would end Node. So does a promise rejected with no handler by the end of the turn (D-110), unless `process.on('unhandledRejection')` has a listener; that one isn't a difference from Node.
 - **Approximate output:** `util.inspect` output and `assert`'s messages for structures.
 - **Compressed bytes** may differ from Node's (both are valid).

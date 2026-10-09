@@ -48,8 +48,9 @@ class Http2ClientTest {
         client = new Http2Client(vertx, egress, new SocketClient(vertx, egress));
         SelfSignedCertificate certificate = SelfSignedCertificate.create("localhost");
         ca = Files.readString(Path.of(certificate.certificatePath()));
-        io.vertx.core.Handler<io.vertx.core.http.HttpServerRequest> handler = req -> req.body().onSuccess(body -> {
+        io.vertx.core.Handler<io.vertx.core.http.HttpServerRequest> handler = req -> { captureTrailers(req.connection()); req.body().onSuccess(body -> {
             switch (req.path()) {
+                case "/empty" -> req.response().setStatusCode(204).end();
                 case "/reset" -> req.response().reset(7);
                 case "/trailers" -> {
                     req.response().setChunked(true).putTrailer("x-checksum", "abc").write("with trailers");
@@ -58,7 +59,7 @@ class Http2ClientTest {
                 default -> req.response().putHeader("content-type", "text/plain").putHeader("x-version", req.version().name())
                         .end(req.method().name() + " " + req.path() + " " + body.toString());
             }
-        });
+        }); };
         secure = await(vertx.createHttpServer(new HttpServerOptions().setSsl(true).setUseAlpn(true).setKeyCertOptions(certificate.keyCertOptions()))
                 .requestHandler(handler).listen(0, "127.0.0.1"));
         clear = await(vertx.createHttpServer(new HttpServerOptions().setHttp2ClearTextEnabled(true)).requestHandler(handler).listen(0, "127.0.0.1"));
@@ -70,6 +71,78 @@ class Http2ClientTest {
     @AfterEach
     void tearDown() throws Exception {
         await(vertx.close());
+    }
+
+    /**
+     * The request trailers a Vert.x server received, which its API doesn't show: its Netty decoder is wrapped once per
+     * connection to keep each stream's last HEADERS frame (the trailers, when there are any).
+     */
+    static final java.util.Map<Integer, String> RECEIVED_TRAILERS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    static void captureTrailers(io.vertx.core.http.HttpConnection connection) {
+        Object inner = connection instanceof io.vertx.core.http.impl.UnpooledHttpClientConnection u ? u.unwrap() : connection;
+        if (!(inner instanceof io.vertx.core.net.impl.ConnectionBase base)) {
+            return;
+        }
+        var handler = base.channelHandlerContext().pipeline().get(io.netty.handler.codec.http2.Http2ConnectionHandler.class);
+        if (handler == null || handler.decoder().frameListener() instanceof TrailerCapture) {
+            return;
+        }
+        handler.decoder().frameListener(new TrailerCapture(handler.decoder().frameListener()));
+    }
+
+    static final class TrailerCapture extends io.netty.handler.codec.http2.Http2FrameListenerDecorator {
+        TrailerCapture(io.netty.handler.codec.http2.Http2FrameListener listener) {
+            super(listener);
+        }
+
+        @Override
+        public void onHeadersRead(io.netty.channel.ChannelHandlerContext ctx, int streamId, io.netty.handler.codec.http2.Http2Headers headers,
+                                  int padding, boolean endOfStream) throws io.netty.handler.codec.http2.Http2Exception {
+            if (headers.method() == null && endOfStream) {
+                RECEIVED_TRAILERS.put(streamId, headers.toString());
+            }
+            super.onHeadersRead(ctx, streamId, headers, padding, endOfStream);
+        }
+
+        @Override
+        public void onHeadersRead(io.netty.channel.ChannelHandlerContext ctx, int streamId, io.netty.handler.codec.http2.Http2Headers headers,
+                                  int dependency, short weight, boolean exclusive, int padding, boolean endOfStream)
+                throws io.netty.handler.codec.http2.Http2Exception {
+            if (headers.method() == null && endOfStream) {
+                RECEIVED_TRAILERS.put(streamId, headers.toString());
+            }
+            super.onHeadersRead(ctx, streamId, headers, dependency, weight, exclusive, padding, endOfStream);
+        }
+    }
+
+    @Test
+    void trailersRealFlagsAndState() throws Exception {
+        OutgoingHttp2Session session = open("http://127.0.0.1:" + clear.actualPort(), new JsonObject());
+        JsonObject state = session.state();
+        assertThat(state.fieldNames()).containsExactlyInAnyOrder("effectiveLocalWindowSize", "effectiveRecvDataLength", "nextStreamID",
+                "localWindowSize", "lastProcStreamID", "remoteWindowSize", "outboundQueueSize", "deflateDynamicTableSize", "inflateDynamicTableSize");
+        assertThat(state.getInteger("nextStreamID")).isEqualTo(1);
+
+        // A request whose body is followed by trailers, which end it.
+        OutgoingHttp2Stream upload = await(session.request(new JsonObject().put(":method", "POST").put(":path", "/echo"), false));
+        assertThat(upload.state().getInteger("state")).isEqualTo(2);
+        await(upload.write(Buffer.buffer("body")));
+        await(upload.sendTrailers(new JsonObject().put("x-sum", "42")));
+        JsonObject head = await(upload.response());
+        assertThat(read(upload.body())).isEqualTo("POST /echo body");
+        assertThat(RECEIVED_TRAILERS.get(upload.id())).contains("x-sum: 42");
+        assertThat(head.getInteger("flags") & NettyHttp2.END_STREAM).isZero();
+
+        // A response with no body ends the stream on its HEADERS frame: Node's flags say so.
+        OutgoingHttp2Stream empty = await(session.request(new JsonObject().put(":path", "/empty"), true));
+        assertThat(await(empty.response()).getInteger("flags") & NettyHttp2.END_STREAM).isEqualTo(NettyHttp2.END_STREAM);
+        OutgoingHttp2Stream withTrailers = await(session.request(new JsonObject().put(":path", "/trailers"), true));
+        await(withTrailers.response());
+        read(withTrailers.body());
+        assertThat(await(withTrailers.trailers()).getInteger("flags") & NettyHttp2.END_STREAM).isEqualTo(NettyHttp2.END_STREAM);
+        assertThat(session.state().getInteger("nextStreamID")).isEqualTo(7);
+        assertThat(session.state().getLong("inflateDynamicTableSize")).isPositive();
     }
 
     private OutgoingHttp2Session open(String authority, JsonObject tls) throws Exception {

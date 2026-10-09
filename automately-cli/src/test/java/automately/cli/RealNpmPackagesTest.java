@@ -340,8 +340,11 @@ class RealNpmPackagesTest {
     /** The HTTP/2 servers' answers (D-117), fixed so Node and the isolate can be compared. */
     private void serveHttp2(io.vertx.core.http.HttpServerRequest req) {
         io.vertx.core.http.HttpServerResponse res = req.response();
+        java.util.Map<Integer, io.vertx.core.json.JsonObject> trailers = RequestTrailers.of(req.connection());
         req.body().onSuccess(body -> {
             switch (req.path()) {
+                case "/request-trailers" -> res.putHeader("content-type", "application/json").end(new io.vertx.core.json.JsonObject()
+                        .put("body", body.toString()).put("trailers", trailers.remove((int) req.streamId())).encode());
                 case "/json" -> res.putHeader("content-type", "application/json").putHeader("x-version", req.version().name())
                         .putHeader("set-cookie", (Iterable<String>) List.of("a=1", "b=2")).putHeader("x-repeat", (Iterable<String>) List.of("one", "two"))
                         .end("{\"hello\":\"http2\"}");
@@ -365,6 +368,58 @@ class RealNpmPackagesTest {
                 default -> res.setStatusCode(404).end("not found");
             }
         });
+    }
+
+    /**
+     * The trailers each request stream ended with, which Vert.x's server doesn't show: its Netty decoder is wrapped once
+     * per connection to keep them, as Http2ClientTest's capture does (D-118).
+     */
+    static final class RequestTrailers extends io.netty.handler.codec.http2.Http2FrameListenerDecorator {
+        private final java.util.Map<Integer, io.vertx.core.json.JsonObject> received = new java.util.concurrent.ConcurrentHashMap<>();
+
+        private RequestTrailers(io.netty.handler.codec.http2.Http2FrameListener listener) {
+            super(listener);
+        }
+
+        static java.util.Map<Integer, io.vertx.core.json.JsonObject> of(io.vertx.core.http.HttpConnection connection) {
+            if (!(connection instanceof io.vertx.core.net.impl.ConnectionBase base)) {
+                return new java.util.HashMap<>();
+            }
+            var handler = base.channelHandlerContext().pipeline().get(io.netty.handler.codec.http2.Http2ConnectionHandler.class);
+            if (handler == null) {
+                return new java.util.HashMap<>();
+            }
+            if (handler.decoder().frameListener() instanceof RequestTrailers capture) {
+                return capture.received;
+            }
+            RequestTrailers capture = new RequestTrailers(handler.decoder().frameListener());
+            handler.decoder().frameListener(capture);
+            return capture.received;
+        }
+
+        private void keep(int streamId, io.netty.handler.codec.http2.Http2Headers headers, boolean endOfStream) {
+            if (headers.method() == null && endOfStream) {
+                io.vertx.core.json.JsonObject names = new io.vertx.core.json.JsonObject();
+                headers.forEach(h -> names.put(h.getKey().toString(), names.containsKey(h.getKey().toString())
+                        ? names.getString(h.getKey().toString()) + ", " + h.getValue() : h.getValue().toString()));
+                received.put(streamId, names);
+            }
+        }
+
+        @Override
+        public void onHeadersRead(io.netty.channel.ChannelHandlerContext ctx, int streamId, io.netty.handler.codec.http2.Http2Headers headers,
+                                  int padding, boolean endOfStream) throws io.netty.handler.codec.http2.Http2Exception {
+            keep(streamId, headers, endOfStream);
+            super.onHeadersRead(ctx, streamId, headers, padding, endOfStream);
+        }
+
+        @Override
+        public void onHeadersRead(io.netty.channel.ChannelHandlerContext ctx, int streamId, io.netty.handler.codec.http2.Http2Headers headers,
+                                  int dependency, short weight, boolean exclusive, int padding, boolean endOfStream)
+                throws io.netty.handler.codec.http2.Http2Exception {
+            keep(streamId, headers, endOfStream);
+            super.onHeadersRead(ctx, streamId, headers, dependency, weight, exclusive, padding, endOfStream);
+        }
     }
 
     /** The HTTP libraries' server: fixed answers, so Node and the isolate can be compared. */
@@ -449,7 +504,7 @@ class RealNpmPackagesTest {
 
     /** What the library's module returns under real Node, as JSON. */
     private String underNode(String lib) throws IOException, InterruptedException {
-        ProcessBuilder node = new ProcessBuilder("node", "--input-type=module", "-e",
+        ProcessBuilder node = new ProcessBuilder("node", "--no-warnings", "--input-type=module", "-e",
                 "const m = await import('./src/" + lib + ".js'); console.log(JSON.stringify(await m.run()));")
                 .directory(project.toFile()).redirectErrorStream(true);
         node.environment().putAll(testEnv);

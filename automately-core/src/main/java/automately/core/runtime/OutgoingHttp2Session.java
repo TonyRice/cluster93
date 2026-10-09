@@ -37,6 +37,9 @@ public interface OutgoingHttp2Session {
 
     void goaway(long errorCode, int lastStreamId, Buffer opaqueData);
 
+    /** Node's {@code session.state}: windows, stream ids, queue and HPACK table sizes (D-118). */
+    JsonObject state();
+
     /** Closes once open streams are done. */
     Future<Void> close();
 

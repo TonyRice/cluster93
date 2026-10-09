@@ -217,12 +217,13 @@ export function inherits(ctor, superCtor) {
   Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
 }
 
-export function deprecate(fn, message) {
+/** As Node's: the first call emits a DeprecationWarning, with its code when given, through process.emitWarning. */
+export function deprecate(fn, message, code) {
   let warned = false;
-  return function (...args) {
+  return function deprecated(...args) {
     if (!warned) {
       warned = true;
-      console.warn('DeprecationWarning: ' + message);
+      globalThis[Symbol.for('automately.process')].emitWarning(message, 'DeprecationWarning', code, deprecated);
     }
     return new.target ? Reflect.construct(fn, args, new.target) : fn.apply(this, args);
   };

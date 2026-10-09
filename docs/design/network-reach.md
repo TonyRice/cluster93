@@ -6,7 +6,7 @@
 - **Configurable address spaces (§10):** ✅ built (D-111, D-113).
 - **got and real socket details (§11):** ✅ built (D-114). The isolate reports a Node version so got loads (D-115).
 - **B5, `net` and `tls` sockets (§7):** ✅ built (D-116), with pg, mysql2, ioredis, MongoDB and nodemailer matching real Node against real servers.
-- **The `http2` client (§12):** ✅ built (D-117), with got's `http2: true` matching real Node.
+- **The `http2` client (§12):** ✅ built (D-117), with got's `http2: true` matching real Node. Request trailers, `state`, priorities and the frames' real flags as Node 26 has them (D-118).
 - **Servers reached by hostname with intercepted ports (§5, D-112):** accepted (Tony, 2026-10-08).
 - **The rest, accepted with Tony's answers in §8** (2026-10-08):
   - got and real socket details (§11)
@@ -429,8 +429,14 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **Limits:** a session is reserved through the socket client's limits (`reserve`), and a stream takes one of the script's 16 request places, released when its body and trailers are done or it's reset.
 - **Events reach the script as a stream:** the session's goaway, settings and errors arrive as small JSON chunks on a host stream, the same flow control as bodies.
 - **got (`http2: true`):** http2-wrapper opens its own TLS socket (ALPN `h2`) and passes it as `createConnection`. When it's one of the isolate's own sockets, already through the rules, the session closes it and opens its own connection to the same origin.
-- **Node's details, matched against real Node:** the PRIORITY bit in response flags, `CANCEL` and `NO_ERROR` resets ending a stream quietly, `request()` on a destroyed session failing the stream rather than throwing, and the `connect` event's socket being distinct from `session.socket`.
+- **Node's details, matched against real Node:** `CANCEL` and `NO_ERROR` resets ending a stream quietly, `request()` on a destroyed session failing the stream rather than throwing, and the `connect` event's socket being distinct from `session.socket`.
 - **One race, found under CPU load:** calls into a connection from the isolate's thread raced with Netty, and a ping after a reset went unanswered. Every session and stream operation now runs on the connection's event loop.
+
+**Completing Node's client (D-118):** what Vert.x doesn't expose is read from the Netty connection beneath it (`NettyHttp2`).
+- **Flags:** the response's and the trailers' flags are their HEADERS frames' own, recorded by a listener on Netty's decoder. Node reports nghttp2's flags as they are: a Node server sends 4 (END_HEADERS), and Vert.x's server adds PRIORITY.
+- **Request trailers** go through Vert.x's own HTTP/2 stream (`writeHeaders(trailers, end)`), so Vert.x knows the request ended. A frame written past it on the Netty encoder left the response never ending.
+- **`state`** comes from Netty's connection, flow controllers and HPACK tables. A stream's state during an event is a snapshot taken as its frame was read, since Netty has often closed the stream by the time the script runs.
+- **Priorities, as Node 26:** RFC 9113 deprecated them, so nothing is sent and Node's DEP0194 warning is emitted once.
 
 ## 13. WebSockets (accepted)
 - **The ingress** passes `Upgrade: websocket` through to the service's node, then its internal endpoint. Frames are bridged both ways with backpressure. Today it strips `Upgrade`, so WebSockets don't pass.

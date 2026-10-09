@@ -94,7 +94,7 @@ public final class Http2Client {
         JsonObject tlsOptions = request.getJsonObject("tls", new JsonObject());
         ClientSSLOptions ssl;
         try {
-            ssl = tls ? SocketClient.sslOptions(tlsOptions).setUseAlpn(true).setApplicationLayerProtocols(List.of("h2")) : null;
+            ssl = tls ? SocketClient.sslOptions(tlsOptions.copy().put("ALPNProtocols", new JsonArray().add("h2"))) : null;
         } catch (IllegalArgumentException e) {
             return Future.failedFuture(new HostException("TypeError", "ERR_INVALID_ARG_VALUE", "Invalid TLS options: " + e.getMessage()));
         }
@@ -125,7 +125,7 @@ public final class Http2Client {
                     }
                     automately.core.metrics.Metrics.of(vertx).socketOpened(tenant == null ? "-" : tenant, tls);
                     return Future.<OutgoingHttp2Session>succeededFuture(new Session(connection, vertx.getOrCreateContext(), info, release,
-                            requestSlot, tls, host, port));
+                            requestSlot, tls, host, port, NettyHttp2.of(connection)));
                 })
                 .onFailure(err -> release.run()));
     }
@@ -248,9 +248,12 @@ public final class Http2Client {
         private final int port;
         private final Events events;
         private final AtomicBoolean closed = new AtomicBoolean();
+        /** The Netty connection beneath, for flags, trailers and state (D-118); null if it can't be reached. */
+        private final NettyHttp2 netty;
 
         Session(HttpClientConnection connection, Context context, JsonObject info, Runnable release, Supplier<Runnable> requestSlot,
-                boolean tls, String host, int port) {
+                boolean tls, String host, int port, NettyHttp2 netty) {
+            this.netty = netty;
             this.connection = connection;
             this.context = context;
             this.info = info;
@@ -336,7 +339,7 @@ public final class Http2Client {
                         slot.run();
                     }
                 };
-                Stream stream = new Stream(request, context, finished);
+                Stream stream = new Stream(request, context, finished, netty);
                     Future<Void> sent = onContext(() -> endStream ? request.end() : request.sendHead());
                 return sent.map(v -> (OutgoingHttp2Stream) stream).onFailure(err -> finished.run());
             }).onFailure(err -> slot.run()).recover(err -> Future.failedFuture(err instanceof HostException ? err
@@ -367,6 +370,11 @@ public final class Http2Client {
         }
 
         @Override
+        public JsonObject state() {
+            return netty == null ? new JsonObject() : netty.sessionState();
+        }
+
+        @Override
         public Future<Void> close() {
             return onContext(connection::shutdown).onComplete(done -> release.run());
         }
@@ -386,12 +394,14 @@ public final class Http2Client {
         private final Runnable finished;
         private final Promise<JsonObject> head = Promise.promise();
         private final Promise<JsonObject> trailers = Promise.promise();
+        private final NettyHttp2 netty;
         private volatile BodyStream body;
 
-        Stream(HttpClientRequest request, Context context, Runnable finished) {
+        Stream(HttpClientRequest request, Context context, Runnable finished, NettyHttp2 netty) {
             this.request = request;
             this.context = context;
             this.finished = finished;
+            this.netty = netty;
             request.exceptionHandler(err -> fail(err));
             request.response().onFailure(this::fail).onSuccess(response -> {
                 response.pause();
@@ -399,11 +409,15 @@ public final class Http2Client {
                 response.exceptionHandler(this::fail);
                 JsonArray raw = new JsonArray().add(":status").add(String.valueOf(response.statusCode()));
                 response.headers().forEach(h -> raw.add(h.getKey().toLowerCase(Locale.ROOT)).add(h.getValue()));
-                head.tryComplete(new JsonObject().put("rawHeaders", raw).put("status", response.statusCode()));
+                int id = (int) request.streamId();
+                int flags = netty == null ? NettyHttp2.END_HEADERS : netty.nextHeaderFlags(id, NettyHttp2.END_HEADERS);
+                head.tryComplete(new JsonObject().put("rawHeaders", raw).put("status", response.statusCode()).put("flags", flags));
                 response.end().onComplete(ended -> {
                     JsonArray rawTrailers = new JsonArray();
                     response.trailers().forEach(t -> rawTrailers.add(t.getKey().toLowerCase(Locale.ROOT)).add(t.getValue()));
-                    trailers.tryComplete(new JsonObject().put("rawTrailers", rawTrailers));
+                    int trailerFlags = netty == null ? NettyHttp2.END_HEADERS | NettyHttp2.END_STREAM
+                            : netty.nextHeaderFlags(id, NettyHttp2.END_HEADERS | NettyHttp2.END_STREAM);
+                    trailers.tryComplete(new JsonObject().put("rawTrailers", rawTrailers).put("flags", trailerFlags));
                     finished.run();
                 });
             });
@@ -457,13 +471,31 @@ public final class Http2Client {
 
         @Override
         public Future<JsonObject> trailers() {
-            return trailers.future();
+            // The script is done with the stream once it has its trailers: its state is forgotten then, not before.
+            return trailers.future().onComplete(done -> forget());
+        }
+
+        private void forget() {
+            if (netty != null && request.streamId() > 0) {
+                netty.forget(id());
+            }
+        }
+
+        @Override
+        public Future<Void> sendTrailers(JsonObject headers) {
+            return onLoop(() -> NettyHttp2.writeTrailers(request, headers));
+        }
+
+        @Override
+        public JsonObject state() {
+            return netty == null ? new JsonObject() : netty.streamState(id());
         }
 
         @Override
         public void reset(long code) {
             context.runOnContext(v -> request.reset(code));
             fail(streamError(code));
+            forget();
         }
     }
 }

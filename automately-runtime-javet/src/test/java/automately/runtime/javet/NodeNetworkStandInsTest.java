@@ -225,6 +225,36 @@ class NodeNetworkStandInsTest {
     }
 
     @Test
+    void httpRequestTakesItsProtocolFromTheAgentAsNodeDoes() throws Exception {
+        JsonArray out = run("""
+                import http from 'node:http';
+                import https from 'node:https';
+                const call = (options) => new Promise((resolve) => {
+                  try {
+                    const req = http.request('https://localhost:%d/', options, (res) => {
+                      let text = '';
+                      res.setEncoding('utf8');
+                      res.on('data', (c) => { text += c; });
+                      res.on('end', () => resolve(text));
+                    });
+                    req.on('error', (e) => resolve(e.code));
+                    req.end();
+                  } catch (e) {
+                    resolve(e.code);
+                  }
+                });
+                export default async () => [
+                  await call({ ca: %s }),
+                  // http2-wrapper (got's http2: true) falls back to HTTP/1.1 this way.
+                  await call({ _defaultAgent: https.globalAgent, ca: %2$s }),
+                  await call({ agent: new https.Agent({ ca: %2$s }) }),
+                ];
+                """.formatted(tlsServer.actualPort(), io.vertx.core.json.Json.encode(tlsCa)));
+
+        assertThat(out).containsExactly("ERR_INVALID_PROTOCOL", "secure", "secure");
+    }
+
+    @Test
     void diagnosticsChannelsPublishAndTrace() throws Exception {
         JsonArray out = run("""
                 import dc, { channel, subscribe, tracingChannel } from 'node:diagnostics_channel';

@@ -13,7 +13,7 @@ const call = (session, headers, body) => new Promise((resolve) => {
   let response = null;
   let trailers = null;
   req.on('response', (h, flags) => { events.push('response'); response = { status: h[':status'], type: h['content-type'], cookie: h['set-cookie'], repeat: h['x-repeat'], version: h['x-version'], flags }; });
-  req.on('trailers', (t) => { events.push('trailers'); trailers = { checksum: t['x-checksum'], count: t['x-count'] }; });
+  req.on('trailers', (t, flags) => { events.push('trailers'); trailers = { checksum: t['x-checksum'], count: t['x-count'], flags }; });
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => events.push('end'));
   req.on('error', (e) => events.push('error ' + e.code + ' ' + e.message));
@@ -70,6 +70,74 @@ export async function run() {
   const clear = await session(process.env.TEST_H2C);
   out.h2c = { alpn: clear.s.alpnProtocol, encrypted: clear.s.encrypted, json: (await call(clear.s, { ':path': '/json' })).response };
   clear.s.close();
+
+  // D-118: request trailers, the state objects and priorities, as Node 26 has them.
+  const warnings = [];
+  process.on('warning', (w) => warnings.push([w.name, w.code, w.message]));
+  const h2c = (await session(process.env.TEST_H2C)).s;
+  const fresh = h2c.state;
+  out.sessionState = { keys: Object.keys(fresh), nextStreamID: fresh.nextStreamID, lastProcStreamID: fresh.lastProcStreamID,
+    effectiveRecvDataLength: fresh.effectiveRecvDataLength };
+  out.uploadTrailers = await new Promise((resolve) => {
+    const events = [];
+    const req = h2c.request({ ':method': 'POST', ':path': '/request-trailers' }, { waitForTrailers: true });
+    const early = (() => { try { req.sendTrailers({ a: '1' }); return 'sent'; } catch (e) { return [e.code, e.message]; } })();
+    req.on('wantTrailers', () => {
+      events.push('wantTrailers');
+      for (const bad of [{ ':path': '/' }, { connection: 'close' }]) {
+        try { req.sendTrailers(bad); } catch (e) { events.push([e.name, e.code, e.message]); }
+      }
+      req.sendTrailers({ 'X-Sum': 42, 'x-list': ['a', 'b'] });
+      events.push(['sentTrailers', { ...req.sentTrailers }]);
+      try { req.sendTrailers({}); } catch (e) { events.push([e.code, e.message]); }
+    });
+    req.on('finish', () => events.push('finish'));
+    req.on('response', (h, flags) => {
+      const state = req.state;
+      events.push(['response', h[':status'], flags, Object.keys(state), state.state, state.weight, state.sumDependencyWeight, state.localClose]);
+    });
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => events.push('end'));
+    req.on('close', () => {
+      const after = (() => { try { req.sendTrailers({}); return 'sent'; } catch (e) { return [e.code, e.message]; } })();
+      resolve({ early, events, received: JSON.parse(body), rstCode: req.rstCode, stateAfter: req.state, after });
+    });
+    req.write('part one ');
+    req.end('part two');
+  });
+  out.noTrailerListener = await new Promise((resolve) => {
+    const req = h2c.request({ ':method': 'POST', ':path': '/request-trailers' }, { waitForTrailers: true });
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (c) => { body += c; });
+    req.on('close', () => resolve({ received: JSON.parse(body), sentTrailers: req.sentTrailers && { ...req.sentTrailers }, rstCode: req.rstCode }));
+    req.end('x');
+  });
+  out.getWaitsForNothing = await new Promise((resolve) => {
+    const events = [];
+    const req = h2c.request({ ':path': '/request-trailers' }, { waitForTrailers: true });
+    req.on('wantTrailers', () => events.push('wantTrailers'));
+    req.on('response', (h, flags) => events.push(['response', flags, req.state.state]));
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (c) => { body += c; });
+    req.on('close', () => resolve({ events, received: JSON.parse(body), sentTrailers: req.sentTrailers }));
+  });
+  out.priority = await new Promise((resolve) => {
+    const req = h2c.request({ ':path': '/json' }, { weight: 200, exclusive: true });
+    const returned = req.priority({ weight: 1, silent: true });
+    req.resume();
+    req.on('close', () => resolve({ returned, stateAfterClose: req.state }));
+  });
+  const used = h2c.state;
+  out.sessionStateAfter = { nextStreamID: used.nextStreamID, lastProcStreamID: used.lastProcStreamID, inflate: used.inflateDynamicTableSize > 0,
+    deflate: used.deflateDynamicTableSize > 0 };
+  h2c.close();
+  await new Promise((resolve) => h2c.on('close', resolve));
+  out.closedSessionState = h2c.state;
+  out.warnings = warnings;
 
   out.untrusted = (await session(process.env.TEST_H2)).error;
   out.wrongName = (await session(process.env.TEST_H2.replace('localhost', '127.0.0.1'), { ca })).error;

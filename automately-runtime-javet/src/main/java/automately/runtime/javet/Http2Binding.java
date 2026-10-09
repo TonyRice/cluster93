@@ -53,6 +53,28 @@ public final class Http2Binding {
         return bridge.promise(() -> stream == null ? closed() : stream.end().map(v -> JsValues.UNDEFINED));
     }
 
+    /** Ends the stream with trailers, as Node's sendTrailers. */
+    @V8Function(name = "sendTrailers")
+    public V8ValuePromise sendTrailers(int id, V8Value trailers) throws JavetException {
+        OutgoingHttp2Stream stream = bridge.http2Stream(id);
+        JsonObject headers = bridge.values().options(trailers);
+        return bridge.promise(() -> stream == null ? closed() : stream.sendTrailers(headers).map(v -> JsValues.UNDEFINED));
+    }
+
+    /** Node's {@code stream.state}; {} once the stream is done with. */
+    @V8Function(name = "streamState")
+    public V8Value streamState(int id) throws JavetException {
+        OutgoingHttp2Stream stream = bridge.http2Stream(id);
+        return bridge.values().toJs(stream == null ? new JsonObject() : stream.state());
+    }
+
+    /** Node's {@code session.state}; {} once the session is closed. */
+    @V8Function(name = "sessionState")
+    public V8Value sessionState(int sessionId) throws JavetException {
+        OutgoingHttp2Session session = bridge.session(sessionId);
+        return bridge.values().toJs(session == null ? new JsonObject() : session.state());
+    }
+
     /** Resolves with the response's {@code rawHeaders} and {@code status}, and the {@code bodyId} its body arrives on. */
     @V8Function(name = "response")
     public V8ValuePromise response(int id) throws JavetException {

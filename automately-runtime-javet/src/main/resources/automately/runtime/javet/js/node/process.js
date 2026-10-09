@@ -47,7 +47,7 @@ const process = {
       try { fn(...args); } catch (e) { globalThis[Symbol.for('automately.uncaught')](e, 'process.nextTick callback'); }
     });
   },
-  emitWarning: (warning) => console.warn(typeof warning === 'string' ? 'Warning: ' + warning : String(warning)),
+  emitWarning: nodeEmitWarning,
   exit: (code) => {
     throw new Error('process.exit(' + (code ?? '') + ') is not supported in the isolate; return from the script instead');
   },
@@ -73,6 +73,59 @@ const process = {
 
 // The event loop's check for unhandled rejections emits on it (D-110), whatever a script does to the global.
 Object.defineProperty(globalThis, Symbol.for('automately.process'), { value: process });
+
+/**
+ * Node's process.emitWarning (lib/internal/process/warning.js): a warning Error with its type as name and its code,
+ * emitted as 'warning' on the next tick and written as Node writes it, "(node:1) [CODE] Name: message". Deprecations
+ * honour noDeprecation and throwDeprecation.
+ */
+function nodeEmitWarning(warning, type, code, ctor) {
+  let detail;
+  if (type !== null && typeof type === 'object' && !Array.isArray(type)) {
+    ctor = type.ctor;
+    code = type.code;
+    if (typeof type.detail === 'string') detail = type.detail;
+    type = type.type || 'Warning';
+  } else if (typeof type === 'function') {
+    ctor = type;
+    code = undefined;
+    type = 'Warning';
+  }
+  if (type !== undefined && typeof type !== 'string') throw invalidArg('type', 'of type string', type);
+  if (typeof code === 'function') {
+    ctor = code;
+    code = undefined;
+  } else if (code !== undefined && typeof code !== 'string') {
+    throw invalidArg('code', 'of type string', code);
+  }
+  if (typeof warning === 'string') {
+    const message = warning;
+    warning = new Error(message);
+    warning.name = String(type || 'Warning');
+    if (code !== undefined) warning.code = code;
+    if (detail !== undefined) warning.detail = detail;
+    Error.captureStackTrace?.(warning, ctor || nodeEmitWarning);
+  } else if (!(warning instanceof Error)) {
+    throw invalidArg('warning', 'an instance of Error or of type string', warning);
+  }
+  if (warning.name === 'DeprecationWarning') {
+    if (process.noDeprecation) return;
+    if (process.throwDeprecation) throw warning;
+  }
+  process.nextTick(() => {
+    if (!process.noProcessWarnings) {
+      const text = `(node:${process.pid}) ${warning.code ? `[${warning.code}] ` : ''}${warning.toString()}`;
+      console.warn(warning.detail ? `${text}\n${warning.detail}` : text);
+    }
+    process.emit('warning', warning);
+  });
+}
+
+function invalidArg(name, expected, actual) {
+  const err = new TypeError(`The "${name}" argument must be ${expected}. Received ${actual === null ? 'null' : typeof actual === 'object' ? 'an instance of ' + (actual.constructor?.name ?? 'Object') : `type ${typeof actual} (${String(actual)})`}`);
+  err.code = 'ERR_INVALID_ARG_TYPE';
+  return err;
+}
 
 const started = Date.now();
 function performanceNow() {
