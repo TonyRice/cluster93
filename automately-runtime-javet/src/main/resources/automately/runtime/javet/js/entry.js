@@ -7,4 +7,4 @@ const invoke = async (fn, inputJson, contextJson) => {
     return JSON.stringify({ ok: false, error: errorText(e) });
   }
 };
-return { invoke, fire, requestStop, deliver, request, chunk, streamError };
+return { invoke, fire, requestStop, deliver, request, chunk, streamError, rejected, handled, checkRejections };

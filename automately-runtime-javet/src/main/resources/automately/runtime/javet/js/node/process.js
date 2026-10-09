@@ -70,6 +70,9 @@ const process = {
   [Symbol.toStringTag]: 'process',
 };
 
+// The event loop's check for unhandled rejections emits on it (D-110), whatever a script does to the global.
+Object.defineProperty(globalThis, Symbol.for('automately.process'), { value: process });
+
 const started = Date.now();
 function performanceNow() {
   return Date.now() - started;

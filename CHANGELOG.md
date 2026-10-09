@@ -26,6 +26,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Unhandled promise rejections fail the job, as in Node (2026-10-08)
+
+### Changed
+- **A promise rejected with no handler fails the job** (D-110), as an unhandled rejection ends Node since v15. It's checked after every turn of the event loop, once microtasks have run, so a handler added in the same turn is in time and one added a turn later isn't, as in Node. A rejection in the turn that finishes the script still fails it. The error reads `Unhandled promise rejection: <the reason's stack>`. **Why:** a forgotten `await` or a floating promise used to vanish silently and let the job report success. Tony: nothing runs in production, so there's no grace period.
+- **`process.on('unhandledRejection')` and `'rejectionHandled'` work,** as in Node: with an `unhandledRejection` listener the job goes on, and a throw in that listener fails it.
+- **A promise returned by a timer callback is ignored, as in Node,** so its rejection is an ordinary unhandled rejection, which a listener can hear. Before, it was reported as an uncaught error in the timer callback. A synchronous throw in a timer callback still is.
+
+### Tested
+- `JavetScriptRuntimeTest`: rejections left alone, from an async timer callback, handled too late and in the script's last turn fail the job; one handled in the same turn or heard by a listener doesn't; a throwing listener fails it; and a module that fails to load is still reported as itself. The real-npm suite (30 fixtures) still matches Node.
+
 ## Node's `http` and `https` in the isolate; axios and node-fetch run (2026-10-08)
 
 ### Added

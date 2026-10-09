@@ -1860,3 +1860,27 @@ It's written for people, because the console will show the same response as a "N
 - **`got`** isn't tested; it needs `http2-wrapper` and socket timing events.
 - **Servers** (`createServer`) are B3.
 
+## D-110: Unhandled promise rejections fail the job, as in Node (2026-10-08)
+
+**Status:** accepted (Tony: "i think we should address that, there is nothing running this in production literally").
+
+**Context:** D-109 made a throw in a microtask, `process.nextTick` or an `http` listener fail the job, but left unhandled rejections alone. Node ends the process for one (the `throw` mode, default since v15). In the isolate it vanished: `fetch(url)` without an `await`, or a library's floating promise, failed silently and the job reported success. The note proposed a grace period (log first, fail later); with nothing in production there's no one to protect.
+
+**Decision:**
+1. **V8 reports them; the prelude keeps them.** The runtime sets Javet's promise-reject callback. A rejection with no handler is recorded under its promise, and a handler added later takes it back. Javet closes both values when the callback returns, so they're kept in the prelude's `Map`, not in Java.
+2. **Checked when Node checks:** after each turn of the event loop, meaning after microtasks have drained following a batch of tasks or a timer. A handler attached in the same turn is in time; one attached after a later turn isn't. A final check runs once the script's promise has settled and every queued microtask has run, so a rejection in the script's last turn still fails it.
+3. **What happens to one still unhandled:**
+   - If `process` has `unhandledRejection` listeners, they get `(reason, promise)` and the job goes on. A later handler then emits `rejectionHandled`.
+   - Without listeners, the job fails with `Unhandled promise rejection: <reason>`, the reason's stack when it has one.
+   - A throw in either listener fails the job as an uncaught error.
+   - The prelude finds `process` under `Symbol.for('automately.process')`, so a script that replaces the global doesn't turn the check off.
+4. **The script's own failure wins.** If the default export throws, that's the error, not a rejection it left behind. A module that fails to load is reported as itself: the check doesn't run once the promise being waited on has settled, and the module's own evaluation promise is the one that rejected.
+5. **Promises returned by timer callbacks are ignored,** as Node's `setTimeout` ignores them, so their rejections take the path above. That replaces D-109's special case, which reported them as uncaught timer errors no listener could hear.
+6. **Services too:** a floating rejection ends a service's run, as it would end a Node server. Handlers' own promises are awaited by `ctx.serve`, so they aren't floating.
+7. **No grace period and no switch.** Node's `--unhandled-rejections=warn` isn't offered. A script that wants to survive them registers a listener, as in Node.
+
+**Consequences:**
+- **Scripts that relied on silent rejections now fail.** That's intended: each was a bug.
+- **Library risk:** a library that leaves internal promises rejected would now fail jobs, as it would crash Node. All 30 real-npm fixtures still match Node.
+- **Tested** in `JavetScriptRuntimeTest` (seven cases).
+

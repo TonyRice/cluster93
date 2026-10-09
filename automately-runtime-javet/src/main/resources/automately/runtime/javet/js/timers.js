@@ -22,16 +22,44 @@ define('clearInterval', clear);
 const reportUncaught = (e, where) => host.uncaught(`Uncaught error in ${where}: ${errorText(e)}`);
 Object.defineProperty(globalThis, Symbol.for('automately.uncaught'), { value: reportUncaught });
 
+// Promises rejected with no handler (D-110). V8 reports each as it's rejected, and again if a handler is added later;
+// the event loop checks after every turn, once microtasks have run, as Node does. Each still unhandled goes to
+// process.on('unhandledRejection') listeners if there are any, and otherwise ends the job, as Node's default (`throw`
+// since v15) ends the process. One handled after its listeners heard of it emits 'rejectionHandled'.
+const unhandled = new Map();
+const reported = new WeakSet();
+const processOf = () => globalThis[Symbol.for('automately.process')];
+const rejected = (promise, reason) => { unhandled.set(promise, reason); };
+const handled = (promise) => {
+  if (unhandled.delete(promise) || !reported.has(promise)) return;
+  reported.delete(promise);
+  try { processOf()?.emit('rejectionHandled', promise); } catch (e) { reportUncaught(e, "a 'rejectionHandled' listener"); }
+};
+const checkRejections = () => {
+  for (const [promise, reason] of unhandled) {
+    unhandled.delete(promise);
+    try {
+      if (processOf()?.emit('unhandledRejection', reason, promise)) {
+        reported.add(promise);
+        continue;
+      }
+    } catch (e) {
+      reportUncaught(e, "an 'unhandledRejection' listener");
+      return;
+    }
+    host.uncaught(`Unhandled promise rejection: ${errorText(reason)}`);
+    return;
+  }
+};
+
 // Called by the event loop when timer `id` is due.
 const fire = (id) => {
   const timer = timers.get(id);
   if (!timer) return;
   if (timer.repeat) host.timer(id, timer.ms); else timers.delete(id);
+  // A promise the callback returns is ignored, as in Node; if it rejects, that's an unhandled rejection (below).
   try {
-    const result = timer.fn(...timer.args);
-    if (result && typeof result.then === 'function') {
-      result.then(undefined, (e) => host.uncaught(`Uncaught error in timer callback: ${errorText(e)}`));
-    }
+    timer.fn(...timer.args);
   } catch (e) {
     host.uncaught(`Uncaught error in timer callback: ${errorText(e)}`);
   }

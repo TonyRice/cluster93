@@ -153,7 +153,7 @@ A job-shaped `process`, also available as a global (D-096).
 - **`env`:** exactly what the job declared, plus `NODE_ENV=production`. It's never the node's environment.
   - Secrets are referenced by name (`{"secret": "stripe-live"}`), read when the run starts, and only for tokens with `secrets:use` (D-068). Their values are masked in the job's log.
   - The full guide is in [host APIs](host-apis.md).
-- **There:** `nextTick` (a microtask; a throw in its callback fails the job, as an uncaught exception ends Node), `hrtime` and `hrtime.bigint`, `uptime`, `cwd()` (`/`), `platform` (`linux`), `arch` (`x64`), `argv` (`[]`), `pid` (1), `emitWarning`, and `stdout.write`/`stderr.write` (to the log). Also `on`/`emit` and the other listener methods; nothing emits events, though.
+- **There:** `nextTick` (a microtask; a throw in its callback fails the job, as an uncaught exception ends Node), `hrtime` and `hrtime.bigint`, `uptime`, `cwd()` (`/`), `platform` (`linux`), `arch` (`x64`), `argv` (`[]`), `pid` (1), `emitWarning`, and `stdout.write`/`stderr.write` (to the log). Also `on`/`emit` and the other listener methods. The only events emitted are `unhandledRejection` and `rejectionHandled`, as in Node (D-110): without an `unhandledRejection` listener, a promise rejected with no handler by the end of a turn fails the job.
 - **Differs:**
   - `version` is `''` and `versions` is `{}` (D-102). `memoryUsage()` is zeros.
   - `Object.prototype.toString.call(process)` is `[object process]`, as in Node (D-109). axios checks it to choose its Node adapter.
@@ -380,7 +380,7 @@ These exist for their pure parts, so libraries that import them load. They open 
 - **PKCS#1 v1.5 decryption** is refused in `privateDecrypt`; use OAEP (D-104).
 - **Streams:** crypto classes aren't streams; `fetch` bodies and `files.stream` are async iterables, not Node streams. `fs` streams hold the whole file (32 MB).
 - **HTTP:** no real sockets behind `req.socket`; agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused.
-- **Uncaught errors:** a throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` event listener, fails the job as it would end Node. Unhandled promise rejections don't, yet.
+- **Uncaught errors:** a throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` event listener, fails the job as it would end Node. So does a promise rejected with no handler by the end of the turn (D-110), unless `process.on('unhandledRejection')` has a listener; that one isn't a difference from Node.
 - **Approximate output:** `util.inspect` output and `assert`'s messages for structures.
 - **Compressed bytes** may differ from Node's (both are valid).
 - **URLs:** no punycode, and IPv6 isn't normalised.

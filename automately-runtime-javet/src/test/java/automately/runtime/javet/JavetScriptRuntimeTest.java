@@ -542,6 +542,73 @@ class JavetScriptRuntimeTest {
             assertThat(result.error()).contains("Uncaught error in " + where).contains("micro exploded");
         }
 
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.ValueSource(strings = {
+                // Rejected and never handled, while the script waits.
+                "Promise.reject(new Error('left alone')); return ctx.sleep(1000);",
+                // An async timer callback whose promise rejects: Node ignores the promise, so nothing handles it.
+                "setTimeout(async () => { throw new Error('left alone'); }, 5); return ctx.sleep(1000);",
+                // A handler added only after a later turn of the loop is too late, as in Node.
+                "const p = Promise.reject(new Error('left alone')); await ctx.sleep(20); await p.catch(() => {});",
+                // Rejected in the very turn the script returns.
+                "Promise.reject(new Error('left alone')); return 'done';"})
+        void anUnhandledRejectionFailsTheRunAsInNode(String body) throws Exception {
+            ExecutionResult result = run("export default async (input, ctx) => { " + body + " }");
+
+            assertThat(result.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(result.error()).contains("Unhandled promise rejection").contains("left alone");
+        }
+
+        @Test
+        void rejectionsHandledInTheSameTurnOrHeardByAListenerDont() throws Exception {
+            ExecutionResult result = run("""
+                    export default async (input, ctx) => {
+                      const heard = [];
+                      // Handled later in the same turn: V8 reports it, then takes it back.
+                      const p = Promise.reject(new Error('caught late'));
+                      await null;
+                      p.catch(() => heard.push('caught'));
+                      // Heard by a listener: the job goes on, and handling it afterwards is reported too.
+                      process.on('unhandledRejection', (reason, promise) => heard.push('unhandled: ' + reason.message));
+                      process.on('rejectionHandled', () => heard.push('handled after all'));
+                      const q = Promise.reject(new Error('heard'));
+                      await ctx.sleep(20);
+                      q.catch(() => {});
+                      await ctx.sleep(20);
+                      return heard;
+                    }
+                    """);
+
+            assertThat(result.error()).isNull();
+            assertThat((JsonArray) result.output()).containsExactly("caught", "unhandled: heard", "handled after all");
+        }
+
+        @Test
+        void aThrowInAnUnhandledRejectionListenerFailsTheRun() throws Exception {
+            ExecutionResult result = run("""
+                    export default async (input, ctx) => {
+                      process.on('unhandledRejection', () => { throw new Error('listener exploded'); });
+                      Promise.reject(new Error('first'));
+                      return ctx.sleep(1000);
+                    }
+                    """);
+
+            assertThat(result.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(result.error()).contains("'unhandledRejection' listener").contains("listener exploded");
+        }
+
+        @Test
+        void aModuleThatFailsToLoadIsReportedAsItselfNotAsARejection() throws Exception {
+            ExecutionResult result = run("""
+                    await null;
+                    throw new Error('broken at load');
+                    export default () => 1;
+                    """);
+
+            assertThat(result.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(result.error()).contains("broken at load").doesNotContain("Unhandled promise rejection");
+        }
+
         @Test
         void timerCountIsLimited() throws Exception {
             ExecutionResult result = run("""

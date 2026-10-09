@@ -433,37 +433,64 @@ public final class JavetScriptRuntime implements ScriptRuntime {
              V8Module module = v8.getExecutor(automately.core.packages.Imports.rewrite(execution.script(), ModuleResolver.JOB_URL))
                      .setResourceName(ModuleResolver.JOB).compileV8Module()) {
             defineProcess(v8, resolver);
-            // Evaluating a module answers a promise: it rejects if the module (or one it imports) throws, and settles
-            // later if one awaits at the top level.
-            try (V8Value evaluated = module.execute(true)) {
-                if (evaluated instanceof V8ValuePromise loading) {
-                    ExecutionResult early = runLoop(v8, loading, js, execution, control);
-                    if (early != null) {
-                        return early;
-                    }
-                    if (loading.isRejected()) {
-                        try (V8Value error = loading.getResult()) {
-                            return ExecutionResult.failed(describe(error));
-                        }
+            v8.setPromiseRejectCallback((event, promise, reason) -> {
+                try {
+                    js.rejection(event, promise, reason);
+                } catch (JavetException e) {
+                    control.loop.reportUncaught("Could not track a promise rejection: " + e.getMessage());
+                }
+            });
+            try {
+                return evaluate(v8, module, js, execution, control);
+            } finally {
+                // The entry points close with this block; nothing after it, such as the bridge closing, is the script's.
+                v8.setPromiseRejectCallback((event, promise, reason) -> { });
+            }
+        }
+    }
+
+    private ExecutionResult evaluate(V8Runtime v8, V8Module module, ScriptEntryPoints js, Execution execution, Control control)
+            throws JavetException {
+        // Evaluating a module answers a promise: it rejects if the module (or one it imports) throws, and settles
+        // later if one awaits at the top level.
+        try (V8Value evaluated = module.execute(true)) {
+            if (evaluated instanceof V8ValuePromise loading) {
+                ExecutionResult early = runLoop(v8, loading, js, execution, control);
+                if (early != null) {
+                    return early;
+                }
+                if (loading.isRejected()) {
+                    try (V8Value error = loading.getResult()) {
+                        return ExecutionResult.failed(describe(error));
                     }
                 }
             }
-            try (V8ValueObject namespace = (V8ValueObject) module.getNamespace();
-                 V8Value entry = namespace.get("default")) {
-                if (!(entry instanceof V8ValueFunction fn)) {
-                    return ExecutionResult.failed("The script must export a default function");
+        }
+        try (V8ValueObject namespace = (V8ValueObject) module.getNamespace();
+             V8Value entry = namespace.get("default")) {
+            if (!(entry instanceof V8ValueFunction fn)) {
+                return ExecutionResult.failed("The script must export a default function");
+            }
+            String context = execution.context().toScriptJson().encode();
+            try (V8ValuePromise promise = js.invoke.call(null, fn, execution.input().encode(), context)) {
+                ExecutionResult early = runLoop(v8, promise, js, execution, control);
+                if (early != null) {
+                    return early;
                 }
-                String context = execution.context().toScriptJson().encode();
-                try (V8ValuePromise promise = js.invoke.call(null, fn, execution.input().encode(), context)) {
-                    ExecutionResult early = runLoop(v8, promise, js, execution, control);
-                    if (early != null) {
-                        return early;
-                    }
-                    JsonObject envelope = new JsonObject(promise.getResultString());
-                    return envelope.getBoolean("ok")
-                            ? ExecutionResult.succeeded(envelope.getValue("output"))
-                            : ExecutionResult.failed(envelope.getString("error"));
+                JsonObject envelope = new JsonObject(promise.getResultString());
+                if (!envelope.getBoolean("ok")) {
+                    return ExecutionResult.failed(envelope.getString("error"));
                 }
+                // A rejection left unhandled in the turn that finished the script still fails it, as it would end
+                // Node before the process exits (D-110).
+                drainAll(v8, control);
+                js.checkRejections();
+                if (control.killedWith() != null) {
+                    return control.killedWith();
+                }
+                return control.loop.uncaught() != null
+                        ? ExecutionResult.failed(control.loop.uncaught())
+                        : ExecutionResult.succeeded(envelope.getValue("output"));
             }
         }
     }
@@ -501,6 +528,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 return control.killedWith();
             }
             drainMicrotasks(v8, promise, control);
+            checkRejections(v8, promise, js, control);
             if (loop.uncaught() != null) {
                 return ExecutionResult.failed(loop.uncaught());
             }
@@ -517,6 +545,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 js.fireTimer(id);
                 worked = true;
                 drainMicrotasks(v8, promise, control);
+                checkRejections(v8, promise, js, control);
             }
             if (worked) {
                 continue;
@@ -538,6 +567,26 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             if (task != null) {
                 task.run(js);
             }
+        }
+    }
+
+    /**
+     * After a turn of the loop, as Node checks after each macrotask (D-110): a rejection still without a handler ends
+     * the job, or goes to the script's {@code unhandledRejection} listeners, whose own microtasks then run. Not once the
+     * script's promise settled: that may be the module's own failed load, which is reported as itself.
+     */
+    private static void checkRejections(V8Runtime v8, V8ValuePromise promise, ScriptEntryPoints js, Control control)
+            throws JavetException {
+        if (promise.isPending() && control.killedWith() == null) {
+            js.checkRejections();
+            drainMicrotasks(v8, promise, control);
+        }
+    }
+
+    /** Runs every queued microtask, even once the script's promise settled. */
+    private static void drainAll(V8Runtime v8, Control control) throws JavetException {
+        while (control.killedWith() == null && v8.await()) {
+            // Each call runs the queue; it answers whether more work remains.
         }
     }
 
