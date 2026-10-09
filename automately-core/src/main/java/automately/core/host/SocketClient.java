@@ -109,6 +109,39 @@ public final class SocketClient {
         String what = tls == null ? "net.connect" : "tls.connect";
         String target = host;
         int targetPort = port;
+        return reserve(tenant, executionOpen, what, target, targetPort).compose(release -> {
+            return egress.address(tenant, target, targetPort, EgressProtocol.TCP, what).compose(address -> {
+                ConnectOptions options = new ConnectOptions()
+                        .setRemoteAddress(SocketAddress.inetSocketAddress(targetPort, address.getHostAddress()))
+                        .setHost(target)
+                        .setPort(targetPort)
+                        .setTimeout(CONNECT_TIMEOUT_MS);
+                if (ssl != null) {
+                    options.setSsl(true).setSslOptions(ssl);
+                    String servername = servername(tls, target);
+                    if (servername != null) {
+                        options.setSniServerName(servername);
+                    }
+                }
+                return client.connect(options).recover(err -> Future.failedFuture(networkError(err, what, address.getHostAddress(), targetPort)))
+                        .compose(socket -> {
+                            socket.pause();
+                            return verified(socket, tls).map(info -> {
+                                automately.core.metrics.Metrics.of(vertx).socketOpened(tenant == null ? "-" : tenant, ssl != null);
+                                return (OutgoingSocket) new Connection(socket, vertx.getOrCreateContext(), tenant == null ? "-" : tenant, target,
+                                        release, info);
+                            });
+                        });
+            }).onFailure(err -> release.run());
+        });
+    }
+
+    /**
+     * A place for one more connection within the cluster policy's limits (D-116): one of the script's sockets, one of the
+     * tenant's on this node, and a token from its connect rate. Completes with how to give the place back (once), or fails
+     * with the limit it hit. Sockets and HTTP/2 sessions both count.
+     */
+    Future<Runnable> reserve(String tenant, AtomicInteger executionOpen, String what, String target, int targetPort) {
         return egress.cluster().compose(policy -> {
             EgressLimits limits = policy.limits();
             if (executionOpen.incrementAndGet() > limits.socketsPerExecution()) {
@@ -136,29 +169,7 @@ public final class SocketClient {
                         + " is not allowed: this tenant opened more than " + limits.connectsPerMinute()
                         + " connections in the last minute on this node"));
             }
-            return egress.address(tenant, target, targetPort, EgressProtocol.TCP, what).compose(address -> {
-                ConnectOptions options = new ConnectOptions()
-                        .setRemoteAddress(SocketAddress.inetSocketAddress(targetPort, address.getHostAddress()))
-                        .setHost(target)
-                        .setPort(targetPort)
-                        .setTimeout(CONNECT_TIMEOUT_MS);
-                if (ssl != null) {
-                    options.setSsl(true).setSslOptions(ssl);
-                    String servername = servername(tls, target);
-                    if (servername != null) {
-                        options.setSniServerName(servername);
-                    }
-                }
-                return client.connect(options).recover(err -> Future.failedFuture(networkError(err, what, address.getHostAddress(), targetPort)))
-                        .compose(socket -> {
-                            socket.pause();
-                            return verified(socket, tls).map(info -> {
-                                automately.core.metrics.Metrics.of(vertx).socketOpened(tenant == null ? "-" : tenant, ssl != null);
-                                return (OutgoingSocket) new Connection(socket, vertx.getOrCreateContext(), tenant == null ? "-" : tenant, target,
-                                        release, info);
-                            });
-                        });
-            }).onFailure(err -> release.run());
+            return Future.succeededFuture(release);
         });
     }
 
@@ -190,14 +201,18 @@ public final class SocketClient {
         if (tls == null || described == null || described.getBoolean("authorized", false) || !tls.getBoolean("rejectUnauthorized", true)) {
             return Future.succeededFuture(info);
         }
-        String code = described.getString("authorizationError");
         socket.close();
+        return Future.failedFuture(verifyFailure(described.getString("authorizationError")));
+    }
+
+    /** A refused chain as Node's error: OpenSSL's code and words. */
+    static HostException verifyFailure(String code) {
         String message = automately.core.host.ConnectionInfo.VERIFY_MESSAGES.getOrDefault(code, "certificate verification failed");
         // Node 26 adds this hint when the chain doesn't reach a root it knows; the isolate keeps its words.
         if (NODE_HINTED.contains(code)) {
             message += "; if the root CA is installed locally, try running Node.js with --use-system-ca";
         }
-        return Future.failedFuture(new HostException("Error", code, message));
+        return new HostException("Error", code, message);
     }
 
     /** The JVM-side TLS options for a script's {@code tls.connect} options. */
@@ -275,6 +290,10 @@ public final class SocketClient {
         }
         String message = chain.toString().toLowerCase(Locale.ROOT);
         String at = (address.contains(":") ? "[" + address + "]" : address) + ":" + port;
+        if (message.contains("no_application_protocol")) {
+            // The server takes none of the ALPN protocols offered (an HTTP/2 client at an HTTP/1-only server).
+            return new HostException("Error", "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL", "tlsv1 alert no application protocol");
+        }
         if (handshake || message.contains("handshake") || message.contains("certificate")) {
             String code = message.contains("expired") ? "CERT_HAS_EXPIRED"
                     : message.contains("subject alternative") || message.contains("no name matching") || message.contains("hostname")

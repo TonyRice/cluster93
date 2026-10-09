@@ -132,7 +132,7 @@ class NodeNetworkStandInsTest {
                 export default () => [
                   net.isIP('10.0.0.1'), net.isIP('::1'), net.isIP('01.1.1.1'), net.isIPv6('fe80::1%eth0'),
                   code(() => net.createServer()), code(() => tls.createServer()),
-                  http2.constants.HTTP2_HEADER_STATUS, code(() => http2.connect('https://example.com')),
+                  http2.constants.HTTP2_HEADER_STATUS, code(() => http2.createServer()),
                   tty.isatty(1), tls.DEFAULT_MIN_VERSION,
                 ];
                 """);

@@ -90,6 +90,8 @@ public final class HostBridge {
     private final Map<Integer, FileWriter> writers = new ConcurrentHashMap<>();
     private final Map<Integer, automately.core.runtime.OutgoingRequest> outgoing = new ConcurrentHashMap<>();
     private final Map<Integer, automately.core.runtime.OutgoingSocket> sockets = new ConcurrentHashMap<>();
+    private final Map<Integer, automately.core.runtime.OutgoingHttp2Session> sessions = new ConcurrentHashMap<>();
+    private final Map<Integer, automately.core.runtime.OutgoingHttp2Stream> http2Streams = new ConcurrentHashMap<>();
     private final AtomicInteger nextReplyId = new AtomicInteger(1);
     private final AtomicInteger nextId = new AtomicInteger(1);
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -344,6 +346,40 @@ public final class HostBridge {
         return sockets.remove(id);
     }
 
+    // --- HTTP/2 sessions and streams (D-117) ---
+
+    int addSession(automately.core.runtime.OutgoingHttp2Session session) {
+        int id = nextId.getAndIncrement();
+        if (closed.get()) {
+            session.destroy();
+        } else {
+            sessions.put(id, session);
+        }
+        return id;
+    }
+
+    automately.core.runtime.OutgoingHttp2Session session(int id) {
+        return sessions.get(id);
+    }
+
+    automately.core.runtime.OutgoingHttp2Session removeSession(int id) {
+        return sessions.remove(id);
+    }
+
+    int addHttp2Stream(automately.core.runtime.OutgoingHttp2Stream stream) {
+        int id = nextId.getAndIncrement();
+        http2Streams.put(id, stream);
+        return id;
+    }
+
+    automately.core.runtime.OutgoingHttp2Stream http2Stream(int id) {
+        return http2Streams.get(id);
+    }
+
+    automately.core.runtime.OutgoingHttp2Stream removeHttp2Stream(int id) {
+        return http2Streams.remove(id);
+    }
+
     // --- outgoing HTTP requests (node:http, D-109) ---
 
     int addOutgoing(automately.core.runtime.OutgoingRequest request) {
@@ -403,6 +439,9 @@ public final class HostBridge {
         // A run's sockets close with it, whatever it left open (D-116).
         sockets.values().forEach(automately.core.runtime.OutgoingSocket::destroy);
         sockets.clear();
+        http2Streams.clear();
+        sessions.values().forEach(automately.core.runtime.OutgoingHttp2Session::destroy);
+        sessions.clear();
         awaitingReply.values().forEach(inbound -> inbound.fail(503, "The script ended before it answered"));
         awaitingReply.clear();
         apis.close();

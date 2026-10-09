@@ -26,6 +26,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Node's `http2` client; got with `http2: true` (2026-10-09)
+
+### Added
+- **`http2.connect` and its sessions and streams, as Node's** (D-117), on the host's HTTP/2 connections:
+  - **Connecting:** over TLS with ALPN, verified as `tls` sockets are, or h2c over `http:`.
+  - **Streams:** parallel, with trailers, resets, ping, settings and goaway, and Node's headers, flags and errors.
+  - **Limits:** a session counts as a socket, a stream as one of the script's 16 requests.
+  - **No servers.**
+  - **Why:** phase B's HTTP/2 step; got's `http2: true` and other HTTP/2 clients need it.
+- **got with `http2: true`** gives real Node's results. http2-wrapper's own TLS socket is accepted, and replaced by the host's connection.
+
+### Fixed
+- **HTTP/2 calls run on the connection's event loop.** Under CPU load, a ping after a reset went unanswered.
+
 ## `net` and `tls` sockets; pg, mysql2, ioredis, MongoDB and nodemailer run (2026-10-09)
 
 ### Added

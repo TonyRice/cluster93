@@ -6,6 +6,7 @@
 - **Configurable address spaces (§10):** ✅ built (D-111, D-113).
 - **got and real socket details (§11):** ✅ built (D-114). The isolate reports a Node version so got loads (D-115).
 - **B5, `net` and `tls` sockets (§7):** ✅ built (D-116), with pg, mysql2, ioredis, MongoDB and nodemailer matching real Node against real servers.
+- **The `http2` client (§12):** ✅ built (D-117), with got's `http2: true` matching real Node.
 - **Servers reached by hostname with intercepted ports (§5, D-112):** accepted (Tony, 2026-10-08).
 - **The rest, accepted with Tony's answers in §8** (2026-10-08):
   - got and real socket details (§11)
@@ -319,7 +320,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 3. **Configurable address spaces (§10):** ✅ (D-111, D-113).
 4. **got over HTTP/1.1** (§11): ✅ (D-114, D-115).
 5. **B5: sockets** (§7): ✅ (D-116).
-6. **The `http2` client** (§12).
+6. **The `http2` client** (§12): ✅ (D-117).
 7. **B4: `dns`** (§6).
 8. **B3: routes and ports, then `createServer`** (§5).
 9. **WebSockets** (§13).
@@ -414,7 +415,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **Node's messages for refused connections and unknown hosts** (`connect ECONNREFUSED 127.0.0.1:9`), which got passes on.
 - **Found along the way:** the isolate's `ECDH.getPrivateKey()` kept leading zero bytes, which Node drops. One generated key in 256 came out a byte longer than Node's, which made the webcrypto fixture flaky. Fixed, and the fixture now checks the case directly.
 
-## 12. The `http2` client (accepted; this replaces "never `http2`")
+## 12. The `http2` client (built, D-117; this replaces "never `http2`")
 - **A session is a Vert.x connection:** `http2.connect` goes through the gate, then `HttpClientAgent.connect`, which answers with an `HttpClientConnection`. That's exactly a Node session. Over TLS it negotiates `h2` with ALPN; for `http://` it uses h2c with prior knowledge.
 - **Session calls:** `request` (a stream), `settings`, `ping`, `goaway`, `close`/`destroy` and the remote settings, mapped onto Vert.x's.
 - **A stream is a `Duplex`,** with `response`, `trailers`, `close(code)` and `rstCode`.
@@ -422,6 +423,14 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **Limits:** a session counts as a socket, and a stream as a request. Headers are capped at 64 KB. TLS options as in §7.
 - **Not built:** HTTP/2 servers. The ingress can offer h2 to clients separately.
 - **Tested** against a Vert.x h2 test server, with a fixture against real Node and got with `http2: true`.
+
+**What building it settled (D-117):**
+- **Verification as for sockets:** the host judges the chain against the trust store or `ca`, refusing with Node's codes, and the session checks the name with `tls.checkServerIdentity` before `connect`.
+- **Limits:** a session is reserved through the socket client's limits (`reserve`), and a stream takes one of the script's 16 request places, released when its body and trailers are done or it's reset.
+- **Events reach the script as a stream:** the session's goaway, settings and errors arrive as small JSON chunks on a host stream, the same flow control as bodies.
+- **got (`http2: true`):** http2-wrapper opens its own TLS socket (ALPN `h2`) and passes it as `createConnection`. When it's one of the isolate's own sockets, already through the rules, the session closes it and opens its own connection to the same origin.
+- **Node's details, matched against real Node:** the PRIORITY bit in response flags, `CANCEL` and `NO_ERROR` resets ending a stream quietly, `request()` on a destroyed session failing the stream rather than throwing, and the `connect` event's socket being distinct from `session.socket`.
+- **One race, found under CPU load:** calls into a connection from the isolate's thread raced with Netty, and a ping after a reset went unanswered. Every session and stream operation now runs on the connection's event loop.
 
 ## 13. WebSockets (accepted)
 - **The ingress** passes `Upgrade: websocket` through to the service's node, then its internal endpoint. Frames are bridged both ways with backpressure. Today it strips `Upgrade`, so WebSockets don't pass.

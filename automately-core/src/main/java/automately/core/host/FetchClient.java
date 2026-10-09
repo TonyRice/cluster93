@@ -50,6 +50,7 @@ public final class FetchClient {
     private final HttpClient client;
     private volatile HttpClient insecure;
     private volatile SocketClient sockets;
+    private volatile Http2Client http2;
     /** Connections requests have gone out on, so a script's socket can say when one was reused from the pool (D-114). */
     private final java.util.Set<io.vertx.core.http.HttpConnection> seen =
             java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>()));
@@ -291,6 +292,20 @@ public final class FetchClient {
                     sockets = new SocketClient(vertx, egress);
                 }
                 made = sockets;
+            }
+        }
+        return made;
+    }
+
+    /** Scripts' HTTP/2 sessions (D-117), counted with their sockets. Made when first asked for. */
+    public Http2Client http2() {
+        Http2Client made = http2;
+        if (made == null) {
+            synchronized (this) {
+                if (http2 == null) {
+                    http2 = new Http2Client(vertx, egress, sockets());
+                }
+                made = http2;
             }
         }
         return made;

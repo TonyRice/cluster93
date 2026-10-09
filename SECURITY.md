@@ -68,7 +68,7 @@ Automately runs other people's code. This page describes who is trusted, what ea
   - **The development switch:** `AUTOMATELY_EGRESS_ALLOW_PRIVATE` opens private and reserved addresses for every tenant (still after the deny rules) and is for local development only; a node warns at every start while it's on.
   - **Tenant S3 endpoints:** allowed by the tenant's storage policy.
 - Refusals are counted per tenant and reason (`automately_egress_denied_total`).
-- **Scripts' sockets** (D-116) go through the same rules as `tcp`, and the cluster policy's limits apply:
+- **Scripts' sockets** (D-116), and HTTP/2 sessions (D-117) counted as sockets, go through the same rules, as `tcp` and `http` respectively, and the cluster policy's limits apply:
   - at most 120 new connections a minute and 256 open sockets per tenant on each node
   - 16 open sockets per script
   - every socket is closed when its run ends

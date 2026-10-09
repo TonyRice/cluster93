@@ -1,0 +1,176 @@
+package automately.runtime.javet;
+
+import automately.core.host.EgressPolicy;
+import automately.core.host.FetchClient;
+import automately.core.host.NodeHostApis;
+import automately.core.host.ServeRegistry;
+import automately.core.host.SharedDataKvStore;
+import automately.core.job.OrphanPolicy;
+import automately.core.runtime.Execution;
+import automately.core.runtime.ExecutionResult;
+import automately.core.runtime.JobContext;
+import automately.core.runtime.StateSink;
+import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServer;
+import io.vertx.core.http.HttpServerOptions;
+import io.vertx.core.json.Json;
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
+import io.vertx.core.net.SelfSignedCertificate;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * {@code http2} sessions in the isolate (D-117), in every build, against local HTTP/2 servers through a standalone gate
+ * with the development switch. Their results against real Node are checked by RealNpmPackagesTest's http2client fixture.
+ */
+class NodeHttp2Test {
+
+    private static Vertx vertx;
+    private static JavetScriptRuntime runtime;
+    private static HttpServer secure;
+    private static HttpServer clear;
+    private static String ca;
+    private static final AtomicInteger connectionsClosed = new AtomicInteger();
+    private static NodeHostApis.Node node;
+
+    @BeforeAll
+    static void setUp() throws Exception {
+        vertx = Vertx.vertx();
+        runtime = new JavetScriptRuntime(vertx, 64, 2);
+        SelfSignedCertificate certificate = SelfSignedCertificate.create("localhost");
+        ca = Files.readString(Path.of(certificate.certificatePath()));
+        io.vertx.core.Handler<io.vertx.core.http.HttpServerRequest> handler = req -> req.body().onSuccess(body -> {
+            req.connection().closeHandler(v -> connectionsClosed.incrementAndGet());
+            switch (req.path()) {
+                case "/trailers" -> {
+                    req.response().setChunked(true).putTrailer("x-checksum", "abc");
+                    req.response().end("with trailers");
+                }
+                case "/refused" -> req.response().reset(7);
+                case "/slow" -> vertx.setTimer(5_000, id -> req.response().end("late"));
+                default -> req.response().putHeader("x-version", req.version().name()).end(req.method().name() + " " + req.path() + " " + body);
+            }
+        });
+        secure = vertx.createHttpServer(new HttpServerOptions().setSsl(true).setUseAlpn(true).setKeyCertOptions(certificate.keyCertOptions()))
+                .requestHandler(handler).listen(0, "127.0.0.1").toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+        clear = vertx.createHttpServer(new HttpServerOptions().setHttp2ClearTextEnabled(true)).requestHandler(handler)
+                .listen(0, "127.0.0.1").toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+        node = new NodeHostApis.Node(vertx, new SharedDataKvStore(vertx), new FetchClient(vertx, new EgressPolicy(true)), new ServeRegistry());
+    }
+
+    @AfterAll
+    static void tearDown() throws Exception {
+        vertx.close().toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void streamsTrailersResetsAndPingOverOneSession() throws Exception {
+        JsonArray out = run("""
+                import http2 from 'node:http2';
+                const call = (session, headers, body) => new Promise((resolve) => {
+                  const req = session.request(headers);
+                  const events = [];
+                  let text = '';
+                  req.setEncoding('utf8');
+                  req.on('response', (h) => events.push('response ' + h[':status'] + ' ' + h['x-version']));
+                  req.on('trailers', (t) => events.push('trailers ' + t['x-checksum']));
+                  req.on('data', (c) => { text += c; });
+                  req.on('error', (e) => events.push('error ' + e.code));
+                  req.on('close', () => resolve({ events, text, rstCode: req.rstCode }));
+                  if (body !== undefined) req.end(body);
+                });
+                export default () => new Promise((resolve) => {
+                  const session = http2.connect('https://localhost:%d', { ca: %s }, async () => {
+                    const out = [session.alpnProtocol];
+                    out.push(await call(session, { ':path': '/hello' }));
+                    out.push(await call(session, { ':method': 'POST', ':path': '/echo' }, 'body'));
+                    out.push(await call(session, { ':path': '/trailers' }));
+                    out.push(await call(session, { ':path': '/refused' }));
+                    out.push(await new Promise((r) => session.ping(Buffer.from('abcdefgh'), (err, duration, payload) => r(String(payload)))));
+                    session.close(() => resolve(out));
+                  });
+                  session.on('error', (e) => resolve(['error', e.code, e.message]));
+                });
+                """.formatted(secure.actualPort(), Json.encode(ca)));
+
+        assertThat(out.getString(0)).isEqualTo("h2");
+        assertThat(out.getJsonObject(1).getJsonArray("events")).containsExactly("response 200 HTTP_2");
+        assertThat(out.getJsonObject(1).getString("text")).isEqualTo("GET /hello ");
+        assertThat(out.getJsonObject(2).getString("text")).isEqualTo("POST /echo body");
+        assertThat(out.getJsonObject(3).getJsonArray("events")).containsExactly("response 200 undefined", "trailers abc");
+        assertThat(out.getJsonObject(4).getJsonArray("events")).containsExactly("error ERR_HTTP2_STREAM_ERROR");
+        assertThat(out.getJsonObject(4).getInteger("rstCode")).isEqualTo(7);
+        assertThat(out.getString(5)).isEqualTo("abcdefgh");
+    }
+
+    @Test
+    void h2cAndRefusals() throws Exception {
+        JsonArray out = run("""
+                import http2 from 'node:http2';
+                const open = (url, options) => new Promise((resolve) => {
+                  const session = http2.connect(url, options);
+                  session.on('connect', () => { resolve(['connected', session.alpnProtocol]); session.close(); });
+                  session.on('error', (e) => resolve(['error', e.code]));
+                });
+                export default async () => [
+                  await open('http://127.0.0.1:%d'),
+                  await open('https://localhost:%d'),
+                  await open('https://127.0.0.1:%d', { ca: %s }),
+                  (() => { try { http2.connect('ftp://x'); return 'ran'; } catch (e) { return e.code; } })(),
+                  (() => { try { http2.createServer(); return 'ran'; } catch (e) { return e.code; } })(),
+                ];
+                """.formatted(clear.actualPort(), secure.actualPort(), secure.actualPort(), Json.encode(ca)));
+
+        assertThat(out.getJsonArray(0)).containsExactly("connected", "h2c");
+        assertThat(out.getJsonArray(1)).containsExactly("error", "DEPTH_ZERO_SELF_SIGNED_CERT");
+        assertThat(out.getJsonArray(2)).containsExactly("error", "ERR_TLS_CERT_ALTNAME_INVALID");
+        assertThat(out.getString(3)).isEqualTo("ERR_HTTP2_UNSUPPORTED_PROTOCOL");
+        assertThat(out.getString(4)).isEqualTo("ERR_NOT_SUPPORTED");
+    }
+
+    @Test
+    void streamsShareTheRequestLimitAndSessionsCloseWithTheRun() throws Exception {
+        int before = connectionsClosed.get();
+        JsonArray out = run("""
+                import http2 from 'node:http2';
+                export default () => new Promise((resolve) => {
+                  const session = http2.connect('http://127.0.0.1:%d', () => {
+                    const results = [];
+                    // Sixteen slow streams hold every request place; the seventeenth is refused.
+                    for (let i = 0; i < 17; i++) {
+                      const req = session.request({ ':path': '/slow' });
+                      req.on('error', (e) => { results.push(e.message.includes('Too many concurrent requests') ? 'refused' : e.code); resolve(results); });
+                    }
+                  });
+                });
+                """.formatted(clear.actualPort()));
+
+        assertThat(out).containsExactly("refused");
+        // The script returned with its session open: the run's end closed it.
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (connectionsClosed.get() == before && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(connectionsClosed.get()).isGreaterThan(before);
+    }
+
+    private static JsonArray run(String script) throws Exception {
+        Execution execution = new Execution("job-1", "tenant-a", "import { Buffer } from 'node:buffer';\n" + script, new JsonObject(),
+                Duration.ofSeconds(20), JobContext.firstAttempt("job-1", OrphanPolicy.FAIL));
+        ExecutionResult result = runtime.execute(execution, (level, line) -> { }, StateSink.DISCARD,
+                        NodeHostApis.factory(node).create("tenant-a", "job-1", false))
+                .result().toCompletionStage().toCompletableFuture().get(40, TimeUnit.SECONDS);
+        assertThat(result.error()).isNull();
+        return (JsonArray) result.output();
+    }
+}

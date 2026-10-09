@@ -47,7 +47,7 @@ class RealNpmPackagesTest {
     private static final List<String> WORKING = List.of("lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer",
             "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals");
     /** The HTTP libraries (D-109), published as a second package: one would be over a version's 10 MB. */
-    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets");
+    private static final List<String> NETWORK = List.of("httpclient", "axios", "nodefetch", "got", "sockets", "http2client", "gothttp2");
     /**
      * Database and mail drivers (D-116), run against real servers in containers: two more packages, since together
      * they'd be over a version's 10 MB.
@@ -193,7 +193,7 @@ class RealNpmPackagesTest {
     }
 
     @ParameterizedTest(name = "{0} gives the same answer as under Node")
-    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "webcrypto", "globals", "httpclient", "axios", "nodefetch", "got", "sockets"})
+    @ValueSource(strings = {"lodash", "datefns", "dayjs", "zod", "marked", "jsyaml", "yaml", "ajv", "semver", "immer", "rxjs", "mustache", "events", "validator", "uuid", "nanoid", "nodecrypto", "papaparse", "csvparse", "jwt", "nodecryptokeys", "nodemodules", "http2client", "gothttp2"})
     void aLibraryRunsInTheIsolateAsItDoesInNode(String lib) throws Exception {
         sameAsNode(lib);
     }
@@ -313,6 +313,14 @@ class RealNpmPackagesTest {
                     }
                 })).listen(0, "127.0.0.1"));
         testEnv.put("TEST_STARTTLS", String.valueOf(starttls.actualPort()));
+        // HTTP/2 (D-117): over TLS with ALPN, with the same certificate, and in clear text (h2c).
+        io.vertx.core.Handler<io.vertx.core.http.HttpServerRequest> h2 = this::serveHttp2;
+        io.vertx.core.http.HttpServer h2tls = await(serverVertx.createHttpServer(new io.vertx.core.http.HttpServerOptions().setSsl(true).setUseAlpn(true)
+                .setKeyCertOptions(certificate.keyCertOptions())).requestHandler(h2).listen(0, "127.0.0.1"));
+        testEnv.put("TEST_H2", "https://localhost:" + h2tls.actualPort());
+        io.vertx.core.http.HttpServer h2c = await(serverVertx.createHttpServer(new io.vertx.core.http.HttpServerOptions().setHttp2ClearTextEnabled(true))
+                .requestHandler(h2).listen(0, "127.0.0.1"));
+        testEnv.put("TEST_H2C", "http://127.0.0.1:" + h2c.actualPort());
         halfClose = new ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress());
         testEnv.put("TEST_HALFCLOSE", String.valueOf(halfClose.getLocalPort()));
         Thread acceptor = new Thread(() -> {
@@ -327,6 +335,36 @@ class RealNpmPackagesTest {
         }, "real-npm-half-close");
         acceptor.setDaemon(true);
         acceptor.start();
+    }
+
+    /** The HTTP/2 servers' answers (D-117), fixed so Node and the isolate can be compared. */
+    private void serveHttp2(io.vertx.core.http.HttpServerRequest req) {
+        io.vertx.core.http.HttpServerResponse res = req.response();
+        req.body().onSuccess(body -> {
+            switch (req.path()) {
+                case "/json" -> res.putHeader("content-type", "application/json").putHeader("x-version", req.version().name())
+                        .putHeader("set-cookie", (Iterable<String>) List.of("a=1", "b=2")).putHeader("x-repeat", (Iterable<String>) List.of("one", "two"))
+                        .end("{\"hello\":\"http2\"}");
+                case "/echo" -> res.putHeader("content-type", "application/json").end(new io.vertx.core.json.JsonObject()
+                        .put("method", req.method().name()).put("path", req.uri()).put("authority", req.authority() == null ? null : req.authority().toString())
+                        .put("custom", req.getHeader("x-custom")).put("body", body.toString()).put("length", body.length()).encode());
+                case "/trailers" -> {
+                    res.setChunked(true).putHeader("content-type", "text/plain").putTrailer("x-checksum", "abc").putTrailer("x-count", "2");
+                    res.write("first ");
+                    res.end("second");
+                }
+                case "/reset" -> res.reset(7);
+                case "/cancel" -> res.reset(8);
+                case "/empty" -> res.setStatusCode(204).end();
+                case "/big" -> res.end(io.vertx.core.buffer.Buffer.buffer(new byte[300_000]));
+                case "/slow" -> serverVertx.setTimer(1_500, id -> {
+                    if (!res.closed()) {
+                        res.end("late");
+                    }
+                });
+                default -> res.setStatusCode(404).end("not found");
+            }
+        });
     }
 
     /** The HTTP libraries' server: fixed answers, so Node and the isolate can be compared. */

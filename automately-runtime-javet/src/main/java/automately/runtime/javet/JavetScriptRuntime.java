@@ -398,6 +398,7 @@ public final class JavetScriptRuntime implements ScriptRuntime {
                 bindApi(v8, hostObject, "files", new FilesBinding(bridge, host.files()), callbacks);
                 bindApi(v8, hostObject, "fetch", new FetchBinding(bridge, host.fetch()), callbacks);
                 bindApi(v8, hostObject, "sockets", new SocketBinding(bridge, host.sockets()), callbacks);
+                bindApi(v8, hostObject, "http2", new Http2Binding(bridge, host.sockets()), callbacks);
                 bindApi(v8, hostObject, "http", new HttpBinding(bridge), callbacks);
                 bindApi(v8, hostObject, "secrets", new SecretsBinding(bridge, host.secrets()), callbacks);
                 bindApi(v8, hostObject, "fs", new FsBinding(bridge, host.fs()), callbacks);

@@ -54,8 +54,8 @@ final class NodeFetchApi implements FetchApi {
         }
     }
 
-    /** One of the {@value #MAX_CONCURRENT} places, and how to give it back once; or null if none is free. */
-    private Runnable take() {
+    /** One of the {@value #MAX_CONCURRENT} places, and how to give it back once; or null if none is free. HTTP/2 streams take them too. */
+    Runnable take() {
         if (inFlight.incrementAndGet() > MAX_CONCURRENT) {
             inFlight.decrementAndGet();
             return null;

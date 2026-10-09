@@ -314,6 +314,28 @@ class NodeSocketsTest {
     }
 
     @Test
+    void alpnIsNegotiatedAsNodeReportsIt() throws Exception {
+        io.vertx.core.http.HttpServer h2 = vertx.createHttpServer(new io.vertx.core.http.HttpServerOptions().setSsl(true).setUseAlpn(true)
+                .setKeyCertOptions(SelfSignedCertificate.create("localhost").keyCertOptions())).requestHandler(req -> req.response().end())
+                .listen(0, "127.0.0.1").toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+        try {
+            JsonArray out = run("""
+                    import tls from 'node:tls';
+                    export default () => new Promise((resolve) => {
+                      const socket = tls.connect({ host: 'localhost', port: %d, rejectUnauthorized: false, ALPNProtocols: ['h2', 'http/1.1'] }, () => {
+                        resolve(socket.alpnProtocol);
+                        socket.destroy();
+                      });
+                      socket.on('error', (e) => resolve(e.code));
+                    });
+                    """.formatted(h2.actualPort()));
+            assertThat(out.getValue(0)).isEqualTo("h2");
+        } finally {
+            h2.close();
+        }
+    }
+
+    @Test
     void checkServerIdentityIsNodes() throws Exception {
         JsonArray out = run("""
                 import { checkServerIdentity } from 'node:tls';

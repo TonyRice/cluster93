@@ -42,7 +42,7 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `net` | Outbound TCP sockets, as Node's; no servers | The host's sockets, through the egress rules | D-109, D-114, D-116 |
 | `tls` | Outbound TLS sockets and upgrades, as Node's; no servers | The host's sockets, through the egress rules | D-109, D-114, D-116 |
 | `child_process` | Its names only: starting a process throws | JavaScript | D-116 |
-| `http2` | Its constants only; HTTP/2 isn't supported | JavaScript | D-109 |
+| `http2` | The client, as Node's; no servers | The host's HTTP/2 connections, through the egress rules | D-109, D-117 |
 | `tty` | `isatty()` is false: a job has no terminal | JavaScript | D-109 |
 | `diagnostics_channel` | Complete: channels, `tracingChannel` | JavaScript | D-114 |
 | `dns`, `dns/promises` | Its names and constants; lookups are phase B4 | JavaScript | D-114 |
@@ -50,7 +50,7 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 
 **Refused:** `dgram`, `cluster`, `worker_threads`, `vm`, `v8`, `inspector`, `module`, `readline`, `repl`, `perf_hooks`, `async_hooks`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module), `constants` and `stream/web`.
 - **When:** importing one stops the publish ("Node's "dns" module isn't available in the isolate …"). A CommonJS `require()` of one throws when it runs instead, with a warning at publish.
-- **What's coming** ([network reach](../design/network-reach.md)): an `http2` client, `dns` lookups (B4), `http.createServer` by hostname (B3), and WebSockets, all through the egress rules. `async_hooks` and `perf_hooks` come with B3, since the web frameworks need them.
+- **What's coming** ([network reach](../design/network-reach.md)): `dns` lookups (B4), `http.createServer` by hostname (B3), and WebSockets, all through the egress rules. `async_hooks` and `perf_hooks` come with B3, since the web frameworks need them.
 - **The rest** need the Node runtime.
 
 ## Globals
@@ -398,10 +398,38 @@ Outbound TCP and TLS sockets, as Node's, on the host (D-116). The only restricti
   - **No PFX:** `pfx` and `passphrase` are refused; pass PEM.
   - **Wrapping a stream:** `new tls.TLSSocket(stream)` over a stream that isn't a `net.Socket` makes an unconnected socket with Node's internal `_handle._parentWrap` (http2-wrapper reaches for it when it loads). Running TLS over such a stream isn't supported.
 
-## `http2`, `tty`, `dns` and `child_process`
+## `http2`
 
-These have everything that doesn't open a connection or a process, so libraries that import them load (D-109, D-114, D-116).
-- **`http2`:** `constants` (all 240 of Node 26's) and `sensitiveHeaders`, so axios, which imports it for an optional HTTP/2 path, loads. `connect` throws until phase B's `http2` step; `createServer` and `createSecureServer` throw always.
+Node's HTTP/2 client (D-117), on the host's HTTP/2 connections. A session counts as one of the script's sockets against the cluster policy's limits; each stream counts as one of its 16 concurrent requests, with `fetch` and `http`.
+
+- **`http2.connect(authority[, options][, listener])`:**
+  - **Over `https:`,** ALPN negotiates `h2`, and the session is verified as `tls` sockets are: the chain against the trust store or `ca` (Node's codes when it's refused), then the host name with `tls.checkServerIdentity` or the script's own check. `rejectUnauthorized: false` is honoured and logged once.
+  - **Over `http:`,** it speaks HTTP/2 from the first byte (h2c), as Node's client does. A server that doesn't speak HTTP/2 refuses the TLS handshake (`ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL`).
+  - **Through the egress rules** as an `http` connection.
+- **`ClientHttp2Session`:**
+  - **Requests:** `request(headers, options)`, made before or after `connect` (streams wait for it), with `endStream` defaulting to Node's choice for `GET`, `HEAD` and `DELETE`.
+  - **Control:** `ping(payload, callback)` (8 bytes, or Node's default), `settings(settings, callback)` (acknowledged before the callback), `goaway(code, lastStreamID, data)`, `close(callback)` (after open streams), `destroy`, `setTimeout`.
+  - **Events:** `connect`, `remoteSettings`, `localSettings`, `goaway`, `close`, `error`, `timeout`.
+  - **State:** `alpnProtocol` (`h2` or `h2c`), `encrypted`, `type`, `closed`, `destroyed`, `connecting`, `localSettings`, `remoteSettings`, `originSet`, `pendingSettingsAck`, and `socket` (the connection's addresses and TLS details).
+- **`ClientHttp2Stream`,** a `Duplex`:
+  - **Events:** `response` (headers with `:status`, Node's flags, raw headers), `trailers`, `data`, `end`, `close` and `error`.
+  - **State:** `id`, `rstCode`, `sentHeaders`, `pending`, `closed`.
+  - **Control:** `close(code)` sends RST_STREAM, and `setTimeout`.
+  - **Headers follow Node's rules** (`set-cookie` a list, repeats joined, single-value headers keep the first).
+  - **A reset from the peer:** `NO_ERROR` and `CANCEL` end the stream quietly. Any other code fails it with `ERR_HTTP2_STREAM_ERROR` "Stream closed with error code NGHTTP2_REFUSED_STREAM", as in Node.
+- **Also:** `getDefaultSettings()`, `getPackedSettings()`/`getUnpackedSettings()`, `sensitiveHeaders`, and all 240 `constants`.
+- **`createConnection`:** http2-wrapper (got's `http2: true`) opens its own TLS socket and hands it to `http2.connect`. If the socket is one of the isolate's own `net`/`tls` sockets, it already went through the egress rules, so the session closes it and opens its own connection to the same origin. Anything else is refused, since it would bypass the rules.
+- **Differs:**
+  - **Server push is off** (`enablePush: false`), as browsers have it now.
+  - **`END_STREAM` in the response flags** is reported for HEAD, 204 and 304; a 200 whose body happens to be empty reports it without.
+  - **Not supported:** `sendTrailers` (request trailers) and stream priorities (`priority()` does nothing).
+  - **`state`** is an empty object.
+- **Refused:** `CONNECT` tunnels, `pfx`, and servers (`createServer`, `createSecureServer`). HTTP/2 servers never run on the cluster's nodes; the ingress serves clients.
+- **Proven with:** a fixture against real Node over TLS and h2c (headers, bodies, parallel streams, trailers, every kind of reset, ping, settings, refusals), and got with `http2: true`.
+
+## `tty`, `dns` and `child_process`
+
+These have everything that doesn't start a process or need a terminal, and `dns` everything but lookups, so libraries that import them load (D-109, D-114, D-116).
 - **`tty`:** `isatty()` is always false, as for Node with its output piped, so libraries such as debug don't add colours. `ReadStream` and `WriteStream` throw: a job has no terminal.
 - **`dns` and `dns/promises`:**
   - **There:** every name and constant Node has (`ADDRCONFIG`, `V4MAPPED`, `ALL`, the error codes), `Resolver` and `promises.Resolver`, and `get`/`setDefaultResultOrder`. Libraries that import it when they load, such as got's cacheable-lookup and ioredis, load.
@@ -453,13 +481,14 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
     - `zlib`, including Node-made gzip, deflate and Brotli data
     - `assert`, `querystring` and `timers/promises`
     - `node:http`/`https`: methods, headers (repeated ones included), whole and streamed and fixed-length bodies, auth, redirects, a 1 MB body, an unheard response, timeouts, aborts, hang-ups, refused connections, and the validators, with events in Node's order
+    - `node:http2`, against TLS and h2c servers, and got with `http2: true`
     - `node:net`/`tls`, against local echo, TLS, STARTTLS and half-close servers: event order, held writes, half-close, async iteration, idle timeouts, every error, trusted, refused, unverified and wrong-name TLS, custom identity checks, the upgrade, and `checkServerIdentity` itself
   - **Refused at publish, as expected:** bcrypt and sharp (native).
 - **Against the standards:** the Java side is checked against its standards' test vectors:
   - **KDFs:** RFC 6070 (PBKDF2), 5869 (HKDF) and 7914 (scrypt)
   - **Ciphers:** the GCM spec and RFC 8439 (ChaCha20-Poly1305)
   - **Curves:** RFC 8032 (Ed25519) and 7748 (X25519)
-- **Always-on tests:** `NodeStandInsTest` runs in every build, checking each module's behaviour in the isolate, the caps, and what stays unavailable. `NodeNetworkStandInsTest` runs `node:http` against a local server, including the socket's real connection details over plain HTTP and over TLS (unverified and trusted). It also covers `diagnostics_channel`, `events.on`, `dns`'s names, unconnected sockets, the pure parts of `net`, `tls`, `http2` and `tty`, and the `fs` streams. `StreamedRequestTest` checks the host side of `http`: framing, TLS (verification, `ca`, opting out), refused requests, and the shared limit and its release. `NodeSocketsTest` and `SocketClientTest` check sockets in the isolate and on the host: events, half-close, errors, TLS, the upgrade, the limits, cleanup at the end of a run, and that a socket nobody reads pushes back on its peer.
+- **Always-on tests:** `NodeStandInsTest` runs in every build, checking each module's behaviour in the isolate, the caps, and what stays unavailable. `NodeNetworkStandInsTest` runs `node:http` against a local server, including the socket's real connection details over plain HTTP and over TLS (unverified and trusted). It also covers `diagnostics_channel`, `events.on`, `dns`'s names, unconnected sockets, the pure parts of `net`, `tls`, `http2` and `tty`, and the `fs` streams. `StreamedRequestTest` checks the host side of `http`: framing, TLS (verification, `ca`, opting out), refused requests, and the shared limit and its release. `NodeHttp2Test` and `Http2ClientTest` check HTTP/2 in the isolate and on the host (streams, trailers, resets, ping, settings, refusals, the shared limits, cleanup). `NodeSocketsTest` and `SocketClientTest` check sockets in the isolate and on the host: events, half-close, errors, TLS, the upgrade, the limits, cleanup at the end of a run, and that a socket nobody reads pushes back on its peer.
 
 ## Known differences, in one list
 
@@ -469,6 +498,7 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 - **Streams:** crypto classes aren't streams; `fetch` bodies and `files.stream` are async iterables, not Node streams. `fs` streams hold the whole file (32 MB).
 - **HTTP:** `req.socket` is a stand-in reporting the host's connection (D-114); agents don't pool; `maxHeaderSize` is 64 KiB; `lookup`/`family`/`localAddress` are ignored; a custom `checkServerIdentity` is refused for `http`/`https` (`tls.connect` takes one); TLS cipher names are IANA's, not OpenSSL's.
 - **Sockets:** `ref`/`unref` change nothing, a job doesn't wait for open sockets, TLS sessions aren't reused, and over TLS `end()` closes (D-116).
+- **HTTP/2:** no server push, no request trailers or priorities, `END_STREAM` reported only where the status implies it, and a `createConnection` socket replaced by the host's own connection (D-117).
 - **Uncaught errors:** a throw in a `queueMicrotask` or `process.nextTick` callback, or in an `http` event listener, fails the job as it would end Node. So does a promise rejected with no handler by the end of the turn (D-110), unless `process.on('unhandledRejection')` has a listener; that one isn't a difference from Node.
 - **Approximate output:** `util.inspect` output and `assert`'s messages for structures.
 - **Compressed bytes** may differ from Node's (both are valid).
@@ -480,6 +510,6 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 **Missing for now:**
 - **Globals:** `Blob`, `FormData`, `Headers`/`Request`/`Response`, Web Streams, `MessageChannel` and `WebSocket`.
 - **Crypto:** Brotli compression, AES-KW, classic Diffie-Hellman, and encrypted private keys.
-- **Network:** the `http2` client, `dns` lookups (B4), `http.createServer` (B3), and WebSockets, in that order (network-reach.md §9).
+- **Network:** `dns` lookups (B4), `http.createServer` (B3), and WebSockets, in that order (network-reach.md §9).
 
 Changes to any stand-in are recorded in the [changelog](../../CHANGELOG.md) and [decisions](../DECISIONS.md).

@@ -58,3 +58,29 @@ Object.defineProperty(globalThis, Symbol.for('automately.sockets'), {
   }),
 });
 
+// node:http2's way to the host (D-117): sessions counted as sockets, streams as requests. A session's events (goaway,
+// new settings) arrive as JSON chunks on a stream; a stream's body arrives as a stream once it has answered.
+const http2Host = host.http2;
+Object.defineProperty(globalThis, Symbol.for('automately.http2'), {
+  value: Object.freeze({
+    connect: async (request) => {
+      const r = await http2Host.connect(request);
+      return { id: r.id, info: r.info, settings: r.settings, events: readable(r.eventsId) };
+    },
+    request: (sessionId, headers, endStream) => http2Host.request(sessionId, headers, endStream),
+    write: (id, bytes) => http2Host.write(id, bytes),
+    end: (id) => http2Host.end(id),
+    response: async (id) => {
+      const r = await http2Host.response(id);
+      return { rawHeaders: r.rawHeaders, status: r.status, body: readable(r.bodyId) };
+    },
+    trailers: (id) => http2Host.trailers(id),
+    reset: (id, code) => http2Host.reset(id, code),
+    ping: (sessionId, payload) => http2Host.ping(sessionId, payload),
+    settings: (sessionId, settings) => http2Host.settings(sessionId, settings),
+    goaway: (sessionId, code, lastStreamId, data) => http2Host.goaway(sessionId, code, lastStreamId, data),
+    close: (sessionId) => http2Host.close(sessionId),
+    destroy: (sessionId) => http2Host.destroy(sessionId),
+  }),
+});
+

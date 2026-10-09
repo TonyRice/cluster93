@@ -18,6 +18,14 @@ public interface SocketApi {
      */
     Future<OutgoingSocket> connect(JsonObject request);
 
+    /**
+     * An HTTP/2 session (D-117): {@code {authority: "https://host:port", tls?: {...as connect's}}}. It counts as a
+     * socket. Completes once connected and, with TLS, once the chain is judged.
+     */
+    default Future<automately.core.runtime.OutgoingHttp2Session> http2(JsonObject request) {
+        return Future.failedFuture(new HostException("Error", "unavailable", "HTTP/2 isn't available on this host"));
+    }
+
     /** The certificates the host trusts, as PEM, for {@code tls.rootCertificates}. */
     default JsonArray rootCertificates() {
         return new JsonArray();

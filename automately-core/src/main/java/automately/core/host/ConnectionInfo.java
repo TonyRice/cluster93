@@ -57,6 +57,15 @@ public final class ConnectionInfo {
     }
 
     /**
+     * An HTTP/2 session a script opened (D-117), judged as a socket is: the chain against {@code ca} or the JVM's trust
+     * store, the host name left to the script's checkServerIdentity.
+     */
+    public static JsonObject ofSession(HttpConnection connection, List<String> ca) {
+        return describe(connection.remoteAddress(), connection.localAddress(), connection.isSsl(), connection.isSsl() ? connection.sslSession() : null,
+                () -> connection.peerCertificates(), connection.isSsl() ? "h2" : null, false, false, ca);
+    }
+
+    /**
      * A script's own socket (D-116), as {@link #of(HttpConnection, boolean, boolean)} describes a request's connection.
      * The host completes every handshake and judges the chain here, against {@code ca} or the JVM's trust store, so a
      * refusal carries OpenSSL's code as Node's does.

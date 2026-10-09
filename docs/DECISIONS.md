@@ -2084,3 +2084,33 @@ It's written for people, because the console will show the same response as a "N
 - **`infoAccess` in peer certificates:** always `undefined`.
 - **MongoDB 8.0** doesn't start on Linux 6.19 or newer (MongoDB's SERVER-121912), so the tests use 8.2.
 
+### D-117 — Node's `http2` client, on Vert.x's HTTP/2 connections
+**Date:** 2026-10-09 · **Status:** Accepted. Phase B's `http2` step (network-reach.md §12), approved with the plan (Tony: "okay lets do step 4 now").
+
+**Decision:**
+- **`http2.connect` opens a host HTTP/2 connection** (Vert.x's `HttpClientAgent.connect`, an `HttpClientConnection`), through the egress rules as `http`.
+  - **Over TLS,** it's negotiated with ALPN `h2`. Over `http:` it's h2c with prior knowledge, as Node's client does.
+  - **Server push is off.**
+  - **It counts as one of the script's sockets** against the cluster policy's limits.
+- **Verification is the sockets' (D-116):** the host judges the chain and refuses with OpenSSL's code; the script checks the host name with `tls.checkServerIdentity`.
+- **Streams are requests on the connection.**
+  - **Sending:** headers go at once (`sendHead`) or with the end of an empty request.
+  - **Receiving:** the response's headers, body and trailers come back as host futures and a stream.
+  - **Limits:** each stream takes one of the script's 16 concurrent requests, which it shares with `fetch` and `http`.
+- **The session's events** (goaway, remote settings, errors) reach the script as JSON chunks on a host stream.
+- **In the isolate:** `ClientHttp2Session` and `ClientHttp2Stream` with Node's events, headers rules, flags and error codes, plus `getPackedSettings`/`getUnpackedSettings`. Servers are refused (D-112).
+- **`createConnection`** is accepted only when it returns one of the isolate's own sockets, which went through the rules. The session closes it and opens its own connection to the same origin. That's how http2-wrapper, and so got's `http2: true`, connect.
+- **Every session and stream operation runs on the connection's event loop.** Calling in from the isolate's thread raced with Netty under CPU load: a ping after a reset went unanswered.
+
+**Tested:**
+- **`Http2ClientTest` (4):** TLS and h2c, trailers, resets, ping, settings, refusals (untrusted, not HTTP/2, bad scheme) and the shared limits.
+- **`NodeHttp2Test` (3):** sessions in the isolate, refusals, the request limit, and closing at the run's end. It passes under CPU load.
+- **`RealNpmPackagesTest`:** a `http2client` fixture over TLS and h2c, and got with `http2: true`, both matching real Node 26.8.1.
+- **The other suites:** the 30 other fixtures and the 5 drivers against real servers still match.
+
+**Not done:**
+- request trailers (`sendTrailers`)
+- priorities
+- `state`
+- `END_STREAM` in response flags beyond what the status implies
+

@@ -158,6 +158,16 @@ class SocketClientTest {
     }
 
     @Test
+    void alpnIsNegotiatedAndReported() throws Exception {
+        io.vertx.core.http.HttpServer h2 = await(vertx.createHttpServer(new io.vertx.core.http.HttpServerOptions().setSsl(true).setUseAlpn(true)
+                .setKeyCertOptions(certificate.keyCertOptions())).requestHandler(req -> req.response().end()).listen(0, "127.0.0.1"));
+        OutgoingSocket socket = await(client.connect("acme", new JsonObject().put("host", "localhost").put("port", h2.actualPort())
+                .put("tls", new JsonObject().put("ca", ca).put("ALPNProtocols", new JsonArray().add("h2").add("http/1.1"))), new AtomicInteger()));
+        assertThat(socket.info().getJsonObject("tls").getString("alpnProtocol")).isEqualTo("h2");
+        socket.destroy();
+    }
+
+    @Test
     void mailPortsAreRefusedByDefault() {
         assertThatThrownBy(() -> await(client.connect("acme", new JsonObject().put("host", "127.0.0.1").put("port", 25), new AtomicInteger())))
                 .cause().isInstanceOf(HostException.class).hasMessageContaining("a cluster rule denies it").hasMessageContaining("blocklisted");
