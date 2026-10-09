@@ -134,52 +134,89 @@ final class TenantsCommand extends Base {
         }
     }
 
-    @Command(name = "egress", description = "Show where a tenant's scripts may connect, or replace its rules with --allow or --none.")
+    @Command(name = "egress", description = "Show where a tenant's scripts may connect, or replace its rules with --allow, --deny or --none, "
+            + "or set its --posture.")
     static final class Egress extends Base {
         @Parameters(paramLabel = "TENANT")
         String tenant;
 
-        @Option(names = "--allow", paramLabel = "TO:PORTS", description = "Repeatable: a CIDR or host name, then ports, "
+        @Option(names = "--allow", paramLabel = "TO:PORTS", description = "Repeatable: a CIDR, host name, *.suffix or @set, then ports, "
                 + "such as 10.0.5.20/32:5432, db.internal.example:5432,6379 or 10.1.0.0/16:8000-8099. Replaces the rules.")
         List<String> allow;
 
-        @Option(names = "--none", description = "Remove every rule: only public addresses again.")
+        @Option(names = "--deny", paramLabel = "TO[:PORTS]", description = "Repeatable: what to refuse this tenant, such as 203.0.113.0/24 "
+                + "or *.example.com:25. Without ports, every port. Replaces the rules.")
+        List<String> deny;
+
+        @Option(names = "--posture", paramLabel = "POSTURE", description = "public, allow-list (only what rules allow), or inherit (the cluster's).")
+        String posture;
+
+        @Option(names = "--none", description = "Remove every rule and the tenant's own posture: the cluster's policy alone again.")
         boolean none;
 
         @Override
         int execute() {
             String path = "/v1/tenants/" + Api.segment(tenant) + "/egress-policy";
             JsonNode policy;
-            if (allow == null && !none) {
+            if (allow == null && deny == null && posture == null && !none) {
                 policy = api().get(path);
             } else {
                 com.fasterxml.jackson.databind.node.ArrayNode rules = Json.array();
-                for (String rule : none ? List.<String>of() : allow) {
-                    int colon = rule.lastIndexOf(':');
-                    if (colon <= 0 || colon == rule.length() - 1) {
-                        err().println("--allow takes TO:PORTS, such as 10.0.5.20/32:5432; got \"" + rule + "\"");
+                if (allow == null && deny == null && !none) {
+                    // Only the posture changes: keep the rules.
+                    api().get(path).path("rules").forEach(rules::add);
+                }
+                for (String rule : none || allow == null ? List.<String>of() : allow) {
+                    com.fasterxml.jackson.databind.node.ObjectNode entry = rule("allow", rule, true);
+                    if (entry == null) {
                         return 2;
                     }
-                    com.fasterxml.jackson.databind.node.ArrayNode ports = Json.array();
-                    for (String port : rule.substring(colon + 1).split(",")) {
-                        if (port.trim().matches("\\d{1,5}")) {
-                            ports.add(Integer.parseInt(port.trim()));
-                        } else {
-                            ports.add(port.trim());
-                        }
+                    rules.add(entry);
+                }
+                for (String rule : none || deny == null ? List.<String>of() : deny) {
+                    com.fasterxml.jackson.databind.node.ObjectNode entry = rule("deny", rule, false);
+                    if (entry == null) {
+                        return 2;
                     }
-                    com.fasterxml.jackson.databind.node.ObjectNode entry = Json.object().put("to", rule.substring(0, colon));
-                    entry.set("ports", ports);
                     rules.add(entry);
                 }
                 com.fasterxml.jackson.databind.node.ObjectNode body = Json.object();
-                body.set("allow", rules);
+                body.set("rules", rules);
+                if (posture != null && !none) {
+                    body.put("posture", posture);
+                }
                 policy = api().put(path, body);
             }
             if (!printedJson(policy)) {
                 EgressCommand.print(this, policy);
             }
             return 0;
+        }
+
+        /** {@code TO:PORTS} (or {@code TO} alone for a deny) as a rule; null, with the reason printed, if it isn't one. */
+        private com.fasterxml.jackson.databind.node.ObjectNode rule(String action, String text, boolean needsPorts) {
+            // An IPv6 CIDR has colons of its own, so the ports are what follows the last colon after any "/".
+            int slash = text.indexOf('/');
+            int colon = text.lastIndexOf(':');
+            boolean hasPorts = colon > 0 && colon > slash && colon < text.length() - 1
+                    && text.substring(colon + 1).matches("[0-9@a-z,\\- ]+") && (slash >= 0 || !text.substring(0, colon).contains(":"));
+            if (needsPorts && !hasPorts) {
+                err().println("--" + action + " takes TO:PORTS, such as 10.0.5.20/32:5432; got \"" + text + "\"");
+                return null;
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode entry = Json.object().put("action", action).put("to", hasPorts ? text.substring(0, colon) : text);
+            if (hasPorts) {
+                com.fasterxml.jackson.databind.node.ArrayNode ports = Json.array();
+                for (String port : text.substring(colon + 1).split(",")) {
+                    if (port.trim().matches("\\d{1,5}")) {
+                        ports.add(Integer.parseInt(port.trim()));
+                    } else {
+                        ports.add(port.trim());
+                    }
+                }
+                entry.set("ports", ports);
+            }
+            return entry;
         }
     }
 

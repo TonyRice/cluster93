@@ -207,7 +207,7 @@ The API is **contract-first**: [`openapi.yaml`](automately-server/src/main/resou
 Each job gets a **new isolate**, which is closed when the job finishes. Nothing carries over between jobs, including globals and prototype pollution.
 
 - **No host access.** The script can reach only frozen, tenant-scoped APIs (`console`, timers, `ctx`, `kv`, `bus`, `fetch`, `log`). There is no `Java`, `require` or `process`.
-- **Egress.** `fetch` refuses private and reserved addresses (cloud metadata included) and the cluster's own nodes, connects to the address it checked, and follows no redirects. An operator can let one tenant reach specific private addresses (D-108).
+- **Egress.** `fetch` refuses private and reserved addresses (cloud metadata included) and the cluster's own nodes, connects to the address it checked, and follows no redirects. Operators configure the address spaces: allow and deny rules for the whole cluster and per tenant, named address sets, and an allow-list-only posture (D-108, D-111).
 - **Wall-clock timeout.** Enforced from the event loop with `terminateExecution()`. It also covers loops at module top level and loops after an `await`.
 - **Heap limit** (`AUTOMATELY_MAX_HEAP_MB`). When an isolate runs out of memory, V8 normally aborts the whole process. Here a near-heap-limit callback terminates the script instead and grants a little headroom so V8 can unwind, and the node keeps serving.
 
@@ -248,7 +248,8 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_MAX_REQUEST_BYTES` | `1073741824` | Largest request body the ingress accepts |
 | `AUTOMATELY_INTERNAL_PORT` | `8090` | Node-to-node endpoint for proxied service traffic (cluster-only, secret-protected) |
 | `AUTOMATELY_ADVERTISE_HOST` | this host's address | How other nodes reach this node's internal endpoint |
-| `AUTOMATELY_EGRESS_ALLOW_PRIVATE` | `false` | Let every tenant's `fetch` reach private addresses (local development only; a node's own ports stay refused). For production, grant a tenant specific addresses with `PUT /v1/tenants/{tenant}/egress-policy` |
+| `AUTOMATELY_EGRESS_ALLOW_PRIVATE` | `false` | Let every tenant's `fetch` reach private addresses (local development only; a node's own ports stay refused). For production, write rules in the cluster's or a tenant's egress policy |
+| `AUTOMATELY_EGRESS_POLICY_FILE` | | A JSON cluster egress policy (`posture`, `rules`, `addressSets`) stored at the cluster's first start only; after that, `PUT /v1/egress/cluster-policy` changes it (D-111) |
 | `AUTOMATELY_CLUSTERED` | `false` | |
 | `AUTOMATELY_CLUSTER_PORT` | `5701` | Ignite discovery (communication uses port + 100) |
 | `AUTOMATELY_CLUSTER_MEMBERS` | `127.0.0.1` | Hosts to join (`host` or `host:port`) |
@@ -282,8 +283,8 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 ## Build
 
 ```bash
-./mvnw verify      # JDK 21. Unit tests (2- and 3-node clusters in one JVM, chaos, full restarts), then
-                   # DockerClusterIT: 3 containers, SIGKILL mid-job (needs Docker; -DskipITs to skip)
+./mvnw verify -DskipITs   # JDK 21. The unit tests: 2- and 3-node clusters in one JVM, chaos, full restarts
+./mvnw verify             # also DockerClusterIT: 3 containers, SIGKILL mid-job (needs Docker, about 6 minutes)
 ```
 
 Javet's native library is included for linux-x86_64 only for now.
@@ -298,7 +299,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
-| No tests | 437 unit tests (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress, files, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture) plus 6 Docker integration tests that use real `SIGKILL`s | `./mvnw verify` |
+| No tests | 869 unit tests (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress rules, files, packages, Node stand-ins, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture), 7 Docker integration tests that use real `SIGKILL`s, and 30 real npm libraries checked against Node | `./mvnw verify` |
 | `callbackUrl`: one unsigned POST of `{success, error}` when a job finished, never retried | A signed POST of the result and your `data` for every way a job ends, retried through a durable queue | `CallbacksTest`, `CallbackDeliveryTest` |
 | `messagebus`: at most once, lost if nobody listened | The same bus, plus durable queues: at least once, leases, retries, dead letters, surviving a node's death | `QueueStoreContract` on both stores, a three-node failover test, the demo |
 | `Automately.startJob(..., waitForJob)` blocked a thread until the child finished | `jobs.run()` returns a handle whose `result()` is a promise; children stay in the tenant, with depth and rate limits | `JobsFromScriptsTest` |
@@ -319,12 +320,17 @@ Javet's native library is included for linux-x86_64 only for now.
 6. ~~**Security groundwork**~~ ✅ Closed ports, mutual TLS between nodes, tenant secrets, signed releases, users, roles and a tamper-evident audit log (D-065 to D-074)
 7. ~~**The file system**~~ ✅ Folders, moves and copies, mounts, Node-style `fs` with `/tmp`, handles, locks and public links ([design](docs/design/vfs.md))
 8. ~~**Packages**~~ ✅ Versioned JavaScript published once and imported by name, locked per job; deploy a version as a service; yank, block, purge; stand-ins for Node's `path`, `events`, `buffer`, `url`, `util` and `process`; real npm libraries tested against Node ([design](docs/design/packages.md), [guide](docs/guides/packages.md))
-9. **Next:**
-   - **The Node runtime:** native code and the rest of Node, in sandboxed containers ([design](docs/design/node-runtime.md); accepted, not built). Then tests that run real native packages (`bcrypt`, `sharp`) there, as the isolate's are tested today.
-   - **The S3 download gap under load** (D-081 misses a timing of a closed connection).
-   - **`automately packages check <npm package>`:** install a package in a scratch folder and report whether it runs in the isolate, needs Node built-ins (which), or needs native code, before anyone writes code against it.
-   - **More of Node in the isolate** ([design](docs/design/isolate-polyfills.md), accepted): `crypto` backed by the JVM and Web Crypto, `stream`, `zlib`, `assert`, `os`, web globals, and `process.env` declared per job; network modules later, never reaching private addresses unless allowed.
-   - **Streaming output in the CLI:** follow a service across restarts and redeploys, and stream a job's or service's output and events as they happen, not only one run's logs.
+9. **More of Node in the isolate** ([design](docs/design/isolate-polyfills.md), [reference](docs/scripting/node-compat.md))
+   - ~~**Phase A: computation**~~ ✅ `crypto` on the JVM and Web Crypto, `stream`, `zlib`, `assert`, `os`, web globals, `process.env` per job (D-095 to D-106)
+   - **Phase B: the network** (in progress; [design](docs/design/network-reach.md), order in §9). Scripts get Node's real behaviour, restricted only in where they may connect and how much they may use.
+     - ✅ One egress gate for every connection, and Node's `http`/`https` clients, with axios and node-fetch matching Node (D-108, D-109). Unhandled promise rejections fail a job, as in Node (D-110).
+     - ✅ Configurable address spaces: allow and deny rules for the whole cluster and per tenant, named address sets, and an allow-list-only posture (D-111, D-113)
+     - **Next:** `got` and real socket details; `net`/`tls` sockets (pg, mysql2, ioredis, mongodb, nodemailer); an `http2` client; filtered `dns`; servers reached by hostname only, with listening ports intercepted (Express, Koa, Fastify; D-112); WebSockets. Raw TCP and UDP servers never run on core nodes.
+10. **The Node runtime:** native code and the rest of Node, in gVisor containers ([design](docs/design/node-runtime.md); accepted, not built). It starts after phase B, with its spikes: the runner's speed, rootless Podman with gVisor, and networking passed out through the runner. It reuses phase B's egress gate and routing.
+11. **Links:** your own devices and servers joining the cluster, and the only place raw TCP and UDP servers may run (design under review; [NOTES.md](NOTES.md)).
+12. **Then:** apps, the console, databases and Python.
+
+**Also queued:** `automately packages check <npm package>`, which reports whether a package runs in the isolate before anyone writes code against it; and CLI output that streams across a service's restarts and redeploys.
 
 Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES.md](NOTES.md).
 
@@ -335,7 +341,7 @@ Parked ideas, such as remote workers offering a sandboxed browser, are in [NOTES
 - [docs/benchmarks.md](docs/benchmarks.md): measured performance, and how to rerun it
 - [docs/DECISIONS.md](docs/DECISIONS.md): the decision log
 - [docs/design/revival-plan.md](docs/design/revival-plan.md): the original plan (why and what), with current status
-- [docs/design/](docs/design/): designs for upcoming work, including [the file system](docs/design/vfs.md), [packages](docs/design/packages.md) and [the Node runtime](docs/design/node-runtime.md)
+- [docs/design/](docs/design/): designs for upcoming work, including [the file system](docs/design/vfs.md), [packages](docs/design/packages.md), [network reach](docs/design/network-reach.md) and [the Node runtime](docs/design/node-runtime.md)
 - [docs/guides/packages.md](docs/guides/packages.md): publishing packages and importing them from scripts
 - [docs/scripting/job-context.md](docs/scripting/job-context.md): the job context API for scripts (attempts, steps, checkpoints)
 - [docs/scripting/services.md](docs/scripting/services.md): services, timers and cancellation

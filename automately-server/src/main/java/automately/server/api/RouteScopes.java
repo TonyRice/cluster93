@@ -37,6 +37,10 @@ final class RouteScopes {
     static final long SECRET_BODY = automately.core.secrets.TenantSecrets.MAX_VALUE_BYTES * 6L + 1024;
     /** A package manifest: a thousand files' paths and hashes, with room to spare. */
     static final long MANIFEST = 512 * 1024;
+    /** A tenant's egress policy: a hundred rules with their notes (D-111). */
+    static final long TENANT_EGRESS = 64 * 1024;
+    /** The cluster's egress policy: 500 rules and 50 address sets of up to a thousand ranges each (D-111). */
+    static final long CLUSTER_EGRESS = 4 * 1024 * 1024;
     private static final String SEG = "[^/]+";
 
     static final List<Rule> RULES = List.of(
@@ -86,8 +90,10 @@ final class RouteScopes {
             rule("GET", "/v1/tenants/" + SEG + "/storage-policy", "getStoragePolicy", Who.ADMIN, null),
             json("PUT", "/v1/tenants/" + SEG + "/storage-policy", "putStoragePolicy", Who.ADMIN, null, SMALL),
             rule("GET", "/v1/tenants/" + SEG + "/egress-policy", "getTenantEgressPolicy", Who.ADMIN, null),
-            json("PUT", "/v1/tenants/" + SEG + "/egress-policy", "putTenantEgressPolicy", Who.ADMIN, null, SMALL),
+            json("PUT", "/v1/tenants/" + SEG + "/egress-policy", "putTenantEgressPolicy", Who.ADMIN, null, TENANT_EGRESS),
             rule("GET", "/v1/egress-policy", "getEgressPolicy", Who.TENANT, Scopes.JOBS_READ),
+            rule("GET", "/v1/egress/cluster-policy", "getClusterEgressPolicy", Who.ADMIN, null),
+            json("PUT", "/v1/egress/cluster-policy", "putClusterEgressPolicy", Who.ADMIN, null, CLUSTER_EGRESS),
 
             rule("GET", "/v1/storage", "getStorage", Who.TENANT, Scopes.STORAGE_READ),
             rule("GET", "/v1/storage/providers", "listStorageProviders", Who.TENANT, Scopes.STORAGE_READ),

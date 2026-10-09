@@ -213,10 +213,11 @@ const data = await res.json();      // or res.text(), res.bytes(), or stream res
 
 - Only `http` and `https`.
 - **Every connection goes through the egress gate** (D-108), and a refusal fails with `code: 'egress_denied'` and a message that says why:
-  - **Public addresses** are allowed.
-  - **Private and reserved addresses are refused:** loopback, 10/8, 172.16/12, 192.168/16, link-local (including the 169.254.169.254 cloud metadata endpoint), CGNAT, unique-local IPv6, the documentation ranges, and IPv6 forms that carry one of these (NAT64, 6to4, IPv4-mapped and IPv4-compatible). An operator can allow specific ones for your tenant: a CIDR or an exact host name, on specific ports.
+  - **By default, public addresses** are allowed.
+  - **Private and reserved addresses are refused by default:** loopback, 10/8, 172.16/12, 192.168/16, link-local (including the 169.254.169.254 cloud metadata endpoint), CGNAT, unique-local IPv6, the documentation ranges, and IPv6 forms that carry one of these (NAT64, 6to4, IPv4-mapped and IPv4-compatible).
+  - **Operators can change both** (D-111): allow and deny rules for the whole cluster and for your tenant, and an "allow-list" posture under which only what a rule allows is reachable.
   - **The cluster's own nodes are always refused,** on every port and whatever their address, and no rule can allow them.
-  - **See your tenant's policy** with `GET /v1/egress-policy` or `automately egress`: the defaults and why, your rules, and the limits.
+  - **See your tenant's policy** with `GET /v1/egress-policy` or `automately egress`: each step in the order it's applied, with why; the cluster's rules and yours; the posture; and the limits. A refusal by a rule names that rule and its note.
 - The connection goes to the exact address that was checked, so DNS tricks can't get around this.
 - Redirects are **not followed**: a 3xx comes back as is.
 - The response body streams (`res.body`), with no size limit when read as a stream. `text()`, `json()` and `bytes()` buffer it, up to 5 MB.

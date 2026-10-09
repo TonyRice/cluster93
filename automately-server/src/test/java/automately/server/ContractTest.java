@@ -203,10 +203,17 @@ class ContractTest {
         calls.check("putStoragePolicy", "PUT", "/v1/tenants/contract/storage-policy", admin,
                 new JsonObject().put("allow", new JsonArray().add("disk")).put("diskAllotmentMb", 10));
         calls.check("getStoragePolicy", "GET", "/v1/tenants/contract/storage-policy", admin, null);
-        calls.check("putTenantEgressPolicy", "PUT", "/v1/tenants/contract/egress-policy", admin, new JsonObject().put("allow",
-                new JsonArray().add(new JsonObject().put("to", "10.0.5.20/32").put("ports", new JsonArray().add(5432).add("8000-8099")))));
+        calls.check("putTenantEgressPolicy", "PUT", "/v1/tenants/contract/egress-policy", admin, new JsonObject().put("posture", "allow-list")
+                .put("rules", new JsonArray().add(new JsonObject().put("to", "10.0.5.20/32").put("ports", new JsonArray().add(5432).add("8000-8099")))
+                        .add(new JsonObject().put("action", "deny").put("to", "*.example.com").put("note", "not this one"))));
         calls.check("getTenantEgressPolicy", "GET", "/v1/tenants/contract/egress-policy", admin, null);
         calls.check("getEgressPolicy", "GET", "/v1/egress-policy", tenant, null);
+        calls.check("putClusterEgressPolicy", "PUT", "/v1/egress/cluster-policy", admin, new JsonObject().put("posture", "public")
+                .put("addressSets", new JsonObject().put("corp", new JsonArray().add("198.51.100.0/24")))
+                .put("rules", new JsonArray().add(new JsonObject().put("action", "deny").put("to", "@corp").put("protocols",
+                        new JsonArray().add("tcp")).put("note", "ours")).add(new JsonObject().put("to", "*.partner.example")
+                        .put("ports", new JsonArray().add(443).add("@smtp")))));
+        calls.check("getClusterEgressPolicy", "GET", "/v1/egress/cluster-policy", admin, null);
         calls.check("putStorageProvider", "PUT", "/v1/storage/providers/local", tenant, new JsonObject().put("type", "disk"));
         calls.check("putMount", "PUT", "/v1/mounts/mnt/local", tenant, new JsonObject().put("provider", "local").put("readOnly", true));
         calls.check("listMounts", "GET", "/v1/mounts", tenant, null);

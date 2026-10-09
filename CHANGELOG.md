@@ -26,6 +26,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Operators configure the address spaces scripts may reach (2026-10-08)
+
+### Added
+- **The cluster's egress policy** (D-111, D-113), `GET`/`PUT /v1/egress/cluster-policy` and `automately egress cluster`.
+  - **What it holds:** allow and deny rules for every tenant, named address sets, and the posture: `public` (the default) or `allow-list`, where nothing is reachable unless a rule allows it.
+  - **Seeding:** `AUTOMATELY_EGRESS_POLICY_FILE` seeds it at the cluster's first start.
+  - **Why:** Tony: "make it configurable what address spaces we allow and disallow".
+- **Tenant policies gain deny rules and a posture of their own** (`automately tenants egress --deny … --posture …`).
+- **What a rule can target:**
+  - CIDRs, host names, `*.suffix`
+  - the built-in sets `@private`, `@loopback`, `@link-local`, `@cgnat`, `@reserved` and `@public`, or the operator's own
+  - anything (`*`)
+  - on ports, including `@smtp`, and protocols (`http`, `tcp`, `dns`), with a note shown to tenants
+- **A new cluster's policy refuses mail ports (25, 465, 587) to raw sockets,** ready for B5.
+
+### Changed
+- **The order:** cluster nodes are always refused, then cluster denies, tenant denies, tenant allows, cluster allows, and the posture.
+- **Unchanged when nothing is set:** without any policy, scripts reach exactly what they did before. A test holds the built-in sets to the old check.
+- **`GET /v1/egress-policy`** shows each step in the order it's applied, with why, the cluster's rules and the tenant's, and the posture. It replaces `defaults` and `allow`.
+- **A refusal by a rule** names the rule and its note in the script's error.
+- **Speed:** nodes cache both policies, and a change is announced on the event bus so every node drops its copy at once.
+
+### Docs
+- **The README's roadmap is current again:**
+  - phase A done
+  - phase B's progress and next steps
+  - the Node runtime after phase B, then links
+  - the stale S3 item gone (fixed in D-094)
+
+  The build section shows `-DskipITs` as the everyday run, and the test count is 869 unit tests. **Why:** Tony asked that the README and its roadmap be kept current with every change.
+
 ## Phase B made concrete: configurable address spaces, and servers by hostname (2026-10-08)
 
 ### Docs

@@ -21,6 +21,7 @@ import java.util.UUID;
  * @param ingressPort   where services' HTTP traffic arrives (routed by Host)
  * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
  * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
+ * @param egressPolicyFile   a JSON cluster egress policy stored at the cluster's first start, or null (D-111)
  * @param internalPort  this node's internal endpoint, where the ingress proxies service traffic (cluster-only)
  * @param advertiseHost the address other nodes use to reach the internal endpoint
  * @param ingressIdleTimeout how long a proxied request may go without a byte before it's closed
@@ -51,6 +52,7 @@ public record ServerConfig(
         int ingressPort,
         String ingressDomain,
         boolean egressAllowPrivate,
+        Path egressPolicyFile,
         int internalPort,
         String advertiseHost,
         Duration ingressIdleTimeout,
@@ -124,6 +126,8 @@ public record ServerConfig(
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_INGRESS_PORT", "8000")),
                 env.getOrDefault("AUTOMATELY_INGRESS_DOMAIN", "localhost"),
                 Boolean.parseBoolean(env.getOrDefault("AUTOMATELY_EGRESS_ALLOW_PRIVATE", "false")),
+                // Seeds the cluster's egress policy at its first start only (D-111); the API changes it after that.
+                blankToNull(env.get("AUTOMATELY_EGRESS_POLICY_FILE")) == null ? null : Path.of(env.get("AUTOMATELY_EGRESS_POLICY_FILE").trim()),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_INTERNAL_PORT", "8090")),
                 env.getOrDefault("AUTOMATELY_ADVERTISE_HOST", defaultAdvertiseHost()),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS", "60000"))),

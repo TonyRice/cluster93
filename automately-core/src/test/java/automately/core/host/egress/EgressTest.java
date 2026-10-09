@@ -26,6 +26,11 @@ class EgressTest {
         return TenantEgress.fromJson("acme", new JsonObject(json));
     }
 
+    private static boolean allows(TenantEgress policy, String host, InetAddress address, int port) {
+        return policy.rules().stream().anyMatch(rule -> rule.action() == EgressRule.Action.ALLOW
+                && rule.matches(host, address, Egress.checked(address), port, EgressProtocol.HTTP, AddressSets.builtInOnly()));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0",
             "192.0.0.8", "192.0.2.10", "198.51.100.7", "203.0.113.9", "198.18.0.1", "192.88.99.1", "224.0.0.1", "240.0.0.1",
@@ -58,17 +63,17 @@ class EgressTest {
                            {"to": "10.1.0.0/16", "ports": ["8000-8099"]},
                            {"to": "fd00::/8", "ports": [443]},
                            {"to": "192.168.7.7", "ports": [22]}]}""");
-        assertThat(p.allows(null, ip("10.0.5.20"), 5432)).isTrue();
-        assertThat(p.allows(null, ip("10.0.5.21"), 5432)).isFalse();
-        assertThat(p.allows(null, ip("10.0.5.20"), 5433)).isFalse();
-        assertThat(p.allows("db.internal.example", ip("10.9.9.9"), 6379)).isTrue();
-        assertThat(p.allows("DB.INTERNAL.EXAMPLE", ip("10.9.9.9"), 8050)).isTrue();
-        assertThat(p.allows("other.internal.example", ip("10.9.9.9"), 6379)).isFalse();
-        assertThat(p.allows(null, ip("10.1.200.3"), 8099)).isTrue();
-        assertThat(p.allows(null, ip("10.2.0.1"), 8099)).isFalse();
-        assertThat(p.allows(null, ip("fd12::5"), 443)).isTrue();
-        assertThat(p.allows(null, ip("192.168.7.7"), 22)).isTrue();
-        assertThat(p.toJson().getJsonArray("allow").getJsonObject(1).getJsonArray("ports")).isEqualTo(new JsonArray().add(6379).add("8000-8099"));
+        assertThat(allows(p, null, ip("10.0.5.20"), 5432)).isTrue();
+        assertThat(allows(p, null, ip("10.0.5.21"), 5432)).isFalse();
+        assertThat(allows(p, null, ip("10.0.5.20"), 5433)).isFalse();
+        assertThat(allows(p, "db.internal.example", ip("10.9.9.9"), 6379)).isTrue();
+        assertThat(allows(p, "DB.INTERNAL.EXAMPLE", ip("10.9.9.9"), 8050)).isTrue();
+        assertThat(allows(p, "other.internal.example", ip("10.9.9.9"), 6379)).isFalse();
+        assertThat(allows(p, null, ip("10.1.200.3"), 8099)).isTrue();
+        assertThat(allows(p, null, ip("10.2.0.1"), 8099)).isFalse();
+        assertThat(allows(p, null, ip("fd12::5"), 443)).isTrue();
+        assertThat(allows(p, null, ip("192.168.7.7"), 22)).isTrue();
+        assertThat(p.toJson().getJsonArray("rules").getJsonObject(1).getJsonArray("ports")).isEqualTo(new JsonArray().add(6379).add("8000-8099"));
     }
 
     @ParameterizedTest
@@ -94,7 +99,8 @@ class EgressTest {
     @Test
     void aHexLookingHostNameIsAHostRuleAndIsNeverLookedUp() {
         TenantEgress p = policy("{\"allow\": [{\"to\": \"dead.beef.cafe.bad\", \"ports\": [80]}]}");
-        assertThat(p.allow().get(0).host()).isEqualTo("dead.beef.cafe.bad");
+        assertThat(p.rules().get(0).name()).isEqualTo("dead.beef.cafe.bad");
+        assertThat(p.rules().get(0).kind()).isEqualTo(EgressRule.Kind.HOST);
     }
 
     @Test

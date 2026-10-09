@@ -1945,3 +1945,49 @@ It's written for people, because the console will show the same response as a "N
 - **`https.createServer` ignores `key`/`cert`,** since the ingress does TLS.
 - **An `http2` client is built on Vert.x** (§12), replacing "never `http2`".
 
+### D-113 — Configurable address spaces, as built
+**Date:** 2026-10-08 · **Status:** Accepted. Builds D-111 (network-reach.md §10).
+
+**What was built:**
+- **The rules:** allow and deny rules at two levels.
+  - **Targets:** CIDRs, host names, `*.suffix`, named sets (`@private`, `@loopback`, `@link-local`, `@cgnat`, `@reserved`, `@public`, and the operator's own) and `*`.
+  - **Scope:** by port (including `@smtp`) and by protocol (`http`, `tcp`, `dns`), with a note.
+- **The order:** cluster nodes, cluster denies, tenant denies, tenant allows, cluster allows, the development switch, then the posture (the tenant's, else the cluster's).
+- **The API:**
+  - **The cluster's policy:** `GET`/`PUT /v1/egress/cluster-policy`, with the built-in sets explained.
+  - **Tenant policies** gain `rules` and `posture`. The older `allow` list is still read.
+  - **The tenant's view** lists each step in order with why, plus the cluster's rules and the tenant's.
+- **The CLI:** `automately egress cluster`, and `tenants egress --deny`/`--posture`.
+- **Seeding:** `AUTOMATELY_EGRESS_POLICY_FILE` seeds the cluster's policy at first start.
+- **Errors:** a refusal by a rule names the rule and its note.
+
+**Choices made while building:**
+- **Addresses:**
+  - an allow matches only the address really reached, and a deny matches either form of it
+  - a missing set refuses as a deny and opens nothing as an allow
+  - `*.tld` only in a deny
+- **The built-in sets are the old public check, restated.** A test holds them to exactly `EgressPolicy.isPublic` over the reserved and public address corpus, so nothing changed for policies that set nothing.
+- **The development switch keeps D-108's meaning:** every private and reserved address, now after deny rules.
+- **The connect rate and socket caps aren't in the cluster policy yet.** They arrive with sockets (B5), which first uses them.
+- **Caching:** a node caches both policies.
+  - **On a change:** it's announced on the event bus and every node drops its copy.
+  - **As a backstop:** copies expire after 5 s, and a read that raced a change isn't cached.
+  - **The API reads past the cache.**
+
+**Tested:**
+- **`EgressRulesTest` (79):**
+  - the sets match the old check
+  - every step of the order
+  - postures at both levels
+  - the SMTP default only for `tcp`
+  - nodes beyond any rule
+  - the development switch honouring denies
+  - allow and deny on embedded forms
+  - suffixes
+  - missing sets
+  - the older shape
+  - round trips
+  - malformed policies
+- **`HostApisTest`:** across two nodes, a cluster deny beats a tenant allow with the note in the error; a cluster allow serves every tenant; an allow-list tenant can't reach a public address; tenants are refused the cluster API; unknown sets are refused. The second node sees a change without waiting for its cache.
+- **Also updated:** `ContractTest` (the new operations) and `CliTest` (both commands). The existing `EgressTest` (62) is unchanged and passing.
+

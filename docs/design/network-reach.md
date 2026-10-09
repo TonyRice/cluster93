@@ -3,7 +3,8 @@
 **Status:**
 - **B1, the egress gate and allow-lists:** ✅ built (D-108). Tony decided its shape on 2026-10-08 (D-095 §4.5).
 - **B2, the `http`/`https` client:** ✅ built (D-109), with axios and node-fetch matching real Node. Unhandled rejections fail jobs as in Node (D-110).
-- **Configurable address spaces (§10, D-111) and servers reached by hostname with intercepted ports (§5, D-112):** accepted (Tony, 2026-10-08).
+- **Configurable address spaces (§10):** ✅ built (D-111, D-113).
+- **Servers reached by hostname with intercepted ports (§5, D-112):** accepted (Tony, 2026-10-08).
 - **The rest, accepted with Tony's answers in §8** (2026-10-08):
   - got and real socket details (§11)
   - sockets, B5 (§7)
@@ -319,7 +320,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 | Express 5, Koa, Fastify | `createServer`; `async_hooks` (`AsyncResource`); also `diagnostics_channel` and `perf_hooks` (Fastify) |
 | ws | sockets plus HTTP `upgrade` (§13) |
 
-## 10. Configurable address spaces (accepted, D-111)
+## 10. Configurable address spaces (built, D-111, D-113)
 **The problem:** the gate's ranges were hard-coded, and an operator could do only two things: flip one global switch, and give tenants allow rules. Tony: "make it configurable what address spaces we allow and disallow."
 
 **One rule model, at two levels:**
@@ -347,9 +348,9 @@ GET /v1/egress-policy                     (the tenant, read-only)
 **Defaults:**
 - **A new cluster's policy is one cluster deny rule:** `@smtp-ports` over `tcp`, with a note saying why. An operator can edit or remove it, and a tenant allow can't override it.
   - **Lifting it for one tenant:** the operator adds a narrower cluster allow, or moves the deny into specific tenants' policies.
-- **The development switch** (`AUTOMATELY_EGRESS_ALLOW_PRIVATE`) still works: it acts as allow rules for `@private` and `@loopback`. The node's own ports are still refused.
+- **The development switch** (`AUTOMATELY_EGRESS_ALLOW_PRIVATE`) still works as before: it opens every private and reserved address after the deny rules. The node's own ports are still refused.
 
-**Settings in the cluster policy:** the connect rate (120 a minute per tenant per node) and the socket caps (16 per execution, 256 per tenant per node), with those defaults.
+**Settings in the cluster policy, from B5:** the connect rate (120 a minute per tenant per node) and the socket caps (16 per execution, 256 per tenant per node). They come with sockets, the first thing that uses them.
 
 **Where it lives:**
 - **Storage:** `Records`, edited through `GET`/`PUT /v1/egress/cluster-policy` (operators, audited) and `automately egress cluster …`.
@@ -358,6 +359,22 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **Tenant policies** gain deny rules and a posture. Today's rules read as allows.
 
 **The tenant's view (`GET /v1/egress-policy`)** shows the effective policy in the order it's applied: the floor, the cluster's rules with their notes, the tenant's rules, the posture, and the limits. Each item says why, which is what the console's "Network access" page shows.
+
+**What building it settled (D-113):**
+- **Matching an address:**
+  - **An allow matches only the address a connection really reaches** (an IPv6 form's embedded IPv4). Allowing `64:ff9b::/96` doesn't open the private addresses behind NAT64.
+  - **A deny matches either form.** Denying `2002::/16` refuses public addresses reached through 6to4.
+- **Missing sets:** a rule naming a set that no longer exists refuses everything as a deny and opens nothing as an allow. A tenant's rules may only name sets that exist when they're written.
+- **Built-in names:**
+  - **Sets:** `@public` and `*` are built in. `@public` is everything in none of the other sets, so "allow `@public` on 443" is how an allow-list tenant gets HTTPS to the internet without anything private.
+  - **Ports:** `@smtp` names 25, 465 and 587.
+- **Suffixes:** `*.ru` (a whole top-level domain) is accepted in a deny but not an allow, which would be too broad to be what was meant.
+- **Caching:** every connection reads both policies, so nodes cache them.
+  - **On a change:** it's announced on the event bus and every node drops its copy.
+  - **As a backstop:** the cache also expires after 5 s, and a read that raced a change isn't cached.
+  - **The API reads past the cache.**
+- **Request sizes:** a tenant's policy can be up to 64 KB, the cluster's up to 4 MB.
+- **A tenant's posture** can be set back to the cluster's with `"posture": "inherit"`.
 
 ## 11. got, and real socket details on `http` (accepted)
 - **`node:diagnostics_channel`,** which doesn't touch the network: channels, subscribing, publishing, and `tracingChannel`. got, mysql2, ioredis and Fastify import it.

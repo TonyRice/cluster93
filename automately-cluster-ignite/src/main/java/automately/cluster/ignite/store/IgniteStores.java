@@ -23,7 +23,8 @@ public final class IgniteStores {
             java.util.stream.Stream.concat(automately.core.identity.Identity.KINDS.stream(),
                     java.util.stream.Stream.of(automately.core.audit.AuditExporter.STATE, automately.core.files.FileTree.OPS,
                     automately.core.files.FileLocks.KIND, automately.core.packages.PackageStore.VERSIONS,
-                    automately.core.packages.PackageStore.BLOBS, automately.core.host.egress.EgressPolicies.KIND))
+                    automately.core.packages.PackageStore.BLOBS, automately.core.host.egress.EgressPolicies.KIND,
+                    automately.core.host.egress.EgressPolicies.CLUSTER_KIND))
                     .map(IgniteRecords::definition)).toList();
 
     public final JobStore jobs;

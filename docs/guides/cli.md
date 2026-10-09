@@ -75,7 +75,8 @@ The URL and token are saved in `~/.config/automately/config.json` (`%APPDATA%\au
 | `queues stats · dead · retry · discard` | A queue's counts, its dead letters (with their last error), and putting one back or deleting it |
 | `storage` · `storage providers ls · get · set-s3 · set-disk · check · rm` · `storage routes [set]` | Your own S3 bucket or disk folder, and which paths go there ([storage guide](storage.md)) |
 | `storage mounts · mount FOLDER --provider NAME [--read-only] · unmount FOLDER` | Folders bound to a provider; read-only refuses changes beneath it |
-| `egress` | Where your scripts may connect: the defaults and why, the rules an operator granted you, and the limits (D-108) |
+| `egress` | Where your scripts may connect: each step of the policy in the order it applies, with why; the cluster's rules and yours; the posture; and the limits (D-108, D-111) |
+| `egress cluster [--file POLICY.json] [--posture public\|allow-list]` | Operators only. Show the cluster's egress policy (rules for every tenant, address sets, posture), replace it from a file, or change the posture (D-111) |
 | `tokens create NAME --scope jobs:read · ls · revoke` | Your tenant's service tokens. The secret is printed once, to stdout |
 | `login URL --invite CODE [--name USER]` · `login --tenant NAME` | Join with an invite, as a new user or as you; switch to another of your tenants ([users guide](users.md)) |
 | `invites create --role R [--group G] [--user U]` · `invites ls · rm` | Invite people. The code is printed once. Operators: `--tenant T` (a first owner) or `--operator` |
@@ -85,7 +86,7 @@ The URL and token are saved in `~/.config/automately/config.json` (`%APPDATA%\au
 | `profile [--name N] [--display-name D] [--email E]` | You and your tenants; change your name or details |
 | `users · users rename OLD NEW · disable · enable · operator [--remove] · rm` | Operators: every user |
 | `tenants create · ls · rm · token · tokens · revoke · storage-policy` | Admin only |
-| `tenants egress TENANT [--allow TO:PORTS …] [--none]` | Admin only. Let a tenant's scripts reach specific private addresses or hosts, such as `--allow 10.0.5.20/32:5432 --allow db.internal.example:5432,6379`. Replaces its rules |
+| `tenants egress TENANT [--allow TO:PORTS …] [--deny TO[:PORTS] …] [--posture public\|allow-list\|inherit] [--none]` | Admin only. A tenant's own rules: `--allow 10.0.5.20/32:5432 --allow db.internal.example:5432,6379`, `--deny *.example.com`, or `--deny 203.0.113.0/24:25`. `TO` can also be `@set` or `*`. `--allow`/`--deny` replace its rules, and `--posture` alone keeps them (D-111) |
 | `mcp` | The MCP stdio bridge for AI agents ([MCP guide](mcp.md)) |
 | `cluster init --nodes a,b,c [--host a=10.0.0.11]` | Operator: create the cluster's CA and a join line per node. `ca.key` stays with you ([cluster guide](cluster.md)) |
 | `node invite ID [--host ADDR] [--key PUBLIC_KEY] --ca ca.key` · `node revoke ID` | Operator: a one-line join for a new node (also renews); revoke a node |

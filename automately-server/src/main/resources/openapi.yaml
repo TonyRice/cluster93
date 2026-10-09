@@ -344,10 +344,12 @@ paths:
     put:
       operationId: putTenantEgressPolicy
       tags: [admin, egress]
-      summary: Let a tenant's scripts reach specific private addresses or hosts, on specific ports (admin; replaces the rules)
+      summary: Set a tenant's egress rules and posture (admin; replaces them)
       description: >-
-        Each rule is a CIDR or an exact host name, and the ports it opens. Public addresses need no rule. The cluster's
-        own nodes can never be allowed. At most 100 rules; an empty list removes them all (D-108).
+        Allow and deny rules for this tenant, and optionally its own posture instead of the cluster's. A tenant deny is
+        applied after the cluster's denies; a tenant allow before the cluster's allows. The cluster's own nodes can never
+        be allowed. At most 100 rules; an empty body removes them all (D-108, D-111). "allow", a list of allow rules,
+        is the older shape and still accepted.
       security:
         - bearer: [admin]
       requestBody:
@@ -357,6 +359,11 @@ paths:
             schema:
               type: object
               properties:
+                posture: { type: string, enum: [public, allow-list, inherit] }
+                rules:
+                  type: array
+                  maxItems: 100
+                  items: { $ref: '#/components/schemas/EgressRule' }
                 allow:
                   type: array
                   maxItems: 100
@@ -365,11 +372,56 @@ paths:
         '200': { $ref: '#/components/responses/EgressPolicy' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/egress/cluster-policy:
+    get:
+      operationId: getClusterEgressPolicy
+      tags: [admin, egress]
+      summary: The cluster's egress policy, for every tenant (admin)
+      security:
+        - bearer: [admin]
+      responses:
+        '200': { $ref: '#/components/responses/ClusterEgressPolicy' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putClusterEgressPolicy
+      tags: [admin, egress]
+      summary: Set the cluster's egress rules, address sets and posture (admin; replaces them)
+      description: >-
+        Rules for every tenant: a cluster deny can't be overridden by a tenant, a cluster allow applies after the
+        tenant's rules. Address sets are named lists of CIDRs that rules refer to as "@name". The posture decides what no
+        rule does: "public" (public addresses allowed) or "allow-list" (nothing unless allowed). At most 500 rules and 50
+        sets of 1000 ranges (D-111).
+      security:
+        - bearer: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                posture: { type: string, enum: [public, allow-list] }
+                rules:
+                  type: array
+                  maxItems: 500
+                  items: { $ref: '#/components/schemas/EgressRule' }
+                addressSets:
+                  type: object
+                  maxProperties: 50
+                  additionalProperties:
+                    type: array
+                    minItems: 1
+                    maxItems: 1000
+                    items: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/ClusterEgressPolicy' }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/egress-policy:
     get:
       operationId: getEgressPolicy
       tags: [egress]
-      summary: 'Where your scripts may connect: the defaults and why, your rules, and the limits'
+      summary: 'Where your scripts may connect: each step of the policy in the order it applies, with why, and the limits'
       security:
         - bearer: ['jobs:read']
       responses:
@@ -2600,6 +2652,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/EgressPolicy' }
+    ClusterEgressPolicy:
+      description: The cluster's egress policy.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ClusterEgressPolicy' }
     StorageProvider:
       description: A storage provider.
       content:
@@ -2738,26 +2795,36 @@ components:
         allowPrivateEndpoints: { type: boolean }
     EgressRule:
       type: object
-      required: [to, ports]
+      required: [to]
       properties:
-        to: { type: string, description: 'A CIDR (10.0.5.20/32, fd00::/8) or an exact host name' }
+        action: { type: string, enum: [allow, deny], description: 'allow (the default) or deny' }
+        to: { type: string, description: 'A CIDR (10.0.5.20/32, fd00::/8), an exact host name, *.example.com, a set (@private) or * (anything)' }
         ports:
           type: array
           minItems: 1
           maxItems: 32
+          description: Required on an allow; on a deny, omitted means every port.
           items:
             oneOf:
               - { type: integer, minimum: 1, maximum: 65535 }
-              - { type: string, pattern: '^[0-9]+(-[0-9]+)?$' }
+              - { type: string, pattern: '^([0-9]+(-[0-9]+)?|@[a-z]+)$' }
+        protocols:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [http, tcp, dns] }
+        note: { type: string, maxLength: 200 }
     EgressPolicy:
       type: object
-      required: [tenant, allow, defaults, developmentSwitch, limits]
+      required: [tenant, posture, steps, clusterRules, rules, addressSets, developmentSwitch, limits]
       properties:
         tenant: { type: string }
-        allow:
-          type: array
-          items: { $ref: '#/components/schemas/EgressRule' }
-        defaults:
+        posture:
+          type: object
+          required: [value, from]
+          properties:
+            value: { type: string, enum: [public, allow-list] }
+            from: { type: string, enum: [cluster, tenant] }
+        steps:
           type: array
           items:
             type: object
@@ -2766,6 +2833,13 @@ components:
               to: { type: string }
               access: { type: string }
               why: { type: string }
+        clusterRules:
+          type: array
+          items: { $ref: '#/components/schemas/EgressRule' }
+        rules:
+          type: array
+          items: { $ref: '#/components/schemas/EgressRule' }
+        addressSets: { type: object, description: 'Built-in sets with what they are, and the cluster''s own with their ranges.' }
         developmentSwitch: { type: boolean }
         limits:
           type: object
@@ -2774,6 +2848,22 @@ components:
             requestBodyBytes: { type: integer }
             timeoutMs: { type: integer }
             followsRedirects: { type: boolean }
+    ClusterEgressPolicy:
+      type: object
+      required: [posture, rules, addressSets, builtInSets]
+      properties:
+        posture: { type: string, enum: [public, allow-list] }
+        rules:
+          type: array
+          items: { $ref: '#/components/schemas/EgressRule' }
+        addressSets:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+        builtInSets:
+          type: object
+          additionalProperties: { type: string }
     StorageProvider:
       type: object
       required: [id, name, type, settings, hasSecret]

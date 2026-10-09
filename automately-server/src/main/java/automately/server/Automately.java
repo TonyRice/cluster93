@@ -308,6 +308,30 @@ public final class Automately {
         }
     }
 
+    /**
+     * Stores {@code AUTOMATELY_EGRESS_POLICY_FILE} as the cluster's egress policy if the cluster has none yet (D-111).
+     * After that the API owns it, so a changed file is ignored, and the log says so. A file that isn't a valid policy
+     * stops the node from starting.
+     */
+    private static Future<Void> seedEgressPolicy(Vertx vertx, ServerConfig config, automately.core.host.egress.EgressPolicies policies) {
+        if (config.egressPolicyFile() == null) {
+            return Future.succeededFuture();
+        }
+        String file = config.egressPolicyFile().toString();
+        return vertx.fileSystem().readFile(file).compose(bytes -> {
+            automately.core.host.egress.ClusterEgress policy;
+            try {
+                policy = automately.core.host.egress.ClusterEgress.fromJson(new io.vertx.core.json.JsonObject(bytes));
+            } catch (IllegalArgumentException | io.vertx.core.json.DecodeException e) {
+                return Future.failedFuture(new IllegalArgumentException("AUTOMATELY_EGRESS_POLICY_FILE (" + file + ") isn't a valid egress policy: "
+                        + e.getMessage()));
+            }
+            return policies.seedCluster(policy).onSuccess(stored -> LOG.info(stored
+                    ? "Stored the cluster's egress policy from {} (D-111)"
+                    : "The cluster already has an egress policy, so {} was ignored; change it with PUT /v1/egress/cluster-policy", file)).mapEmpty();
+        });
+    }
+
     private static Future<RunningNode> wire(ServerConfig config, java.util.function.Function<Vertx, TxtResolver> txt, Vertx vertx,
                                             Stores stores, IgniteCluster cluster, Security security) {
         // A fresh id per process start: a restarted node must not be mistaken for its previous life (D-009).
@@ -331,10 +355,11 @@ public final class Automately {
         ServiceStore services = stores.services();
         DomainStore domains = stores.domains();
         NodeRegistry nodes = new SharedDataNodeRegistry(vertx, config.heartbeat().multipliedBy(3));
-        // Every connection a script causes goes through one gate: never a cluster node, private addresses only by a
-        // tenant's rules (D-108).
+        // Every connection a script causes goes through one gate: never a cluster node, then the cluster's and the
+        // tenant's rules and posture (D-108, D-111).
         automately.core.host.egress.EgressPolicies egressPolicies = new automately.core.host.egress.EgressPolicies(
-                stores.records().open(automately.core.host.egress.EgressPolicies.KIND));
+                stores.records().open(automately.core.host.egress.EgressPolicies.KIND),
+                stores.records().open(automately.core.host.egress.EgressPolicies.CLUSTER_KIND), vertx);
         if (config.egressAllowPrivate()) {
             LOG.warn("AUTOMATELY_EGRESS_ALLOW_PRIVATE is on: every tenant's scripts may reach private and loopback addresses. "
                     + "It's for local development only; grant a tenant specific addresses with its egress policy instead (D-108).");
@@ -402,6 +427,7 @@ public final class Automately {
                 .compose(v -> authenticator.ensureAdminToken(new SecureRandom())).onSuccess(generated -> generated.ifPresent(token -> LOG.warn(
                         "\n\n  No AUTOMATELY_ADMIN_TOKEN was set, so this cluster generated its admin token (shown once, save it now):\n\n"
                         + "    {}\n\n  It manages tenants and tokens only. Rotate it with POST /v1/admin/rotate (D-044).\n", token)))
+                .compose(v -> seedEgressPolicy(vertx, config, egressPolicies))
                 .compose(v -> clusterSecret(vertx)).compose(secret -> {
             // With node certificates, only another node can reach the internal endpoint, so D-036's secret is retired (D-066).
             InternalHttpVerticle endpoint = security.tls() == null

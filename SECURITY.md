@@ -52,7 +52,21 @@ Automately runs other people's code. This page describes who is trusted, what ea
 - **The cluster's own nodes are refused on every port,** even on public addresses: every address a live node advertises, and every address of the node's own interfaces (D-108). No rule can allow them.
 - The connection goes to the exact address that was checked, so DNS rebinding can't swap one in.
 - Redirects aren't followed.
-- **Private addresses are allowed only by an operator:** per tenant, with an egress policy of CIDRs or exact host names on specific ports (`PUT /v1/tenants/{tenant}/egress-policy`, audited), or for tenant S3 endpoints by its storage policy. `AUTOMATELY_EGRESS_ALLOW_PRIVATE` opens them for every tenant and is for local development only; a node warns at every start while it's on.
+- **Operators configure the address spaces** (D-111), at two levels, and every change is audited:
+  - **The cluster's policy** (`PUT /v1/egress/cluster-policy`) applies to every tenant. Its deny rules can't be overridden by a tenant.
+  - **Each tenant's policy** (`PUT /v1/tenants/{tenant}/egress-policy`).
+  - **Rules:** allow or deny, to a CIDR, a host name, a `*.suffix`, a named address set (built in, such as `@private` or `@link-local`, or the operator's own) or anything, by port and by protocol.
+  - **The order:**
+    1. cluster nodes (always refused)
+    2. cluster denies
+    3. tenant denies
+    4. tenant allows
+    5. cluster allows
+    6. the posture: `public` (public addresses allowed) or `allow-list` (nothing unless allowed), set for the cluster and optionally per tenant
+  - **Hard to get around:** a deny matches an address in any of its forms, an allow only the address actually reached, and a rule naming a set that no longer exists refuses rather than opens.
+  - **The default cluster policy refuses mail ports (25, 465, 587) to raw sockets.**
+  - **The development switch:** `AUTOMATELY_EGRESS_ALLOW_PRIVATE` opens private and reserved addresses for every tenant (still after the deny rules) and is for local development only; a node warns at every start while it's on.
+  - **Tenant S3 endpoints:** allowed by the tenant's storage policy.
 - Refusals are counted per tenant and reason (`automately_egress_denied_total`).
 - Tenant S3 endpoints are still checked by the older address check, without the cluster-node rule; they move to the gate with phase B's next step.
 

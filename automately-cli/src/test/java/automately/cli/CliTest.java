@@ -366,19 +366,40 @@ class CliTest {
     void egressRulesFromTheCommandLine() throws Exception {
         loginAsNewTenant("netty");
         Result set = cli("--url", url, "--token", ADMIN, "tenants", "egress", "netty", "--allow", "10.0.5.20/32:5432",
-                "--allow", "db.internal.example:5432,8000-8099");
+                "--allow", "db.internal.example:5432,8000-8099", "--deny", "*.example.com", "--deny", "fd00::/8:443");
         assertThat(set.code()).as(set.err()).isZero();
-        assertThat(set.out()).contains("10.0.5.20/32 on port 5432").contains("db.internal.example on ports 5432, 8000-8099");
+        assertThat(set.out()).contains("allow 10.0.5.20/32 on port 5432").contains("allow db.internal.example on ports 5432, 8000-8099")
+                .contains("deny *.example.com on every port").contains("deny fd00::/8 on port 443");
 
         Result mine = cli("egress");
         assertThat(mine.code()).as(mine.err()).isZero();
-        assertThat(mine.out()).contains("Network access for netty").contains("the cluster's own nodes: always refused")
-                .contains("10.0.5.20/32 on port 5432");
-        assertThat(cli("--json", "egress").json().get("allow").size()).isEqualTo(2);
+        assertThat(mine.out()).contains("Network access for netty (posture: public, the cluster's)")
+                .contains("1. the cluster's own nodes: always refused").contains("allow 10.0.5.20/32 on port 5432")
+                .contains("Cluster rules:").contains("deny * on ports 25, 465, 587 (tcp)");
+        assertThat(cli("--json", "egress").json().get("rules").size()).isEqualTo(4);
+
+        // The posture alone keeps the rules.
+        Result locked = cli("--url", url, "--token", ADMIN, "tenants", "egress", "netty", "--posture", "allow-list");
+        assertThat(locked.out()).contains("posture: allow-list, set for this tenant").contains("allow 10.0.5.20/32 on port 5432");
 
         Result bad = cli("--url", url, "--token", ADMIN, "tenants", "egress", "netty", "--allow", "10.0.0.0/8");
         assertThat(bad.code()).isEqualTo(2);
-        assertThat(cli("--url", url, "--token", ADMIN, "tenants", "egress", "netty", "--none").out()).contains("Rules: none");
+        Result none = cli("--url", url, "--token", ADMIN, "tenants", "egress", "netty", "--none");
+        assertThat(none.out()).contains("This tenant's rules: none").contains("the cluster's)");
+
+        // Operators: the cluster's policy, from a file and by posture.
+        java.nio.file.Path file = java.nio.file.Files.writeString(java.nio.file.Files.createTempFile("egress", ".json"), """
+                {"addressSets": {"corp": ["198.51.100.0/24"]},
+                 "rules": [{"action": "deny", "to": "@corp", "note": "our own ranges"}]}""");
+        Result cluster = cli("--url", url, "--token", ADMIN, "egress", "cluster", "--file", file.toString());
+        assertThat(cluster.code()).as(cluster.err()).isZero();
+        assertThat(cluster.out()).contains("Posture: public").contains("deny @corp on every port: our own ranges").contains("@corp: 198.51.100.0/24");
+        Result clusterLocked = cli("--url", url, "--token", ADMIN, "egress", "cluster", "--posture", "allow-list");
+        assertThat(clusterLocked.out()).contains("Posture: allow-list").contains("deny @corp");
+        assertThat(cli("egress").out()).contains("deny @corp on every port: our own ranges").contains("posture: allow-list, the cluster's");
+        Result reset = cli("--url", url, "--token", ADMIN, "egress", "cluster", "--file",
+                java.nio.file.Files.writeString(file, automately.core.host.egress.ClusterEgress.DEFAULT.toJson().encode()).toString());
+        assertThat(reset.out()).contains("Posture: public");
     }
 
     @Test

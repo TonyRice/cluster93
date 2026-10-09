@@ -246,15 +246,19 @@ class HostApisTest {
                         .add(new JsonObject().put("to", "127.0.0.1/32").put("ports", new JsonArray().add("1-65535"))))));
         assertThat(set.statusCode()).as(set.bodyAsString()).isEqualTo(200);
         try {
-            // The tenant sees the whole policy: the defaults and why, its rules, and the limits.
+            // The tenant sees the whole policy: each step in order with why, its rules, and the limits.
             JsonObject view = get(nodeB, TENANT, "/v1/egress-policy").bodyAsJsonObject();
-            assertThat(view.getJsonArray("allow").getJsonObject(0).getString("to")).isEqualTo("10.255.255.0/24");
-            assertThat(view.getJsonArray("defaults").getJsonObject(2).getString("access")).isEqualTo("always refused");
+            assertThat(view.getJsonArray("rules").getJsonObject(0).getString("to")).isEqualTo("10.255.255.0/24");
+            assertThat(view.getJsonArray("steps").getJsonObject(0).getString("access")).isEqualTo("always refused");
+            assertThat(view.getJsonObject("posture").getString("value")).isEqualTo("public");
+            assertThat(view.getJsonArray("clusterRules").getJsonObject(0).getJsonArray("protocols")).containsExactly("tcp");
             assertThat(view.getBoolean("developmentSwitch")).isFalse();
             assertThat(view.getJsonObject("limits").getInteger("concurrentRequests")).isEqualTo(16);
-            assertThat(get(nodeB, "globex", "/v1/egress-policy").bodyAsJsonObject().getJsonArray("allow")).isEmpty();
+            assertThat(get(nodeB, "globex", "/v1/egress-policy").bodyAsJsonObject().getJsonArray("rules")).isEmpty();
 
-            JsonArray after = runJob(nodeB, TENANT, probe).getJsonArray("output");
+            // Node B hears of the change on the event bus; its cache would otherwise keep the old policy up to 5 s.
+            JsonArray after = eventually(() -> runJob(nodeB, TENANT, probe).getJsonArray("output"),
+                    out -> !out.getString(0).startsWith("a private or reserved address"));
             assertThat(after.getString(0)).isIn("timeout", "network_error");          // allowed, so it tried
             assertThat(after.getString(1)).startsWith("a private or reserved address"); // another port
             assertThat(after.getString(2)).startsWith("one of the cluster's own nodes"); // no rule reaches a node
@@ -272,6 +276,77 @@ class HostApisTest {
             await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
                     .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("allow", new JsonArray())));
         }
+    }
+
+    @Test
+    void clusterRulesApplyToEveryTenantAndATenantRuleCantUndoADeny() throws Exception {
+        String probe = """
+                export default async () => {
+                  const tries = [];
+                  for (const url of ['http://10.255.255.1:9/', 'http://10.255.254.1:9/', 'http://93.184.216.34:9/']) {
+                    try { await fetch(url, { timeoutMs: 300 }); tries.push('reached'); }
+                    catch (e) { tries.push(e.code === 'egress_denied' ? e.message.replace(/^.* is not allowed: /, '') : e.code); }
+                  }
+                  return tries;
+                }
+                """;
+        HttpResponse<Buffer> cluster = await(client.put(nodeA.httpPort(), "localhost", "/v1/egress/cluster-policy")
+                .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject()
+                        .put("addressSets", new JsonObject().put("lab", new JsonArray().add("10.255.255.0/24")))
+                        .put("rules", new JsonArray()
+                                .add(new JsonObject().put("action", "deny").put("to", "@lab").put("note", "the lab network"))
+                                .add(new JsonObject().put("to", "10.255.254.0/24").put("ports", new JsonArray().add(9))))));
+        assertThat(cluster.statusCode()).as(cluster.bodyAsString()).isEqualTo(200);
+        assertThat(cluster.bodyAsJsonObject().getJsonObject("builtInSets").getString("link-local")).contains("169.254.169.254");
+        HttpResponse<Buffer> tenantAllow = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("rules", new JsonArray()
+                        .add(new JsonObject().put("to", "10.255.255.0/24").put("ports", new JsonArray().add(9))))));
+        assertThat(tenantAllow.statusCode()).as(tenantAllow.bodyAsString()).isEqualTo(200);
+        try {
+            JsonArray tries = runJob(nodeA, TENANT, probe).getJsonArray("output");
+            assertThat(tries.getString(0)).isEqualTo("a cluster rule denies it (rule \"@lab\": the lab network)");
+            assertThat(tries.getString(1)).isIn("timeout", "network_error");     // the cluster's allow, for every tenant
+            assertThat(runJob(nodeA, "globex", probe).getJsonArray("output").getString(1)).isIn("timeout", "network_error");
+
+            // An allow-list tenant reaches only what a rule allows: not even a public address.
+            HttpResponse<Buffer> locked = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/globex/egress-policy")
+                    .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("posture", "allow-list")));
+            assertThat(locked.statusCode()).as(locked.bodyAsString()).isEqualTo(200);
+            assertThat(locked.bodyAsJsonObject().getJsonObject("posture").getString("from")).isEqualTo("tenant");
+            JsonArray globex = runJob(nodeA, "globex", probe).getJsonArray("output");
+            assertThat(globex.getString(1)).isIn("timeout", "network_error");
+            assertThat(globex.getString(2)).startsWith("no rule allows it");
+
+            // A tenant's rule may only name sets that exist; only operators change the cluster's policy.
+            HttpResponse<Buffer> unknownSet = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/globex/egress-policy")
+                    .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("rules", new JsonArray()
+                            .add(new JsonObject().put("action", "deny").put("to", "@nope")))));
+            assertThat(unknownSet.statusCode()).isEqualTo(400);
+            assertThat(unknownSet.bodyAsString()).contains("@lab");
+            HttpResponse<Buffer> notAdmin = await(client.put(nodeA.httpPort(), "localhost", "/v1/egress/cluster-policy")
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject()));
+            assertThat(notAdmin.statusCode()).isEqualTo(403);
+            assertThat(get(nodeB, TENANT, "/v1/egress-policy").bodyAsJsonObject().getJsonArray("clusterRules").getJsonObject(0)
+                    .getString("note")).isEqualTo("the lab network");
+        } finally {
+            await(client.put(nodeA.httpPort(), "localhost", "/v1/egress/cluster-policy").putHeader("Authorization", TestAuth.ADMIN)
+                    .sendJsonObject(automately.core.host.egress.ClusterEgress.DEFAULT.toJson()));
+            for (String tenant : java.util.List.of(TENANT, "globex")) {
+                await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + tenant + "/egress-policy")
+                        .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject()));
+            }
+        }
+    }
+
+    /** Retries {@code attempt} until {@code done} accepts its answer, for up to 6 s (longer than the policy cache). */
+    private static <T> T eventually(java.util.concurrent.Callable<T> attempt, java.util.function.Predicate<T> done) throws Exception {
+        long deadline = System.currentTimeMillis() + 6_000;
+        T answer = attempt.call();
+        while (!done.test(answer) && System.currentTimeMillis() < deadline) {
+            Thread.sleep(200);
+            answer = attempt.call();
+        }
+        return answer;
     }
 
     @Test
