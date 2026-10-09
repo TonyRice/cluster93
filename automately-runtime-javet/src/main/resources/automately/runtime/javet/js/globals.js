@@ -346,6 +346,10 @@ define('queueMicrotask', (callback) => {
 
 const timeOrigin = Date.now();
 const marks = [];
+// perf_hooks' observers hear of each mark and measure through this (D-123); performance itself stays frozen.
+let performanceObserved = null;
+Object.defineProperty(globalThis, Symbol.for('automately.performanceObserved'), { value: (hook) => { performanceObserved = hook; } });
+const recorded = (entry) => { if (performanceObserved) performanceObserved(entry); return entry; };
 define('performance', Object.freeze({
   timeOrigin,
   now: () => Date.now() - timeOrigin,
@@ -353,7 +357,7 @@ define('performance', Object.freeze({
     const entry = Object.freeze({ name: String(name), entryType: 'mark', startTime: options?.startTime ?? Date.now() - timeOrigin, duration: 0,
       detail: options?.detail ?? null });
     if (marks.length < 10000) marks.push(entry);
-    return entry;
+    return recorded(entry);
   },
   measure: (name, start, end) => {
     const at = (m, fallback) => (typeof m === 'number' ? m : m === undefined ? fallback : marks.findLast((e) => e.name === m)?.startTime ?? fallback);
@@ -361,7 +365,7 @@ define('performance', Object.freeze({
     const endTime = at(typeof start === 'object' && start !== null ? start.end : end, Date.now() - timeOrigin);
     const entry = Object.freeze({ name: String(name), entryType: 'measure', startTime, duration: endTime - startTime, detail: null });
     if (marks.length < 10000) marks.push(entry);
-    return entry;
+    return recorded(entry);
   },
   getEntries: () => marks.slice(),
   getEntriesByName: (name, type) => marks.filter((e) => e.name === name && (type === undefined || e.entryType === type)),

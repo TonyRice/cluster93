@@ -8,7 +8,7 @@
 - **got and real socket details (§11):** ✅ built (D-114). The isolate reports a Node version so got loads (D-115).
 - **B5, `net` and `tls` sockets (§7):** ✅ built (D-116), with pg, mysql2, ioredis, MongoDB and nodemailer matching real Node against real servers.
 - **The `http2` client (§12):** ✅ built (D-117), with got's `http2: true` matching real Node. Request trailers, `state`, priorities and the frames' real flags as Node 26 has them (D-118).
-- **Servers reached by hostname with intercepted ports (§5, D-112):** ✅ built (D-123): Node's `http.Server`, ports by host, path prefixes, ports kept off the network, domains per port. Express, Koa and Fastify against real Node are next.
+- **Servers reached by hostname with intercepted ports (§5, D-112):** ✅ built (D-123): Node's `http.Server`, ports by host, path prefixes, ports kept off the network, domains per port. Express 5 and Fastify 5 answer as they do under real Node. Koa 3 waits on the WHATWG globals (`Blob`, `ReadableStream`, `Response`), being built next (Tony, 2026-10-09).
 - **The rest, accepted with Tony's answers in §8** (2026-10-08):
   - got and real socket details (§11)
   - sockets, B5 (§7)

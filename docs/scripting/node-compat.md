@@ -41,6 +41,7 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `http`, `https` | The client, and servers reached by hostname | The host's HTTP client, through the egress gate; servers through the cluster's ingress | D-108, D-109, D-123 |
 | `async_hooks` | `AsyncResource` complete; `AsyncLocalStorage` without `run` | JavaScript | D-123 |
 | `perf_hooks` | `performance`, observers of marks and measures | JavaScript | D-123 |
+| `worker_threads`, `module`, `v8` | Their names, for what libraries read when they load; no threads, no loading code at run time, no V8 internals | JavaScript | D-123 |
 | `net` | Outbound TCP sockets, as Node's; no servers | The host's sockets, through the egress rules | D-109, D-114, D-116 |
 | `tls` | Outbound TLS sockets and upgrades, as Node's; no servers | The host's sockets, through the egress rules | D-109, D-114, D-116 |
 | `child_process` | Its names only: starting a process throws | JavaScript | D-116 |
@@ -541,6 +542,13 @@ Node's `http.Server` (D-112, D-123), as `lib/_http_server.js` and `lib/_http_out
 - **`AsyncLocalStorage`:** `getStore`, `exit`, `disable`, `bind` and `snapshot` are there. `run()` and `enterWith()` throw `ERR_NOT_SUPPORTED`, because carrying a value across `await` needs a V8 hook the isolate doesn't have, and losing it silently would be worse (D-112).
 - **`createHook`** returns a hook whose `enable()` throws, for the same reason. `executionAsyncId()` is 1.
 - **`perf_hooks`:** the isolate's `performance` (whole milliseconds). A `PerformanceObserver` sees `mark` and `measure` entries a turn later. `monitorEventLoopDelay()` and `createHistogram()` return empty histograms.
+
+## `worker_threads`, `module` and `v8`
+
+Names only, so libraries that read them when they load work: pino and thread-stream (Fastify's logger), and Koa (D-123).
+- **`worker_threads`:** the main thread's view (`isMainThread` true, `threadId` 0, `parentPort` and `workerData` null), and `get`/`setEnvironmentData`. `new Worker()` throws `ERR_NOT_SUPPORTED`; split work into jobs instead.
+- **`module`:** `builtinModules`, `isBuiltin` and `createRequire`. The `require` it gives throws `ERR_NOT_SUPPORTED`, since code is bundled when it's published.
+- **`v8`:** `startupSnapshot.isBuildingSnapshot()` is false. Heap statistics are zeros, as `process.memoryUsage()` is. `serialize`, `deserialize`, heap snapshots and `setFlagsFromString` throw `ERR_NOT_SUPPORTED`.
 
 ## `tty` and `child_process`
 

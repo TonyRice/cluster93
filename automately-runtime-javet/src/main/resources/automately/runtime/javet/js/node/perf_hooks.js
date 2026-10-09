@@ -26,23 +26,15 @@ export class PerformanceObserver {
   static get supportedEntryTypes() { return SUPPORTED; }
 }
 
-// Marks and measures made through this module's performance reach observers, as Node delivers them, a turn later.
-for (const name of ['mark', 'measure']) {
-  const original = performance[name];
-  Object.defineProperty(performance, name, {
-    configurable: true,
-    value: (...args) => {
-      const entry = original(...args);
-      for (const observer of observers) {
-        if (observer._types.has(entry.entryType)) {
-          const list = { getEntries: () => [entry], getEntriesByName: (n) => (entry.name === n ? [entry] : []), getEntriesByType: (t) => (entry.entryType === t ? [entry] : []) };
-          setImmediate(() => observer._callback(list, observer));
-        }
-      }
-      return entry;
-    },
-  });
-}
+// Marks and measures reach observers a turn later, as Node delivers them.
+globalThis[Symbol.for('automately.performanceObserved')]((entry) => {
+  for (const observer of observers) {
+    if (observer._types.has(entry.entryType)) {
+      const list = { getEntries: () => [entry], getEntriesByName: (n) => (entry.name === n ? [entry] : []), getEntriesByType: (t) => (entry.entryType === t ? [entry] : []) };
+      setImmediate(() => observer._callback(list, observer));
+    }
+  }
+});
 
 class Histogram {
   constructor() { this.min = 9223372036854776000; this.max = 0; this.mean = NaN; this.stddev = NaN; this.count = 0; this.exceeds = 0; this.percentiles = new Map(); }

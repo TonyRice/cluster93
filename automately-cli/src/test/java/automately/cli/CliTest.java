@@ -624,10 +624,10 @@ class CliTest {
         assertThat(refused.code()).isEqualTo(1);
         assertThat(refused.err()).contains("fake-sharp needs native code (pulled in by your code)").contains("\"runtime\": \"node\"");
 
-        Files.writeString(project.resolve("src/index.js"), "import cp from 'node:worker_threads';\nimport bufferutil from 'bufferutil';\nexport default [cp, bufferutil];\n");
+        Files.writeString(project.resolve("src/index.js"), "import cp from 'node:vm';\nimport bufferutil from 'bufferutil';\nexport default [cp, bufferutil];\n");
         Result builtins = cli("packages", "publish", project.toString(), "--dry-run");
         assertThat(builtins.code()).isEqualTo(1);
-        assertThat(builtins.err()).contains("bufferutil").contains("left out").contains("worker_threads (imported by src/index.js)");
+        assertThat(builtins.err()).contains("bufferutil").contains("left out").contains("vm (imported by src/index.js)");
 
         // Node's path, events, buffer, url and util have stand-ins in the isolate (D-090), so they stay imports.
         Files.writeString(project.resolve("src/index.js"), "import path from 'node:path';\nimport { EventEmitter } from 'events';\n"

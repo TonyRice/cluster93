@@ -92,6 +92,9 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("timers", "node:timers"), java.util.Map.entry("node:timers", "node:timers"),
             java.util.Map.entry("async_hooks", "node:async_hooks"), java.util.Map.entry("node:async_hooks", "node:async_hooks"),
             java.util.Map.entry("perf_hooks", "node:perf_hooks"), java.util.Map.entry("node:perf_hooks", "node:perf_hooks"),
+            java.util.Map.entry("worker_threads", "node:worker_threads"), java.util.Map.entry("node:worker_threads", "node:worker_threads"),
+            java.util.Map.entry("module", "node:module"), java.util.Map.entry("node:module", "node:module"),
+            java.util.Map.entry("v8", "node:v8"), java.util.Map.entry("node:v8", "node:v8"),
             java.util.Map.entry("timers/promises", "node:timers/promises"), java.util.Map.entry("node:timers/promises", "node:timers/promises"),
             java.util.Map.entry("os", "node:os"), java.util.Map.entry("node:os", "node:os"),
             java.util.Map.entry("http", "node:http"), java.util.Map.entry("node:http", "node:http"),
@@ -153,6 +156,9 @@ public final class JavetScriptRuntime implements ScriptRuntime {
             java.util.Map.entry("node:dns", resource("node/dns.js")),
             java.util.Map.entry("node:async_hooks", resource("node/async_hooks.js")),
             java.util.Map.entry("node:perf_hooks", resource("node/perf_hooks.js")),
+            java.util.Map.entry("node:worker_threads", resource("node/worker_threads.js")),
+            java.util.Map.entry("node:module", resource("node/module.js")),
+            java.util.Map.entry("node:v8", resource("node/v8.js")),
             java.util.Map.entry("node:dns/promises", "import dns from 'node:dns'; export const { lookup, lookupService, Resolver, getServers, setServers, "
                     + "getDefaultResultOrder, setDefaultResultOrder, resolve, resolve4, resolve6, resolveAny, resolveCaa, resolveCname, resolveMx, "
                     + "resolveNaptr, resolveNs, resolvePtr, resolveSoa, resolveSrv, resolveTlsa, resolveTxt, reverse } = dns.promises; "

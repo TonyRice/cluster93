@@ -5,6 +5,8 @@ import automately.server.Automately.RunningNode;
 import automately.server.ServerConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.vertx.core.Future;
+import io.vertx.core.http.HttpMethod;
+import io.vertx.core.http.RequestOptions;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
@@ -54,6 +56,8 @@ class RealNpmPackagesTest {
      */
     private static final List<String> DRIVERS = List.of("pg", "mysql2", "ioredis", "nodemailer");
     private static final List<String> MONGO = List.of("mongodb");
+    /** Web frameworks run as services (D-123): their fixtures only listen, under Node and through the ingress. */
+    private static final List<String> WEB = List.of("express", "koa", "fastify");
     /** Set to run the drivers: they need Docker for their servers. */
     private static final boolean SERVICES = System.getenv("AUTOMATELY_TEST_REAL_SERVICES") != null;
     private final List<org.testcontainers.containers.GenericContainer<?>> containers = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
@@ -134,6 +138,10 @@ class RealNpmPackagesTest {
         Files.writeString(net.resolve("automately.json"), "{\"name\": \"realworld-net\", \"version\": \"1.0.0\", \"exports\": {" + netExports + "}}");
         Result publishedNet = cli("packages", "publish", net.toString());
         assertThat(publishedNet.code()).as(publishedNet.err()).isZero();
+        // One package each: together they're over the 10 MB a package version may be.
+        for (String web : WEB) {
+            publishVariant("realworld-" + web, List.of(web));
+        }
         if (SERVICES) {
             publishVariant("realworld-db", DRIVERS);
             publishVariant("realworld-mongo", MONGO);
@@ -210,6 +218,120 @@ class RealNpmPackagesTest {
     void aDriverTalksToItsServerAsItDoesUnderNode(String lib) throws Exception {
         Assumptions.assumeTrue(SERVICES, "Set AUTOMATELY_TEST_REAL_SERVICES (and have Docker) to run the drivers against real servers");
         sameAsNode(lib);
+    }
+
+    @ParameterizedTest(name = "{0} serves through the ingress as it does under Node")
+    // Koa 3 joins once the isolate has the WHATWG globals it checks bodies against (Blob, ReadableStream, Response).
+    @ValueSource(strings = {"express", "fastify"})
+    void aWebFrameworkServesAsItDoesUnderNode(String lib) throws Exception {
+        // Under real Node, listening on a free port.
+        int port;
+        try (java.net.ServerSocket free = new java.net.ServerSocket(0)) {
+            port = free.getLocalPort();
+        }
+        ProcessBuilder builder = new ProcessBuilder("node", "--no-warnings", "--input-type=module", "-e", "await import('./src/" + lib + ".js')")
+                .directory(project.toFile()).redirectErrorStream(true).redirectOutput(project.resolve(lib + ".node.log").toFile());
+        builder.environment().put("PORT", String.valueOf(port));
+        Process nodeApp = builder.start();
+        io.vertx.core.http.HttpClient http = serverVertx.createHttpClient();
+        try {
+            awaitListening(port, nodeApp, lib);
+            // In the cluster, as a service whose script only imports it: no default export (D-123).
+            Path script = project.resolve("service-" + lib + ".mjs");
+            Files.writeString(script, "import 'realworld-" + lib + "/" + lib + "';\n");
+            Result deployed = cli("services", "deploy", lib, script.toString());
+            assertThat(deployed.code()).as(lib + ": " + deployed.err()).isZero();
+            String host = lib + "--realnpm.localhost";
+
+            List<String> underNode = exchanges(http, new RequestOptions().setHost("127.0.0.1").setPort(port), false);
+            List<String> inService = exchanges(http, new RequestOptions().setHost("127.0.0.1").setPort(node.ingressPort())
+                    .putHeader("Host", host), true);
+            assertThat(String.join("\n\n", inService)).as(() -> lib + " (the service: " + cli("services", "get", lib).out() + ", its run: "
+                            + cli("jobs", "get", Json.parse(cli("services", "get", lib, "--json").out()).path("currentJobId").asText("none"), "--json").out() + ")")
+                    .isEqualTo(String.join("\n\n", underNode));
+        } finally {
+            nodeApp.destroyForcibly();
+            await(http.close());
+            cli("services", "rm", lib);
+        }
+    }
+
+    /** Hop-by-hop headers and Date: the proxy's and the clock's, not the app's. */
+    private static final java.util.Set<String> NOT_THE_APPS = java.util.Set.of("date", "connection", "keep-alive", "transfer-encoding", "server");
+
+    /** The same requests, each answered as "status, headers in order, body". */
+    private List<String> exchanges(io.vertx.core.http.HttpClient http, RequestOptions base, boolean throughIngress) throws Exception {
+        byte[] upload = new byte[2 * 1024 * 1024];
+        for (int i = 0; i < upload.length; i++) {
+            upload[i] = (byte) (i * 31 % 251);
+        }
+        List<String> out = new java.util.ArrayList<>();
+        // The service may still be starting its server.
+        String first = ask(http, base, HttpMethod.GET, "/hello", null, null);
+        long deadline = System.currentTimeMillis() + 30_000;
+        while (throughIngress && first.contains(" -> 503 ") && System.currentTimeMillis() < deadline) {
+            Thread.sleep(200);
+            first = ask(http, base, HttpMethod.GET, "/hello", null, null);
+        }
+        out.add(first);
+        out.add(ask(http, base, HttpMethod.HEAD, "/hello", null, null));
+        out.add(ask(http, base, HttpMethod.GET, "/json", null, null));
+        out.add(ask(http, base, HttpMethod.GET, "/users/42?expand=yes", null, null));
+        out.add(ask(http, base, HttpMethod.POST, "/echo", "application/json", io.vertx.core.buffer.Buffer.buffer("{\"a\":[1,2],\"b\":\"x\"}")));
+        out.add(ask(http, base, HttpMethod.POST, "/form", "application/x-www-form-urlencoded", io.vertx.core.buffer.Buffer.buffer("a=1&b=two+words")));
+        out.add(ask(http, base, HttpMethod.GET, "/cookies", null, null));
+        out.add(ask(http, base, HttpMethod.GET, "/redirect", null, null));
+        out.add(ask(http, base, HttpMethod.GET, "/error", null, null));
+        out.add(ask(http, base, HttpMethod.GET, "/missing", null, null));
+        out.add(ask(http, base, HttpMethod.GET, "/stream", null, null));
+        out.add(ask(http, base, HttpMethod.POST, "/upload", "application/octet-stream", io.vertx.core.buffer.Buffer.buffer(upload)));
+        // A client that leaves mid-response: the app hears its response close unfinished.
+        java.util.concurrent.CompletableFuture<String> firstChunk = new java.util.concurrent.CompletableFuture<>();
+        // The handler is set as the response arrives, before its first chunk can.
+        io.vertx.core.http.HttpClientResponse slow = await(http.request(new RequestOptions(base).setMethod(HttpMethod.GET).setURI("/slow"))
+                .compose(io.vertx.core.http.HttpClientRequest::send)
+                .map(response -> response.handler(chunk -> firstChunk.complete(chunk.toString()))));
+        out.add("slow began with " + firstChunk.get(10, TimeUnit.SECONDS).trim());
+        await(slow.request().connection().close());
+        String events = ask(http, base, HttpMethod.GET, "/events", null, null);
+        long until = System.currentTimeMillis() + 10_000;
+        while (events.endsWith("[]") && System.currentTimeMillis() < until) {
+            Thread.sleep(50);
+            events = ask(http, base, HttpMethod.GET, "/events", null, null);
+        }
+        out.add(events.substring(events.lastIndexOf('\n') + 1));
+        return out;
+    }
+
+    private String ask(io.vertx.core.http.HttpClient http, RequestOptions base, HttpMethod method, String uri, String type,
+                       io.vertx.core.buffer.Buffer body) throws Exception {
+        RequestOptions options = new RequestOptions(base).setMethod(method).setURI(uri);
+        if (type != null) {
+            options.putHeader("Content-Type", type);
+        }
+        return await(http.request(options).compose(request -> (body == null ? request.send() : request.send(body))
+                .compose(response -> response.body().map(bytes -> {
+                    StringBuilder text = new StringBuilder(method + " " + uri + " -> " + response.statusCode() + " " + response.statusMessage());
+                    response.headers().forEach(h -> {
+                        if (!NOT_THE_APPS.contains(h.getKey().toLowerCase(java.util.Locale.ROOT))) {
+                            text.append('\n').append(h.getKey().toLowerCase(java.util.Locale.ROOT)).append(": ").append(h.getValue());
+                        }
+                    });
+                    return text.append('\n').append(bytes.toString()).toString();
+                }))));
+    }
+
+    private static void awaitListening(int port, Process app, String lib) throws Exception {
+        long deadline = System.currentTimeMillis() + 20_000;
+        while (System.currentTimeMillis() < deadline) {
+            assertThat(app.isAlive()).as(lib + " under node exited").isTrue();
+            try (java.net.Socket probe = new java.net.Socket("127.0.0.1", port)) {
+                return;
+            } catch (IOException notYet) {
+                Thread.sleep(100);
+            }
+        }
+        throw new AssertionError(lib + " under node never listened on " + port);
     }
 
     /** The library's fixture gives the same JSON in the isolate as under real Node. */

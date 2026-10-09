@@ -2325,5 +2325,18 @@ It's written for people, because the console will show the same response as a "N
 - **`ServicePortsTest` (3):** validation, prefix matching and port hosts.
 - **Regressions:** every existing serving test, and the real-npm suite with the drivers.
 
-**Next:** Express, Koa and Fastify against real Node (§5's proof).
+**Frameworks against real Node** (§5's proof), in `RealNpmPackagesTest`. Each runs under Node on a port and as a service whose script only imports it (no default export). The same requests go to both, and the answers are compared: status, reason phrase, every header in order (except `Date` and the hop-by-hop headers the proxy owns) and body. The requests:
+- routes and parameters, JSON and urlencoded bodies, two cookies
+- a redirect, an error handler, the framework's own 404
+- a streamed response, HEAD, a 2 MB upload
+- a client that leaves mid-response
+
+**Results:**
+- **Express 5 and Fastify 5 match on every request.** Fastify listens on localhost's two addresses.
+- **What getting there needed:**
+  - stand-ins for `worker_threads`, `module` and `v8` (read at load by pino, thread-stream and Koa)
+  - the bundler knowing the new modules
+  - one package per framework (together over 10 MB)
+  - a fix to `perf_hooks`, which tried to redefine the frozen global `performance` (observers now hear marks through an internal hook)
+- **Koa 3 waits on the WHATWG globals:** it checks every body against `Blob`, `ReadableStream` and `Response`, which the isolate doesn't have. Tony chose to build them fully next (2026-10-09).
 

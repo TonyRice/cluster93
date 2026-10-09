@@ -42,6 +42,8 @@ public final class Imports {
             "dns", "node:dns", "dns/promises", "node:dns/promises",
             // For servers' libraries (D-123).
             "async_hooks", "node:async_hooks", "perf_hooks", "node:perf_hooks",
+            // Their names only, for what libraries read when they load: no threads, no loading code, no V8 internals (D-123).
+            "worker_threads", "node:worker_threads", "module", "node:module", "v8", "node:v8",
             // The host APIs as modules (D-091).
             "automately:kv", "automately:bus", "automately:jobs", "automately:files", "automately:secrets", "automately:fetch", "automately:log");
 

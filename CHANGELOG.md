@@ -36,6 +36,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
   - **Plain apps:** a plain `app.js` with no default export runs as a service, and a stop emits `SIGTERM`.
 
   **Why:** phase B's step 6; Express, Koa and Fastify run on it.
+- **Express 5 and Fastify 5 run as services and answer as they do under real Node** (checked request by request in `RealNpmPackagesTest`). Koa 3 follows with the WHATWG globals. Stand-ins for `worker_threads`, `module` and `v8`, so libraries that read them at load (pino, Koa) load.
 - **A service's `ports`** (path prefixes, ports kept off the network), domains pointing at a port, `routes` in the API, `automately services routes` and `domains add --port`.
 - **Node's `Timeout` objects** from `setTimeout`/`setInterval`, **`async_hooks`** (`AsyncResource`) and **`perf_hooks`**.
 
