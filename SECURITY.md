@@ -18,7 +18,15 @@ Automately runs other people's code. This page describes who is trusted, what ea
 
 **Scripts are sandboxed in V8 isolates** (D-002, D-003, D-019, D-024):
 - **No Java access.** Each job gets a fresh isolate with no Java interop and no Node.js APIs. A script reaches the outside only through the allow-listed host APIs (`kv`, `bus`, `fetch`, `files`, `log`, `ctx`), and every call is checked against the job's tenant (D-025).
-- **Memory.** The isolate's heap is capped (`AUTOMATELY_MAX_HEAP_MB`). Hitting the cap ends the script, not the node.
+- **Memory: the heap is capped, but not everything an isolate uses.** `AUTOMATELY_MAX_HEAP_MB` caps V8's heap, and hitting it ends the script, not the node.
+  - **Outside the cap:**
+    - ArrayBuffers and typed arrays (one `new ArrayBuffer(2**33)` is accepted)
+    - resizable and growable buffers
+    - WebAssembly memory
+    - ICU objects behind `Intl` and `toLocaleString`
+    - bytes a script hands to the host
+  - **The consequence:** today a script can exhaust a node's memory and get it killed (D-126). The fix is per-isolate accounting and tenant worker processes with kernel memory caps ([engine-neutral-runtime.md](docs/design/engine-neutral-runtime.md)).
+  - **Until it lands:** run only trusted tenants on shared nodes, or give each untrusted tenant its own nodes.
 - **Time.** Jobs have a timeout (`AUTOMATELY_MAX_TIMEOUT_MS`), and a stop request is followed by forced termination after a grace period (D-020).
 - **No reuse.** Isolates are never reused between jobs, let alone between tenants.
 - **Tested.** The hostile-script tests (`JavetScriptRuntimeTest.HostileScripts`) cover infinite loops (plain, after an `await`, at module top level), memory bombs, global state and prototype pollution leaking between jobs, and reaching host internals. Each must be stopped or refused while the node keeps working. Tenant scoping of every host API is tested separately (`NodeHostServicesTest`, `HostApisTest`).
@@ -102,6 +110,7 @@ Automately runs other people's code. This page describes who is trusted, what ea
 
 ## What isn't defended, so deploy accordingly
 
+- **A script can exhaust a node's memory** outside the isolate's heap limit (see Memory above, D-126).
 - **Isolates share the node's process.** V8 isolates are memory-safe sandboxes, but they aren't separate processes or VMs. A V8 vulnerability that escapes the isolate would compromise the node, so keep the JVM and Javet up to date. For hostile multi-tenant use at scale, run nodes as unprivileged containers on dedicated hosts.
 - **CPU is bounded by time, not quota.** A job's timeout and the node's capacity bound how much CPU a tenant uses, but a running service has no CPU cap beyond holding one of the node's isolate slots. The per-tenant service limit (`AUTOMATELY_MAX_SERVICES_PER_TENANT`) bounds how many it can hold.
 - **Nodes authenticate each other with certificates (D-066, D-067).** Ignite discovery and communication, the clustered event bus and the internal endpoint use TLS 1.3 with **a node certificate required on both sides**, signed by the cluster's own CA, whose private key stays on the operator's machine. A machine without such a certificate can't join or read traffic. Nodes are added with one-line join bundles, and removed with `automately node revoke`, which every node enforces and which forces the node out ([docs/guides/cluster.md](docs/guides/cluster.md)).

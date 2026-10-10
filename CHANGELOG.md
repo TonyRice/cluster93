@@ -26,6 +26,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Engine-neutral runtime: design, and memory outside the heap limit (2026-10-09)
+
+### Security
+- **Corrected: the heap limit doesn't bound an isolate's memory.** `AUTOMATELY_MAX_HEAP_MB` caps V8's heap only. ArrayBuffers (one 8 GB), resizable and growable buffers, WebAssembly memory, ICU objects and copies into Java are outside it, so one script can exhaust a node's memory. `SECURITY.md` and the README said otherwise and now say so. **Why:** found in a security review after phase B; the measurements are in the design below. Fixing it is the work that follows.
+
+### Docs
+- **`docs/design/engine-neutral-runtime.md` (D-126, proposed).**
+  - **The plan:** an engine-neutral layer under the bindings, an embedded GraalJS adapter beside Javet, a comparison of both inside GraalVM native-image tenant workers, and the worker↔node protocol designed in full.
+  - **Also recorded:**
+    - Javet running in a native image (0.7 s to the first script, about 50 MB of its own memory)
+    - kernel memory caps working on V8 processes without root
+    - a guard on `maxByteLength`, tested against bypasses
+    - WebAssembly's page cap
+
+  **Why:** Tony's concern is engine-level security, and tenants will run in worker processes, so the engine should be replaceable and chosen by measurement.
+
 ## WebSockets, as Node's; phase B complete (2026-10-09)
 
 ### Added

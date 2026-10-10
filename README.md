@@ -209,7 +209,9 @@ Each job gets a **new isolate**, which is closed when the job finishes. Nothing 
 - **No host access.** The script can reach only frozen, tenant-scoped APIs (`console`, timers, `ctx`, `kv`, `bus`, `fetch`, `log`). There is no `Java`, `require` or `process`.
 - **Egress.** Every connection a script makes (`fetch`, `http`, `net`/`tls` sockets) refuses private and reserved addresses (cloud metadata included) and the cluster's own nodes, connects to the address it checked, and sockets are capped per script, per tenant and per minute (D-116). Operators configure the address spaces: allow and deny rules for the whole cluster and per tenant, named address sets, and an allow-list-only posture (D-108, D-111).
 - **Wall-clock timeout.** Enforced from the event loop with `terminateExecution()`. It also covers loops at module top level and loops after an `await`.
-- **Heap limit** (`AUTOMATELY_MAX_HEAP_MB`). When an isolate runs out of memory, V8 normally aborts the whole process. Here a near-heap-limit callback terminates the script instead and grants a little headroom so V8 can unwind, and the node keeps serving.
+- **Heap limit** (`AUTOMATELY_MAX_HEAP_MB`). When an isolate runs out of heap, V8 normally aborts the whole process. Here a near-heap-limit callback terminates the script instead and grants a little headroom so V8 can unwind, and the node keeps serving.
+  - **What it doesn't cover:** memory outside the heap. ArrayBuffers, WebAssembly memory, ICU objects and bytes handed to the host aren't capped yet, so a script can exhaust a node's memory.
+  - **The fix in progress:** per-isolate accounting and tenant worker processes with kernel memory caps (D-126, [design](docs/design/engine-neutral-runtime.md)).
 
 The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each of these. [SECURITY.md](SECURITY.md) has the full threat model: who is trusted, each boundary, and what isn't defended.
 
@@ -337,10 +339,11 @@ Javet's native library is included for linux-x86_64 only for now.
      - ✅ Express 5, Koa 3 and Fastify 5 answer as under real Node
      - ✅ The WHATWG globals as Node's, loaded on first use: `Blob`/`File`, Web Streams and `stream/web`, `Headers`/`Request`/`Response`/`FormData`, the text and compression streams, `MessageChannel`/`BroadcastChannel`. The global `fetch` is Node's; the host's is `automately:fetch` (D-124)
      - ✅ WebSockets: the ingress tunnels upgraded connections, Node's server emits `upgrade`, and `node:http` upgrades over the job's own sockets. The ws library's client and server and the global `WebSocket` match real Node (D-125). Raw TCP and UDP servers never run on core nodes.
-     - **Phase B is complete.** Next: the shared execution layer and the Node runtime (item 10).
-10. **The Node runtime:** native code and the rest of Node, in gVisor containers ([design](docs/design/node-runtime.md); accepted, not built). It starts after phase B, with its spikes: the runner's speed, rootless Podman with gVisor, and networking passed out through the runner. It reuses phase B's egress gate and routing.
-11. **Links:** your own devices and servers joining the cluster, and the only place raw TCP and UDP servers may run (design under review; [NOTES.md](NOTES.md)).
-12. **Then:** apps, the console, databases and Python.
+     - **Phase B is complete.** Next: the engine-neutral runtime and tenant workers (item 10), then the Node runtime (item 11).
+10. **Engine-neutral runtime and tenant workers** (in progress; [design](docs/design/engine-neutral-runtime.md), D-126). The bindings move onto a small SPI so the engine can be swapped. GraalJS is embedded beside Javet, and both are compared inside native-image tenant workers that carry kernel memory caps. The worker↔node protocol is designed in full now and built once the engine is chosen.
+11. **The Node runtime:** native code and the rest of Node, in gVisor containers ([design](docs/design/node-runtime.md); accepted, not built). It starts after phase B, with its spikes: the runner's speed, rootless Podman with gVisor, and networking passed out through the runner. It reuses phase B's egress gate and routing.
+12. **Links:** your own devices and servers joining the cluster, and the only place raw TCP and UDP servers may run (design under review; [NOTES.md](NOTES.md)).
+13. **Then:** apps, the console, databases and Python.
 
 **Also queued:** `automately packages check <npm package>`, which reports whether a package runs in the isolate before anyone writes code against it; and CLI output that streams across a service's restarts and redeploys.
 

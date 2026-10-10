@@ -2441,3 +2441,26 @@ It's written for people, because the console will show the same response as a "N
 - **Regressions:** the full local suite, with the real-npm suite and the drivers.
 
 **Differs from Node:** a 101's reason phrase is always "Switching Protocols". A server's `upgrade` gets an empty `head`, since early bytes come as the socket's data. A `windowBits` under 15 stores rather than compresses.
+
+### D-126 — An engine-neutral runtime, GraalJS beside Javet, and tenant workers as native images
+**Date:** 2026-10-09 · **Status:** Proposed. The neutral layer, the GraalJS adapter and the comparison are approved to build (Tony); the engine and the worker↔node protocol are decided after the comparison. Design: [engine-neutral-runtime.md](design/engine-neutral-runtime.md).
+
+**Why:**
+- **Memory outside the isolate's limit.** A security review found that `AUTOMATELY_MAX_HEAP_MB` caps only V8's heap. ArrayBuffers (one 8 GB), resizable and growable buffers, WebAssembly memory, ICU objects (`toLocaleString` with options: +500 MB per 20,000 calls, never collected until a full GC) and copies into Java all escape it, and one line of script can get a node OOM-killed. Services and retried jobs then repeat that node after node. No data or host escape was found.
+- **Engine-level security.** V8 is C++, and its bugs are the usual route out of a JavaScript sandbox. GraalJS is a memory-safe engine with sandbox policies, available on Community Edition since GraalVM 25.1. Tony's concern is the engine itself.
+
+**Decision (proposed):**
+- **Two seams.** The bindings and the run's orchestration move to a new `automately-runtime-js`, written against a small SPI (`JsEngine`, `JsContext`, `JsArg`, `@HostFunction`). Javet and GraalJS each implement it. The placement seam is the existing `HostApis` interfaces: served in-process today, and by a `RemoteHostApis` in a worker later.
+- **One conformance suite** (today's runtime tests) runs on every engine.
+- **Tenants run in worker processes,** one per tenant, each with a kernel memory cap (cgroups; measured to work without root, while per-process limits crash V8 at start-up). Workers are GraalVM native images; the node stays a full JVM.
+  - **Javet runs in a native image:** a substitution for `JavetClassLoader.loadClass`, and JNI registration of its classes.
+  - **The cost:** it starts in 0.7 s, with about 50 MB of its own memory plus about 3 MB per idle service.
+- **The engine is chosen by measurement:** both engines in native-image workers, fully warmed up, on computation, our polyfills, host-heavy work and a service-like load; memory per context; and the hostile memory tests under a cgroup cap.
+- **The worker↔node protocol is designed now and built after the engine is chosen.**
+  - **The shape:** node-runtime.md's JSON-RPC (D-084–D-086), sent as length-prefixed binary frames with raw bytes attached, over the worker's stdio pipes.
+  - **Streams:** credit-based flow control per stream and per connection.
+  - **What runs where:** calls with authority are answered on the node; pure computation (crypto, zlib) stays in the worker.
+  - **Trust:** the worker is untrusted, bound to one tenant for life, and the node keeps its identity and its limits.
+- **Not yet:** the server keeps Javet in-process, and there's no engine setting (Tony: several engines are for later).
+
+**Docs corrected now:** `SECURITY.md` and the README no longer claim the heap limit bounds an isolate's memory.
