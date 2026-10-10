@@ -5,7 +5,7 @@
   - the engine-neutral layer, proven with Javet alone
   - an embedded GraalJS adapter on the same layer
   - a comparison of the two inside native-image workers
-- **Built:** step 1, the engine-neutral layer with Javet alone (2026-10-09). Behaviour is unchanged: the conformance suite passes per class as before, the real-npm comparisons match Node, and start-up time is the same.
+- **Built:** step 2, an embedded GraalJS adapter: the conformance suite passes on it, 136 of 136 (2026-10-10). Before it, step 1, the engine-neutral layer with Javet alone (2026-10-09). Behaviour is unchanged: the conformance suite passes per class as before, the real-npm comparisons match Node, and start-up time is the same.
 - **Still to decide:**
   - **The engine,** from the comparison's results (§8).
   - **The worker↔node protocol (§7):** designed here in full, but built only after the engine is picked.
@@ -116,29 +116,54 @@ Simple parameters (`int`, `double`, `boolean`, `String`) stay as they are.
 
 **`JavetScriptRuntime`** keeps its name, now a `ScriptRunner` over the Javet engine, so the server is untouched.
 
-### `automately-runtime-graaljs` (the GraalJS adapter)
-It embeds GraalJS through GraalVM's polyglot API in our own process, not GraalVM's Node. The dependencies are `org.graalvm.polyglot:polyglot` and `js-community` (25.4.4.1.1).
-- **Engine:** one shared polyglot `Engine`, so parsed and compiled code is reused, as V8's code cache is.
-- **Host objects:** `ProxyObject`/`ProxyExecutable`, built from the `@HostFunction` methods.
-- **Promises:** made through a prelude helper.
-- **Bytes:** read from the guest's typed arrays with `Value.readBuffer`.
-- **Modules:**
-  - **Serving them:** a polyglot `FileSystem` serving our virtual module paths.
-  - **Specifiers:** rewritten to those paths where GraalJS doesn't resolve `node:` and bare names itself.
-  - **Dynamic `import()`:** stays off, matching Javet, through the existing source rewrite.
-- **Termination:** `Context.close(true)`, or `interrupt`.
-- **Unhandled rejections:** `js.unhandled-rejections=handler`.
-- **Checked first, in a spike:**
-  - module loading
-  - the order of microtasks and macrotasks against D-110 and D-121
-  - rejection tracking
-  - bytes across the boundary
-  - `Error.captureStackTrace`
-  - termination
+### `automately-runtime-graaljs` (the GraalJS adapter; built 2026-10-10)
+It embeds GraalJS through GraalVM's polyglot API in our own process, not GraalVM's Node. The dependencies are `org.graalvm.polyglot:polyglot` with `js-community` (in-process) and `js-isolate-linux-amd64-community` (isolated), at 25.4.4.1.1. The jars are Java 17 bytecode, so they run on the server's JDK 21.
 
-**Known differences to record, not hide:**
-- **Error wording:** GraalJS's messages aren't V8's.
-- **Intl output:** formatted by ICU4J, while Node uses ICU4C.
+**Where the guest runs:**
+- **The default:** each `GraalJsEngine` spawns its own polyglot isolate (`engine.SpawnIsolate`), with an isolate-wide limit (`engine.MaxIsolateMemory`), and each run's context gets a heap limit (`sandbox.MaxHeapMemory`). Reaching it ends the run (`resourceExhausted`), never the JVM.
+- **The other mode:** `IN_PROCESS`, the guest in the JVM's own heap with no per-run limit. Kept only for the comparison.
+
+**The policy, and why it's `TRUSTED`:**
+- **What the strict policies refuse:**
+  - `ISOLATED` and `UNTRUSTED` refuse `js.stack-trace-api` (`Error.captureStackTrace`, allowed only under `TRUSTED`).
+  - They refuse `js.unhandled-rejections` (allowed up to `CONSTRAINED`), without which D-110 can't work.
+  - `ISOLATED` also requires a total CPU-time cap (`sandbox.MaxCPUTime`), which doesn't fit services that run for weeks.
+- **What `TRUSTED` with a spawned isolate still gives:** the separate heap and the heap limit. It was measured to stop a heap bomb, buffers and resizable buffers at the limit, and to collect `toLocaleString` churn normally.
+- **The lockdown, by hand:**
+  - no host access but byte buffers and our own proxies, and no host class lookup
+  - no I/O but the run's modules
+  - no threads, processes, native access, environment or polyglot access
+  - GraalJS's own extra globals switched off or deleted: `print`, `load`, `console` (ours replaces it), `Polyglot`, `Packages`, `Java`, `Graal`, and the global `arguments`
+- **Turned on for Node's behaviour:** `js.stack-trace-api` and `js.temporal`.
+
+**How each part works:**
+- **Host functions:** `ProxyObject`s of `ProxyExecutable`s, built from the same `@HostFunction` bindings, with the same argument rules as Javet's adapter.
+  - **Exceptions:** a Java exception is thrown into the script as a real `Error` (`Value.throwException`).
+  - **Numbers:** GraalJS reports small integers as `Integer` and other numbers as `Double`, which matches V8's split, but a BigInt also says it's a number, so BigInts are checked for explicitly.
+- **Bytes:**
+  - **From scripts:** only an `ArrayBuffer` gives its bytes to the host, so a typed array's are read from its buffer at its own offset and length, as Javet's rule (D-103).
+  - **To scripts:** `new Uint8Array(hostByteBuffer).slice()`, measured at no cost against 117 ms per MiB for byte-by-byte writes.
+- **Modules:**
+  - **Why the rewrite:** GraalJS asks its file system for an import by specifier alone, never saying who imports it, but the rules depend on the importer (D-089).
+  - **The rewrite:** `GraalJsModules` serves each module with its static imports already resolved by `ModuleSources` against that module (`Imports.rewriteStaticSpecifiers`).
+  - **Paths:** they mirror the URLs (`/job.mjs`, `/packages/<name>/<version>/<file>`, `/node:fs`), so stack traces name modules, and a job's failure text maps them back to V8's form.
+  - **Refusals:** a refused import fails its read with the reason, which GraalJS reports as the import's own error.
+  - **Sharing:** built-ins rewritten once are shared by every context.
+- **The job:** loaded through `import()`, which gives V8's semantics: a promise that waits for top-level `await` and rejects with the stack.
+- **A built-in's namespace from inside a host function** (the WebSocket global, D-125): a module that re-exports it is evaluated in place, so it's the same instance the job's imports get.
+- **Microtasks:** GraalJS drains them itself whenever a call into the context returns. Our loop already drains after every callback, so the order is the same as V8's.
+- **Rejections:** `Graal.setUnhandledPromiseRejectionHandler` reports each rejection still unhandled at the end of a turn to the prelude, which is when our loop checks (D-110).
+- **Termination:** `Context.close(true)` from any thread.
+
+**Conformance: 136 of 136**, the same suite Javet passes. One difference is declared rather than hidden: **GraalJS never reports a rejection handled in a later turn**, so Node's `rejectionHandled` doesn't fire. The suite asserts the rest of D-110 on both engines, and that event only on engines that report it (`EngineUnderTest.reportsRejectionsHandledLater`). Emulating it would mean patching `Promise.prototype.then`, and that would still miss `await`.
+
+**Other known differences:**
+- **Error wording:** e.g. "Cannot read property 'x' of null" against V8's "Cannot read properties of null (reading 'x')".
+- **Intl output:** ICU4J against ICU4C.
+- **No `WebAssembly`** unless `wasm-community` is added.
+- **Script-visible stacks** show the module paths above.
+
+None of these failed a conformance test.
 
 ### `automately-worker` (the tenant worker's seed)
 - **What it is:** a `main` hosting one engine, built as a GraalVM native image: `worker-javet` and `worker-graaljs` (`-Pnative`, GraalVM CE 25.4).

@@ -582,7 +582,12 @@ class ScriptRuntimeTest {
                     """);
 
             assertThat(result.error()).isNull();
-            assertThat((JsonArray) result.output()).containsExactly("caught", "unhandled: heard", "handled after all");
+            if (EngineUnderTest.engine().reportsRejectionsHandledLater()) {
+                assertThat((JsonArray) result.output()).containsExactly("caught", "unhandled: heard", "handled after all");
+            } else {
+                // The engine can't say a rejection was handled in a later turn: the rest of D-110 still holds.
+                assertThat((JsonArray) result.output()).containsExactly("caught", "unhandled: heard");
+            }
         }
 
         @Test

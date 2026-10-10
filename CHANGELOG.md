@@ -26,6 +26,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## Embedded GraalJS beside Javet (2026-10-10)
+
+### Added
+- **`automately-runtime-graaljs`: embedded GraalJS as a second engine for the runtime** (D-126, step 2).
+  - **It passes the same conformance suite as V8, 136 of 136.**
+  - **By default** each engine runs its guests in a polyglot isolate of its own, with a heap limit per run.
+  - **Measured in its spike:** the routes that escape V8's limit are bounded there (a heap bomb, buffers, resizable buffers, `Intl` churn).
+  - **Modules** are served with their imports already resolved by the runtime's rules, since GraalJS's loader never says who imports.
+  - **Not yet:** the server doesn't use it (Tony: several engines are for later); the comparison in native-image workers comes next.
+
+  **Why:** Tony's concern is engine-level security, and GraalJS is a memory-safe engine. It's measured against Javet before anything is chosen.
+- **`Imports.rewriteStaticSpecifiers`:** rewrites every static import's and re-export's specifier in place, keeping lines. GraalJS's adapter uses it.
+- **`EngineUnderTest.reportsRejectionsHandledLater`:** the conformance suite now states this one engine difference. GraalJS doesn't report a rejection handled in a later turn, so Node's `rejectionHandled` doesn't fire there; the rest of D-110 holds on both.
+
 ## The runtime, engine-neutral; Javet as its first engine (2026-10-09)
 
 ### Changed

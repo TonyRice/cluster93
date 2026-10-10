@@ -36,6 +36,7 @@
         <module>automately-core</module>
         <module>automately-runtime-js</module>
         <module>automately-runtime-javet</module>
+        <module>automately-runtime-graaljs</module>
         <module>automately-cluster-ignite</module>
         <module>automately-server</module>
         <module>automately-cli</module>
@@ -47,6 +48,8 @@
 
         <vertx.version>5.2.0</vertx.version>
         <javet.version>6.0.2</javet.version>
+        <!-- Embedded GraalJS (D-126): the polyglot API, in-process or in its own isolate. -->
+        <graaljs.version>25.4.4.1.1</graaljs.version>
         <junit.version>5.14.0</junit.version>
         <assertj.version>3.27.7</assertj.version>
         <archunit.version>1.5.1</archunit.version>
@@ -134,6 +137,28 @@
                 <groupId>automately</groupId>
                 <artifactId>automately-runtime-javet</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>automately</groupId>
+                <artifactId>automately-runtime-graaljs</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.graalvm.polyglot</groupId>
+                <artifactId>polyglot</artifactId>
+                <version>${graaljs.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.graalvm.polyglot</groupId>
+                <artifactId>js-community</artifactId>
+                <version>${graaljs.version}</version>
+                <type>pom</type>
+            </dependency>
+            <dependency>
+                <groupId>org.graalvm.polyglot</groupId>
+                <artifactId>js-isolate-linux-amd64-community</artifactId>
+                <version>${graaljs.version}</version>
+                <type>pom</type>
             </dependency>
             <dependency>
                 <groupId>com.caoccao.javet</groupId>

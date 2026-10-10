@@ -103,4 +103,38 @@ class ImportsTest {
         String source = "import { a } from 'x'; export default () => a; // import (";
         assertThat(Imports.rewrite(source, "file:///x")).isSameAs(source);
     }
+
+    @Test
+    void staticSpecifiersAreRewrittenInPlaceAndNothingElse() {
+        String source = String.join("\n",
+                "import a from 'a';",
+                "import 'b';",
+                "import { c } from \"c\";",
+                "import * as d from 'd';",
+                "import e, { f } from 'e';",
+                "export * from 'g';",
+                "export { h } from 'h';",
+                "export * as i from 'i';",
+                "const later = import('dynamic');",
+                "const text = \"import x from 'not-an-import'\";",
+                "// import y from 'commented';",
+                "obj.import('method');",
+                "export const keep = 'keep';");
+        String out = Imports.rewriteStaticSpecifiers(source, name -> name.equals("keep") ? null : "/@m/" + name);
+        assertThat(out.lines().toList()).containsExactly(
+                "import a from \"/@m/a\";",
+                "import \"/@m/b\";",
+                "import { c } from \"/@m/c\";",
+                "import * as d from \"/@m/d\";",
+                "import e, { f } from \"/@m/e\";",
+                "export * from \"/@m/g\";",
+                "export { h } from \"/@m/h\";",
+                "export * as i from \"/@m/i\";",
+                "const later = import('dynamic');",
+                "const text = \"import x from 'not-an-import'\";",
+                "// import y from 'commented';",
+                "obj.import('method');",
+                "export const keep = 'keep';");
+        assertThat(Imports.rewriteStaticSpecifiers("const x = 1;", name -> "/@m/" + name)).isEqualTo("const x = 1;");
+    }
 }

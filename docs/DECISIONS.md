@@ -2445,7 +2445,12 @@ It's written for people, because the console will show the same response as a "N
 ### D-126 — An engine-neutral runtime, GraalJS beside Javet, and tenant workers as native images
 **Date:** 2026-10-09 · **Status:** Proposed. The neutral layer, the GraalJS adapter and the comparison are approved to build (Tony); the engine and the worker↔node protocol are decided after the comparison. Design: [engine-neutral-runtime.md](design/engine-neutral-runtime.md).
 
-**Built so far:** step 1, the engine-neutral layer with Javet alone (2026-10-09). The conformance suite passes per class exactly as before, the real-npm comparisons still match Node, and start-up time is unchanged (4.26 ms against 4.53 ms for a trivial job, same machine and day).
+**Built so far:**
+- **Step 2, embedded GraalJS (2026-10-10):** `automately-runtime-graaljs` passes the conformance suite, 136 of 136.
+  - **Where it runs:** a spawned polyglot isolate with a heap limit per run, under the `TRUSTED` policy, locked down by hand, because the stricter policies refuse `Error.captureStackTrace` and rejection tracking.
+  - **Modules:** served with their imports pre-resolved, since GraalJS's loader never says who imports.
+  - **The one difference declared:** GraalJS doesn't report rejections handled in a later turn (`rejectionHandled`).
+- Step 1, the engine-neutral layer with Javet alone (2026-10-09). The conformance suite passes per class exactly as before, the real-npm comparisons still match Node, and start-up time is unchanged (4.26 ms against 4.53 ms for a trivial job, same machine and day).
 
 **Why:**
 - **Memory outside the isolate's limit.** A security review found that `AUTOMATELY_MAX_HEAP_MB` caps only V8's heap. ArrayBuffers (one 8 GB), resizable and growable buffers, WebAssembly memory, ICU objects (`toLocaleString` with options: +500 MB per 20,000 calls, never collected until a full GC) and copies into Java all escape it, and one line of script can get a node OOM-killed. Services and retried jobs then repeat that node after node. No data or host escape was found.

@@ -1,0 +1,119 @@
+package automately.runtime.graaljs;
+
+import automately.runtime.js.Js;
+import automately.runtime.js.JsError;
+import automately.runtime.js.JsHandle;
+import io.vertx.core.json.Json;
+import org.graalvm.polyglot.Value;
+
+import java.nio.ByteBuffer;
+
+/**
+ * Converts between GraalJS values and the Java values the host APIs take, through the context's helpers
+ * (helpers.js), which are captured before the script runs (D-126). Run thread only.
+ */
+final class GraalJsValues {
+
+    private final Value helpers;
+    private final Value undefined;
+    private final Value promise;
+    private final Value error;
+    private final Value parse;
+    private final Value stringify;
+    private final Value view;
+    private final Value bytes;
+    private final Value truthy;
+    private final Value string;
+    private final Value isBigInt;
+
+    GraalJsValues(Value helpers) {
+        this.helpers = helpers;
+        this.undefined = helpers.getMember("undefined");
+        this.promise = helpers.getMember("promise");
+        this.error = helpers.getMember("error");
+        this.parse = helpers.getMember("parse");
+        this.stringify = helpers.getMember("stringify");
+        this.view = helpers.getMember("view");
+        this.bytes = helpers.getMember("bytes");
+        this.truthy = helpers.getMember("truthy");
+        this.string = helpers.getMember("string");
+        this.isBigInt = helpers.getMember("isBigInt");
+    }
+
+    Value helper(String name) {
+        return helpers.getMember(name);
+    }
+
+    Value undefined() {
+        return undefined;
+    }
+
+    /** {@code [promise, resolve, reject]}. */
+    Value newPromise() {
+        return promise.execute();
+    }
+
+    boolean truthy(Value value) {
+        return truthy.execute(value).asBoolean();
+    }
+
+    boolean isBigInt(Value value) {
+        return isBigInt.execute(value).asBoolean();
+    }
+
+    String string(Value value) {
+        return string.execute(value).asString();
+    }
+
+    /** A typed array's own bytes, or null if it isn't one. */
+    byte[] viewBytes(Value value) {
+        if (value.isNull() || value.isString() || value.isNumber() || value.isBoolean()) {
+            return null;
+        }
+        Value seen = view.execute(value);
+        if (seen.isNull()) {
+            return null;
+        }
+        Value buffer = seen.getArrayElement(0);
+        long offset = seen.getArrayElement(1).asLong();
+        int length = seen.getArrayElement(2).asInt();
+        byte[] out = new byte[length];
+        if (length > 0) {
+            buffer.readBuffer(offset, out, 0, length);
+        }
+        return out;
+    }
+
+    /** A JSON-compatible Java value, or null for what JSON leaves out (functions, undefined). */
+    Object toJava(Value value) {
+        Value encoded = stringify.execute(value);
+        return encoded.isString() ? Json.decodeValue(encoded.asString()) : null;
+    }
+
+    /** A host function's result, or a promise's value, as JavaScript (D-126). */
+    Object toJs(Object value) {
+        if (value == Js.UNDEFINED) {
+            return undefined;
+        }
+        if (value == null || value instanceof String || value instanceof Boolean || value instanceof Integer || value instanceof Value) {
+            return value;
+        }
+        if (value instanceof JsHandle handle) {
+            return handle.value();
+        }
+        if (value instanceof JsError failure) {
+            return error(failure);
+        }
+        if (value instanceof byte[] data) {
+            return bytes.execute(ByteBuffer.wrap(data));
+        }
+        if (value instanceof Double number) {
+            return number;
+        }
+        return parse.execute(Json.encode(value));
+    }
+
+    Value error(JsError failure) {
+        return error.execute(failure.name(), failure.code(), failure.message());
+    }
+}

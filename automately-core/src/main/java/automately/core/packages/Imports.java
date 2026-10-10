@@ -168,15 +168,15 @@ public final class Imports {
                         meta.add(new int[]{t.start, property.end});
                     }
                 } else {
-                    String from = importFrom(tokens, i + 1);
+                    Token from = importFrom(tokens, i + 1);
                     if (from != null) {
-                        specifiers.add(from);
+                        specifiers.add(from.value);
                     }
                 }
             } else if (t.text.equals("export")) {
-                String from = exportFrom(tokens, i + 1);
+                Token from = exportFrom(tokens, i + 1);
                 if (from != null) {
-                    specifiers.add(from);
+                    specifiers.add(from.value);
                 }
             }
         }
@@ -184,13 +184,13 @@ public final class Imports {
     }
 
     /** {@code import 'x'}, {@code import a from 'x'}, {@code import {…} from 'x'}, {@code import * as a from 'x'}, {@code import a, {…} from 'x'}. */
-    private static String importFrom(List<Token> tokens, int i) {
+    private static Token importFrom(List<Token> tokens, int i) {
         Token t = at(tokens, i);
         if (t == null) {
             return null;
         }
         if (t.kind == Kind.STRING) {
-            return t.value;
+            return t;
         }
         if (t.kind == Kind.NAME) {
             Token after = at(tokens, i + 1);
@@ -204,13 +204,13 @@ public final class Imports {
     }
 
     /** {@code export * from 'x'}, {@code export * as a from 'x'}, {@code export {…} from 'x'}. */
-    private static String exportFrom(List<Token> tokens, int i) {
+    private static Token exportFrom(List<Token> tokens, int i) {
         Token t = at(tokens, i);
         return t != null && (t.is("*") || t.is("{")) ? clause(tokens, i) : null;
     }
 
     /** {@code {…} from 'x'} or {@code * as a from 'x'} (and {@code * from 'x'} after export), starting at the brace or star. */
-    private static String clause(List<Token> tokens, int i) {
+    private static Token clause(List<Token> tokens, int i) {
         Token t = at(tokens, i);
         if (t == null) {
             return null;
@@ -237,10 +237,53 @@ public final class Imports {
         return null;
     }
 
-    private static String from(List<Token> tokens, int i) {
+    private static Token from(List<Token> tokens, int i) {
         Token from = at(tokens, i);
         Token name = at(tokens, i + 1);
-        return from != null && from.kind == Kind.NAME && from.text.equals("from") && name != null && name.kind == Kind.STRING ? name.value : null;
+        return from != null && from.kind == Kind.NAME && from.text.equals("from") && name != null && name.kind == Kind.STRING ? name : null;
+    }
+
+    /**
+     * Rewrites every static import's and re-export's specifier (D-126): {@code mapping} gives the new name for each, or
+     * null to leave it. Engines whose module loader sees only the specifier, never who imports it (GraalJS), are handed
+     * names that are already resolved this way. Positions, and so lines, are kept.
+     */
+    public static String rewriteStaticSpecifiers(String source, java.util.function.Function<String, String> mapping) {
+        List<Token> tokens = tokenize(source);
+        record Edit(int start, int end, String text) {
+        }
+        List<Edit> edits = new ArrayList<>();
+        for (int i = 0; i < tokens.size(); i++) {
+            Token t = tokens.get(i);
+            if (t.kind != Kind.NAME || i > 0 && tokens.get(i - 1).is(".")) {
+                continue;
+            }
+            Token specifier = null;
+            if (t.text.equals("import")) {
+                Token next = at(tokens, i + 1);
+                if (next != null && !next.is("(") && !next.is(".")) {
+                    specifier = importFrom(tokens, i + 1);
+                }
+            } else if (t.text.equals("export")) {
+                specifier = exportFrom(tokens, i + 1);
+            }
+            if (specifier != null) {
+                String replacement = mapping.apply(specifier.value);
+                if (replacement != null) {
+                    edits.add(new Edit(specifier.start, specifier.end, quote(replacement)));
+                }
+            }
+        }
+        if (edits.isEmpty()) {
+            return source;
+        }
+        StringBuilder out = new StringBuilder(source.length() + edits.size() * 32);
+        int at = 0;
+        for (Edit edit : edits) {
+            out.append(source, at, edit.start()).append(edit.text());
+            at = edit.end();
+        }
+        return out.append(source, at, source.length()).toString();
     }
 
     private static Token at(List<Token> tokens, int i) {
