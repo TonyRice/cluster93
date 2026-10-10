@@ -5,6 +5,7 @@
   - the engine-neutral layer, proven with Javet alone
   - an embedded GraalJS adapter on the same layer
   - a comparison of the two inside native-image workers
+- **Built:** step 1, the engine-neutral layer with Javet alone (2026-10-09). Behaviour is unchanged: the conformance suite passes per class as before, the real-npm comparisons match Node, and start-up time is the same.
 - **Still to decide:**
   - **The engine,** from the comparison's results (§8).
   - **The worker↔node protocol (§7):** designed here in full, but built only after the engine is picked.

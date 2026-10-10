@@ -29,7 +29,7 @@ Automately runs other people's code. This page describes who is trusted, what ea
   - **Until it lands:** run only trusted tenants on shared nodes, or give each untrusted tenant its own nodes.
 - **Time.** Jobs have a timeout (`AUTOMATELY_MAX_TIMEOUT_MS`), and a stop request is followed by forced termination after a grace period (D-020).
 - **No reuse.** Isolates are never reused between jobs, let alone between tenants.
-- **Tested.** The hostile-script tests (`JavetScriptRuntimeTest.HostileScripts`) cover infinite loops (plain, after an `await`, at module top level), memory bombs, global state and prototype pollution leaking between jobs, and reaching host internals. Each must be stopped or refused while the node keeps working. Tenant scoping of every host API is tested separately (`NodeHostServicesTest`, `HostApisTest`).
+- **Tested.** The hostile-script tests (`ScriptRuntimeTest.HostileScripts`) cover infinite loops (plain, after an `await`, at module top level), memory bombs, global state and prototype pollution leaking between jobs, and reaching host internals. Each must be stopped or refused while the node keeps working. Tenant scoping of every host API is tested separately (`NodeHostServicesTest`, `HostApisTest`).
 
 **Tenants are kept apart:**
 - Every key, topic, file path, service, domain and job is scoped to the tenant that owns it, taken from the token rather than the request (D-045).

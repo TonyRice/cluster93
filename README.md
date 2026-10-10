@@ -198,7 +198,8 @@ The API is **contract-first**: [`openapi.yaml`](automately-server/src/main/resou
 | Module | Contents |
 |---|---|
 | `automately-core` | Job model and transitions, `JobStore`, `JobStateStore`, `NodeRegistry`, the `ScriptRuntime` SPI, scheduler, node verticle, orphan reaper, and services (`ServiceDefinition`, `ServiceStore`, `ServiceSupervisor`). Depends only on `vertx-core` |
-| `automately-runtime-javet` | `ScriptRuntime` on V8 isolates, with an event loop per isolate (timers, stop requests, async host calls) |
+| `automately-runtime-js` | The engine-neutral runtime (D-126): the bindings, an event loop per run (timers, stop requests, async host calls), the prelude and the Node and web polyfills, plus the conformance suite every engine runs |
+| `automately-runtime-javet` | V8 through Javet: the runtime's engine today, an isolate per run |
 | `automately-cluster-ignite` | The cluster is the database: Ignite bootstrap, durable tables, the Ignite stores |
 | `automately-server` | Bootstrap, REST API, HTTP ingress, the shaded jar |
 
@@ -213,7 +214,7 @@ Each job gets a **new isolate**, which is closed when the job finishes. Nothing 
   - **What it doesn't cover:** memory outside the heap. ArrayBuffers, WebAssembly memory, ICU objects and bytes handed to the host aren't capped yet, so a script can exhaust a node's memory.
   - **The fix in progress:** per-isolate accounting and tenant worker processes with kernel memory caps (D-126, [design](docs/design/engine-neutral-runtime.md)).
 
-The hostile-script suite (`JavetScriptRuntimeTest$HostileScripts`) covers each of these. [SECURITY.md](SECURITY.md) has the full threat model: who is trusted, each boundary, and what isn't defended.
+The hostile-script suite (`ScriptRuntimeTest$HostileScripts`) covers each of these. [SECURITY.md](SECURITY.md) has the full threat model: who is trusted, each boundary, and what isn't defended.
 
 ### Numbers
 
@@ -305,7 +306,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
-| No tests | 930 unit tests (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress rules, files, packages, Node stand-ins, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture), 7 Docker integration tests that use real `SIGKILL`s, and real npm libraries checked against Node: 41 alone, plus 5 database and mail drivers against real servers | `./mvnw verify` |
+| No tests | 929 unit tests (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress rules, files, packages, Node stand-ins, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture), 7 Docker integration tests that use real `SIGKILL`s, and real npm libraries checked against Node: 41 alone, plus 5 database and mail drivers against real servers | `./mvnw verify` |
 | `callbackUrl`: one unsigned POST of `{success, error}` when a job finished, never retried | A signed POST of the result and your `data` for every way a job ends, retried through a durable queue | `CallbacksTest`, `CallbackDeliveryTest` |
 | `messagebus`: at most once, lost if nobody listened | The same bus, plus durable queues: at least once, leases, retries, dead letters, surviving a node's death | `QueueStoreContract` on both stores, a three-node failover test, the demo |
 | `Automately.startJob(..., waitForJob)` blocked a thread until the child finished | `jobs.run()` returns a handle whose `result()` is a promise; children stay in the tenant, with depth and rate limits | `JobsFromScriptsTest` |

@@ -5,7 +5,7 @@
 import * as esbuild from 'esbuild';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const OUT = new URL('../../automately-runtime-javet/src/main/resources/automately/runtime/javet/js/node/', import.meta.url).pathname;
+const OUT = new URL('../../automately-runtime-js/src/main/resources/automately/runtime/js/node/', import.meta.url).pathname;
 const lock = JSON.parse(readFileSync(new URL('./package-lock.json', import.meta.url), 'utf8'));
 const pinned = Object.entries(lock.packages).filter(([path]) => path.startsWith('node_modules/') && !lock.packages[path].dev)
   .map(([path, info]) => `//   ${path.slice('node_modules/'.length)}@${info.version} ${info.integrity}`).join('\n');
@@ -95,7 +95,7 @@ writeFileSync(OUT + 'stream_promises.js', "// Node's stream/promises, from the v
 // The WHATWG streams (D-124), from web-streams-polyfill (spec-compliant, tested against the web-platform tests). Not a
 // module: a script that evaluates to its classes, which the prelude loads on first use, so isolates that never touch
 // ReadableStream pay nothing for it. The package ships only its minified build.
-const WEB = new URL('../../automately-runtime-javet/src/main/resources/automately/runtime/javet/js/web/', import.meta.url).pathname;
+const WEB = new URL('../../automately-runtime-js/src/main/resources/automately/runtime/js/web/', import.meta.url).pathname;
 const webStreams = await esbuild.build({ stdin: { contents: "export * from 'web-streams-polyfill';", resolveDir: new URL('.', import.meta.url).pathname },
   bundle: true, write: false, format: 'iife', globalName: 'webStreams', platform: 'neutral', target: 'es2022', mainFields: ['module', 'main'],
   conditions: ['import'], logLevel: 'warning', legalComments: 'inline' });

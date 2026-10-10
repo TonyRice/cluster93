@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>automately</groupId>
+        <artifactId>automately-parent</artifactId>
+        <version>2.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>automately-runtime-js</artifactId>
+    <name>Automately Runtime (engine-neutral)</name>
+    <description>
+        The JavaScript runtime written once for every engine (D-126): the bindings, the event loop, the run's
+        orchestration, the prelude and the Node and web polyfills. Engines (Javet, GraalJS) implement its small SPI.
+        Its tests are the conformance suite: each engine module runs them against its own engine.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>automately</groupId>
+            <artifactId>automately-core</artifactId>
+        </dependency>
+        <!-- The test DNS server from core's tests (D-122), for the conformance suite. -->
+        <dependency>
+            <groupId>automately</groupId>
+            <artifactId>automately-core</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- The conformance suite is packaged for the engine modules, which run it; there's no engine here to run it on. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -26,6 +26,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## The runtime, engine-neutral; Javet as its first engine (2026-10-09)
+
+### Changed
+- **The JavaScript runtime moved to a new engine-neutral module, `automately-runtime-js`** (D-126, step 1).
+  - **What moved:** the bindings, `HostBridge`, the event loop, the run's orchestration (`ScriptRunner`), the module resolution rules (`ModuleSources`), the prelude and the Node and web polyfills.
+  - **The SPI they're written against:** `JsEngine`, `JsContext`, `JsArg`, `@HostFunction`.
+  - **`automately-runtime-javet` is now V8's adapter:** isolates, the heap limit, V8's code caches, ICU data, and binding the host functions as direct V8 callbacks. `JavetScriptRuntime` keeps its name and constructor, so the server is unchanged.
+  - **The runtime's tests became the conformance suite:** `automately-runtime-js` packages them, and each engine module runs them on its own engine, Javet through `JavetUnderTest`. `JavetScriptRuntimeTest` is now `ScriptRuntimeTest`.
+
+  **Why:** so a second engine (embedded GraalJS) can be added and compared without writing the bindings twice. The design is in `docs/design/engine-neutral-runtime.md`.
+- **No change in behaviour:**
+  - **Every conformance test passes on Javet,** per class exactly as before (136), and the real-npm comparisons still match Node (41).
+  - **A trivial job's start-up:** 4.26 ms through the new layer against 4.53 ms for the old code, both measured on the same machine the same day.
+
 ## Engine-neutral runtime: design, and memory outside the heap limit (2026-10-09)
 
 ### Security

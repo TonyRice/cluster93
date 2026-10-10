@@ -34,6 +34,7 @@
     <modules>
         <module>automately-tls</module>
         <module>automately-core</module>
+        <module>automately-runtime-js</module>
         <module>automately-runtime-javet</module>
         <module>automately-cluster-ignite</module>
         <module>automately-server</module>
@@ -122,6 +123,11 @@
             <dependency>
                 <groupId>automately</groupId>
                 <artifactId>automately-cluster-ignite</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>automately</groupId>
+                <artifactId>automately-runtime-js</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

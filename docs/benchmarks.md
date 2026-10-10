@@ -18,7 +18,7 @@ driven from the same machine through Docker's port mapping. Rerun it on your har
 
 ## Isolate start-up
 
-`IsolateStartupBenchmark` (in `automately-runtime-javet`, run with `AUTOMATELY_BENCH=1`) times one job's isolate in-process, with no HTTP or cluster: a fresh isolate, the prelude and the script, on one thread after 100 warm-up runs, 500 measured. Measured 2026-10-08 on the machine above (D-106):
+`IsolateStartupBenchmark` (in the conformance suite in `automately-runtime-js`, run on V8 with `AUTOMATELY_BENCH=1 ./mvnw -pl automately-runtime-javet -Dtest=IsolateStartupBenchmark test`) times one job's isolate in-process, with no HTTP or cluster: a fresh isolate, the prelude and the script, on one thread after 100 warm-up runs, 500 measured. Measured 2026-10-08 on the machine above (D-106):
 
 | Script | p50 | p90 | p99 |
 |---|---|---|---|

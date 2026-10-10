@@ -2445,6 +2445,8 @@ It's written for people, because the console will show the same response as a "N
 ### D-126 — An engine-neutral runtime, GraalJS beside Javet, and tenant workers as native images
 **Date:** 2026-10-09 · **Status:** Proposed. The neutral layer, the GraalJS adapter and the comparison are approved to build (Tony); the engine and the worker↔node protocol are decided after the comparison. Design: [engine-neutral-runtime.md](design/engine-neutral-runtime.md).
 
+**Built so far:** step 1, the engine-neutral layer with Javet alone (2026-10-09). The conformance suite passes per class exactly as before, the real-npm comparisons still match Node, and start-up time is unchanged (4.26 ms against 4.53 ms for a trivial job, same machine and day).
+
 **Why:**
 - **Memory outside the isolate's limit.** A security review found that `AUTOMATELY_MAX_HEAP_MB` caps only V8's heap. ArrayBuffers (one 8 GB), resizable and growable buffers, WebAssembly memory, ICU objects (`toLocaleString` with options: +500 MB per 20,000 calls, never collected until a full GC) and copies into Java all escape it, and one line of script can get a node OOM-killed. Services and retried jobs then repeat that node after node. No data or host escape was found.
 - **Engine-level security.** V8 is C++, and its bugs are the usual route out of a JavaScript sandbox. GraalJS is a memory-safe engine with sandbox policies, available on Community Edition since GraalVM 25.1. Tony's concern is the engine itself.
