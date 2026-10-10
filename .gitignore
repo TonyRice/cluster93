@@ -6,3 +6,7 @@ target/
 file-uploads/
 hs_err_pid*.log
 core.[0-9]*
+
+# The engine comparison's native workers (benchmarks/engines/build.sh) and the per-run workload copies.
+benchmarks/engines/bin/
+benchmarks/engines/results/*/workloads/

@@ -5,7 +5,10 @@
   - the engine-neutral layer, proven with Javet alone
   - an embedded GraalJS adapter on the same layer
   - a comparison of the two inside native-image workers
-- **Built:** step 2, an embedded GraalJS adapter: the conformance suite passes on it, 136 of 136 (2026-10-10). Before it, step 1, the engine-neutral layer with Javet alone (2026-10-09). Behaviour is unchanged: the conformance suite passes per class as before, the real-npm comparisons match Node, and start-up time is the same.
+- **Built:**
+  - **Step 3 (2026-10-10):** both engines in native-image workers, compared (§8). The results and the trade-offs are written up for Tony to choose from.
+  - **Step 2 (2026-10-10):** an embedded GraalJS adapter. The conformance suite passes on it, 136 of 136.
+  - **Step 1 (2026-10-09):** the engine-neutral layer, with Javet alone. Behaviour is unchanged: the conformance suite passes per class as before, the real-npm comparisons match Node, and start-up time is the same.
 - **Still to decide:**
   - **The engine,** from the comparison's results (§8).
   - **The worker↔node protocol (§7):** designed here in full, but built only after the engine is picked.
@@ -142,7 +145,8 @@ It embeds GraalJS through GraalVM's polyglot API in our own process, not GraalVM
   - **Numbers:** GraalJS reports small integers as `Integer` and other numbers as `Double`, which matches V8's split, but a BigInt also says it's a number, so BigInts are checked for explicitly.
 - **Bytes:**
   - **From scripts:** only an `ArrayBuffer` gives its bytes to the host, so a typed array's are read from its buffer at its own offset and length, as Javet's rule (D-103).
-  - **To scripts:** `new Uint8Array(hostByteBuffer).slice()`, measured at no cost against 117 ms per MiB for byte-by-byte writes.
+  - **To scripts, in-process:** `new Uint8Array(hostByteBuffer).slice()`, measured at no cost against 117 ms per MiB for byte-by-byte writes.
+  - **To scripts, isolated:** a host `ByteBuffer` crosses the isolate's boundary one byte at a time (2.5 s per 5 MB), but a string crosses in one piece. So the bytes go across as a Latin-1 string, one character per byte, and a helper fills the `Uint8Array` inside the isolate (48 ms per 5 MB). Gzip of 1 MB went from 2.8 s to 0.14 s.
 - **Modules:**
   - **Why the rewrite:** GraalJS asks its file system for an import by specifier alone, never saying who imports it, but the rules depend on the importer (D-089).
   - **The rewrite:** `GraalJsModules` serves each module with its static imports already resolved by `ModuleSources` against that module (`Imports.rewriteStaticSpecifiers`).
@@ -156,6 +160,11 @@ It embeds GraalJS through GraalVM's polyglot API in our own process, not GraalVM
 - **Termination:** `Context.close(true)` from any thread.
 
 **Conformance: 136 of 136**, the same suite Javet passes. One difference is declared rather than hidden: **GraalJS never reports a rejection handled in a later turn**, so Node's `rejectionHandled` doesn't fire. The suite asserts the rest of D-110 on both engines, and that event only on engines that report it (`EngineUnderTest.reportsRejectionsHandledLater`). Emulating it would mean patching `Promise.prototype.then`, and that would still miss `await`.
+
+**Measured costs of the isolate (2026-10-10, native workers):**
+- **Crossing the boundary is slow for bulk data.** A host call costs about 18 µs into the isolate, against about 6 µs for V8 through Javet. Bytes and strings cross at roughly 10 ns per character. Pure computation inside the isolate runs as fast as in-process (JSON, DeltaBlue: no difference). But every host API that moves bytes pays this: crypto, zlib, kv values, request and response bodies.
+- **The per-run heap limit counts garbage the isolate hasn't collected yet.** `sandbox.MaxHeapMemory` counts every byte, buffers included, which is the point. But a workload holding about 10 MB at a time (Buffer base64 and hex of 1 MB, repeatedly) fails at 128 MB, crawls at 192 MB, and runs normally from 256 MB. A limit there must leave room for the collector, so as a rule set it 2–4× above what a script actually holds.
+- **Cold code is slow.** Until the JIT has compiled it, GraalJS runs a script about 4× slower than V8 (3 MB of hex and base64 both ways: 1.56 s against 0.40 s on its first run; 0.58 s against 0.32 s warm). Each worker keeps one engine, so code from shared sources (all our polyfills) compiles once per worker. But a tenant's script that runs once pays the full cold cost.
 
 **Other known differences:**
 - **Error wording:** e.g. "Cannot read property 'x' of null" against V8's "Cannot read properties of null (reading 'x')".
@@ -182,6 +191,13 @@ None of these failed a conformance test.
 | native image | 0.7 s | 50 MB | 182 / 245 / 339 MB |
 
 The native image's RSS includes 136 MB of shared memory (the V8 library and ICU data in `/tmp`), paid once per node with a shared path. **Its own cost is about 50 MB, plus about 3 MB per idle service,** which is V8's cost per isolate, the same on the JVM.
+
+**Building the workers (GraalVM CE 25.4, `benchmarks/engines/build.sh`):**
+- **The cost:** `worker-javet` takes 2.5–5 minutes and peaks at 2.9 GB. `worker-graaljs` takes about 8 minutes and peaks at 5.9 GB; it carries the whole JS language and the isolate's library, and runs out of a 5 or 6 GB builder heap.
+- **The safeguards:** each build runs one at a time under a kernel memory cap (9 GB). The builder gets 7 GB of heap and 2 threads, since fewer threads hold fewer compilation graphs at once. An uncapped GraalJS build once took down the developer's terminal, with `/tmp` (tmpfs) already full.
+- **What the image may see:** a native image only reaches the classes, methods and resources it's told about. The tracing agent's record listed only the host functions its run happened to call (for zlib, just `process`), so streaming zlib would have failed in a worker. A hand-written file in `automately-worker` now registers every binding's public methods, plus all the runtime's JavaScript by glob. `NativeImageMetadataTest` fails if a class with `@HostFunction` methods is missing from it.
+
+**A leak to fix before workers run in production:** a worker that's killed (at its memory cap, say) leaves its unpacked V8 library in `/tmp/javet/<pid>/` and its ICU data copy (`/tmp/automately-icudt*.dat`). On a tmpfs `/tmp` that's memory: about 80 MB per dead worker (a 46–51 MB library and 33 MB of ICU data). The fix is the one above: one shared copy at a fixed path, unpacked once per node. `run.sh` cleans up after itself meanwhile.
 
 ## 4. Kernel memory caps on workers
 - **Cgroups work, without root.** cgroup v2 has the memory controller delegated to the user session here. `systemd-run --user --scope -p MemoryMax=256M` around a V8 process filling 1 GB: the kernel killed it at the cap (exit 137), and everything outside carried on.
@@ -310,10 +326,10 @@ Every flow of bytes is a channel with credits, as HTTP/2's flow-control windows:
 
 The engine-neutral SPI needs no change for any of it.
 
-## 8. The comparison (method; results to come)
+## 8. The comparison (run 2026-10-10)
 Both engines run in native-image workers (GraalVM CE 25.4), with the same scripts.
 
-- **Warm-up:** at least 20 seconds or 200 iterations, whichever is longer, then 50 measured iterations. The median, p99 and throughput are reported; the first run is recorded only for information. Long-term performance is what matters (Tony).
+- **Warm-up:** at least 20 seconds or 200 iterations, whichever is longer, then 50 measured iterations. The median and p99 are reported; the first run is recorded only for information. Long-term performance is what matters (Tony).
 - **Workloads:**
   - **Pure computation:** JSON round trips on 1 MB, a regex tokenizer, string building, Map/Set churn, a sort, SHA-256 in JavaScript, Richards and DeltaBlue.
   - **Our polyfills:** Buffer base64/hex, a stream pipeline, URL parsing, EventEmitter, TextEncoder/Decoder.
@@ -327,10 +343,116 @@ Both engines run in native-image workers (GraalVM CE 25.4), with the same script
 - **Conformance:** the suite's pass and fail lists for GraalJS. Where practical, the real-npm bundles are run through both workers and compared with Node.
 - **Rerunnable:** the benchmark scripts live in `benchmarks/engines/`.
 
-**Results:** to come.
+### How it was run
+- **Rerunnable:** `benchmarks/engines/build.sh`, then `run.sh` (about an hour). The raw results, the tables and a CPU log are in `benchmarks/engines/results/2026-10-10-1054/`.
+- **The machine:** an i7-1185G7 laptop, 8 threads, 30 GB, Linux 7.0. It ran on the balanced profile with **turbo off**, so the clock held at 3.0 GHz, and the CPU stayed at 49°C median and 60°C at most.
+  - **Why turbo off:** earlier attempts with turbo on reached 97°C, and the clock swung between 0.4 and 4.2 GHz. Those numbers were thrown away.
+- **Three variants:**
+  - V8 through Javet
+  - GraalJS in its own isolate (the default, with a heap limit per run)
+  - GraalJS in-process, kept only to separate the engine's speed from the isolate's cost
+- **Memory limits:**
+  - **Workloads:** 512 MB on every engine. GraalJS's limit counts buffers and trips on uncollected garbage (§3), so 128 MB would have failed buffer-codec there.
+  - **Start-up and idle memory:** the default 128 MB.
+  - **Hostile tests:** 64 MB per run, with a 512 MB kernel cap on the worker.
+- **What the plan had that this didn't do:**
+  - **WebAssembly on GraalJS:** `wasm-community` wasn't added, so GraalJS has none.
+  - **The `ISOLATED`/`UNTRUSTED` policies:** they refuse options Node's behaviour needs (§3).
+  - **The real-npm bundles through the workers:** not run.
+  - **service-router:** it's a request handler's work without the serve path (route matching, query parsing, JSON in and out).
+
+### Results
+**Start-up and idle memory:**
+
+| | V8 (Javet) | GraalJS, isolated | GraalJS, in-process |
+|---|---|---|---|
+| First script answered | 0.75 s | 0.70 s | 0.69 s |
+| Private memory after it | 40 MB | 17 MB | 15 MB |
+| Private memory with 20 / 50 idle services | 104 / 193 MB | 289 / 441 MB | 276 / 336 MB |
+| Each further idle service | 3.0 MB | 5.1 MB | 2.0 MB |
+
+GraalJS starts smaller, but its isolate's heap grows by about 285 MB once services are running. With 50 idle services it holds 2.3 times V8's memory.
+
+**Warmed-up time per iteration** (median; the ratio is against V8, above 1 is slower):
+
+| Workload | V8 | GraalJS, isolated | GraalJS, in-process |
+|---|---|---|---|
+| regex-tokenize | 30.4 ms | 9.4 ms (0.31×) | 9.4 ms (0.31×) |
+| events (EventEmitter) | 98.2 ms | 67.6 ms (0.69×) | 68.1 ms (0.69×) |
+| buffer-codec | 72.7 ms | 74.0 ms (1.02×) | 99.7 ms (1.37×) |
+| promise-timers | 57.1 ms | 59.6 ms (1.04×) | 55.6 ms (0.97×) |
+| sha256-js | 74.7 ms | 77.7 ms (1.04×) | 77.8 ms (1.04×) |
+| url-parse | 36.1 ms | 38.0 ms (1.05×) | 93.2 ms (2.58×) |
+| crypto-hash | 71.3 ms | 93.9 ms (1.32×) | 66.6 ms (0.93×) |
+| map-set-churn | 55.5 ms | 84.3 ms (1.52×) | 98.8 ms (1.78×) |
+| string-build | 24.5 ms | 38.5 ms (1.57×) | 151.4 ms (6.17×) |
+| stream-pipeline | 162.2 ms | 315.0 ms (1.94×) | 837.3 ms (5.16×) |
+| kv-loop | 38.6 ms | 79.4 ms (2.05×) | 37.1 ms (0.96×) |
+| richards | 29.7 ms | 60.8 ms (2.05×) | 61.5 ms (2.07×) |
+| zlib-roundtrip | 45.3 ms | 120.3 ms (2.65×) | 138.3 ms (3.05×) |
+| text-codec | 25.7 ms | 99.8 ms (3.88×) | 263.9 ms (10.26×) |
+| sort | 60.9 ms | 249.9 ms (4.10×) | 253.3 ms (4.16×) |
+| deltablue | 21.5 ms | 108.7 ms (5.06×) | 108.3 ms (5.04×) |
+| service-router | 18.3 ms | 108.4 ms (5.92×) | 107.1 ms (5.84×) |
+| json-roundtrip | 38.0 ms | 326.3 ms (8.58×) | 326.7 ms (8.59×) |
+
+**What the timings show:**
+- **Object-heavy code is where V8 leads:** objects, method calls and JSON (DeltaBlue, sort, the request handler, JSON round trips) run 4–9× faster on V8. Community Edition's JIT does compile them (about 145 compilations for DeltaBlue, none failed), so this is the compiler's quality, not missing warm-up.
+- **Numeric and typed-array code is level:** SHA-256 in JavaScript, Buffer's codecs, URL parsing and the event loop. GraalJS is faster at regular expressions (3.2×) and EventEmitter (1.45×).
+- **The isolate costs nothing for computation** (isolated and in-process match on JSON, DeltaBlue, Richards, sort). **It costs a lot for bytes and calls crossing into the host:** kv 2.05× against 0.96× in-process, crypto 1.32× against 0.93×.
+- **Tail latency is worse on GraalJS:** p99 runs well above the median where V8's barely moves (buffer-codec 373 against 74 ms median; string-build 192 against 39 ms). These are the isolate's garbage-collection pauses.
+- **Cold first runs are 1.4–18× slower on GraalJS,** median 6.6× (text-codec 0.8 s against 0.04 s, sha256-js 0.86 s against 0.08 s); see §3.
+- **Not explained yet:** in-process GraalJS is slower than isolated on strings, streams, URLs and text codecs (up to 10×). The likely cause is the worker's own garbage collector, which the isolate doesn't use. In-process isn't a candidate either way.
+
+**Memory under load:** GraalJS's private memory after a workload is 2–8× V8's (isolated: 80–355 MB, against V8's 42–71 MB).
+
+**The hostile memory tests** (64 MB per run, the worker capped at 512 MB):
+
+| Attack | V8 (Javet) | GraalJS, isolated |
+|---|---|---|
+| Heap bomb | stopped at the limit | stopped at the limit |
+| One 8 GB buffer | **worker killed** at the cap | refused: `RangeError` |
+| 64 buffers of 16 MB | **worker killed** | stopped at the limit |
+| Resizable buffer to 1 GB | **worker killed** | refused: `RangeError` |
+| Growable SharedArrayBuffer to 1 GB | **worker killed** | refused: `RangeError` |
+| `toLocaleString` churn | **worker killed** | ran to the end in bounded memory (220 MB peak) |
+| 100,000 `Intl.DateTimeFormat`s held | **worker killed** | stopped at the limit |
+| WebAssembly `memory.grow` to 1 GB | allowed, uncounted (the pages weren't touched, so not yet resident) | no WebAssembly |
+| 1 GB handed to the host's crypto | **worker killed** | stopped at the limit |
+
+The kernel's cap held every time, so the node was never at risk. But on V8, a single script took down its whole worker, and with it every service the tenant had on that worker. On GraalJS, the run that misbehaved ended with an error, and its neighbours carried on.
+
+**Buffer's codecs, rewritten during the comparison:**
+- **The change:** hex and base64 are now built in typed arrays, and hex decoding follows Node exactly (`'1g'`, `' 1'` and `'+1'` decoded to `01` before, and give nothing now).
+- **The gain:** buffer-codec went from about 300 ms to 73 ms on V8, and from 765–2,500 ms to 74 ms in GraalJS's isolate. The earlier figures were taken with turbo on, so the real gain is if anything larger.
+- **The road not taken:** a Java codec was measured and dropped (NOTES.md).
+
+### The trade-offs
+GraalJS is good, and it's better for security; V8 is faster.
+
+| | V8 through Javet | GraalJS (Community Edition), isolated |
+|---|---|---|
+| **The engine itself** | C++. Memory-corruption bugs are the usual route out of a JavaScript sandbox, and V8's fixes reach us only through Javet's releases | Java, a memory-safe language, so that class of bug doesn't arise in the engine. Fixes come with GraalVM's releases |
+| **Memory a script can take** | Only the heap is bounded. 7 of 9 attacks got past it, and only the kernel stopped them by killing the worker | Every byte is counted. 7 of 9 attacks stopped at the run, 1 ran in bounded memory, and none reached the kernel's cap |
+| **One script's failure** | Takes down every service on its worker | Ends that run only |
+| **Per-run memory limits** | Need Javet patches (§5) | Built in, but they need 2–4× headroom over what a script holds |
+| **Warm speed** | The reference | Level on numeric code and the event loop. 2–9× slower on object-heavy and JSON-heavy code. 1.3–2.7× slower when moving bytes through host APIs |
+| **Cold speed** | Fast from the first run | 1.4–18× slower until compiled (median 6.6×) |
+| **Tail latency** | Steady | Longer garbage-collection pauses |
+| **Memory** | 3 MB per idle service | 5 MB per idle service plus about 285 MB for the isolate. 2–8× V8's under load |
+| **Node compatibility** | The reference; conformance 136/136 | Conformance 136/136. No `rejectionHandled`, different error wording, ICU4J's `Intl`, no WebAssembly unless added |
+| **Licence** | Javet: Apache 2.0. V8: BSD | UPL/MIT (Community Edition). Oracle's stronger compiler is under the GFTC (NOTES.md) |
+
+**What this points to (the choice is Tony's):**
+- **GraalJS as the multi-tenant default,** where scripts are untrusted and the engine is the attack surface.
+- **V8 kept for trusted or speed-critical work:** the engine SPI already allows it, and Tony plans to support several engines later.
+- **Before GraalJS carries heavy traffic:**
+  - cut its per-call cost at the isolate's boundary
+  - measure Oracle's compiler (NOTES.md)
+  - handle cold start in the warm pool
 
 ## 9. Order of work
 1. The engine-neutral layer, with Javet only: no change in behaviour, the same test counts.
 2. The GraalJS adapter: the spike first, then the conformance suite run on it.
-3. The native-image workers and the comparison; the results go into §8.
+3. The native-image workers and the comparison; the results are in §8 (done 2026-10-10).
 4. Tony picks the engine. Then the protocol (§7), the remote `HostApis`, the worker pool with kernel caps, and gVisor/Firecracker, each a plan of its own.

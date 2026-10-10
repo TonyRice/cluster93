@@ -4,7 +4,6 @@ import automately.runtime.js.EntryPoints;
 import automately.runtime.js.JsEngineException;
 import org.graalvm.polyglot.Value;
 
-import java.nio.ByteBuffer;
 
 /** The prelude's functions the event loop calls into, as GraalJS values. Only used on the run's thread (D-126). */
 final class GraalJsEntryPoints implements EntryPoints {
@@ -20,12 +19,12 @@ final class GraalJsEntryPoints implements EntryPoints {
     private final Value chunk;
     private final Value streamError;
     private final Value checkRejections;
-    private final Value bytes;
+    private final GraalJsValues values;
     private final GraalJsContext context;
 
-    GraalJsEntryPoints(GraalJsContext context, Value prelude, Value bytes) {
+    GraalJsEntryPoints(GraalJsContext context, Value prelude, GraalJsValues values) {
         this.context = context;
-        this.bytes = bytes;
+        this.values = values;
         this.invoke = prelude.getMember("invoke");
         this.rejected = prelude.getMember("rejected");
         this.fire = prelude.getMember("fire");
@@ -76,7 +75,7 @@ final class GraalJsEntryPoints implements EntryPoints {
 
     @Override
     public void chunk(int streamId, byte[] data) throws JsEngineException {
-        context.guard(() -> chunk.executeVoid(streamId, data == null ? null : bytes.execute(ByteBuffer.wrap(data))));
+        context.guard(() -> chunk.executeVoid(streamId, data == null ? null : values.toUint8Array(data)));
     }
 
     @Override

@@ -48,7 +48,7 @@ final class GraalJsContext implements JsContext {
         this.memoryLimitReached = memoryLimitReached;
         this.context = engine.newContext(files);
         try {
-            this.values = new GraalJsValues(context.eval(engine.helpers()));
+            this.values = new GraalJsValues(context.eval(engine.helpers()), engine.mode() == GraalJsEngine.Mode.ISOLATED);
         } catch (PolyglotException e) {
             close();
             throw wrap(e);
@@ -185,7 +185,7 @@ final class GraalJsContext implements JsContext {
     @Override
     public EntryPoints runPrelude(String source) throws JsEngineException {
         Value prelude = guardGet(() -> context.eval(engine.prelude(source)));
-        entryPoints = new GraalJsEntryPoints(this, prelude, values.helper("bytes"));
+        entryPoints = new GraalJsEntryPoints(this, prelude, values);
         return entryPoints;
     }
 

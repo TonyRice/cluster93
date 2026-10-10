@@ -201,6 +201,7 @@ The API is **contract-first**: [`openapi.yaml`](automately-server/src/main/resou
 | `automately-runtime-js` | The engine-neutral runtime (D-126): the bindings, an event loop per run (timers, stop requests, async host calls), the prelude and the Node and web polyfills, plus the conformance suite every engine runs |
 | `automately-runtime-javet` | V8 through Javet: the runtime's engine today, an isolate per run |
 | `automately-runtime-graaljs` | Embedded GraalJS, in a polyglot isolate with a heap limit per run: a second engine passing the same conformance suite, for comparison (not used by the server yet) |
+| `automately-worker` | The tenant worker's seed (D-126): one engine built as a GraalVM native image (`worker-javet`, `worker-graaljs`), with the engine comparison's commands; `benchmarks/engines/` builds and runs it |
 | `automately-cluster-ignite` | The cluster is the database: Ignite bootstrap, durable tables, the Ignite stores |
 | `automately-server` | Bootstrap, REST API, HTTP ingress, the shaded jar |
 
@@ -307,7 +308,7 @@ Javet's native library is included for linux-x86_64 only for now.
 | Hazelcast types in 39 files; data lost when the whole cluster stopped | Embedded Apache Ignite as cluster and database (durable, replicated), behind store interfaces | ArchUnit: Ignite only in `automately.cluster.ignite`; full-restart and store contract tests |
 | Regex routing by hand, no API description | `vertx-web` `Router`, an OpenAPI 3.1 contract that validates every request, one table of what each route needs | `ContractTest` (routes = spec, every response validated), `AuthTest` |
 | HTTP Basic with a long-lived username and API key on every request | Scoped, revocable, hashed bearer tokens per tenant, and an admin token that can't read tenant data | `AuthTest`, `AuthenticatorTest` |
-| No tests | 1,066 unit tests, the runtime's conformance suite run on both engines among them (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress rules, files, packages, Node stand-ins, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture), 7 Docker integration tests that use real `SIGKILL`s, and real npm libraries checked against Node: 41 alone, plus 5 database and mail drivers against real servers | `./mvnw verify` |
+| No tests | 1,069 unit tests, the runtime's conformance suite run on both engines among them (hostile scripts, orphan scenarios, services, host APIs, queues, callbacks, egress rules, files, packages, Node stand-ins, auth, the API contract, MCP, the CLI and its installer, file backends on S3 and disk, tenant storage providers, 2- and 3-node clusters, chaos, architecture), 7 Docker integration tests that use real `SIGKILL`s, and real npm libraries checked against Node: 41 alone, plus 5 database and mail drivers against real servers | `./mvnw verify` |
 | `callbackUrl`: one unsigned POST of `{success, error}` when a job finished, never retried | A signed POST of the result and your `data` for every way a job ends, retried through a durable queue | `CallbacksTest`, `CallbackDeliveryTest` |
 | `messagebus`: at most once, lost if nobody listened | The same bus, plus durable queues: at least once, leases, retries, dead letters, surviving a node's death | `QueueStoreContract` on both stores, a three-node failover test, the demo |
 | `Automately.startJob(..., waitForJob)` blocked a thread until the child finished | `jobs.run()` returns a handle whose `result()` is a promise; children stay in the tenant, with depth and rate limits | `JobsFromScriptsTest` |
@@ -345,7 +346,8 @@ Javet's native library is included for linux-x86_64 only for now.
 10. **Engine-neutral runtime and tenant workers** (in progress; [design](docs/design/engine-neutral-runtime.md), D-126). The engine can be swapped, and the worker↔node protocol is designed in full now and built once the engine is chosen.
     - ✅ The bindings, event loop and polyfills on a small SPI, with V8 (Javet) as the first engine; the runtime's tests became a conformance suite every engine runs
     - ✅ Embedded GraalJS, in a polyglot isolate with a heap limit per run, passing the same suite
-    - Next: both compared inside native-image tenant workers with kernel memory caps; then the protocol
+    - ✅ Both compared inside native-image tenant workers with kernel memory caps ([results and trade-offs](docs/design/engine-neutral-runtime.md#8-the-comparison-run-2026-10-10)). GraalJS is the safer engine (no memory attack reached the kernel's cap), and V8 the faster one (2–9× on object-heavy code)
+    - Next: the engine decision, then the worker↔node protocol
 11. **The Node runtime:** native code and the rest of Node, in gVisor containers ([design](docs/design/node-runtime.md); accepted, not built). It starts after phase B, with its spikes: the runner's speed, rootless Podman with gVisor, and networking passed out through the runner. It reuses phase B's egress gate and routing.
 12. **Links:** your own devices and servers joining the cluster, and the only place raw TCP and UDP servers may run (design under review; [NOTES.md](NOTES.md)).
 13. **Then:** apps, the console, databases and Python.

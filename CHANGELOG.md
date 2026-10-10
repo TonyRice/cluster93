@@ -26,6 +26,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 - Authorship: Adam & Lynn Incorporated (tony@adamnlynn.com) recorded in the POM (`organization`, `developers`), the README, and the repository's git config.
 - This changelog and `docs/DECISIONS.md`. **Why:** every change and its reasoning should be traceable.
 
+## V8 and GraalJS compared in native-image workers (2026-10-10)
+
+### Added
+- **`automately-worker`: the tenant worker's seed, built as a GraalVM native image** (D-126, step 3).
+  - **Two builds:** `worker-javet` and `worker-graaljs`, one engine each, with in-process host APIs.
+  - **Commands:** `bench`, `idle`, `hostile`, `run` and `start`.
+
+  **Why:** tenants will run in worker processes, and the engine is chosen by measuring both where they'll run.
+- **`benchmarks/engines/`: the comparison, rerunnable.**
+  - **`build.sh`:** builds the workers one at a time under a kernel memory cap. GraalJS's image needs a 7 GB builder heap.
+  - **`run.sh`:** runs 18 workloads (Octane's Richards and DeltaBlue among them), memory with idle services, and the hostile memory tests. Every worker runs under a cap, and the CPU's temperature and clock are logged.
+  - **`summarize.py`:** writes the tables.
+  - **The results** are in `results/2026-10-10-1054/` and the design doc's §8.
+
+  **What it found:**
+  - **Security:** GraalJS stopped 7 of 9 memory attacks at the run and kept 1 in bounded memory. On V8, 7 of 9 got past the heap limit, and the kernel had to kill the worker.
+  - **Speed:** V8 is 2–9× faster on object-heavy and JSON-heavy code, the two are level on numeric code, and GraalJS is 3× faster on regular expressions.
+  - **Cold runs:** GraalJS's first runs are slower (median 6.6×).
+  - **Memory:** GraalJS uses more (5 MB against 3 MB per idle service, plus about 285 MB for its isolate).
+- **`NativeImageMetadataTest`:** fails if a class with host functions is missing from the workers' native-image metadata.
+
+### Changed
+- **Buffer's hex and base64 are built in typed arrays:** buffer-codec went from about 300 ms to 73 ms on V8, and from 765+ ms to 74 ms in GraalJS's isolate. **Why:** they were built a character at a time. A Java codec was measured too, but decoding in Java was slower on every engine, and encoding in Java was slower in GraalJS's isolate (NOTES.md).
+- **GraalJS, isolated: bytes reach scripts as a Latin-1 string,** filled into a `Uint8Array` inside the isolate. **Why:** a host buffer crosses the isolate's boundary one byte at a time; gzip of 1 MB went from 2.8 s to 0.14 s.
+- **GraalJS's dependency is now `org.graalvm.polyglot:js`.** **Why:** `js-community` became a deprecated alias for it in 25.x; it's open source (MIT/UPL), so nothing else changes.
+
+### Fixed
+- **`Buffer.from(text, 'hex')` stops at the first pair that isn't two hex digits, as Node does.** Before, `'1g'`, `' 1'` and `'+1'` each decoded to the byte `01`, through `parseInt`'s leniency.
+- **The native workers register every host function.** The tracing agent had recorded only the ones its run called (for zlib, only `process`), so streaming zlib would have failed in a worker. A hand-written metadata file now registers all of them, and all the runtime's JavaScript.
+
+### Docs
+- **`docs/design/engine-neutral-runtime.md`:**
+  - **§8:** the results, and the trade-offs between V8 and GraalJS.
+  - **§3:** the isolate's measured costs (the boundary, the heap limit's headroom, cold code), what building the workers takes, and the `/tmp` leak a killed worker leaves.
+- **NOTES.md:**
+  - Oracle GraalVM's compiler, with a review of its licence (GFTC: hosted use is fine, and paid redistribution isn't)
+  - engine-specific host fast paths
+  - GraalJS's cold start
+  - TextEncoder/TextDecoder
+
 ## Embedded GraalJS beside Javet (2026-10-10)
 
 ### Added

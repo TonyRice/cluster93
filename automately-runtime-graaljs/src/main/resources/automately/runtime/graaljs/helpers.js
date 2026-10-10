@@ -30,8 +30,15 @@
     stringify: (value) => stringify(value),
     // A typed array's buffer, offset and length; null for anything else (a DataView isn't one).
     view: (value) => (isView(value) && !(value instanceof DataViewClass) ? [value.buffer, value.byteOffset, value.byteLength] : null),
-    // Bytes from the host, copied into an ArrayBuffer of the script's own.
+    // Bytes from the host, copied into an ArrayBuffer of the script's own: from a host buffer in-process, and from a
+    // Latin-1 string across an isolate's boundary, which a string crosses in one piece but a buffer byte by byte (50x).
     bytes: (hostBuffer) => call(Uint8.prototype.slice, new Uint8(hostBuffer)),
+    bytesFromLatin1: (text) => {
+      const n = text.length;
+      const out = new Uint8(n);
+      for (let i = 0; i < n; i++) out[i] = text.charCodeAt(i);
+      return out;
+    },
     truthy: (value) => !!value,
     string: (value) => String(value),
     isBigInt: (value) => typeof value === 'bigint',

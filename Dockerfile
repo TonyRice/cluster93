@@ -55,6 +55,7 @@ COPY automately-core/pom.xml automately-core/
 COPY automately-runtime-js/pom.xml automately-runtime-js/
 COPY automately-runtime-javet/pom.xml automately-runtime-javet/
 COPY automately-runtime-graaljs/pom.xml automately-runtime-graaljs/
+COPY automately-worker/pom.xml automately-worker/
 COPY automately-server/pom.xml automately-server/
 RUN --mount=type=cache,target=/root/.m2 ./mvnw -q -B dependency:go-offline -DexcludeReactor=true || true
 COPY . .

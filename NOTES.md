@@ -81,6 +81,25 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
 - ~~**Unhandled promise rejections**~~: done in D-110; they fail the job as in Node.
 - ~~**`got`**~~: works over HTTP/1.1 (D-114); `http2: true` waits for the `http2` client step.
 
+## Parked from the engine comparison (D-126 step 3, 2026-10-10)
+- **Oracle GraalVM's compiler:** Community Edition's JIT is the weaker one, and DeltaBlue-style code runs about 5× slower than on V8. Oracle GraalVM's polyglot artifacts carry the stronger compiler. Worth measuring first; the licence only matters if it closes the gap.
+  - **Which parts are Oracle's (25.4 on Maven Central):** the embeddable `org.graalvm.polyglot:js` is MIT/UPL with the open `truffle-runtime`, and `js-community` is a deprecated alias for it. The only GFTC artifact left is `js-isolate`, Oracle's build of the isolate library. Oracle's compiler comes from that, or from building the workers with Oracle GraalVM's `native-image`. Everything Automately uses today is UPL or GPL.
+  - **The terms, reviewed 2026-10-10** (GFTC text of 2023-06-12 and graalvm.org/faq; not legal advice):
+    - **Internal business operations:** allowed, commercial and production use included. The FAQ: hosted use by third parties who never get a copy "is generally considered use for your internal business operations, and you may charge fees for your service".
+    - **Redistribution of the unmodified program:** allowed "provided that You do not charge Your licensees any fees associated with such distribution or use of the Program", which extends to services involving the distributed program. Native-image output counts as the program, so an Oracle-built worker is Oracle's program once it's handed to anyone.
+    - **What that means here:**
+      - self-hosting: fine
+      - a paid hosted service: fine, per the FAQ
+      - a free open-source release containing Oracle-built workers: fine
+      - selling licences, or paid support for a self-hosted install containing them: likely not
+    - **Also required:** unmodified only, Oracle's notices kept, export law, no reverse engineering.
+    - **Updates:** the licence itself has no time limit, but Oracle's policy (older blog posts) gives free updates to an LTS only until a year after the next LTS. For the sandbox's engine, that means upgrading on Oracle's schedule to keep getting security fixes.
+  - **The line is what reaches customers:** anything Oracle-built that leaves our servers is redistribution. The CLI (a native binary, D-048), any Links agent on customers' devices, and any self-hosted edition must stay Community Edition builds if anything around them is paid. Only the hosted service's own workers could use Oracle's builds.
+  - **If adopted:** Community Edition stays the default, with Oracle GraalVM as an opt-in build profile. Whoever builds with it accepts its terms, and Automately's own releases never contain Oracle's binaries. A lawyer's read before anything paid.
+- **Host fast paths that depend on the engine:** a Java codec for Buffer's hex and base64 was built and measured, then removed. Encoding in Java won on V8 (up to 2.8×) and in-process GraalJS (up to 22×), but lost 2× across GraalJS's isolate, and decoding in Java lost everywhere. If the engine is chosen, the fast paths can be chosen for it.
+- **GraalJS's cold start:** first runs are about 4× slower than V8's. To look at: warming the polyfills' hot paths when a worker starts, and whether Community Edition can keep compiled code between processes.
+- **TextEncoder and TextDecoder** got 4× slower on GraalJS in the first measurements; check whether they need the same treatment as Buffer's codecs.
+
 ## Next after phase B (Tony, 2026-10-08; updated 2026-10-09)
 Phase B finished on 2026-10-09 with WebSockets (D-125).
 

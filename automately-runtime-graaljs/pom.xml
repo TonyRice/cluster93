@@ -26,10 +26,11 @@
             <groupId>org.graalvm.polyglot</groupId>
             <artifactId>polyglot</artifactId>
         </dependency>
-        <!-- GraalJS in the host's own heap (in-process mode). -->
+        <!-- GraalJS in the host's own heap (in-process mode). Open source (MIT/UPL) since 25.x; js-community is now a
+             deprecated alias for it. -->
         <dependency>
             <groupId>org.graalvm.polyglot</groupId>
-            <artifactId>js-community</artifactId>
+            <artifactId>js</artifactId>
             <type>pom</type>
         </dependency>
         <!-- GraalJS in a polyglot isolate with its own heap (the default mode), for linux-x86_64. -->

@@ -37,6 +37,7 @@
         <module>automately-runtime-js</module>
         <module>automately-runtime-javet</module>
         <module>automately-runtime-graaljs</module>
+        <module>automately-worker</module>
         <module>automately-cluster-ignite</module>
         <module>automately-server</module>
         <module>automately-cli</module>
@@ -150,7 +151,7 @@
             </dependency>
             <dependency>
                 <groupId>org.graalvm.polyglot</groupId>
-                <artifactId>js-community</artifactId>
+                <artifactId>js</artifactId>
                 <version>${graaljs.version}</version>
                 <type>pom</type>
             </dependency>

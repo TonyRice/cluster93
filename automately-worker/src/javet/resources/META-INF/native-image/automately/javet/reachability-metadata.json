@@ -1,0 +1,3194 @@
+{
+ "reflection": [
+  {
+   "type": "com.caoccao.javet.annotations.CheckReturnValue",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.NodeModule",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8Allow",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8BindingEnabler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8Block",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8Convert",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8Function",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8Getter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8Property",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8ProxyFunctionApply",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8RuntimeSetter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.annotations.V8Setter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.entities.JavetEntityError",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.entities.JavetEntityFunction",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.entities.JavetEntityMap",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.entities.JavetEntityObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.entities.JavetEntityPropertyDescriptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.entities.JavetEntitySymbol",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.JSFunctionType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.JSRuntimeType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.JSScopeType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.JavetErrorType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.JavetPromiseRejectEvent",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.RawPointerType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8AllocationSpace",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8AwaitMode",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8ContextType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8ConversionMode",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8GCCallbackFlags",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8GCType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8MicrotasksPolicy",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8Priority",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8ProxyMode",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8RuntimeTerminationMode",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8ScopeType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8ValueErrorType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8ValueInternalType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8ValueSymbolType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8ValueType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.BaseJavetScriptingException",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetCompilationException",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetConverterException",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetError",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetException",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetExecutionException",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetOutOfMemoryException",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetScriptingError",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetTerminatedException",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.V8ErrorTemplate",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interception.BaseJavetDirectCallableInterceptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interception.BaseJavetInterceptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interception.jvm.JavetJVMInterceptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interception.jvm.JavetJVMInterceptor$BaseJavetPackage",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interception.jvm.JavetJVMInterceptor$JavetPackage",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interception.jvm.JavetJVMInterceptor$JavetV8",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interception.jvm.JavetJVMInterceptor$JavetVirtualPackage",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interception.logging.BaseJavetConsoleInterceptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interception.logging.JavetStandardConsoleInterceptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IEnumBitset",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavaFunction",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavaSupplier",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetAnonymous",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetBiConsumer",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetBiFunction",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetBiIndexedConsumer",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetClosable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetEntityError",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetEntityFunction",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetEntityMap",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetEntityObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetEntityPropertyDescriptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetEntitySymbol",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetInterceptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetLogger",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetMappable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetRawPointer",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetResettable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetSupplier",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetUniConsumer",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetUniFunction",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interfaces.IJavetUniIndexedConsumer",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.INodeNative",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.IV8Cloneable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.IV8Convertible",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.IV8Creatable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.IV8Executable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.IV8InspectorListener",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.IV8Native",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.JavetClassLoader",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.NodeNative",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.NodeRuntime",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Guard",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Host",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Host$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Host$NodeI18nInstanceHolder",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Host$NodeInstanceHolder",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Host$V8GuardDaemon",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Host$V8I18nInstanceHolder",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Host$V8InstanceHolder",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Host$V8StatisticsFutureDaemon",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Inspector",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Internal",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Locker",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Native",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Notifier",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Runtime",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Runtime$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Scope",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8ScriptOrigin",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.binding.BindingContext",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.binding.BindingContextStore",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.binding.ClassDescriptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.binding.ClassDescriptor$GetPriority",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.binding.ClassDescriptor$SetPriority",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.binding.ClassDescriptorStore",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.binding.IClassProxyPlugin",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.binding.IClassProxyPluginFunction",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.binding.MethodDescriptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable$DirectCall",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable$GetterAndNoThis",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable$GetterAndThis",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable$NoThisAndNoResult",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable$NoThisAndResult",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable$SetterAndNoThis",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable$SetterAndThis",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable$ThisAndNoResult",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetDirectCallable$ThisAndResult",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetGCCallback",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetMicrotasksCompletedCallback",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetNearHeapLimitCallback",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IJavetPromiseRejectCallback",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.IV8ModuleResolver",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.JavetBuiltInModuleResolver",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.JavetCallbackContext",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.JavetCallbackType",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.JavetGCCallback",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.JavetPromiseRejectCallback",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.V8FunctionCallback",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.V8FunctionCallback$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.converters.BaseJavetConverter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.converters.IJavetConverter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.converters.JavetBridgeConverter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.converters.JavetConverterConfig",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.converters.JavetObjectConverter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.converters.JavetObjectConverter$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.converters.JavetPrimitiveConverter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.converters.JavetProxyConverter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.converters.JavetProxyConverter$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.IJavetEngine",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.IJavetEnginePool",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.JavetEngine",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.JavetEngineConfig",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.JavetEnginePool",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.JavetEngineUsage",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.observers.IV8RuntimeObserver",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.observers.V8RuntimeObserverAggregateV8SharedMemoryStatistics",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.observers.V8RuntimeObserverAverageCallbackContextCount",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.observers.V8RuntimeObserverAverageReferenceCount",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.observers.V8RuntimeObserverAverageV8HeapSpaceStatistics",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.observers.V8RuntimeObserverAverageV8HeapStatistics",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.engine.observers.V8RuntimeObserverAverageV8ModuleCount",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.executors.BaseV8Executor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.executors.IV8Executor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.executors.V8FileExecutor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.executors.V8PathExecutor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.executors.V8StringExecutor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.loader.IJavetLibLoadingListener",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.loader.JavetLibLoader",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.loader.JavetLibLoadingListener",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.monitoring.V8HeapSpaceStatistics",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.monitoring.V8HeapStatistics",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.monitoring.V8SharedMemoryStatistics",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.monitoring.V8StatisticsFuture",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.options.NodeFlags",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.options.NodeRuntimeOptions",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.options.RuntimeOptions",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.options.V8Flags",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.options.V8RuntimeOptions",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.BaseJavetDirectProxyHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.BaseJavetProxyHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.BaseJavetProxySymbolConverter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.BaseJavetReflectionProxyHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.BaseJavetReflectionProxyHandler$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.BaseJavetReflectionProxyInvocationHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.IJavetDirectProxyHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.IJavetNonProxy",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.IJavetProxyHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.IJavetProxySymbolConverter",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.IJavetReflectionObjectFactory",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetDirectProxyFunctionHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetDirectProxyObjectHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetProxyPrototypeStore",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetProxyPrototypeStore$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetReflectionProxyClassHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetReflectionProxyClassHandler$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetReflectionProxyFactory",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetReflectionProxyFunctionHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetReflectionProxyInterceptor",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetReflectionProxyObjectHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetReflectionProxyObjectHandler$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetReflectionProxyV8ValueFunctionInvocationHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.JavetReflectionProxyV8ValueObjectInvocationHandler",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.ScoredExecutable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.plugins.BaseJavetProxyPlugin",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.plugins.BaseJavetProxyPluginMultiple",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.plugins.BaseJavetProxyPluginSingle",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.plugins.JavetProxyPluginArray",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.plugins.JavetProxyPluginClass",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.plugins.JavetProxyPluginDefault",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.plugins.JavetProxyPluginList",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.plugins.JavetProxyPluginMap",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.interop.proxy.plugins.JavetProxyPluginSet",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.node.modules.BaseNodeModule",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.node.modules.INodeModule",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.node.modules.NodeModuleAny",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.node.modules.NodeModuleModule",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.node.modules.NodeModuleProcess",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.ArrayUtils",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.Float16",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.JavetDateTimeUtils",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.JavetDefaultLogger",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.JavetOSUtils",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.JavetReflectionUtils",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.JavetResourceUtils",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.JavetTypeUtils",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.JavetVirtualObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.ListUtils",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.SimpleFreeMarkerFormat",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.SimpleFreeMarkerFormat$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.SimpleFreeMarkerFormat$State",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.SimpleList",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.SimpleMap",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.SimpleSet",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.StringUtils",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.ThreadSafeMap",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.ThreadSafeMap$Type",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.V8ValueUtils",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.receivers.IJavetCallbackReceiver",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.utils.receivers.JavetCallbackReceiver",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.IV8Value",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.IV8ValueNonProxyable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.IV8ValuePrimitiveObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.IV8ValuePrimitiveValue",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.V8Data",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.V8Value",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueBigInteger",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueBigNumber",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueBoolean",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueDouble",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueInteger",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueLong",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueNull",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueNumber",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValuePrimitive",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueString",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueUndefined",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueUnknown",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueZonedDateTime",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8Cacheable",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8Context",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8Module",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8Script",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueArray",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueFunction",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueFunction$GetScopeInfosOptions",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueFunction$ScopeInfo",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueFunction$ScopeInfos",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueFunction$ScriptSource",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueFunction$SetSourceCodeOptions",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueIterator",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueKeyContainer",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueMap",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValuePromise",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValuePromise$IListener",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueProxy",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueReference",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueSet",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueTypedArray",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8Context",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8Module",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8Script",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueArguments",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueArray",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueArrayBuffer",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueBooleanObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueDataView",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueDoubleObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueError",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueFunction",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueGlobalObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueIntegerObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueIterator",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueLongObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueMap",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueObject$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValuePromise",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueProxy",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueReference",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueRegExp",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueSet",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueSharedArrayBuffer",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueStringObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueSymbol",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueSymbolObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueTypedArray",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueTypedArray$1",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueWeakMap",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueWeakSet",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.builtin.V8ValueBuiltInJson",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.builtin.V8ValueBuiltInObject",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.builtin.V8ValueBuiltInPromise",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.builtin.V8ValueBuiltInReflect",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.builtin.V8ValueBuiltInSymbol",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.virtual.V8VirtualIterator",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.virtual.V8VirtualValue",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  },
+  {
+   "type": "com.caoccao.javet.values.virtual.V8VirtualValueList",
+   "jniAccessible": true,
+   "allDeclaredConstructors": true,
+   "allPublicConstructors": true,
+   "allDeclaredMethods": true,
+   "allPublicMethods": true,
+   "allDeclaredFields": true,
+   "allPublicFields": true
+  }
+ ]
+}

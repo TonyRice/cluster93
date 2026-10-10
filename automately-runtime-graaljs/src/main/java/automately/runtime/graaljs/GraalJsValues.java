@@ -22,19 +22,22 @@ final class GraalJsValues {
     private final Value stringify;
     private final Value view;
     private final Value bytes;
+    private final boolean isolated;
     private final Value truthy;
     private final Value string;
     private final Value isBigInt;
 
-    GraalJsValues(Value helpers) {
+    /** @param isolated whether the guest is in its own isolate, so bytes go across as Latin-1 strings */
+    GraalJsValues(Value helpers, boolean isolated) {
         this.helpers = helpers;
+        this.isolated = isolated;
         this.undefined = helpers.getMember("undefined");
         this.promise = helpers.getMember("promise");
         this.error = helpers.getMember("error");
         this.parse = helpers.getMember("parse");
         this.stringify = helpers.getMember("stringify");
         this.view = helpers.getMember("view");
-        this.bytes = helpers.getMember("bytes");
+        this.bytes = helpers.getMember(isolated ? "bytesFromLatin1" : "bytes");
         this.truthy = helpers.getMember("truthy");
         this.string = helpers.getMember("string");
         this.isBigInt = helpers.getMember("isBigInt");
@@ -105,12 +108,17 @@ final class GraalJsValues {
             return error(failure);
         }
         if (value instanceof byte[] data) {
-            return bytes.execute(ByteBuffer.wrap(data));
+            return toUint8Array(data);
         }
         if (value instanceof Double number) {
             return number;
         }
         return parse.execute(Json.encode(value));
+    }
+
+    /** Bytes as the script's own Uint8Array. */
+    Value toUint8Array(byte[] data) {
+        return bytes.execute(isolated ? new String(data, java.nio.charset.StandardCharsets.ISO_8859_1) : ByteBuffer.wrap(data));
     }
 
     Value error(JsError failure) {

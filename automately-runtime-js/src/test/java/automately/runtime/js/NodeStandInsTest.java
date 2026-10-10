@@ -102,6 +102,37 @@ class NodeStandInsTest {
     }
 
     @Test
+    void bufferHexAndBase64MatchNode() throws Exception {
+        // Values from real Node 26, for inputs large (192 KB) and small (D-126): hex decodes up to the first pair that
+        // isn't two hex digits ('1g', ' 1' and '+1' give nothing), base64 skips what isn't base64 (MIME line breaks)
+        // and stops at '=', and either alphabet decodes in either mode.
+        assertThat(output("""
+                import { Buffer } from 'node:buffer'; import { createHash } from 'node:crypto';
+                export default () => {
+                  const h = (x) => createHash('sha256').update(x).digest('hex').slice(0, 16);
+                  const big = Buffer.alloc(3 * 65536 + 7);
+                  for (let i = 0; i < big.length; i++) big[i] = (i * 31 + (i >> 8)) & 255;
+                  const hex = big.toString('hex'), b64 = big.toString('base64'), url = big.toString('base64url');
+                  const out = [h(hex), h(b64), h(url), b64.length, url.length, big.subarray(5, 3 * 65536 + 2).toString('base64').slice(-8),
+                    Buffer.from(hex, 'hex').equals(big), Buffer.from(b64, 'base64').equals(big), Buffer.from(url, 'base64url').equals(big),
+                    Buffer.from(url, 'base64').equals(big), Buffer.from(b64.slice(0, -1), 'base64').length,
+                    Buffer.from('ab'.repeat(1000) + 'zz' + 'cd'.repeat(10), 'hex').length,
+                    Buffer.from('ab'.repeat(65541) + 'g1ab', 'hex').length, Buffer.from(hex + 'a', 'hex').equals(big),
+                    Buffer.from(b64.replace(/(.{76})/g, '$1\\n'), 'base64').equals(big), Buffer.from('YW' + 'JjZA'.repeat(200) + '==x==', 'base64').length];
+                  for (const [s, e] of [['1g', 'hex'], ['1ag123', 'hex'], [' 1', 'hex'], ['+1', 'hex'], ['abc', 'hex'], ['AbCd', 'hex'], ['a b', 'base64'],
+                    ['YW=Jj', 'base64'], ['YW-_', 'base64'], ['YW+/', 'base64url'], ['Y', 'base64'], ['=YWJj', 'base64'], ['YWJj====YWJj', 'base64'], ['YéWJj', 'base64']]) {
+                    out.push(Buffer.from(s, e).toString('hex'));
+                  }
+                  out.push(Buffer.from([0, 1, 254, 255, 16]).toString('hex'), Buffer.from([251, 255, 191, 1]).toString('base64'), Buffer.from([251, 255, 191, 1]).toString('base64url'));
+                  return out;
+                };
+                """))
+                .containsExactly("f3035fa96150fbe5", "2815c1b0e4911253", "f07e3529e47bac0a", 262156, 262154, "g6LB4AAf", true, true, true, true,
+                        196615, 1000, 65541, true, true, 601, "", "1a", "", "", "ab", "abcd", "69", "61", "616fbf", "616fbf", "", "", "616263",
+                        "616263", "0001feff10", "+/+/AQ==", "-_-_AQ");
+    }
+
+    @Test
     void url() throws Exception {
         assertThat(output("import { URL, URLSearchParams, fileURLToPath, pathToFileURL } from 'url';"
                 + "export default () => { const u = new URL('../x?a=1#h', 'https://Example.com:443/p/q/r');"

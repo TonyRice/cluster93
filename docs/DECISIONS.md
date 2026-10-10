@@ -2446,6 +2446,11 @@ It's written for people, because the console will show the same response as a "N
 **Date:** 2026-10-09 · **Status:** Proposed. The neutral layer, the GraalJS adapter and the comparison are approved to build (Tony); the engine and the worker↔node protocol are decided after the comparison. Design: [engine-neutral-runtime.md](design/engine-neutral-runtime.md).
 
 **Built so far:**
+- **Step 3, the comparison in native-image workers (2026-10-10):** `automately-worker` and `benchmarks/engines/`; results and trade-offs in the design doc's §8.
+  - **Security:** GraalJS stopped 7 of 9 memory attacks at the run and kept 1 bounded. V8 needed the kernel to kill the worker for 7.
+  - **Speed:** V8 is 2–9× faster on object-heavy and JSON code, the two are level on numeric code, and GraalJS's first runs are slower.
+  - **Memory:** GraalJS uses more.
+  - **Direction (Tony, 2026-10-10):** GraalJS is the better engine for security; the trade-offs are documented for the engine decision.
 - **Step 2, embedded GraalJS (2026-10-10):** `automately-runtime-graaljs` passes the conformance suite, 136 of 136.
   - **Where it runs:** a spawned polyglot isolate with a heap limit per run, under the `TRUSTED` policy, locked down by hand, because the stricter policies refuse `Error.captureStackTrace` and rejection tracking.
   - **Modules:** served with their imports pre-resolved, since GraalJS's loader never says who imports.

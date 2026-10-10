@@ -9,6 +9,26 @@ for (let i = 0; i < 64; i++) {
 }
 B64_INDEX['-'.charCodeAt(0)] = 62;
 B64_INDEX['_'.charCodeAt(0)] = 63;
+// Hex and base64 stay in JavaScript on every engine (D-126): measured against a host codec, decoding in Java lost on
+// both engines (a large string costs more to hand over than to decode), and encoding won on V8 but lost twice over in
+// GraalJS's isolate. Output is built in typed arrays, then turned into a string a chunk at a time.
+const HEX_PAIRS = Array.from({ length: 256 }, (_, i) => (i < 16 ? '0' : '') + i.toString(16));
+const B64_CODES = new Uint8Array(64);
+const B64_URL_CODES = new Uint8Array(64);
+for (let i = 0; i < 64; i++) {
+  B64_CODES[i] = B64.charCodeAt(i);
+  B64_URL_CODES[i] = i === 62 ? 45 : i === 63 ? 95 : B64.charCodeAt(i);
+}
+// A hex digit's value, or -1: only 0-9, a-f and A-F, as Node.
+const hexValue = (c) => (c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1);
+
+function latin1String(codes) {
+  let out = '';
+  for (let i = 0; i < codes.length; i += 8192) {
+    out += String.fromCharCode.apply(null, codes.subarray(i, i + 8192));
+  }
+  return out;
+}
 
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
@@ -32,15 +52,17 @@ function encode(string, encoding) {
     case 'utf8':
       return utf8Encoder.encode(string);
     case 'hex': {
+      // Node stops at the first pair that isn't two hex digits.
       const length = string.length >>> 1;
       const out = new Uint8Array(length);
       let i = 0;
       for (; i < length; i++) {
-        const byte = parseInt(string.substr(i * 2, 2), 16);
-        if (Number.isNaN(byte)) {
+        const high = hexValue(string.charCodeAt(i * 2));
+        const low = hexValue(string.charCodeAt(i * 2 + 1));
+        if (high < 0 || low < 0) {
           break;
         }
-        out[i] = byte;
+        out[i] = (high << 4) | low;
       }
       return out.subarray(0, i);
     }
@@ -95,27 +117,39 @@ function decode(bytes, encoding) {
     case 'hex': {
       let out = '';
       for (let i = 0; i < bytes.length; i++) {
-        out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+        out += HEX_PAIRS[bytes[i]];
       }
       return out;
     }
     case 'base64':
     case 'base64url': {
       const url = normalize(encoding) === 'base64url';
-      const alphabet = url ? B64.slice(0, 62) + '-_' : B64;
-      let out = '';
+      const alphabet = url ? B64_URL_CODES : B64_CODES;
+      const out = new Uint8Array(Math.ceil(bytes.length / 3) * 4);
+      let n = 0;
       let i = 0;
       for (; i + 2 < bytes.length; i += 3) {
         const v = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
-        out += alphabet[v >> 18] + alphabet[(v >> 12) & 63] + alphabet[(v >> 6) & 63] + alphabet[v & 63];
+        out[n++] = alphabet[v >> 18];
+        out[n++] = alphabet[(v >> 12) & 63];
+        out[n++] = alphabet[(v >> 6) & 63];
+        out[n++] = alphabet[v & 63];
       }
       if (i < bytes.length) {
-        const v = (bytes[i] << 16) | ((i + 1 < bytes.length ? bytes[i + 1] : 0) << 8);
-        out += alphabet[v >> 18] + alphabet[(v >> 12) & 63];
-        out += i + 1 < bytes.length ? alphabet[(v >> 6) & 63] : url ? '' : '=';
-        out += url ? '' : '=';
+        const two = i + 1 < bytes.length;
+        const v = (bytes[i] << 16) | ((two ? bytes[i + 1] : 0) << 8);
+        out[n++] = alphabet[v >> 18];
+        out[n++] = alphabet[(v >> 12) & 63];
+        if (two) {
+          out[n++] = alphabet[(v >> 6) & 63];
+        } else if (!url) {
+          out[n++] = 61;
+        }
+        if (!url) {
+          out[n++] = 61;
+        }
       }
-      return out;
+      return latin1String(out.subarray(0, n));
     }
     case 'latin1': {
       let out = '';
