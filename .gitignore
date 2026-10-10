@@ -10,3 +10,5 @@ core.[0-9]*
 # The engine comparison's native workers (benchmarks/engines/build.sh) and the per-run workload copies.
 benchmarks/engines/bin/
 benchmarks/engines/results/*/workloads/
+__pycache__/
+*.pyc

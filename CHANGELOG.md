@@ -5,6 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 
 ## [Unreleased]
 
+### Added
+- **`docs/design/worker-node-protocol.md`**: dedicated normative specification for the In-Cluster Worker ↔ Node IPC protocol (D-127). Defines length-prefixed binary framing (1 MiB max frame, split JSON and raw contiguous bytes), HTTP/2-style flow-control credit windows (256 KiB stream, 4 MiB connection), full RPC lifecycle (`HELLO`, `BIND`, `RUN`, `CALL`, `RESULT`, `CREDIT`, `STATE`, `STATS`), authority partitioning, and zero-trust security invariants. Distinguishes in-cluster workers (child processes, gVisor containers, Firecracker microVMs) from external `automately-link` devices.
+- **`D-127` in `docs/DECISIONS.md`**: establishes operator-configurable engine selection (`AUTOMATELY_WORKER_ENGINE=graaljs|javet`). Both GraalJS (validated with 137/137 tests passing, stopping 7/9 memory attacks) and Javet (V8, 2–9× faster on object/JSON code) are retained as supported first-class engines behind the `JsEngine` SPI.
+- **`benchmarks/engines/README.md`**: comprehensive guide documenting why the benchmark suite exists, its functional purpose, engine sandboxing and performance dimensions, and detailed usage instructions for building and running.
+- **GraalVM SDK auto-detection and edition tracking in `benchmarks/engines/`**:
+  - `build.sh` automatically detects GraalVM across environment variables (`GRAALVM_HOME`, `JAVA_HOME`), SDKMAN candidates, and system `PATH`. It identifies whether the compiler is **Oracle GraalVM** or **GraalVM Community (CE)** and writes `bin/build-metadata.json`.
+  - `run.sh` records the detected GraalVM compiler edition and version into `machine.json`.
+  - `summarize.py` surfaces the GraalVM edition in benchmark reports (`summary.md`).
+  **Why:** to facilitate testing and comparison between GraalJS Community Edition and Oracle GraalVM (under GFTC) to determine if Oracle's enterprise JIT closes the object/JSON performance gap against V8.
+
 ### Removed
 - GitHub Actions CI. **Why:** the repo is private and local `./mvnw verify` is the gate for now (D-017).
 

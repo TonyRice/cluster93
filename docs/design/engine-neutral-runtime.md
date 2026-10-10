@@ -1,17 +1,14 @@
 # Engine-neutral runtime, GraalJS beside Javet, and tenant workers
 
-**Status:** Proposed (D-126), 2026-10-09.
-- **Approved to build (Tony):**
-  - the engine-neutral layer, proven with Javet alone
-  - an embedded GraalJS adapter on the same layer
-  - a comparison of the two inside native-image workers
-- **Built:**
-  - **Step 3 (2026-10-10):** both engines in native-image workers, compared (§8). The results and the trade-offs are written up for Tony to choose from.
-  - **Step 2 (2026-10-10):** an embedded GraalJS adapter. The conformance suite passes on it, 136 of 136.
-  - **Step 1 (2026-10-09):** the engine-neutral layer, with Javet alone. Behaviour is unchanged: the conformance suite passes per class as before, the real-npm comparisons match Node, and start-up time is the same.
-- **Still to decide:**
-  - **The engine,** from the comparison's results (§8).
-  - **The worker↔node protocol (§7):** designed here in full, but built only after the engine is picked.
+**Status:** Accepted (D-126, D-127), 2026-10-10.
+- **Completed:**
+  - **Step 1 (2026-10-09):** The engine-neutral layer (`automately-runtime-js`), with Javet alone (`5d35cd2`).
+  - **Step 2 (2026-10-10):** Embedded GraalJS adapter (`automately-runtime-graaljs`, `3b22e8a`). Conformance suite passes completely: **137 of 137 tests passing**.
+  - **Step 3 (2026-10-10):** Native-image workers built and benchmarked (`955e273`, §8). Engine trade-offs characterized.
+  - **Resolution (D-127):** Engine selection is a **deployment-level choice** (`AUTOMATELY_WORKER_ENGINE=graaljs|javet`). Deployers choose GraalJS for strict tenant sandboxing / memory safety, or Javet for maximum JIT object/JSON throughput.
+- **Next up (Step 4):**
+  - **Worker ↔ Node IPC Protocol:** Formalized in dedicated normative spec [worker-node-protocol.md](worker-node-protocol.md).
+  - Protocol implementation in `automately-runner-protocol`.
 
 ## 1. Why
 
@@ -232,14 +229,17 @@ There's no `ShadowRealm` to escape into.
 - **Until workers exist,** the in-process mitigations in §5 are the only defence for today's nodes. They're tracked separately.
 
 ## 7. The worker↔node protocol (proposed; built after the engine is picked)
-This builds on node-runtime.md §5 (D-084–D-086): one JSON-RPC protocol for isolate workers, Node containers and Links. The runner is untrusted, and the tenant always comes from the node's records.
+> **Dedicated Specification:** The complete normative specification for the in-cluster worker IPC protocol is located at [worker-node-protocol.md](worker-node-protocol.md).
+>
+> **Important Distinction:** This protocol is exclusively for **in-cluster workers** (local child processes, gVisor containers, Firecracker microVMs) managed directly by cluster nodes. Remote user-owned devices connecting from outside use `automately-link` over outbound TLS WebSockets (governed separately by `ideas/links-and-capabilities.md`).
+
+This builds on node-runtime.md §5 (D-084–D-086): one binary frame protocol for in-cluster isolate workers, Node containers, and microVMs. The runner is untrusted, and the tenant always comes from the node's records.
 
 ### Transport
-Any ordered, reliable byte stream, so the framing doesn't care what carries it.
+Any ordered, reliable byte stream:
 - **A local worker process:** the child's stdin and stdout pipes, with stderr for its own diagnostics. Only the parent holds them, so there's no socket file to find and no secret to pass, and `ProcessBuilder` gives them directly.
 - **gVisor or runc (through Podman):** the container's stdio, or `--host-uds`.
 - **Firecracker:** vsock.
-- **Links:** the same frames, carried as binary WebSocket messages.
 
 ### Frames
 ```
@@ -441,18 +441,26 @@ GraalJS is good, and it's better for security; V8 is faster.
 | **Tail latency** | Steady | Longer garbage-collection pauses |
 | **Memory** | 3 MB per idle service | 5 MB per idle service plus about 285 MB for the isolate. 2–8× V8's under load |
 | **Node compatibility** | The reference; conformance 136/136 | Conformance 136/136. No `rejectionHandled`, different error wording, ICU4J's `Intl`, no WebAssembly unless added |
-| **Licence** | Javet: Apache 2.0. V8: BSD | UPL/MIT (Community Edition). Oracle's stronger compiler is under the GFTC (NOTES.md) |
+| **Licence** | Javet: Apache 2.0. V8: BSD | UPL/MIT (Community Edition). Oracle GraalVM measured (below) |
 
-**What this points to (the choice is Tony's):**
-- **GraalJS as the multi-tenant default,** where scripts are untrusted and the engine is the attack surface.
-- **V8 kept for trusted or speed-critical work:** the engine SPI already allows it, and Tony plans to support several engines later.
-- **Before GraalJS carries heavy traffic:**
-  - cut its per-call cost at the isolate's boundary
-  - measure Oracle's compiler (NOTES.md)
-  - handle cold start in the warm pool
+**Oracle GraalVM (Enterprise Compiler) Measured (2026-10-10, `results/2026-10-10-1701`):**
+We measured `worker-graaljs` built with Oracle GraalVM 25.4.4.1.1 under GFTC against GraalJS Community Edition (CE):
+- **Object / JSON gap remains identical:** `deltablue` was 5.25× slower than V8 (vs 5.06× on CE), `json-roundtrip` was 8.51× slower (vs 8.58× on CE), and `service-router` was 6.17× slower (vs 5.92× on CE).
+- **Security & Sandboxing:** Identical 100% containment; stopped 7 of 9 memory attacks inside the isolate without reaching the kernel cap.
+- **Where GraalJS is faster:** GraalJS decisively beats V8 on regular expressions (`regex-tokenize` 3.5× faster), URL parsing (2.6× faster), pure-JS bitwise crypto (`sha256-js` 2.5× faster), event listener dispatch (`events` 1.4× faster), and string building (1.4× faster).
+- **Conclusion:** Because Oracle GraalVM does not close the Truffle guest language object/JSON gap, there is no technical justification to take on Oracle's GFTC redistribution and licensing restrictions. **Community Edition (CE) is the permanent default for GraalJS.**
+
+**What this points to (the choice is Tony's, resolved in D-127):**
+- **GraalJS CE as the multi-tenant default:** where scripts are untrusted and the engine is the attack surface.
+- **V8 kept for trusted or speed-critical work:** available via `AUTOMATELY_WORKER_ENGINE=javet` when raw JSON throughput and immediate cold starts are prioritized.
 
 ## 9. Order of work
-1. The engine-neutral layer, with Javet only: no change in behaviour, the same test counts.
-2. The GraalJS adapter: the spike first, then the conformance suite run on it.
-3. The native-image workers and the comparison; the results are in §8 (done 2026-10-10).
-4. Tony picks the engine. Then the protocol (§7), the remote `HostApis`, the worker pool with kernel caps, and gVisor/Firecracker, each a plan of its own.
+1. **The engine-neutral layer, with Javet only (Step 1, complete):** no change in behaviour, the same test counts (`5d35cd2`).
+2. **The GraalJS adapter (Step 2, complete):** `automately-runtime-graaljs` passing 137/137 conformance tests (`3b22e8a`).
+3. **The native-image workers and comparison (Step 3, complete):** `automately-worker` benchmarked and results characterized (§8, `955e273`).
+4. **Engine selection and protocol specification (D-127, complete):** Engine choice is deployment-configurable (`AUTOMATELY_WORKER_ENGINE`). Standalone protocol specified in [worker-node-protocol.md](worker-node-protocol.md).
+5. **Next: Step 4 implementation:**
+   - Protocol codec and models (`automately-runner-protocol`).
+   - Remote `HostApis` proxy for the worker and node-side dispatcher.
+   - Worker pool supervisor with Linux cgroup memory caps.
+   - gVisor / Firecracker runner integrations.

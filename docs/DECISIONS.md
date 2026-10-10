@@ -2476,3 +2476,22 @@ It's written for people, because the console will show the same response as a "N
 - **Not yet:** the server keeps Javet in-process, and there's no engine setting (Tony: several engines are for later).
 
 **Docs corrected now:** `SECURITY.md` and the README no longer claim the heap limit bounds an isolate's memory.
+
+### D-127 — Deployment-configurable runtime engine and standalone in-cluster Worker ↔ Node protocol
+**Date:** 2026-10-10 · **Status:** Accepted. Supersedes D-126's "single engine winner" assumption. Specification: [worker-node-protocol.md](design/worker-node-protocol.md).
+
+**Decision:**
+1. **Engine selection is a deployment-level choice (`AUTOMATELY_WORKER_ENGINE`):**
+   - Both **GraalJS** and **Javet (V8)** are retained as supported first-class engines behind the `JsEngine` SPI.
+   - GraalJS is validated with **137/137 tests passing** on the conformance suite and stops 7 of 9 memory exhaustion attacks inside the isolate without requiring kernel intervention. It is the recommended engine for untrusted multi-tenant workloads.
+   - Javet (V8) is 2–9× faster on object/JSON-heavy code and cold starts, making it the recommended engine for trusted, performance-sensitive workloads.
+   - Operators can choose which engine to boot based on their security vs throughput requirements.
+2. **Dedicated In-Cluster Worker ↔ Node Protocol Specification:**
+   - Section 7 of `engine-neutral-runtime.md` is extracted into a standalone normative specification: `docs/design/worker-node-protocol.md`.
+   - Defines length-prefixed binary framing (1 MiB max frame, split JSON metadata and raw contiguous bytes), HTTP/2-style flow-control credit windows (256 KiB per stream, 4 MiB per connection), and RPC lifecycle (`HELLO`, `BIND`, `RUN`, `CALL`, `RESULT`, `CREDIT`, `STATE`, `STATS`).
+   - Clearly isolates the scope: applies exclusively to **in-cluster tenant workers** (local child processes, gVisor containers, Firecracker microVMs). External devices dialing out over TLS WebSockets remain scoped to `automately-link` (`ideas/links-and-capabilities.md`).
+
+**Cost:**
+- Maintaining both engine adapters across future JavaScript feature polyfills (guarded by the shared 137-test conformance suite).
+- Implementing the binary frame codec and RPC dispatcher in Step 4 (`automately-runner-protocol`).
+

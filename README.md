@@ -343,11 +343,13 @@ Javet's native library is included for linux-x86_64 only for now.
      - ✅ The WHATWG globals as Node's, loaded on first use: `Blob`/`File`, Web Streams and `stream/web`, `Headers`/`Request`/`Response`/`FormData`, the text and compression streams, `MessageChannel`/`BroadcastChannel`. The global `fetch` is Node's; the host's is `automately:fetch` (D-124)
      - ✅ WebSockets: the ingress tunnels upgraded connections, Node's server emits `upgrade`, and `node:http` upgrades over the job's own sockets. The ws library's client and server and the global `WebSocket` match real Node (D-125). Raw TCP and UDP servers never run on core nodes.
      - **Phase B is complete.** Next: the engine-neutral runtime and tenant workers (item 10), then the Node runtime (item 11).
-10. **Engine-neutral runtime and tenant workers** (in progress; [design](docs/design/engine-neutral-runtime.md), D-126). The engine can be swapped, and the worker↔node protocol is designed in full now and built once the engine is chosen.
+10. **Engine-neutral runtime and tenant workers** (in progress; [design](docs/design/engine-neutral-runtime.md), D-126, D-127). The engine can be swapped, and the worker↔node protocol is designed in full now and built once the engine is chosen.
     - ✅ The bindings, event loop and polyfills on a small SPI, with V8 (Javet) as the first engine; the runtime's tests became a conformance suite every engine runs
-    - ✅ Embedded GraalJS, in a polyglot isolate with a heap limit per run, passing the same suite
+    - ✅ Embedded GraalJS, in a polyglot isolate with a heap limit per run, passing the same suite (137/137 tests passing)
     - ✅ Both compared inside native-image tenant workers with kernel memory caps ([results and trade-offs](docs/design/engine-neutral-runtime.md#8-the-comparison-run-2026-10-10)). GraalJS is the safer engine (no memory attack reached the kernel's cap), and V8 the faster one (2–9× on object-heavy code)
-    - Next: the engine decision, then the worker↔node protocol
+    - ✅ Engine selection decided as a deployment-level choice (`AUTOMATELY_WORKER_ENGINE=graaljs|javet`, D-127). Both engines supported.
+    - ✅ Dedicated normative IPC specification for in-cluster workers: [worker-node-protocol.md](docs/design/worker-node-protocol.md)
+    - Next: Step 4 implementation (`automately-runner-protocol` codec and tenant worker pool)
 11. **The Node runtime:** native code and the rest of Node, in gVisor containers ([design](docs/design/node-runtime.md); accepted, not built). It starts after phase B, with its spikes: the runner's speed, rootless Podman with gVisor, and networking passed out through the runner. It reuses phase B's egress gate and routing.
 12. **Links:** your own devices and servers joining the cluster, and the only place raw TCP and UDP servers may run (design under review; [NOTES.md](NOTES.md)).
 13. **Then:** apps, the console, databases and Python.

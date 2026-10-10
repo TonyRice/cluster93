@@ -74,7 +74,13 @@ done
   cpu=$(lscpu | sed -n 's/^Model name: *//p' | head -1)
   turbo=$(cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null | sed 's/1/off/;s/0/on/')
   profile=$(cat /sys/firmware/acpi/platform_profile 2>/dev/null)
-  echo "{\"machine\":\"$(uname -srm)\",\"cpu\":\"$cpu\",\"turbo\":\"${turbo:-unknown}\",\"powerProfile\":\"${profile:-unknown}\",\"cpus\":$(nproc),\"memGb\":$(free -g | awk '/Mem:/{print $2}'),\"date\":\"$(date -Is)\",\"warmupMs\":$WARMUP_MS,\"warmupMin\":$WARMUP_MIN,\"measured\":$MEASURED}"
+  graal_edition="unknown"
+  graal_version="unknown"
+  if [[ -f "$BIN/build-metadata.json" ]]; then
+    graal_edition=$(python3 -c "import json, sys; print(json.load(open('$BIN/build-metadata.json')).get('edition', 'unknown'))" 2>/dev/null || echo "unknown")
+    graal_version=$(python3 -c "import json, sys; print(json.load(open('$BIN/build-metadata.json')).get('version', 'unknown'))" 2>/dev/null || echo "unknown")
+  fi
+  echo "{\"machine\":\"$(uname -srm)\",\"cpu\":\"$cpu\",\"turbo\":\"${turbo:-unknown}\",\"powerProfile\":\"${profile:-unknown}\",\"graalEdition\":\"$graal_edition\",\"graalVersion\":\"$graal_version\",\"cpus\":$(nproc),\"memGb\":$(free -g | awk '/Mem:/{print $2}'),\"date\":\"$(date -Is)\",\"warmupMs\":$WARMUP_MS,\"warmupMin\":$WARMUP_MIN,\"measured\":$MEASURED}"
 } > "$OUT/machine.json"
 
 for engine in $ENGINES; do

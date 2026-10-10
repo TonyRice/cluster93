@@ -18,6 +18,16 @@ def table(header, body):
     return '\n'.join(out)
 
 # The machine's state during the run: throttling would make the timings unreliable.
+machine_path = os.path.join(os.path.dirname(sys.argv[1]), 'machine.json')
+if os.path.exists(machine_path):
+    try:
+        m = json.load(open(machine_path))
+        edition = m.get('graalEdition', 'unknown')
+        version = m.get('graalVersion', '')
+        print(f"**GraalVM Environment:** {edition} ({version})\n")
+    except Exception:
+        pass
+
 thermal = os.path.join(os.path.dirname(sys.argv[1]), 'thermal.csv')
 if os.path.exists(thermal):
     samples = [line.split(',') for line in open(thermal).read().split()[1:]]
