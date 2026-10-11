@@ -19,6 +19,7 @@ import automately.runner.protocol.message.ResultRunMessage;
 import automately.runner.protocol.message.RunMessage;
 import automately.runner.protocol.message.StateMessage;
 import automately.runner.protocol.message.WelcomeMessage;
+import automately.runner.protocol.stream.StreamMultiplexer;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
@@ -48,6 +49,7 @@ public class NodeWorkerChannel {
     private final WriteStream<Buffer> output;
     private final ReadStream<Buffer> input;
     private final CreditManager creditManager;
+    private final StreamMultiplexer streamMultiplexer;
     private final AtomicInteger inFlightCalls = new AtomicInteger(0);
 
     private String boundTenantId;
@@ -65,6 +67,7 @@ public class NodeWorkerChannel {
         this.output = output;
         this.input = input;
         this.creditManager = creditManager;
+        this.streamMultiplexer = new StreamMultiplexer(this::send, creditManager);
 
         FrameCodec.FrameParser parser = FrameCodec.parser(this::onFrame, this::onError);
         input.handler(parser);
@@ -77,6 +80,10 @@ public class NodeWorkerChannel {
 
     public String boundTenantId() {
         return boundTenantId;
+    }
+
+    public StreamMultiplexer streamMultiplexer() {
+        return streamMultiplexer;
     }
 
     public Future<HelloMessage> awaitHello() {
@@ -142,6 +149,10 @@ public class NodeWorkerChannel {
     }
 
     private void onFrame(Frame frame) {
+        if (streamMultiplexer.handleFrame(frame)) {
+            return;
+        }
+
         switch (frame.type()) {
             case HELLO -> onHello(frame);
             case CALL -> onCall(frame);
@@ -149,7 +160,6 @@ public class NodeWorkerChannel {
             case STATE -> onState(frame);
             case RESULT_RUN -> onResultRun(frame);
             case PING -> send(Frame.pong());
-            case CREDIT -> onCredit(frame);
             case GOODBYE -> onGoodbye(frame);
             default -> LOG.warn("Worker {}: unhandled frame type {}", workerId, frame.type());
         }
@@ -223,15 +233,6 @@ public class NodeWorkerChannel {
                 res = ExecutionResult.succeeded(result.output());
             }
             run.completion().tryComplete(res);
-        }
-    }
-
-    private void onCredit(Frame frame) {
-        int bytesToAdd = frame.json().getInteger("bytesToAdd", 0);
-        if (frame.channelId() == 0) {
-            creditManager.addConnectionCredits(bytesToAdd);
-        } else {
-            creditManager.addStreamCredits(frame.channelId(), bytesToAdd);
         }
     }
 

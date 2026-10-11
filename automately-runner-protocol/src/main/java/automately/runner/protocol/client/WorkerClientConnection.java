@@ -8,6 +8,7 @@ import automately.runner.protocol.frame.FrameType;
 import automately.runner.protocol.message.CallMessage;
 import automately.runner.protocol.message.ErrorMessage;
 import automately.runner.protocol.message.ResultMessage;
+import automately.runner.protocol.stream.StreamMultiplexer;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
@@ -31,6 +32,7 @@ public class WorkerClientConnection {
     private final WriteStream<Buffer> output;
     private final ReadStream<Buffer> input;
     private final CreditManager creditManager;
+    private final StreamMultiplexer streamMultiplexer;
     private final AtomicInteger callIdSequence = new AtomicInteger(1);
     private final Map<Integer, Promise<ResultMessage>> pendingCalls = new ConcurrentHashMap<>();
 
@@ -45,6 +47,7 @@ public class WorkerClientConnection {
         this.output = output;
         this.input = input;
         this.creditManager = creditManager;
+        this.streamMultiplexer = new StreamMultiplexer(this::send, creditManager);
 
         FrameCodec.FrameParser parser = FrameCodec.parser(this::onFrame, this::onError);
         input.handler(parser);
@@ -61,6 +64,10 @@ public class WorkerClientConnection {
 
     public CreditManager creditManager() {
         return creditManager;
+    }
+
+    public StreamMultiplexer streamMultiplexer() {
+        return streamMultiplexer;
     }
 
     public int nextCallId() {
@@ -86,6 +93,10 @@ public class WorkerClientConnection {
     }
 
     private void onFrame(Frame frame) {
+        if (streamMultiplexer.handleFrame(frame)) {
+            return;
+        }
+
         if (frame.type() == FrameType.RESULT) {
             ResultMessage result = ResultMessage.fromFrame(frame);
             Promise<ResultMessage> promise = pendingCalls.remove(result.callId());
@@ -106,17 +117,6 @@ public class WorkerClientConnection {
 
         if (frame.type() == FrameType.PING) {
             send(Frame.pong());
-            return;
-        }
-
-        if (frame.type() == FrameType.CREDIT) {
-            int channelId = frame.channelId();
-            int bytesToAdd = frame.json().getInteger("bytesToAdd", 0);
-            if (channelId == 0) {
-                creditManager.addConnectionCredits(bytesToAdd);
-            } else {
-                creditManager.addStreamCredits(channelId, bytesToAdd);
-            }
             return;
         }
 

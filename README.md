@@ -350,7 +350,9 @@ Javet's native library is included for linux-x86_64 only for now.
     - ✅ Both compared inside native-image tenant workers with kernel memory caps ([results and trade-offs](docs/design/engine-neutral-runtime.md#8-the-comparison-run-2026-10-10)). GraalJS is the safer engine (no memory attack reached the kernel's cap), and V8 the faster one (2–9× on object-heavy code)
     - ✅ Engine selection decided as a deployment-level choice (`AUTOMATELY_WORKER_ENGINE=graaljs|javet`, D-127). Both engines supported.
     - ✅ Dedicated normative IPC specification for in-cluster workers: [worker-node-protocol.md](docs/design/worker-node-protocol.md)
-    - Next: Step 4 implementation (`automately-runner-protocol` codec and tenant worker pool)
+    - ✅ Step 4 implemented: `automately-runner-protocol` binary framing, credit-based flow control, zero-trust dispatcher, and RemoteHostApis proxy (D-128)
+    - ✅ Step 5 implemented: stream multiplexing (`StreamMultiplexer`), warm tenant worker pool supervisor (`TenantWorkerPool`, Linux cgroups v2 memory limits), and Unix Domain Socket transport (`UdsServerTransport`, `UdsClientTransport`, D-129)
+    - **Item 10 is complete.** Next: the Node runtime in gVisor containers (item 11).
 11. **The Node runtime:** native code and the rest of Node, in gVisor containers ([design](docs/design/node-runtime.md); accepted, not built). It starts after phase B, with its spikes: the runner's speed, rootless Podman with gVisor, and networking passed out through the runner. It reuses phase B's egress gate and routing.
 12. **Links:** your own devices and servers joining the cluster, and the only place raw TCP and UDP servers may run (design under review; [NOTES.md](NOTES.md)).
 13. **Then:** apps, the console, databases and Python.

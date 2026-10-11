@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 
 ## [Unreleased]
 
+- **Stream Multiplexing, Warm Tenant Worker Pool Supervisor, and Unix Domain Socket Transport (D-129)**:
+  - `StreamMultiplexer`: bidirectional streaming channel multiplexer (`OPEN`, `DATA`, `END`, `RESET`) with chunk slicing (64 KiB), credit-based backpressure (`CreditManager`), and automatic replenish frames (`CREDIT`) upon data consumption.
+  - `TenantWorkerPool`: maintains a pool of warm, pre-spawned worker processes in `UNBOUND` state, binding them on demand via `BIND` to eliminate cold-start overhead, with configurable reuse policies (`FRESH_PER_JOB` and `REUSE_SAME_TENANT`).
+  - `CgroupMemoryLimiter`: applies Linux cgroups v2 memory bounds (`MemoryMax`, `MemoryHigh`) to worker subprocesses, detects OOM kills via `memory.events`, and provides graceful fallback in unprivileged environments.
+  - `UdsServerTransport` & `UdsClientTransport`: non-blocking Netty Unix domain socket transport (`SocketAddress.domainSocketAddress`), removing virtual thread pipe overhead for container and local worker IPC.
+  - `WorkerMain ipc --socket`: worker daemon connects directly over Unix domain sockets in addition to stdio.
 - **`automately-runner-protocol` module & IPC binary infrastructure (D-128)**:
   - Length-prefixed binary frame encoder/decoder (`Frame`, `FrameType`, `FrameCodec`) with 12-byte header, split JSON metadata, and raw contiguous byte buffers up to 1 MiB.
   - HTTP/2-style flow-control credit windows (`CreditManager`, 256 KiB per stream, 4 MiB global connection limit).

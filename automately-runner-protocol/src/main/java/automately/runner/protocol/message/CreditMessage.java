@@ -9,6 +9,10 @@ import io.vertx.core.json.JsonObject;
  */
 public record CreditMessage(int channelId, int bytesToAdd) {
 
+    public int streamId() {
+        return channelId;
+    }
+
     public Frame toFrame() {
         JsonObject json = new JsonObject().put("bytesToAdd", bytesToAdd);
         return Frame.json(FrameType.CREDIT, channelId, json);

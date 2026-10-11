@@ -2519,4 +2519,27 @@ It's written for people, because the console will show the same response as a "N
 - `automately-runner-protocol` passes all 13 unit and integration tests covering frame chunking, boundary fragmentation, 1 MiB max frame enforcement, credit depletion backpressure, and bidirectional `RemoteHostApis` ↔ `NodeHostApis` RPC execution.
 - Multi-module pre-commit verification (`./mvnw verify -pl automately-runner-protocol,automately-worker -am -DskipITs`) builds and tests cleanly in 55 s with 0 JVM crashes.
 
+### D-129 — Stream Multiplexing, Warm Tenant Worker Pool Supervisor, and Unix Domain Socket (UDS) Transport
+**Date:** 2026-10-10 · **Status:** Accepted. Implements Step 5 in `automately-runner-protocol`. Specification: [worker-node-protocol.md](design/worker-node-protocol.md).
+
+**Decision:**
+1. **Stream Multiplexing (`StreamMultiplexer`):**
+   - End-to-end bidirectional streaming channel multiplexer (`0x30 OPEN`, `0x31 DATA`, `0x32 END`, `0x33 RESET`, `0x34 CREDIT`).
+   - Integrated into both `NodeWorkerChannel` and `WorkerClientConnection`.
+   - Adopts HTTP/2-style flow control: outgoing writes chunk into 64 KiB slices, pause if credit window is depleted, and resume upon receiving `CREDIT` frames.
+   - Incoming streams automatically replenish credits back to the sender once 16 KiB or more of data has been consumed.
+2. **Warm Tenant Worker Pool Supervisor (`TenantWorkerPool`):**
+   - Maintains a warm pool of pre-spawned worker processes in `UNBOUND` state, eliminating the 40–800 ms cold start overhead for tenant job submissions.
+   - Binds workers to tenants on demand via `BIND`, transition states (`UNBOUND` -> `BOUND` -> `BUSY` -> `BOUND` -> `TERMINATED`), and supports `FRESH_PER_JOB` (100% memory isolation) and `REUSE_SAME_TENANT` policies.
+   - Integrates with Linux cgroups v2 (`CgroupMemoryLimiter`): automatically writes `memory.max` and `memory.high` to `/sys/fs/cgroup/automately/worker-<pid>` and verifies OOM kills via `memory.events`. Gracefully falls back to heap options in unprivileged/non-Linux environments.
+3. **Unix Domain Socket (UDS) Transport (`UdsServerTransport`, `UdsClientTransport`):**
+   - Provides native non-blocking Netty domain socket transport over filesystem `.sock` nodes.
+   - Unlike stdio pipes which require virtual-thread stream pumping, Vert.x `NetSocket` directly implements `ReadStream<Buffer>` and `WriteStream<Buffer>`, allowing zero-copy, event-loop native framed IPC.
+   - Added `--socket <path>` CLI option to `WorkerMain ipc` mode.
+
+**Evidence:**
+- 7 new unit and integration tests added across `StreamMultiplexerTest`, `TenantWorkerPoolTest`, and `UdsTransportTest`, bringing `automately-runner-protocol` test count to 20 (all passing).
+- Full pre-commit reactor build (`./mvnw verify -pl automately-runner-protocol,automately-worker -am -DskipITs`) succeeded in 53 s with 0 JVM crashes.
+
+
 

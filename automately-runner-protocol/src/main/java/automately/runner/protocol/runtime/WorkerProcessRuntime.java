@@ -1,5 +1,6 @@
 package automately.runner.protocol.runtime;
 
+import automately.core.job.JobStatus;
 import automately.core.runtime.Execution;
 import automately.core.runtime.ExecutionResult;
 import automately.core.runtime.LogSink;
@@ -7,6 +8,8 @@ import automately.core.runtime.RunningExecution;
 import automately.core.runtime.ScriptRuntime;
 import automately.core.runtime.StateSink;
 import automately.core.runtime.api.HostApis;
+import automately.runner.protocol.pool.TenantWorkerPool;
+import automately.runner.protocol.pool.WorkerProcessHandle;
 import automately.runner.protocol.server.NodeWorkerChannel;
 import automately.runner.protocol.transport.StreamBridge;
 import io.vertx.core.Future;
@@ -27,6 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Executes scripts in an out-of-process in-cluster tenant worker via binary framing IPC (D-127, worker-node-protocol.md).
@@ -39,22 +43,81 @@ public class WorkerProcessRuntime implements ScriptRuntime {
     private final Vertx vertx;
     private final String binaryPath;
     private final int heapMb;
+    private final TenantWorkerPool pool;
     private final AtomicInteger channelSequence = new AtomicInteger(1);
 
     public WorkerProcessRuntime(Vertx vertx) {
         this(vertx, System.getProperty("automately.worker.binary"), 128);
     }
 
+    public WorkerProcessRuntime(Vertx vertx, TenantWorkerPool pool) {
+        this(vertx, null, 128, pool);
+    }
+
     public WorkerProcessRuntime(Vertx vertx, String binaryPath, int heapMb) {
+        this(vertx, binaryPath, heapMb, null);
+    }
+
+    public WorkerProcessRuntime(Vertx vertx, String binaryPath, int heapMb, TenantWorkerPool pool) {
         this.vertx = Objects.requireNonNull(vertx, "vertx");
         this.binaryPath = binaryPath;
         this.heapMb = Math.max(16, heapMb);
+        this.pool = pool;
     }
 
     @Override
     public RunningExecution execute(Execution execution, LogSink logs, StateSink state, HostApis host) {
         int channelId = channelSequence.getAndIncrement();
         Promise<ExecutionResult> promise = Promise.promise();
+
+        if (pool != null) {
+            AtomicReference<WorkerProcessHandle> handleRef = new AtomicReference<>();
+            pool.acquire(execution.tenant()).onComplete(ar -> {
+                if (ar.failed()) {
+                    promise.complete(ExecutionResult.failed("Worker pool failure: " + ar.cause().getMessage()));
+                    return;
+                }
+                WorkerProcessHandle handle = ar.result();
+                handleRef.set(handle);
+                pumpStderr(handle.process().getErrorStream(), logs);
+
+                handle.run(channelId, execution, host, logs, state)
+                        .onComplete(runRes -> {
+                            boolean isError = runRes.failed() || (runRes.succeeded() && runRes.result().status() != JobStatus.SUCCEEDED);
+                            pool.release(handle, isError);
+                            if (runRes.succeeded()) {
+                                promise.complete(runRes.result());
+                            } else {
+                                promise.complete(ExecutionResult.failed("Worker error: " + runRes.cause().getMessage()));
+                            }
+                        });
+            });
+
+            return new RunningExecution() {
+                @Override
+                public Future<ExecutionResult> result() {
+                    return promise.future();
+                }
+
+                @Override
+                public void stop(String reason, Duration grace) {
+                    WorkerProcessHandle handle = handleRef.get();
+                    if (handle != null) {
+                        handle.stop(channelId, reason, grace.toMillis());
+                    }
+                }
+
+                @Override
+                public void cancel(String reason) {
+                    WorkerProcessHandle handle = handleRef.get();
+                    if (handle != null) {
+                        handle.cancel(channelId, reason);
+                        pool.release(handle, true);
+                    }
+                    promise.tryComplete(ExecutionResult.cancelled("Cancelled: " + reason));
+                }
+            };
+        }
 
         Process process;
         try {

@@ -64,7 +64,8 @@ public final class WorkerMain {
         if ("ipc".equals(args[0])) {
             try {
                 ScriptRuntime runtime = engine.runtime(vertx, heapMb, Math.max(2, intOption(args, "--threads", 2)));
-                ipc(vertx, runtime, engine.name());
+                String socketPath = stringOption(args, "--socket", null);
+                ipc(vertx, runtime, engine.name(), socketPath);
             } catch (Exception e) {
                 System.err.println("Worker IPC daemon failed: " + e.getMessage());
                 System.exit(1);
@@ -95,6 +96,15 @@ public final class WorkerMain {
         for (int i = 0; i < args.length - 1; i++) {
             if (args[i].equals(name)) {
                 return Integer.parseInt(args[i + 1]);
+            }
+        }
+        return fallback;
+    }
+
+    private static String stringOption(String[] args, String name, String fallback) {
+        for (int i = 0; i < args.length - 1; i++) {
+            if (args[i].equals(name)) {
+                return args[i + 1];
             }
         }
         return fallback;
@@ -241,11 +251,18 @@ public final class WorkerMain {
         }
     }
 
-    private static void ipc(Vertx vertx, ScriptRuntime runtime, String engineName) throws Exception {
-        WorkerClientConnection conn = new WorkerClientConnection(
-                StreamBridge.writeStream(vertx, System.out),
-                StreamBridge.readStream(vertx, System.in)
-        );
+    private static void ipc(Vertx vertx, ScriptRuntime runtime, String engineName, String socketPath) throws Exception {
+        WorkerClientConnection conn;
+        if (socketPath != null && !socketPath.isBlank()) {
+            automately.runner.protocol.transport.uds.UdsClientTransport uds = new automately.runner.protocol.transport.uds.UdsClientTransport(vertx);
+            var socket = uds.connect(socketPath).toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            conn = new WorkerClientConnection(socket, socket);
+        } else {
+            conn = new WorkerClientConnection(
+                    StreamBridge.writeStream(vertx, System.out),
+                    StreamBridge.readStream(vertx, System.in)
+            );
+        }
         WorkerDaemon daemon = new WorkerDaemon(conn, runtime, engineName);
         daemon.start().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
 
