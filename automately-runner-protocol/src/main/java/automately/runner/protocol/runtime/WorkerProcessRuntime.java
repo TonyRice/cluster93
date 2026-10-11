@@ -24,8 +24,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -230,8 +228,14 @@ public class WorkerProcessRuntime implements ScriptRuntime {
 
     private Process spawnWorkerProcess() throws Exception {
         List<String> command = new ArrayList<>();
-        if (binaryPath != null && Files.isExecutable(Path.of(binaryPath))) {
-            command.add(binaryPath);
+        String resolvedBinary = (binaryPath != null && !binaryPath.isBlank())
+                ? TenantWorkerPool.resolveBinary(binaryPath, "javet")
+                : null;
+        if (resolvedBinary == null) {
+            resolvedBinary = TenantWorkerPool.resolveBinary(null, "javet");
+        }
+        if (resolvedBinary != null) {
+            command.add(resolvedBinary);
             command.add("ipc");
             command.add("--heap-mb");
             command.add(String.valueOf(heapMb));
@@ -239,10 +243,9 @@ public class WorkerProcessRuntime implements ScriptRuntime {
             // Fallback to spawning child JVM
             String javaBin = ProcessHandle.current().info().command()
                     .orElse(System.getProperty("java.home") + File.separator + "bin" + File.separator + "java");
-            String classPath = System.getProperty("java.class.path");
             command.add(javaBin);
             command.add("-cp");
-            command.add(classPath);
+            command.add(TenantWorkerPool.resolveWorkerClasspath());
             command.add("automately.worker.WorkerMain");
             command.add("ipc");
             command.add("--heap-mb");

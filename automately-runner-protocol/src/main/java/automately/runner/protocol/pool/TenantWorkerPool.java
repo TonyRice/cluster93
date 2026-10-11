@@ -12,15 +12,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Queue;
+import java.util.regex.Pattern;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -40,6 +43,7 @@ public class TenantWorkerPool {
 
     private final Vertx vertx;
     private final String binaryPath;
+    private final String mode;
     private final int minWarm;
     private final int maxTotal;
     private final int heapMb;
@@ -57,16 +61,21 @@ public class TenantWorkerPool {
     private record PendingAcquire(String tenantId, Promise<WorkerProcessHandle> promise) {}
 
     public TenantWorkerPool(Vertx vertx) {
-        this(vertx, System.getProperty("automately.worker.binary"), 2, 16, 128, ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), automately.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
+        this(vertx, System.getProperty("automately.worker.binary"), null, 2, 16, 128, ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), automately.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
     }
 
     public TenantWorkerPool(Vertx vertx, String binaryPath, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter) {
-        this(vertx, binaryPath, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, automately.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
+        this(vertx, binaryPath, null, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, automately.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
     }
 
     public TenantWorkerPool(Vertx vertx, String binaryPath, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, automately.runner.protocol.server.NodeRpcAuthorizer authorizer) {
+        this(vertx, binaryPath, null, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer);
+    }
+
+    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, automately.runner.protocol.server.NodeRpcAuthorizer authorizer) {
         this.vertx = Objects.requireNonNull(vertx, "vertx");
         this.binaryPath = binaryPath;
+        this.mode = (mode == null || mode.isBlank()) ? "javet" : mode.toLowerCase(Locale.ROOT);
         this.minWarm = Math.max(0, minWarm);
         this.maxTotal = Math.max(1, maxTotal);
         this.heapMb = Math.max(16, heapMb);
@@ -96,6 +105,16 @@ public class TenantWorkerPool {
 
     public CgroupMemoryLimiter cgroupLimiter() {
         return cgroupLimiter;
+    }
+
+    /** The configured (or auto-discovered) binary path, which may be null when JVM fallback is in play. */
+    public String binaryPath() {
+        return binaryPath;
+    }
+
+    /** The engine mode this pool's workers are built for (e.g. "javet" or "graaljs"). */
+    public String mode() {
+        return mode;
     }
 
     /**
@@ -218,18 +237,21 @@ public class TenantWorkerPool {
         Promise<WorkerProcessHandle> promise = Promise.promise();
         try {
             List<String> command = new ArrayList<>();
-            if (binaryPath != null && Files.isExecutable(Path.of(binaryPath))) {
-                command.add(binaryPath);
+            String resolvedBinary = (binaryPath != null && !binaryPath.isBlank()) ? resolveBinary(binaryPath, mode) : null;
+            if (resolvedBinary == null) {
+                resolvedBinary = resolveBinary(null, mode);
+            }
+            if (resolvedBinary != null) {
+                command.add(resolvedBinary);
                 command.add("ipc");
                 command.add("--heap-mb");
                 command.add(String.valueOf(heapMb));
             } else {
                 String javaBin = ProcessHandle.current().info().command()
                         .orElse(System.getProperty("java.home") + File.separator + "bin" + File.separator + "java");
-                String classPath = System.getProperty("java.class.path");
                 command.add(javaBin);
                 command.add("-cp");
-                command.add(classPath);
+                command.add(resolveWorkerClasspath());
                 command.add("automately.worker.WorkerMain");
                 command.add("ipc");
                 command.add("--heap-mb");
@@ -301,6 +323,170 @@ public class TenantWorkerPool {
                 pending.promise().fail(new IllegalStateException("Worker pool closed"));
             }
             pendingAcquires.clear();
+        }
+    }
+
+    // --- Binary auto-discovery and child-JVM classpath resolution (D-129) ---
+
+    /**
+     * Resolves the executable worker binary for a mode. An explicit binary is honoured first; otherwise the native
+     * worker binaries laid out by the build script ({@code bin/worker-<engine>},
+     * {@code benchmarks/engines/bin/worker-<engine>}, {@code automately-worker/target/worker-<engine>}) are searched,
+     * walking up from the working directory so a server launched from any subdirectory still finds the repository root.
+     *
+     * @param explicitBinary an operator-configured binary path, or null/blank to auto-discover
+     * @param mode           the worker engine mode (e.g. "javet" or "graaljs"); null/blank defaults to "javet"
+     * @return the resolved executable path, or null when none was found
+     */
+    public static String resolveBinary(String explicitBinary, String mode) {
+        return resolveBinary(explicitBinary, mode, Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize());
+    }
+
+    static String resolveBinary(String explicitBinary, String mode, Path baseDir) {
+        String normalized = (mode == null || mode.isBlank()) ? "javet" : mode.toLowerCase(Locale.ROOT);
+        if (explicitBinary != null && !explicitBinary.isBlank()) {
+            Path resolved = firstExecutable(baseDir, explicitBinary.trim());
+            return resolved == null ? null : resolved.toString();
+        }
+        for (String candidate : List.of(
+                "bin/worker-" + normalized,
+                "bin/worker-javet",
+                "benchmarks/engines/bin/worker-" + normalized,
+                "automately-worker/target/worker-" + normalized)) {
+            Path resolved = firstExecutable(baseDir, candidate);
+            if (resolved != null) {
+                return resolved.toString();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves a single candidate path (absolute, or relative to the working directory) to an executable regular file,
+     * walking up parent directories from the working directory. Returns null when no executable file is found.
+     */
+    public static String resolvePath(String path) {
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        Path resolved = firstExecutable(Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize(), path);
+        return resolved == null ? null : resolved.toString();
+    }
+
+    /**
+     * Builds the {@code -cp} value a child JVM needs to run {@code automately.worker.WorkerMain}: the current JVM's
+     * classpath, plus the worker module's jar (or its compiled classes) when not already present.
+     *
+     * @return the classpath for the child JVM
+     */
+    public static String resolveWorkerClasspath() {
+        return resolveWorkerClasspath(System.getProperty("java.class.path", ""),
+                Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize());
+    }
+
+    static String resolveWorkerClasspath(String baseClassPath, Path baseDir) {
+        List<String> entries = new ArrayList<>();
+        if (baseClassPath != null && !baseClassPath.isBlank()) {
+            for (String entry : baseClassPath.split(Pattern.quote(File.pathSeparator))) {
+                if (!entry.isBlank()) {
+                    addIfAbsent(entries, entry);
+                }
+            }
+        }
+        Path workerTarget = findWorkerTargetDir(baseDir);
+        if (workerTarget != null) {
+            List<Path> jars = workerJars(workerTarget);
+            if (!jars.isEmpty()) {
+                for (Path jar : jars) {
+                    addIfAbsent(entries, jar.toAbsolutePath().normalize().toString());
+                }
+            } else {
+                Path classes = workerTarget.resolve("classes");
+                if (Files.isDirectory(classes)) {
+                    addIfAbsent(entries, classes.toAbsolutePath().normalize().toString());
+                }
+            }
+        }
+        return String.join(File.pathSeparator, entries);
+    }
+
+    private static Path firstExecutable(Path baseDir, String candidate) {
+        Path candidatePath;
+        try {
+            candidatePath = Path.of(candidate);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if (candidatePath.isAbsolute()) {
+            return isExecutable(candidatePath) ? candidatePath.normalize() : null;
+        }
+        Path dir = baseDir.toAbsolutePath().normalize();
+        while (dir != null) {
+            Path path = dir.resolve(candidate).normalize();
+            if (isExecutable(path)) {
+                return path;
+            }
+            Path parent = dir.getParent();
+            if (parent == null || parent.equals(dir)) {
+                return null;
+            }
+            dir = parent;
+        }
+        return null;
+    }
+
+    private static boolean isExecutable(Path path) {
+        return Files.isRegularFile(path) && Files.isExecutable(path);
+    }
+
+    private static Path findWorkerTargetDir(Path baseDir) {
+        Path dir = baseDir.toAbsolutePath().normalize();
+        while (dir != null) {
+            Path target = dir.resolve("automately-worker").resolve("target");
+            if (Files.isDirectory(target)) {
+                return target;
+            }
+            Path parent = dir.getParent();
+            if (parent == null || parent.equals(dir)) {
+                return null;
+            }
+            dir = parent;
+        }
+        return null;
+    }
+
+    private static List<Path> workerJars(Path workerTarget) {
+        List<Path> jars = new ArrayList<>();
+        try (var stream = Files.list(workerTarget)) {
+            stream.filter(path -> {
+                String name = path.getFileName().toString();
+                return name.startsWith("automately-worker-") && name.endsWith(".jar")
+                        && !name.contains("-sources") && !name.contains("-javadoc");
+            }).sorted().forEach(jars::add);
+        } catch (IOException ignored) {
+            // The worker module hasn't been built yet; the JVM fallback will simply be missing its main class.
+        }
+        return jars;
+    }
+
+    private static void addIfAbsent(List<String> entries, String path) {
+        String normalized = normalize(path);
+        if (normalized == null) {
+            return;
+        }
+        for (String entry : entries) {
+            if (normalized.equals(normalize(entry))) {
+                return;
+            }
+        }
+        entries.add(normalized);
+    }
+
+    private static String normalize(String path) {
+        try {
+            return Path.of(path).toAbsolutePath().normalize().toString();
+        } catch (RuntimeException e) {
+            return path;
         }
     }
 }

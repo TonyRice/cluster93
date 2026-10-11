@@ -193,7 +193,7 @@ public record ServerConfig(
                 // A job's /tmp (D-079): this much in memory (all of it without a data directory), then spilled up to the total.
                 Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MEMORY_MB", env.get("AUTOMATELY_DATA_DIR") == null ? "64" : "8").trim()),
                 Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MB", "1024").trim()),
-                env.getOrDefault("AUTOMATELY_WORKER_MODE", "embedded").trim().toLowerCase(java.util.Locale.ROOT),
+                env.getOrDefault("AUTOMATELY_WORKER_MODE", "process").trim().toLowerCase(java.util.Locale.ROOT),
                 env.getOrDefault("AUTOMATELY_WORKER_DEFAULT_MODE", env.getOrDefault("AUTOMATELY_WORKER_ENGINE", "javet")).trim().toLowerCase(java.util.Locale.ROOT),
                 parseWorkerBinaries(env));
     }
@@ -205,6 +205,18 @@ public record ServerConfig(
             binaries.put("default", genericBinary);
             binaries.put("javet", genericBinary);
             binaries.put("graaljs", genericBinary);
+        } else {
+            // No explicit binary: pre-populate defaults from the native workers the build script installs (D-129).
+            String javet = automately.runner.protocol.pool.TenantWorkerPool.resolvePath("bin/worker-javet");
+            if (javet != null) {
+                binaries.put("javet", javet);
+                binaries.putIfAbsent("default", javet);
+            }
+            String graaljs = automately.runner.protocol.pool.TenantWorkerPool.resolvePath("bin/worker-graaljs");
+            if (graaljs != null) {
+                binaries.put("graaljs", graaljs);
+                binaries.putIfAbsent("default", graaljs);
+            }
         }
         for (Map.Entry<String, String> entry : env.entrySet()) {
             if (entry.getKey().startsWith("AUTOMATELY_WORKER_BINARY_")) {
