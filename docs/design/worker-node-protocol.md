@@ -40,7 +40,7 @@ This document specifies the high-throughput inter-process communication (IPC) pr
 - **Zero Trust:** The worker process is treated as potentially compromised. The Node holds all state, identity, and authority.
 
 ### Out of Scope: Automately Link (`automately-link`)
-- **Remote Devices:** User-owned hardware (laptops, phones via Termux, external VMs) connecting into the cluster from outside are governed by `ideas/links-and-capabilities.md`.
+- **Remote Devices:** User-owned hardware (laptops, phones via Termux, external VMs) connecting into the cluster from outside are governed by `ideas/links.md`.
 - **Transport Difference:** Links connect via **outbound TLS WebSockets** using join codes and asymmetric cryptographic handshakes, and negotiate capabilities dynamically. They do not share this local runner IPC lifecycle.
 
 ---

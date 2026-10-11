@@ -3,8 +3,16 @@
 All notable changes to Automately are recorded here, with **what** changed and **why**.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Larger choices are explained in [docs/DECISIONS.md](docs/DECISIONS.md).
 
-## [Unreleased]
-
+- **Full Process-Mode Parity (`AUTOMATELY_WORKER_MODE=process`, D-132)**:
+  - Streaming host APIs now work identically out-of-process: `ctx.serve`/`listen` (inbound ingress), `fetch` and `net`/`tls` egress, large-file reads (`files.open`) and `files.respond` are bridged over the worker multiplexer; bus/queue/job listeners arrive as `EVENT` frames and answer with `REPLY`.
+  - The full execution context (package lock, `ctx` including carried steps, `process.env`, and the service flag) is serialized into `RUN` and restored in the worker (`Packages.toJson`/`fromJson`, `JobContext.toJson`/`fromJson`), fixing package imports, env and resumed-step memoization off-process.
+  - Protocol robustness: the receiver now replenishes connection-level credit as well as stream credit, so a long-lived stream can't deadlock on the 4 MiB connection window; a worker EOF/transport error fails its in-flight run immediately (`Worker process died`); state commits run off the event loop; the worker `System.exit(0)`s on EOF (no zombies).
+  - Server lifecycle: the worker pool drains each child's stderr (no 64 KiB pipe deadlock), inspects exit codes 137/139, and `RunningNode.stop()` closes the pool. The worker's own logging is pinned to stderr so it can't corrupt the stdout frame channel.
+  - New verification suites: `StreamMultiplexerCreditTest`, `NodeWorkerChannelEofCrashTest`, `NodeWorkerChannelStateNonBlockingTest`, and `ProcessModeParityTest`.
+- **Default Out-of-Process Worker Mode for Zero-Trust Security (`AUTOMATELY_WORKER_MODE=process`, D-131)**:
+  - `ServerConfig` now defaults `AUTOMATELY_WORKER_MODE` to `process` (instead of `embedded`), isolating all tenant JavaScript execution inside dedicated, cgroups v2-bounded subprocesses.
+  - Mitigates off-heap exhaustion attacks, native isolate crashes, and host memory exploitation by moving untrusted guest code completely out of the server's JVM process space.
+  - `AUTOMATELY_WORKER_MODE=embedded` remains supported as an opt-in mode for low-overhead local development environments.
 - **Per-Tenant Multi-Mode Worker Pool & RPC Authorization (`TenantWorkerPoolManager`, `NodeRpcAuthorizer`, D-130)**:
   - `TenantWorkerPoolManager`: per-tenant worker pool supervisor managing pools partitioned by tenant and worker mode profile (`AUTOMATELY_WORKER_BINARY_*`). Handles zero-trust scoping, warm worker pre-spawning, and cgroups v2 resource quotas.
   - `NodeRpcAuthorizer`: zero-trust security policy interface for `NodeWorkerChannel` evaluating all incoming worker RPC calls against tenant permissions and job contexts before dispatching to node stores.

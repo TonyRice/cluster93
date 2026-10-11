@@ -231,7 +231,7 @@ There's no `ShadowRealm` to escape into.
 ## 7. The worker↔node protocol (proposed; built after the engine is picked)
 > **Dedicated Specification:** The complete normative specification for the in-cluster worker IPC protocol is located at [worker-node-protocol.md](worker-node-protocol.md).
 >
-> **Important Distinction:** This protocol is exclusively for **in-cluster workers** (local child processes, gVisor containers, Firecracker microVMs) managed directly by cluster nodes. Remote user-owned devices connecting from outside use `automately-link` over outbound TLS WebSockets (governed separately by `ideas/links-and-capabilities.md`).
+> **Important Distinction:** This protocol is exclusively for **in-cluster workers** (local child processes, gVisor containers, Firecracker microVMs) managed directly by cluster nodes. Remote user-owned devices connecting from outside use `automately-link` over outbound TLS WebSockets (governed separately by `ideas/links.md`).
 
 This builds on node-runtime.md §5 (D-084–D-086): one binary frame protocol for in-cluster isolate workers, Node containers, and microVMs. The runner is untrusted, and the tenant always comes from the node's records.
 

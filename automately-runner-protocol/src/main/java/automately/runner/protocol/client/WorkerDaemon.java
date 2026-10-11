@@ -5,14 +5,17 @@ import automately.core.runtime.Execution;
 import automately.core.runtime.ExecutionResult;
 import automately.core.runtime.JobContext;
 import automately.core.runtime.LogSink;
+import automately.core.runtime.Packages;
 import automately.core.runtime.RunningExecution;
 import automately.core.runtime.ScriptRuntime;
 import automately.core.runtime.StateSink;
 import automately.runner.protocol.frame.Frame;
 import automately.runner.protocol.frame.FrameType;
 import automately.runner.protocol.message.BindMessage;
+import automately.runner.protocol.message.EventMessage;
 import automately.runner.protocol.message.HelloMessage;
 import automately.runner.protocol.message.LogMessage;
+import automately.runner.protocol.message.OpenStreamMessage;
 import automately.runner.protocol.message.ResultRunMessage;
 import automately.runner.protocol.message.RunMessage;
 import automately.runner.protocol.message.StateMessage;
@@ -27,7 +30,9 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Worker-side protocol daemon: handles HELLO, BIND, and RUN dispatching to a {@link ScriptRuntime} (worker-node-protocol.md §4).
+ * Worker-side protocol daemon: handles HELLO, BIND, and RUN dispatching to a {@link ScriptRuntime}, and routes the
+ * node's asynchronous events and response streams to the run's {@link RemoteHostApis}
+ * (worker-node-protocol.md §4, §6, D-128).
  */
 public class WorkerDaemon {
 
@@ -39,6 +44,8 @@ public class WorkerDaemon {
     private String boundTenantId;
 
     private final Map<Integer, RunningExecution> activeRuns = new ConcurrentHashMap<>();
+    private final Map<Integer, RemoteHostApis> hostsByChannel = new ConcurrentHashMap<>();
+    private final Map<String, RemoteHostApis> hostsByRunId = new ConcurrentHashMap<>();
 
     public WorkerDaemon(WorkerClientConnection connection, ScriptRuntime runtime, String engineName) {
         this.connection = Objects.requireNonNull(connection, "connection");
@@ -46,6 +53,7 @@ public class WorkerDaemon {
         this.engineName = Objects.requireNonNull(engineName, "engineName");
 
         connection.setFrameHandler(this::onFrame);
+        connection.streamMultiplexer().setOpenHandler(this::onOpenStream);
     }
 
     /**
@@ -68,6 +76,7 @@ public class WorkerDaemon {
             case RUN -> onRun(frame);
             case STOP -> onStop(frame);
             case CANCEL -> onCancel(frame);
+            case EVENT -> onEvent(frame);
             case GOODBYE -> LOG.info("Worker received GOODBYE from node");
             default -> LOG.warn("Worker received unhandled frame {}", frame.type());
         }
@@ -84,7 +93,7 @@ public class WorkerDaemon {
         int channelId = runMsg.channelId();
         String runId = runMsg.runId();
 
-        RemoteHostApis hostApis = new RemoteHostApis(connection, runId);
+        RemoteHostApis hostApis = new RemoteHostApis(connection, runId, channelId);
         LogSink logs = (level, line) -> connection.send(new LogMessage(channelId, runId, level, line).toFrame());
         StateSink state = new StateSink() {
             @Override
@@ -98,19 +107,27 @@ public class WorkerDaemon {
             }
         };
 
-        JsonObject ctxJson = runMsg.context();
-        int attempt = ctxJson.getInteger("attempt", 1);
-        OrphanPolicy orphanPolicy = OrphanPolicy.valueOf(ctxJson.getString("orphanPolicy", "FAIL"));
-        JobContext jobContext = new JobContext(runId, attempt, orphanPolicy, null, automately.core.state.JobState.EMPTY, null);
+        JobContext jobContext = JobContext.fromJson(runMsg.context());
+        if (jobContext == null) {
+            jobContext = new JobContext(runId, 1, OrphanPolicy.FAIL, null, automately.core.state.JobState.EMPTY, null);
+        }
+        Packages packages = Packages.fromJson(runMsg.packages());
+        Map<String, String> env = new java.util.LinkedHashMap<>();
+        runMsg.env().forEach(entry -> env.put(entry.getKey(), String.valueOf(entry.getValue())));
 
         Execution execution = new Execution(runId, boundTenantId != null ? boundTenantId : "unbound",
-                runMsg.script(), runMsg.input(), Duration.ofMillis(runMsg.timeoutMs()), jobContext);
+                runMsg.script(), runMsg.input(), Duration.ofMillis(runMsg.timeoutMs()), jobContext,
+                runMsg.longRunning(), packages, env);
 
+        hostsByChannel.put(channelId, hostApis);
+        hostsByRunId.put(runId, hostApis);
         RunningExecution running = runtime.execute(execution, logs, state, hostApis);
         activeRuns.put(channelId, running);
 
         running.result().onComplete(ar -> {
             activeRuns.remove(channelId);
+            hostsByChannel.remove(channelId);
+            hostsByRunId.remove(runId);
             hostApis.close();
 
             ResultRunMessage resultMsg;
@@ -122,6 +139,26 @@ public class WorkerDaemon {
             }
             connection.send(resultMsg.toFrame());
         });
+    }
+
+    private void onEvent(Frame frame) {
+        EventMessage event = EventMessage.fromFrame(frame);
+        RemoteHostApis host = hostsByChannel.get(event.channelId());
+        if (host != null) {
+            host.dispatchEvent(event);
+        } else {
+            LOG.warn("Worker received event {} for unknown run channel {}", event.type(), event.channelId());
+        }
+    }
+
+    private void onOpenStream(OpenStreamMessage open) {
+        String runId = open.metadata().getString("runId");
+        RemoteHostApis host = runId != null ? hostsByRunId.get(runId) : null;
+        if (host == null) {
+            connection.streamMultiplexer().resetStream(open.streamId(), "UNKNOWN_RUN", 404);
+            return;
+        }
+        host.onIncomingStream(open);
     }
 
     private void onStop(Frame frame) {

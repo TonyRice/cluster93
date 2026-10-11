@@ -24,9 +24,8 @@ Automately runs other people's code. This page describes who is trusted, what ea
     - resizable and growable buffers
     - WebAssembly memory
     - ICU objects behind `Intl` and `toLocaleString`
-    - bytes a script hands to the host
-  - **The consequence:** today a script can exhaust a node's memory and get it killed (D-126). The fix is per-isolate accounting and tenant worker processes with kernel memory caps ([engine-neutral-runtime.md](docs/design/engine-neutral-runtime.md)).
-  - **Until it lands:** run only trusted tenants on shared nodes, or give each untrusted tenant its own nodes.
+  - **Kernel memory caps in worker mode (D-129, D-131):** By default (`AUTOMATELY_WORKER_MODE=process`), guest code runs in dedicated tenant worker subprocesses bounded by Linux **cgroups v2** (`memory.max` and `memory.high`). Any attack exhausting memory outside the heap is terminated by the kernel (`OOM killer`), protecting the host node, HTTP ingress, and database.
+  - **Embedded isolate mode (`AUTOMATELY_WORKER_MODE=embedded`):** When opted into embedded mode for local development, unmanaged allocations escape the isolate heap; run only trusted code in embedded mode.
 - **Time.** Jobs have a timeout (`AUTOMATELY_MAX_TIMEOUT_MS`), and a stop request is followed by forced termination after a grace period (D-020).
 - **No reuse.** Isolates are never reused between jobs, let alone between tenants.
 - **Tested.** The hostile-script tests (`ScriptRuntimeTest.HostileScripts`) cover infinite loops (plain, after an `await`, at module top level), memory bombs, global state and prototype pollution leaking between jobs, and reaching host internals. Each must be stopped or refused while the node keeps working. Tenant scoping of every host API is tested separately (`NodeHostServicesTest`, `HostApisTest`).

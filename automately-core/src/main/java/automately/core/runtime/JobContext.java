@@ -37,4 +37,40 @@ public record JobContext(String jobId, int attempt, OrphanPolicy policy, Attempt
                 .put("steps", steps)
                 .put("service", service);
     }
+
+    /**
+     * Serializes this context (including the previous attempt and carried state) so an out-of-process worker can
+     * rebuild it before running the script (D-127, D-128).
+     *
+     * @return the JSON form accepted by {@link #fromJson(JsonObject)}
+     */
+    public JsonObject toJson() {
+        return new JsonObject()
+                .put("jobId", jobId)
+                .put("attempt", attempt)
+                .put("policy", policy.name())
+                .put("previous", previous == null ? null : previous.toJson())
+                .put("carried", carried == null ? JobState.EMPTY.toJson() : carried.toJson())
+                .put("service", service);
+    }
+
+    /**
+     * Restores a context serialized by {@link #toJson()}.
+     *
+     * @param json the serialized context, or null
+     * @return the restored context, or null when {@code json} is null
+     */
+    public static JobContext fromJson(JsonObject json) {
+        if (json == null) {
+            return null;
+        }
+        JsonObject previous = json.getJsonObject("previous");
+        return new JobContext(
+                json.getString("jobId"),
+                json.getInteger("attempt", 1),
+                OrphanPolicy.valueOf(json.getString("policy", "FAIL")),
+                previous == null ? null : Attempt.fromJson(previous),
+                JobState.fromJson(json.getJsonObject("carried")),
+                json.getJsonObject("service"));
+    }
 }

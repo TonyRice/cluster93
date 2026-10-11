@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The worker's frames travel on stdout (worker-node-protocol.md §3), so its own logging must never go there. This
+  config routes everything to stderr, which the node's pool drains. It shadows the server's logback.xml when the
+  worker runs as a child JVM on the server's classpath (D-128).
+-->
+<configuration>
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <pattern>%d{ISO8601} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+    <root level="WARN">
+        <appender-ref ref="STDERR"/>
+    </root>
+</configuration>

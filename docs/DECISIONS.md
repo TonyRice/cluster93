@@ -2557,5 +2557,50 @@ It's written for people, because the console will show the same response as a "N
 - All 24 unit and integration tests pass in `automately-runner-protocol`.
 - All 148 server tests pass cleanly with 0 regressions.
 
+### D-131 — Defaulting AUTOMATELY_WORKER_MODE to Process Isolation for Zero-Trust Security
+**Date:** 2026-10-10 · **Status:** Accepted. Extends D-126 and D-130.
+
+**Context:**
+Prior to this decision, `ServerConfig` defaulted `AUTOMATELY_WORKER_MODE` to `embedded`. While in-process isolates (via Javet) are lightweight and suitable for local development, they execute inside the host JVM process. A malicious native exploit or uncontrolled off-heap allocation (e.g. unconstrained ArrayBuffers or ICU allocations) could crash the server process or exhaust system memory.
+
+**Decision:**
+1. **Default to Out-of-Process Worker Pools (`AUTOMATELY_WORKER_MODE=process`):**
+   - All tenant guest JavaScript executes inside dedicated worker child processes supervised by `TenantWorkerPoolManager`.
+   - Each tenant isolate runs in a sandboxed process boundary enforced with cgroups v2 memory limits (`memory.max`, `memory.high`) and zero-trust protocol RPC authorization (`NodeRpcAuthorizer`).
+   - Any worker crash, segfault, or OOM kill is fully contained within the worker process; the Automately cluster node, HTTP ingress, and database remain resilient and unaffected.
+2. **Embedded Mode Retained as Opt-In:**
+   - Operators can explicitly opt into `AUTOMATELY_WORKER_MODE=embedded` for lightweight, low-overhead development environments where process spawning is unneeded or restricted.
+
+**Evidence:**
+- Verified with targeted server tests and `automately-runner-protocol` test suites.
+
+### D-132 — Full Process-Mode Parity: streaming host APIs, context restoration, and lifecycle hardening
+**Date:** 2026-10-11 · **Status:** Accepted. Extends D-126, D-128, D-129 and D-131.
+
+**Context:**
+D-131 made `AUTOMATELY_WORKER_MODE=process` the default, but out-of-process execution was only partially implemented: `RemoteHostApis` threw `UnsupportedOperationException` for `ctx.serve`, `fetch`, `net`/`tls` and `files.open`; bus/queue/job listeners had no delivery path; the worker rebuilt a stripped `ctx` (no packages, env, carried steps or service flag); and several failure modes hung instead of failing — a stream could exhaust the 4 MiB connection window (only stream credit was replenished), a worker EOF left the run promise unresolved, blocking state writes ran on the event loop, a full 64 KiB stderr pipe deadlocked workers, and a stopped node left worker processes running. With the default flipped, the whole host-API surface had to behave as it does embedded.
+
+**Decision:**
+1. **Bridge the streaming host APIs over the multiplexer.** The node side (`NodeWorkerChannel`) owns the request/response stream pairs: `http.request` → `http.response` (with `upgrade` for WebSockets), `fetch.request` → `fetch.response`, `socket.connect` → `socket.data`, and `files.open` → `files.data`; `files.create` and `files.respond` complete the file API. Response streams are opened before the peer can answer, and a fetch whose body already ended signals failure on the response stream rather than a reset that no longer has a stream to reach.
+2. **Deliver listeners as events.** `serve.listen/unlisten`, `bus.subscribe/handle/unsubscribe/unhandle`, `queue.consume/unconsume` and `jobs.events/unevents` register the run's real node-side listener; each delivery travels as an `EVENT` frame carrying an `eventId` and is answered with a `REPLY` for listeners that expect one (bus requests, queue acks). This is the async half of the protocol that D-128 framed but did not implement.
+3. **Restore the whole execution context.** `Packages.toJson`/`fromJson` and `JobContext.toJson`/`fromJson` serialize the lock, the previous attempt, carried steps and the service descriptor; `RunMessage` carries packages, `process.env`, `longRunning` and the serialized `ctx`. The worker rebuilds the same `Execution` an embedded run would see.
+4. **Fail fast and stay off the event loop.** `NodeWorkerChannel` fails every active run with `ExecutionResult.failed("Worker process died: …")` on EOF or transport error; connection-level credit is replenished with stream credit; state commits run on a worker thread; the worker exits explicitly on EOF; the pool drains stderr and records exit codes 137/139; `RunningNode.stop()` closes the pool; and the worker's logging is pinned to stderr so it cannot corrupt the stdout frame channel (the child-JVM classpath puts the worker's own resources first).
+
+**Alternatives considered:**
+- **Keep long-polling/one-shot RPC for streaming APIs.** Rejected: `fetch` bodies, TCP sockets and HTTP request/response bodies are streaming and full-duplex; modelling them as RPC loses backpressure and can't interleave.
+- **Have the node call the worker's APIs directly (node as client).** Rejected: it inverts the zero-trust direction; the worker must remain the party that requests authority, with the node injecting tenant identity and checking the allowlist.
+- **Reset the request stream to signal a late fetch failure.** Rejected: once the request body has ended the stream is cleaned up on both sides, so the failure needs its own response stream.
+
+**Consequences:**
+- Process mode is now a first-class execution mode: packages, services, ingress, egress, bus/queue/job events and resumed jobs behave as they do embedded.
+- More protocol surface: new `EVENT`/`REPLY` frames and stream types, and the `RUN` frame is larger (it carries the lock). CREDIT frames are doubled (stream and connection).
+- The child-JVM fallback (used when no native image is present) now logs to stderr and resolves worker resources first; a stale native image must be rebuilt to match the protocol.
+
+**Evidence:**
+- `ProcessModeParityTest` (two-node cluster, real child-JVM workers) exercises package imports, `ctx.serve` through the ingress, `fetch` and `net.connect` egress, bus request/reply, worker kill detection and resumed step memoization under `AUTOMATELY_WORKER_MODE=process`.
+- `StreamMultiplexerCreditTest` (10 MiB over the 4 MiB connection window), `NodeWorkerChannelEofCrashTest` (EOF fails the run), `NodeWorkerChannelStateNonBlockingTest` (commits off the event loop).
+
+
+
 
 

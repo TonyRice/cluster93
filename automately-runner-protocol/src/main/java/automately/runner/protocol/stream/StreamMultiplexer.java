@@ -228,11 +228,14 @@ public class StreamMultiplexer {
             if (dataHandler != null) {
                 dataHandler.handle(data);
             }
-            // Replenish credit to peer once 16 KiB or more has been consumed
+            // Replenish credit to peer once 16 KiB or more has been consumed. Both the stream's window and the shared
+            // connection window are granted, or a long-lived stream would exhaust the 4 MiB connection window and
+            // deadlock every other stream (D-127).
             if (unackedBytes >= 16 * 1024) {
                 int toAdd = unackedBytes;
                 unackedBytes = 0;
                 frameSender.apply(new CreditMessage(streamId, toAdd).toFrame());
+                frameSender.apply(new CreditMessage(0, toAdd).toFrame());
             }
         }
 
@@ -242,10 +245,9 @@ public class StreamMultiplexer {
                 int toAdd = unackedBytes;
                 unackedBytes = 0;
                 frameSender.apply(new CreditMessage(streamId, toAdd).toFrame());
+                frameSender.apply(new CreditMessage(0, toAdd).toFrame());
             }
-            if (pendingQueue.isEmpty() && endHandler != null) {
-                endHandler.handle(null);
-            }
+            drainPending();
         }
 
         void onError(Throwable cause) {

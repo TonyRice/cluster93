@@ -13,6 +13,9 @@ import java.util.Set;
 /**
  * Dispatches verified incoming {@code CALL} methods from workers to {@link HostApis} (worker-node-protocol.md §6).
  * Zero-trust: method allowlist checked before execution; unknown methods return INVALID_METHOD.
+ *
+ * <p>Methods whose semantics are streaming or listener-based (serving HTTP, bus/queue/job listeners, file responses)
+ * are delegated to the owning {@link NodeWorkerChannel}, which owns the multiplexer they need (D-128).
  */
 public final class NodeRpcDispatcher {
 
@@ -20,13 +23,13 @@ public final class NodeRpcDispatcher {
             "kv.get", "kv.set", "kv.delete", "kv.list", "kv.increment",
             "secrets.get",
             "bus.publish", "bus.request", "bus.subscribe", "bus.handle", "bus.unsubscribe", "bus.unhandle",
-            "queue.push", "queue.stats", "queue.dead", "queue.retry", "queue.discard",
+            "queue.push", "queue.consume", "queue.unconsume", "queue.stats", "queue.dead", "queue.retry", "queue.discard",
             "fs.stat", "fs.readdir", "fs.mkdir", "fs.rmdir", "fs.unlink", "fs.rename", "fs.copyFile", "fs.readFile", "fs.writeFile", "fs.appendFile",
             "fs.lock", "fs.renewLock", "fs.unlock",
             "files.stat", "files.list", "files.delete", "files.respond",
             "dns.lookup", "dns.resolve",
             "jobs.get", "jobs.run", "jobs.result", "jobs.stop", "jobs.setCallback", "jobs.events", "jobs.unevents",
-            "serve.listen",
+            "serve.listen", "serve.unlisten",
             "execution.close"
     );
 
@@ -37,12 +40,46 @@ public final class NodeRpcDispatcher {
      * Dispatches an RPC method to the target execution's {@link HostApis}.
      */
     public static Future<ResultMessage> dispatch(int callId, HostApis hostApis, String method, JsonObject params, Buffer binary) {
+        return dispatch(callId, hostApis, method, params, binary, null, null);
+    }
+
+    /**
+     * Dispatches an RPC method, giving the {@link NodeWorkerChannel} and run id to the methods that need to open
+     * streams or register listeners.
+     *
+     * @param channel the owning channel, or null when the caller has no streams to bridge
+     * @param runId   the active run's id, or null
+     */
+    public static Future<ResultMessage> dispatch(int callId, HostApis hostApis, String method, JsonObject params, Buffer binary,
+                                                 NodeWorkerChannel channel, String runId) {
         Objects.requireNonNull(hostApis, "hostApis");
         if (method == null || !ALLOWED_METHODS.contains(method)) {
             return Future.failedFuture(new HostException("Error", "INVALID_METHOD", "Unauthorized or unknown RPC method: " + method));
         }
 
         try {
+            switch (method) {
+                // --- channel-bridged methods (streams and listeners) ---
+                case "serve.listen" -> {
+                    return requireChannel(channel).serveListen(runId, params).map(ignored -> new ResultMessage(callId, null));
+                }
+                case "serve.unlisten" -> {
+                    return requireChannel(channel).serveUnlisten(runId, params).map(ignored -> new ResultMessage(callId, null));
+                }
+                case "bus.subscribe", "bus.handle", "queue.consume", "jobs.events" -> {
+                    return requireChannel(channel).registerListener(runId, method, params).map(ignored -> new ResultMessage(callId, null));
+                }
+                case "bus.unsubscribe", "bus.unhandle", "queue.unconsume", "jobs.unevents" -> {
+                    return requireChannel(channel).unregisterListener(runId, method, params).map(ignored -> new ResultMessage(callId, null));
+                }
+                case "files.respond" -> {
+                    return requireChannel(channel).filesRespond(runId, params).map(ignored -> new ResultMessage(callId, null));
+                }
+                default -> {
+                    // fall through to the stateless switch below
+                }
+            }
+
             return switch (method) {
                 // --- KV ---
                 case "kv.get" -> hostApis.kv().get(params.getString("namespace"), params.getString("key"))
@@ -141,5 +178,12 @@ public final class NodeRpcDispatcher {
         } catch (Exception e) {
             return Future.failedFuture(e);
         }
+    }
+
+    private static NodeWorkerChannel requireChannel(NodeWorkerChannel channel) {
+        if (channel == null) {
+            throw new HostException("Error", "UNAVAILABLE", "This method needs a worker connection");
+        }
+        return channel;
     }
 }

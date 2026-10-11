@@ -262,6 +262,10 @@ public class TenantWorkerPool {
             Process process = pb.start();
             long pid = process.pid();
 
+            // Drain stderr immediately: the OS pipe buffer is 64 KiB, and a worker that logs more than that before
+            // its first run would block forever writing to a full pipe (D-128).
+            drainStderr(pid, process.getErrorStream());
+
             // Apply Linux cgroup memory bounds (heapMb + 64 MB native overhead)
             long maxBytes = (heapMb + 64L) * 1024L * 1024L;
             long highBytes = (heapMb + 32L) * 1024L * 1024L;
@@ -293,9 +297,42 @@ public class TenantWorkerPool {
         if (worker != null) {
             totalWorkers.decrementAndGet();
             cgroupLimiter.cleanup(worker.pid());
+            inspectExit(worker);
             worker.terminate();
         }
     }
+
+    /** A worker that died on its own leaves an exit code that says how: 137 is SIGKILL/OOM, 139 is SIGSEGV. */
+    private static void inspectExit(WorkerProcessHandle worker) {
+        try {
+            if (!worker.process().isAlive()) {
+                int code = worker.process().exitValue();
+                if (code == 137) {
+                    LOG.error("Worker {} (pid {}) was killed (exit 137): likely OOM or cgroup memory limit", worker.workerId(), worker.pid());
+                } else if (code == 139) {
+                    LOG.error("Worker {} (pid {}) crashed with SIGSEGV (exit 139)", worker.workerId(), worker.pid());
+                } else if (code != 0) {
+                    LOG.warn("Worker {} (pid {}) exited with code {}", worker.workerId(), worker.pid(), code);
+                }
+            }
+        } catch (IllegalThreadStateException ignored) {
+            // still alive when we looked
+        }
+    }
+
+    private static void drainStderr(long pid, java.io.InputStream stderr) {
+        Thread.ofVirtual().name("worker-stderr-" + pid).start(() -> {
+            try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(stderr))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    LOG.debug("[worker {}] {}", pid, line);
+                }
+            } catch (IOException ignored) {
+                // the pipe closed
+            }
+        });
+    }
+
 
     /**
      * Closes the pool and terminates all warm and active worker processes.
@@ -386,13 +423,8 @@ public class TenantWorkerPool {
 
     static String resolveWorkerClasspath(String baseClassPath, Path baseDir) {
         List<String> entries = new ArrayList<>();
-        if (baseClassPath != null && !baseClassPath.isBlank()) {
-            for (String entry : baseClassPath.split(Pattern.quote(File.pathSeparator))) {
-                if (!entry.isBlank()) {
-                    addIfAbsent(entries, entry);
-                }
-            }
-        }
+        // The worker's own classes and resources go first, so its logback.xml (which routes logging to stderr and keeps
+        // stdout free for frames) shadows the server's when the worker runs as a child JVM on the server's classpath.
         Path workerTarget = findWorkerTargetDir(baseDir);
         if (workerTarget != null) {
             List<Path> jars = workerJars(workerTarget);
@@ -404,6 +436,13 @@ public class TenantWorkerPool {
                 Path classes = workerTarget.resolve("classes");
                 if (Files.isDirectory(classes)) {
                     addIfAbsent(entries, classes.toAbsolutePath().normalize().toString());
+                }
+            }
+        }
+        if (baseClassPath != null && !baseClassPath.isBlank()) {
+            for (String entry : baseClassPath.split(Pattern.quote(File.pathSeparator))) {
+                if (!entry.isBlank()) {
+                    addIfAbsent(entries, entry);
                 }
             }
         }

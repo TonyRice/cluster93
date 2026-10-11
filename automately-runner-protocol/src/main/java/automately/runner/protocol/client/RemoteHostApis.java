@@ -1,9 +1,12 @@
 package automately.runner.protocol.client;
 
+import automately.core.files.FileInfo;
 import automately.core.files.FileWriter;
 import automately.core.host.JvmCrypto;
 import automately.core.host.JvmZlib;
+import automately.core.runtime.BodyStream;
 import automately.core.runtime.FetchedResponse;
+import automately.core.runtime.HostException;
 import automately.core.runtime.HttpExchange;
 import automately.core.runtime.Inbound;
 import automately.core.runtime.OutgoingRequest;
@@ -24,23 +27,32 @@ import automately.core.runtime.api.SecretsApi;
 import automately.core.runtime.api.SocketApi;
 import automately.core.runtime.api.ZlibApi;
 import automately.runner.protocol.message.CallMessage;
+import automately.runner.protocol.message.EventMessage;
+import automately.runner.protocol.message.OpenStreamMessage;
+import automately.runner.protocol.message.ReplyMessage;
 import automately.runner.protocol.message.ResultMessage;
 import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.streams.ReadStream;
 
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /**
- * Worker-side proxy implementing {@link HostApis} by sending RPC {@link CallMessage}s to the node (worker-node-protocol.md §6).
- * Pure computation ({@link #crypto()}, {@link #zlib()}) executes in-process on the worker.
+ * Worker-side proxy implementing {@link HostApis} by sending RPC {@link CallMessage}s to the node and bridging the
+ * streaming and listener host APIs over the {@link automately.runner.protocol.stream.StreamMultiplexer}
+ * (worker-node-protocol.md §6, D-128). Pure computation ({@link #crypto()}, {@link #zlib()}) executes in-process.
  */
 public final class RemoteHostApis implements HostApis {
 
     private final WorkerClientConnection connection;
     private final String runId;
+    private final int channelId;
 
     private final KvApi kv;
     private final BusApi bus;
@@ -56,9 +68,25 @@ public final class RemoteHostApis implements HostApis {
     private final CryptoApi crypto = new JvmCrypto();
     private final ZlibApi zlib = new JvmZlib();
 
+    /** Listener callbacks registered by the script, by {@code method:topic}. */
+    private final Map<String, Consumer<Inbound>> listeners = new ConcurrentHashMap<>();
+    /** Fetch/file requests awaiting their response stream, by the request stream's id. */
+    private final Map<Integer, Promise<FetchedResponse>> pendingResponses = new ConcurrentHashMap<>();
+    /** Socket requests awaiting their data stream, by the request stream's id. */
+    private final Map<Integer, PendingSocket> pendingSockets = new ConcurrentHashMap<>();
+
+    private record PendingSocket(Promise<OutgoingSocket> promise, io.vertx.core.streams.WriteStream<Buffer> request) {}
+    /** The service's HTTP handler, once {@code ctx.serve}/{@code listen} registered it. */
+    private volatile Consumer<HttpExchange> serveHandler;
+
     public RemoteHostApis(WorkerClientConnection connection, String runId) {
+        this(connection, runId, 0);
+    }
+
+    public RemoteHostApis(WorkerClientConnection connection, String runId, int channelId) {
         this.connection = Objects.requireNonNull(connection, "connection");
         this.runId = Objects.requireNonNull(runId, "runId");
+        this.channelId = channelId;
 
         this.kv = new RemoteKv();
         this.bus = new RemoteBus();
@@ -79,6 +107,16 @@ public final class RemoteHostApis implements HostApis {
 
     private Future<ResultMessage> call(String method, JsonObject params, Buffer binary) {
         return connection.call(new CallMessage(connection.nextCallId(), runId, method, params, binary));
+    }
+
+    /**
+     * Creates the outgoing side of a request stream and wires its reset/error to {@code failure}, so a node that
+     * refuses the stream (a denied fetch, a failed socket connect, a missing file) fails the caller instead of hanging.
+     */
+    private io.vertx.core.streams.WriteStream<Buffer> requestStream(int streamId, Promise<?> failure) {
+        io.vertx.core.streams.WriteStream<Buffer> out = connection.streamMultiplexer().createOutputStream(streamId);
+        out.exceptionHandler(failure::tryFail);
+        return out;
     }
 
     @Override
@@ -151,6 +189,134 @@ public final class RemoteHostApis implements HostApis {
         return call("execution.close", new JsonObject()).mapEmpty();
     }
 
+    // -------------------------------------------------------------------------------------------
+    // Incoming frames from the node: events and response streams
+    // -------------------------------------------------------------------------------------------
+
+    /** Dispatches an asynchronous event to the script's registered listener. */
+    void dispatchEvent(EventMessage event) {
+        Consumer<Inbound> listener = listeners.get(event.type() + ":" + event.topic());
+        if (listener == null) {
+            if (event.expectsReply()) {
+                connection.send(ReplyMessage.failure(channelId, event.eventId(), "503", "no listener for " + event.topic()).toFrame());
+            }
+            return;
+        }
+        Inbound inbound = new Inbound() {
+            @Override
+            public Object payload() {
+                return event.payload();
+            }
+
+            @Override
+            public boolean expectsReply() {
+                return event.expectsReply();
+            }
+
+            @Override
+            public void reply(Object value) {
+                connection.send(ReplyMessage.success(channelId, event.eventId(), value).toFrame());
+            }
+
+            @Override
+            public void fail(int code, String message) {
+                connection.send(ReplyMessage.failure(channelId, event.eventId(), String.valueOf(code), message).toFrame());
+            }
+        };
+        try {
+            listener.accept(inbound);
+        } catch (RuntimeException e) {
+            if (event.expectsReply()) {
+                inbound.fail(500, String.valueOf(e.getMessage()));
+            }
+        }
+    }
+
+    /** Handles a stream the node opened for this run (a fetch/file/socket response, or an HTTP request). */
+    void onIncomingStream(OpenStreamMessage open) {
+        String type = open.streamType();
+        JsonObject meta = open.metadata();
+        int requestStreamId = meta.getInteger("requestStreamId", -1);
+        switch (type) {
+            case "fetch.response" -> completeResponse(pendingResponses.remove(requestStreamId), meta, open.streamId());
+            case "files.data" -> completeResponse(pendingResponses.remove(requestStreamId), meta, open.streamId());
+            case "socket.data" -> {
+                PendingSocket pending = pendingSockets.remove(requestStreamId);
+                if (pending == null) {
+                    connection.streamMultiplexer().resetStream(open.streamId(), "UNKNOWN_SOCKET", 404);
+                    return;
+                }
+                pending.promise().complete(socket(meta.getJsonObject("info", new JsonObject()), requestStreamId, open.streamId(), pending.request()));
+            }
+            case "http.request", "http.request.upgrade" -> {
+                Consumer<HttpExchange> handler = serveHandler;
+                if (handler == null) {
+                    connection.streamMultiplexer().resetStream(open.streamId(), "NOT_SERVING", 404);
+                    return;
+                }
+                handler.accept(new RemoteHttpExchange(open));
+            }
+            default -> connection.streamMultiplexer().resetStream(open.streamId(), "UNSUPPORTED_STREAM_TYPE", 400);
+        }
+    }
+
+    private void completeResponse(Promise<FetchedResponse> promise, JsonObject meta, int streamId) {
+        if (promise == null) {
+            connection.streamMultiplexer().resetStream(streamId, "UNKNOWN_REQUEST", 404);
+            return;
+        }
+        if (meta.containsKey("error")) {
+            promise.tryFail(new HostException("Error", "request_failed", meta.getString("error")));
+            connection.streamMultiplexer().resetStream(streamId, "error", 502);
+            return;
+        }
+        ReadStream<Buffer> in = connection.streamMultiplexer().createInputStream(streamId);
+        promise.complete(new FetchedResponse(meta.getJsonObject("meta", new JsonObject()), new ReadStreamBodyStream(in)));
+    }
+
+    private OutgoingSocket socket(JsonObject info, int requestStreamId, int dataStreamId, io.vertx.core.streams.WriteStream<Buffer> out) {
+        ReadStream<Buffer> in = connection.streamMultiplexer().createInputStream(dataStreamId);
+        return new OutgoingSocket() {
+            @Override
+            public JsonObject info() {
+                return info == null ? new JsonObject() : info;
+            }
+
+            @Override
+            public BodyStream data() {
+                return new ReadStreamBodyStream(in);
+            }
+
+            @Override
+            public Future<Void> write(Buffer chunk) {
+                return out.write(chunk);
+            }
+
+            @Override
+            public Future<Void> end() {
+                return out.end();
+            }
+
+            @Override
+            public Future<JsonObject> upgradeTls(JsonObject tls) {
+                return Future.failedFuture(new HostException("Error", "unavailable", "STARTTLS isn't available over the worker protocol"));
+            }
+
+            @Override
+            public void setNoDelay(boolean noDelay) {
+            }
+
+            @Override
+            public void setKeepAlive(boolean keepAlive) {
+            }
+
+            @Override
+            public void destroy() {
+                connection.streamMultiplexer().resetStream(requestStreamId, "destroyed", 499);
+            }
+        };
+    }
+
     // --- Sub-API implementations ---
 
     private final class RemoteKv implements KvApi {
@@ -213,14 +379,14 @@ public final class RemoteHostApis implements HostApis {
 
         @Override
         public Future<Registration> subscribe(String topic, Consumer<Inbound> listener) {
-            return call("bus.subscribe", new JsonObject().put("topic", topic))
-                    .map(r -> () -> call("bus.unsubscribe", new JsonObject().put("topic", topic)).mapEmpty());
+            return registerListener("bus.subscribe", topic, new JsonObject().put("topic", topic), listener,
+                    () -> call("bus.unsubscribe", new JsonObject().put("topic", topic)).mapEmpty());
         }
 
         @Override
         public Future<Registration> handle(String topic, Consumer<Inbound> listener) {
-            return call("bus.handle", new JsonObject().put("topic", topic))
-                    .map(r -> () -> call("bus.unhandle", new JsonObject().put("topic", topic)).mapEmpty());
+            return registerListener("bus.handle", topic, new JsonObject().put("topic", topic), listener,
+                    () -> call("bus.unhandle", new JsonObject().put("topic", topic)).mapEmpty());
         }
     }
 
@@ -309,7 +475,8 @@ public final class RemoteHostApis implements HostApis {
         @Override
         public Future<Registration> consume(String queue, int concurrency, Consumer<Inbound> listener) {
             JsonObject params = new JsonObject().put("queue", queue).put("concurrency", concurrency);
-            return call("queue.consume", params).map(r -> () -> call("queue.unconsume", params).mapEmpty());
+            return registerListener("queue.consume", queue, params, listener,
+                    () -> call("queue.unconsume", new JsonObject().put("queue", queue)).mapEmpty());
         }
 
         @Override
@@ -321,7 +488,9 @@ public final class RemoteHostApis implements HostApis {
         @Override
         public Future<JsonObject> dead(String queue, int limit, String cursor) {
             JsonObject params = new JsonObject().put("queue", queue).put("limit", limit);
-            if (cursor != null) params.put("cursor", cursor);
+            if (cursor != null) {
+                params.put("cursor", cursor);
+            }
             return call("queue.dead", params).map(r -> r.value() instanceof JsonObject o ? o : new JsonObject());
         }
 
@@ -370,8 +539,8 @@ public final class RemoteHostApis implements HostApis {
 
         @Override
         public Future<Registration> events(String id, Consumer<Inbound> listener) {
-            return call("jobs.events", new JsonObject().put("id", id))
-                    .map(r -> () -> call("jobs.unevents", new JsonObject().put("id", id)).mapEmpty());
+            return registerListener("jobs.events", id, new JsonObject().put("id", id), listener,
+                    () -> call("jobs.unevents", new JsonObject().put("id", id)).mapEmpty());
         }
     }
 
@@ -399,7 +568,7 @@ public final class RemoteHostApis implements HostApis {
 
         @Override
         public Future<FileWriter> create(String path, String contentType) {
-            int streamId = connection.nextCallId();
+            int streamId = connection.nextStreamId();
             JsonObject meta = new JsonObject()
                     .put("runId", runId)
                     .put("path", path)
@@ -415,16 +584,9 @@ public final class RemoteHostApis implements HostApis {
                             }
 
                             @Override
-                            public Future<automately.core.files.FileInfo> finish() {
-                                return outStream.end().compose(vEnd -> {
-                                    return call("files.stat", new JsonObject().put("path", path))
-                                            .map(res -> {
-                                                if (res.value() instanceof JsonObject obj) {
-                                                    return automately.core.files.FileInfo.fromJson(obj);
-                                                }
-                                                return null;
-                                            });
-                                });
+                            public Future<FileInfo> finish() {
+                                return outStream.end().compose(vEnd -> call("files.stat", new JsonObject().put("path", path))
+                                        .map(res -> res.value() instanceof JsonObject obj ? FileInfo.fromJson(obj) : null));
                             }
 
                             @Override
@@ -437,31 +599,88 @@ public final class RemoteHostApis implements HostApis {
 
         @Override
         public Future<FetchedResponse> open(String path) {
-            return Future.failedFuture(new UnsupportedOperationException("Streaming file open is handled via stream frames"));
+            int streamId = connection.nextStreamId();
+            Promise<FetchedResponse> promise = Promise.promise();
+            pendingResponses.put(streamId, promise);
+            requestStream(streamId, promise);
+            connection.streamMultiplexer().openStream(streamId, "files.open",
+                            new JsonObject().put("runId", runId).put("path", path))
+                    .onFailure(promise::tryFail);
+            return promise.future();
         }
 
         @Override
         public Future<Void> respond(HttpExchange exchange, String path, JsonObject headers) {
-            return call("files.respond", new JsonObject().put("path", path).put("headers", headers)).mapEmpty();
+            if (exchange instanceof RemoteHttpExchange remote) {
+                JsonObject params = new JsonObject().put("exchangeId", remote.streamId()).put("path", path);
+                if (headers != null) {
+                    params.put("headers", headers);
+                }
+                return call("files.respond", params).mapEmpty();
+            }
+            return Future.failedFuture(new HostException("Error", "invalid_argument", "files.respond needs an exchange from this run"));
         }
     }
 
     private final class RemoteFetch implements FetchApi {
         @Override
         public Future<FetchedResponse> fetch(JsonObject request, byte[] body) {
-            return Future.failedFuture(new UnsupportedOperationException("Streaming fetch is handled via stream frames"));
+            return open(request).compose(outgoing -> {
+                Future<Void> sent = body == null || body.length == 0
+                        ? outgoing.end()
+                        : outgoing.write(Buffer.buffer(body)).compose(v -> outgoing.end());
+                return sent.compose(v -> outgoing.response());
+            });
         }
 
         @Override
         public Future<OutgoingRequest> open(JsonObject request) {
-            return Future.failedFuture(new UnsupportedOperationException("Streaming fetch open is handled via stream frames"));
+            int streamId = connection.nextStreamId();
+            Promise<FetchedResponse> response = Promise.promise();
+            pendingResponses.put(streamId, response);
+            io.vertx.core.streams.WriteStream<Buffer> out = requestStream(streamId, response);
+            return connection.streamMultiplexer().openStream(streamId, "fetch.request",
+                            new JsonObject().put("runId", runId).put("request", request))
+                    .map(v -> new OutgoingRequest() {
+                        @Override
+                        public Future<Void> write(Buffer chunk) {
+                            return out.write(chunk);
+                        }
+
+                        @Override
+                        public Future<Void> end() {
+                            return out.end();
+                        }
+
+                        @Override
+                        public Future<FetchedResponse> response() {
+                            return response.future();
+                        }
+
+                        @Override
+                        public void abort() {
+                            pendingResponses.remove(streamId);
+                            response.tryFail(new HostException("Error", "aborted", "The request was aborted"));
+                            connection.streamMultiplexer().resetStream(streamId, "aborted", 499);
+                        }
+                    });
         }
     }
 
     private final class RemoteSocket implements SocketApi {
         @Override
         public Future<OutgoingSocket> connect(JsonObject request) {
-            return Future.failedFuture(new UnsupportedOperationException("Socket streaming is handled via stream frames"));
+            int streamId = connection.nextStreamId();
+            Promise<OutgoingSocket> promise = Promise.promise();
+            io.vertx.core.streams.WriteStream<Buffer> out = requestStream(streamId, promise);
+            pendingSockets.put(streamId, new PendingSocket(promise, out));
+            connection.streamMultiplexer().openStream(streamId, "socket.connect",
+                            new JsonObject().put("runId", runId).put("request", request))
+                    .onFailure(err -> {
+                        pendingSockets.remove(streamId);
+                        promise.tryFail(err);
+                    });
+            return promise.future();
         }
     }
 
@@ -480,7 +699,182 @@ public final class RemoteHostApis implements HostApis {
     private final class RemoteHttp implements HttpApi {
         @Override
         public Future<Registration> serve(Consumer<HttpExchange> handler) {
-            return call("serve.listen", new JsonObject()).map(r -> () -> Future.succeededFuture());
+            serveHandler = handler;
+            return call("serve.listen", new JsonObject())
+                    .map(r -> () -> call("serve.unlisten", new JsonObject()).mapEmpty());
+        }
+
+        @Override
+        public Future<Registration> listen(int port, Consumer<HttpExchange> handler) {
+            serveHandler = handler;
+            return call("serve.listen", new JsonObject().put("port", port))
+                    .map(r -> () -> call("serve.unlisten", new JsonObject().put("port", port)).mapEmpty());
+        }
+    }
+
+    private Future<Registration> registerListener(String method, String topic, JsonObject callParams, Consumer<Inbound> listener,
+                                                  java.util.function.Supplier<Future<Void>> unregister) {
+        String key = method + ":" + topic;
+        return call(method, callParams).map(r -> {
+            listeners.put(key, listener);
+            return () -> {
+                listeners.remove(key);
+                return unregister.get();
+            };
+        });
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Proxies for the streaming host APIs
+    // -------------------------------------------------------------------------------------------
+
+    /** A {@link BodyStream} over one direction of a multiplexed stream; starts paused, like the embedded one. */
+    static final class ReadStreamBodyStream implements BodyStream {
+        private final ReadStream<Buffer> in;
+
+        ReadStreamBodyStream(ReadStream<Buffer> in) {
+            this.in = in;
+            this.in.pause();
+        }
+
+        @Override
+        public void handler(Consumer<Buffer> chunk, Runnable end, Consumer<Throwable> error) {
+            in.handler(chunk::accept);
+            in.endHandler(v -> end.run());
+            in.exceptionHandler(error::accept);
+        }
+
+        @Override
+        public void pause() {
+            in.pause();
+        }
+
+        @Override
+        public void resume() {
+            in.resume();
+        }
+
+        @Override
+        public void cancel() {
+            in.resume();
+        }
+    }
+
+    /** The {@link HttpExchange} a {@code ctx.serve} handler sees, streamed over the worker protocol. */
+    final class RemoteHttpExchange implements HttpExchange {
+        private final int streamId;
+        private final JsonObject request;
+        private final boolean upgrade;
+        private final BodyStream body;
+        private io.vertx.core.streams.WriteStream<Buffer> responseOut;
+
+        RemoteHttpExchange(OpenStreamMessage open) {
+            this.streamId = open.streamId();
+            this.request = open.metadata().getJsonObject("request", new JsonObject());
+            this.upgrade = open.metadata().getBoolean("upgrade", false);
+            this.body = new ReadStreamBodyStream(connection.streamMultiplexer().createInputStream(streamId));
+        }
+
+        int streamId() {
+            return streamId;
+        }
+
+        @Override
+        public JsonObject request() {
+            return request;
+        }
+
+        @Override
+        public BodyStream body() {
+            return body;
+        }
+
+        @Override
+        public void respond(int status, JsonObject headers) {
+            openResponse(new JsonObject().put("status", status).put("headers", headers != null ? headers : new JsonObject()));
+        }
+
+        @Override
+        public void respond(int status, String statusMessage, JsonArray rawHeaders) {
+            openResponse(new JsonObject().put("status", status).put("statusMessage", statusMessage).put("rawHeaders", rawHeaders));
+        }
+
+        private void openResponse(JsonObject meta) {
+            if (responseOut != null) {
+                return;
+            }
+            int responseStreamId = connection.nextStreamId();
+            JsonObject openMeta = meta.copy().put("runId", runId).put("requestStreamId", streamId);
+            connection.streamMultiplexer().openStream(responseStreamId, "http.response", openMeta);
+            responseOut = connection.streamMultiplexer().createOutputStream(responseStreamId);
+        }
+
+        @Override
+        public Future<Void> write(Buffer chunk) {
+            return responseOut == null ? Future.failedFuture(new IllegalStateException("respond() must be called first")) : responseOut.write(chunk);
+        }
+
+        @Override
+        public void end() {
+            if (responseOut != null) {
+                responseOut.end();
+            }
+        }
+
+        @Override
+        public void fail(int status, String message) {
+            if (responseOut == null) {
+                openResponse(new JsonObject().put("status", status).put("error", message));
+            }
+            connection.streamMultiplexer().resetStream(streamId, message, status);
+        }
+
+        @Override
+        public OutgoingSocket upgrade() {
+            if (!upgrade) {
+                return null;
+            }
+            ReadStream<Buffer> in = connection.streamMultiplexer().createInputStream(streamId);
+            var out = connection.streamMultiplexer().createOutputStream(streamId);
+            return new OutgoingSocket() {
+                @Override
+                public JsonObject info() {
+                    return new JsonObject();
+                }
+
+                @Override
+                public BodyStream data() {
+                    return new ReadStreamBodyStream(in);
+                }
+
+                @Override
+                public Future<Void> write(Buffer chunk) {
+                    return out.write(chunk);
+                }
+
+                @Override
+                public Future<Void> end() {
+                    return out.end();
+                }
+
+                @Override
+                public Future<JsonObject> upgradeTls(JsonObject tls) {
+                    return Future.failedFuture(new HostException("Error", "unavailable", "STARTTLS isn't available over the worker protocol"));
+                }
+
+                @Override
+                public void setNoDelay(boolean noDelay) {
+                }
+
+                @Override
+                public void setKeepAlive(boolean keepAlive) {
+                }
+
+                @Override
+                public void destroy() {
+                    connection.streamMultiplexer().resetStream(streamId, "destroyed", 499);
+                }
+            };
         }
     }
 }

@@ -76,26 +76,39 @@ public final class StreamBridge {
                     if (read > 0) {
                         Buffer chunk = Buffer.buffer(read);
                         chunk.appendBytes(buf, 0, read);
-                        context.runOnContext(v -> {
+                        dispatch(() -> {
                             if (dataHandler != null) {
                                 dataHandler.handle(chunk);
                             }
                         });
                     }
                 }
-                context.runOnContext(v -> {
+                dispatch(() -> {
                     if (endHandler != null) {
                         endHandler.handle(null);
                     }
                 });
             } catch (Exception e) {
                 if (!closed.get()) {
-                    context.runOnContext(v -> {
+                    dispatch(() -> {
                         if (exceptionHandler != null) {
                             exceptionHandler.handle(e);
                         }
                     });
                 }
+            }
+        }
+
+        /** Hands {@code task} to the Vert.x context, unless the context's event loop has already terminated. */
+        private void dispatch(Runnable task) {
+            if (closed.get()) {
+                return;
+            }
+            try {
+                context.runOnContext(v -> task.run());
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // The node is shutting down and took the event loop with it; nothing left to deliver to.
+                closed.set(true);
             }
         }
 

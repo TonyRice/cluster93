@@ -34,6 +34,7 @@ public class WorkerClientConnection {
     private final CreditManager creditManager;
     private final StreamMultiplexer streamMultiplexer;
     private final AtomicInteger callIdSequence = new AtomicInteger(1);
+    private final AtomicInteger streamIdSequence = new AtomicInteger(1);
     private final Map<Integer, Promise<ResultMessage>> pendingCalls = new ConcurrentHashMap<>();
 
     private Handler<Frame> frameHandler = frame -> {};
@@ -50,8 +51,11 @@ public class WorkerClientConnection {
         this.streamMultiplexer = new StreamMultiplexer(this::send, creditManager);
 
         FrameCodec.FrameParser parser = FrameCodec.parser(this::onFrame, this::onError);
-        input.handler(parser);
+        // Register the error and end handlers before handler(): the read pump starts with handler(), and an EOF that
+        // arrives immediately (a closed pipe) must still reach them (D-132).
         input.exceptionHandler(this::onError);
+        input.endHandler(v -> onError(new java.io.IOException("Node connection closed unexpectedly (EOF)")));
+        input.handler(parser);
     }
 
     public void setFrameHandler(Handler<Frame> frameHandler) {
@@ -72,6 +76,11 @@ public class WorkerClientConnection {
 
     public int nextCallId() {
         return callIdSequence.getAndIncrement();
+    }
+
+    /** A stream id the worker opens (odd, so it never collides with the node's even response streams). */
+    public int nextStreamId() {
+        return streamIdSequence.getAndAdd(2);
     }
 
     /**

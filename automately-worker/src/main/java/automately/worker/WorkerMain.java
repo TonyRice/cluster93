@@ -269,6 +269,9 @@ public final class WorkerMain {
         CountDownLatch latch = new CountDownLatch(1);
         conn.setErrorHandler(err -> latch.countDown());
         latch.await();
+        // The node closed the connection (EOF or GOODBYE): exit explicitly so no zombie worker is left behind (D-128).
+        System.out.flush();
+        System.exit(0);
     }
 
     /** Unused, but keeps JsonArray's class reachable for scripts' outputs in a native image. */

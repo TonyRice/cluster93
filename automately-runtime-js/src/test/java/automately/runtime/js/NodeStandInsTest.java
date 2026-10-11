@@ -319,7 +319,7 @@ class NodeStandInsTest {
     }
 
     private static JsonArray output(String script) throws Exception {
-        Execution execution = new Execution("job-1", "tenant-a", script, new JsonObject(), Duration.ofSeconds(5),
+        Execution execution = new Execution("job-1", "tenant-a", script, new JsonObject(), Duration.ofSeconds(15),
                 JobContext.firstAttempt("job-1", OrphanPolicy.FAIL));
         ExecutionResult result = runtime.execute(execution, (level, line) -> { }, StateSink.DISCARD)
                 .result().toCompletionStage().toCompletableFuture().get(30, TimeUnit.SECONDS);

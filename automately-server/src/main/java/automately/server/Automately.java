@@ -368,6 +368,7 @@ public final class Automately {
                 new automately.core.host.egress.ClusterAddresses(vertx, nodes, nodePorts(config)), egressPolicies,
                 new automately.core.host.dns.DnsResolver(vertx, config.egressDnsServers()), config.egressInternalDomains()));
         ScriptRuntime runtime;
+        java.util.concurrent.atomic.AtomicReference<automately.runner.protocol.pool.TenantWorkerPoolManager> workerPoolRef = new java.util.concurrent.atomic.AtomicReference<>();
         if ("process".equalsIgnoreCase(config.workerMode())) {
             var poolManager = new automately.runner.protocol.pool.TenantWorkerPoolManager(
                     vertx,
@@ -380,6 +381,7 @@ public final class Automately {
                     new automately.runner.protocol.pool.CgroupMemoryLimiter(),
                     automately.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL
             );
+            workerPoolRef.set(poolManager);
             runtime = new automately.runner.protocol.runtime.WorkerProcessRuntime(vertx, poolManager);
             LOG.info("Configured process-based ScriptRuntime with TenantWorkerPoolManager (default mode: {})", config.workerDefaultMode());
         } else {
@@ -480,7 +482,7 @@ public final class Automately {
                     .compose(id -> vertx.deployVerticle(ingress))
                     .compose(id -> serveMetrics(vertx, config, instanceId, nodes, cluster))
                     .map(metricsPort -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster, api.routes(),
-                            metricsPort, endpoint.port()));
+                            metricsPort, endpoint.port(), workerPoolRef.get() == null ? null : workerPoolRef.get()::close));
         }).recover(err -> {
             // Not waited for: this runs on one of Vert.x's own threads, which a close can't report back to.
             vertx.close();
@@ -497,11 +499,19 @@ public final class Automately {
 
     /** A started node. {@code apiRoutes} lists every REST route as "METHOD path", for checks that walk them all. */
     public record RunningNode(String nodeId, String instanceId, Vertx vertx, int httpPort, int ingressPort, IgniteCluster cluster,
-                              List<String> apiRoutes, int metricsPort, int internalPort) {
+                              List<String> apiRoutes, int metricsPort, int internalPort, Runnable extraShutdown) {
 
-        /** Stops Vert.x (which stops the node's scripts, D-015), then this node's Ignite. */
+        /** Stops Vert.x (which stops the node's scripts, D-015), this node's Ignite, and any worker processes (D-128). */
         public Future<Void> stop() {
             return vertx.close().andThen(ar -> {
+                if (extraShutdown != null) {
+                    try {
+                        extraShutdown.run();
+                    } catch (RuntimeException e) {
+                        org.slf4j.LoggerFactory.getLogger(RunningNode.class)
+                                .warn("Closing the worker pool failed: {}", e.getMessage());
+                    }
+                }
                 if (cluster != null) {
                     cluster.stop();
                 }
