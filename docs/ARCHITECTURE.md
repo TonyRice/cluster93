@@ -170,3 +170,22 @@ Frame Header (12 Bytes)
   ./mvnw javadoc:aggregate -DskipITs
   ```
   *(Output available at `target/reports/apidocs/index.html`)*
+
+---
+
+## 7. Agent Context Optimization & Javadoc Rules
+
+When reading or modifying Automately code, follow the guidelines detailed in [Agent Context Optimization & Javadoc Engineering Guide](guides/agent-context-and-javadocs.md):
+
+1. **High Information Density at a Fraction of the Token Cost:**
+   - Reading full `.java` implementation files costs 4,000–10,000 tokens for boilerplate, stream pipelines, and logging.
+   - Reading clean interface headers/skeletons with Javadocs delivers exact contracts, invariants, and error modes in under 300 tokens, allowing an agent to hold ~20 class contracts in context for the cost of two implementation files.
+2. **Tags That Prevent Agent Hallucinations:**
+   - `@throws` / `@exception`: Explicit checked/unchecked error modes prevent incorrect exception handling or wrapping.
+   - `@param` & `@return`: Nullability and range contracts eliminate null-handling hallucinations.
+   - `@see` & `@link`: Semantic trails that guide symbol navigation and LSP queries.
+3. **Context-Friendly Javadoc Usage:**
+   - **Never ingest raw HTML Javadoc builds:** Avoid dumping `target/reports/apidocs/*.html` into LLM contexts.
+   - **Extract skeletons/headers:** Pass interface definitions and method signatures with docstrings rather than complete class bodies.
+   - **Leverage LSP On Demand:** In harnesses using `jdtls`, rely on symbol hover and signature help to fetch docstrings dynamically in real time.
+
