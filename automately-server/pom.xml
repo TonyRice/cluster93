@@ -24,6 +24,10 @@
             <artifactId>automately-runtime-javet</artifactId>
         </dependency>
         <dependency>
+            <groupId>automately</groupId>
+            <artifactId>automately-runner-protocol</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.vertx</groupId>
             <artifactId>vertx-web</artifactId>
         </dependency>

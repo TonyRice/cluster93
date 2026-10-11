@@ -15,6 +15,8 @@ import automately.runner.protocol.message.CallMessage;
 import automately.runner.protocol.message.ErrorMessage;
 import automately.runner.protocol.message.HelloMessage;
 import automately.runner.protocol.message.LogMessage;
+import automately.runner.protocol.message.OpenStreamMessage;
+import automately.runner.protocol.message.ResultMessage;
 import automately.runner.protocol.message.ResultRunMessage;
 import automately.runner.protocol.message.RunMessage;
 import automately.runner.protocol.message.StateMessage;
@@ -56,18 +58,32 @@ public class NodeWorkerChannel {
     private final Promise<HelloMessage> helloPromise = Promise.promise();
     private final Map<String, ActiveRun> activeRuns = new ConcurrentHashMap<>();
 
-    private record ActiveRun(int channelId, String runId, HostApis hostApis, LogSink logs, StateSink state, Promise<ExecutionResult> completion) {}
+    private record ActiveRun(int channelId, String runId, HostApis hostApis, LogSink logs, StateSink state,
+                             Map<Integer, automately.core.files.FileWriter> writers,
+                             Promise<ExecutionResult> completion) {
+        ActiveRun(int channelId, String runId, HostApis hostApis, LogSink logs, StateSink state, Promise<ExecutionResult> completion) {
+            this(channelId, runId, hostApis, logs, state, new ConcurrentHashMap<>(), completion);
+        }
+    }
+
+    private final NodeRpcAuthorizer authorizer;
 
     public NodeWorkerChannel(String workerId, WriteStream<Buffer> output, ReadStream<Buffer> input) {
-        this(workerId, output, input, new CreditManager());
+        this(workerId, output, input, new CreditManager(), NodeRpcAuthorizer.ALLOW_ALL);
     }
 
     public NodeWorkerChannel(String workerId, WriteStream<Buffer> output, ReadStream<Buffer> input, CreditManager creditManager) {
+        this(workerId, output, input, creditManager, NodeRpcAuthorizer.ALLOW_ALL);
+    }
+
+    public NodeWorkerChannel(String workerId, WriteStream<Buffer> output, ReadStream<Buffer> input, CreditManager creditManager, NodeRpcAuthorizer authorizer) {
         this.workerId = Objects.requireNonNull(workerId, "workerId");
         this.output = output;
         this.input = input;
         this.creditManager = creditManager;
+        this.authorizer = Objects.requireNonNull(authorizer, "authorizer");
         this.streamMultiplexer = new StreamMultiplexer(this::send, creditManager);
+        this.streamMultiplexer.setOpenHandler(this::onOpenStream);
 
         FrameCodec.FrameParser parser = FrameCodec.parser(this::onFrame, this::onError);
         input.handler(parser);
@@ -188,6 +204,12 @@ public class NodeWorkerChannel {
             return;
         }
 
+        if (!authorizer.isAuthorized(boundTenantId, call.runId(), call.method(), call.params())) {
+            inFlightCalls.decrementAndGet();
+            send(new ErrorMessage(call.callId(), "FORBIDDEN", "Unauthorized method call: " + call.method()).toFrame());
+            return;
+        }
+
         NodeRpcDispatcher.dispatch(call.callId(), run.hostApis(), call.method(), call.params(), call.binary())
                 .onSuccess(result -> send(result.toFrame()))
                 .onFailure(err -> {
@@ -222,6 +244,11 @@ public class NodeWorkerChannel {
         ResultRunMessage result = ResultRunMessage.fromFrame(frame);
         ActiveRun run = activeRuns.remove(result.runId());
         if (run != null) {
+            for (var writer : run.writers().values()) {
+                writer.abort();
+            }
+            run.writers().clear();
+
             ExecutionResult res;
             if ("FAILED".equalsIgnoreCase(result.status())) {
                 res = ExecutionResult.failed(result.error() != null ? result.error() : "Execution failed");
@@ -233,6 +260,53 @@ public class NodeWorkerChannel {
                 res = ExecutionResult.succeeded(result.output());
             }
             run.completion().tryComplete(res);
+        }
+    }
+
+    private void onOpenStream(OpenStreamMessage open) {
+        int streamId = open.streamId();
+        String type = open.streamType();
+        JsonObject meta = open.metadata();
+        String runId = meta != null ? meta.getString("runId") : null;
+        ActiveRun run = runId != null ? activeRuns.get(runId) : null;
+        if (run == null) {
+            LOG.warn("Worker {}: received stream OPEN for unknown run {}", workerId, runId);
+            streamMultiplexer.resetStream(streamId, "UNKNOWN_RUN", 404);
+            return;
+        }
+
+        if ("files.create".equals(type)) {
+            String path = meta.getString("path");
+            String contentType = meta.getString("contentType");
+            var inStream = streamMultiplexer.createInputStream(streamId);
+            run.hostApis().files().create(path, contentType).onComplete(arWriter -> {
+                if (arWriter.failed()) {
+                    LOG.error("Worker {}: failed to create file {}: {}", workerId, path, arWriter.cause().getMessage());
+                    streamMultiplexer.resetStream(streamId, arWriter.cause().getMessage(), 500);
+                    return;
+                }
+                var writer = arWriter.result();
+                run.writers().put(streamId, writer);
+                inStream.handler(chunk -> writer.write(chunk));
+                inStream.endHandler(v -> {
+                    writer.finish().onComplete(arFinish -> {
+                        run.writers().remove(streamId);
+                        if (arFinish.succeeded()) {
+                            JsonObject fileInfoJson = arFinish.result().toViewJson();
+                            send(new ResultMessage(streamId, fileInfoJson).toFrame());
+                        } else {
+                            send(new ErrorMessage(streamId, "FILE_FINISH_FAILED", arFinish.cause().getMessage()).toFrame());
+                        }
+                    });
+                });
+                inStream.exceptionHandler(err -> {
+                    run.writers().remove(streamId);
+                    writer.abort();
+                });
+            });
+        } else {
+            LOG.warn("Worker {}: unhandled stream type {}", workerId, type);
+            streamMultiplexer.resetStream(streamId, "UNSUPPORTED_STREAM_TYPE", 400);
         }
     }
 

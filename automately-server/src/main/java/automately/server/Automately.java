@@ -367,7 +367,24 @@ public final class Automately {
         FetchClient fetch = new FetchClient(vertx, new automately.core.host.egress.Egress(vertx, config.egressAllowPrivate(),
                 new automately.core.host.egress.ClusterAddresses(vertx, nodes, nodePorts(config)), egressPolicies,
                 new automately.core.host.dns.DnsResolver(vertx, config.egressDnsServers()), config.egressInternalDomains()));
-        ScriptRuntime runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
+        ScriptRuntime runtime;
+        if ("process".equalsIgnoreCase(config.workerMode())) {
+            var poolManager = new automately.runner.protocol.pool.TenantWorkerPoolManager(
+                    vertx,
+                    config.workerBinaries(),
+                    config.workerDefaultMode(),
+                    1,
+                    config.capacity(),
+                    config.maxHeapMb(),
+                    automately.runner.protocol.pool.TenantWorkerPool.ReusePolicy.FRESH_PER_JOB,
+                    new automately.runner.protocol.pool.CgroupMemoryLimiter(),
+                    automately.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL
+            );
+            runtime = new automately.runner.protocol.runtime.WorkerProcessRuntime(vertx, poolManager);
+            LOG.info("Configured process-based ScriptRuntime with TenantWorkerPoolManager (default mode: {})", config.workerDefaultMode());
+        } else {
+            runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
+        }
         JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
         ServeRegistry serving = new ServeRegistry();
         StorageRoom room = new StorageRoom(quota, stores.storage(), stores.files());

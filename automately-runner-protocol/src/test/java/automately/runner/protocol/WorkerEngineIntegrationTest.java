@@ -261,4 +261,107 @@ class WorkerEngineIntegrationTest {
                 .toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
         assertThat(storedVal).isEqualTo("hello from graaljs");
     }
+
+    @Test
+    @DisplayName("Executes full JavaScript capabilities (streaming files.create, kv, rpc authorization denial) over worker protocol")
+    void testFullCapabilitiesOverWorkerProtocol() throws Exception {
+        if (!isUnixDomainSocketSupported()) {
+            return;
+        }
+
+        serverTransport = new UdsServerTransport(vertx, socketPath);
+        clientTransport = new UdsClientTransport(vertx);
+
+        CompletableFuture<NodeWorkerChannel> serverChannelFuture = new CompletableFuture<>();
+        // Enforce authorization policy: allow kv and files, deny jobs.run
+        automately.runner.protocol.server.NodeRpcAuthorizer authorizer = (tenantId, runId, method, params) -> {
+            return !method.startsWith("jobs.");
+        };
+
+        serverTransport.listen(socket -> {
+            NodeWorkerChannel channel = new NodeWorkerChannel("worker-full-1", socket, socket, new automately.runner.protocol.flow.CreditManager(), authorizer);
+            serverChannelFuture.complete(channel);
+        }).toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        var clientSocket = clientTransport.connect(socketPath).toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        WorkerClientConnection clientConnection = new WorkerClientConnection(clientSocket, clientSocket);
+
+        JavetScriptRuntime javetRuntime = new JavetScriptRuntime(vertx, 64, 2);
+        WorkerDaemon daemon = new WorkerDaemon(clientConnection, javetRuntime, "javet");
+        daemon.start().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        NodeWorkerChannel serverChannel = serverChannelFuture.get(5, TimeUnit.SECONDS);
+        serverChannel.awaitHello().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        serverChannel.bind("tenant-full", new JsonObject(), new JsonObject()).toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        for (int i = 0; i < 50 && daemon.boundTenantId() == null; i++) {
+            Thread.sleep(20);
+        }
+        assertEquals("tenant-full", daemon.boundTenantId());
+
+        SharedDataKvStore kvStore = new SharedDataKvStore(vertx);
+        automately.core.files.FileStore memoryFileStore = new automately.core.files.SharedDataFileStore(vertx);
+        NodeHostApis.Node node = new NodeHostApis.Node(vertx, kvStore, null, null, memoryFileStore,
+                automately.core.files.StorageCapacity.UNLIMITED,
+                automately.core.storage.TenantQuota.unlimited(),
+                automately.core.files.Room.fixed(Long.MAX_VALUE),
+                null, null, null, null, null, null);
+        NodeHostApis hostApis = new NodeHostApis(node, "tenant-full", "job-full-1", false);
+
+        // Guest code testing:
+        // 1. files.write streaming upload
+        // 2. kv get/set
+        // 3. unauthorized call (jobs.get) which authorizer rejects
+        String script = """
+                export default async (input, ctx) => {
+                    // 1. Streaming file write
+                    const fileInfo = await files.write('reports/summary.txt', 'Hello distributed workers!\\nLine 2 of streamed data.', { contentType: 'text/plain' });
+
+                    // 2. KV state
+                    const store = kv.namespace('metrics');
+                    await store.set('status', 'uploaded');
+                    const status = await store.get('status');
+
+                    // 3. Attempt forbidden call (jobs.run/jobs.get)
+                    let forbiddenCaught = false;
+                    try {
+                        await jobs.get('non-existent');
+                    } catch (e) {
+                        forbiddenCaught = (e.code === 'FORBIDDEN');
+                    }
+
+                    return {
+                        filePath: fileInfo.path,
+                        fileSize: fileInfo.size,
+                        kvStatus: status,
+                        forbiddenCaught: forbiddenCaught
+                    };
+                };
+                """;
+
+        Execution execution = new Execution("job-full-1", "tenant-full", script, new JsonObject(),
+                Duration.ofSeconds(10), JobContext.firstAttempt("job-full-1", OrphanPolicy.FAIL));
+
+        ExecutionResult result = serverChannel.run(1, execution, hostApis,
+                (lvl, line) -> System.out.println("LOG: " + line), new StateSink() {
+                    @Override public void saveCheckpoint(Object value) {}
+                    @Override public void completeStep(String name, Object res) {}
+                }).toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+
+        if (result.status() != JobStatus.SUCCEEDED) {
+            System.err.println("Test failed with error: " + result.error());
+        }
+        assertThat(result.status()).isEqualTo(JobStatus.SUCCEEDED);
+        JsonObject outJson = (JsonObject) result.output();
+        assertThat(outJson.getString("filePath")).isEqualTo("reports/summary.txt");
+        assertThat(outJson.getLong("fileSize")).isEqualTo(51L);
+        assertThat(outJson.getString("kvStatus")).isEqualTo("uploaded");
+        assertThat(outJson.getBoolean("forbiddenCaught")).isTrue();
+
+        // Verify the file was committed in the node's FileStore
+        var stat = memoryFileStore.stat("tenant-full", "reports/summary.txt")
+                .toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertThat(stat).isNotNull();
+        assertThat(stat.size()).isEqualTo(51L);
+    }
 }

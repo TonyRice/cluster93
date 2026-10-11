@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 
 ## [Unreleased]
 
+- **Per-Tenant Multi-Mode Worker Pool & RPC Authorization (`TenantWorkerPoolManager`, `NodeRpcAuthorizer`, D-130)**:
+  - `TenantWorkerPoolManager`: per-tenant worker pool supervisor managing pools partitioned by tenant and worker mode profile (`AUTOMATELY_WORKER_BINARY_*`). Handles zero-trust scoping, warm worker pre-spawning, and cgroups v2 resource quotas.
+  - `NodeRpcAuthorizer`: zero-trust security policy interface for `NodeWorkerChannel` evaluating all incoming worker RPC calls against tenant permissions and job contexts before dispatching to node stores.
+  - Server bootstrap integration: `Automately` node bootstrap optionally initializes `WorkerProcessRuntime` when `AUTOMATELY_WORKER_MODE=process`.
+  - Comprehensive integration test: `WorkerEngineIntegrationTest#testFullCapabilitiesOverWorkerProtocol` verifying guest JS streaming file creation (`files.write`), KV persistence (`kv.set`/`kv.get`), and RPC authorization rejection (`jobs.get` -> `FORBIDDEN`).
 - **End-to-End Worker Engine Integration Suite (`WorkerEngineIntegrationTest`)**:
   - Full-stack integration test standing up Netty Unix Domain Socket server/client transports, `NodeWorkerChannel`, `WorkerDaemon`, and `RemoteHostApis` executing real guest JavaScript.
   - Verifies both **Javet** (V8 isolates) and **GraalJS** (polyglot isolates) runners invoking cluster-backed host APIs (`kv.set`, `kv.get`), emitting durable checkpoints (`ctx.saveCheckpoint`), and completing execution roundtrips.

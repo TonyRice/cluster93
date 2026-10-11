@@ -94,13 +94,20 @@ public record ServerConfig(
         automately.core.files.s3.S3Settings auditS3,
         Duration auditExportInterval,
         long tmpMemoryMb,
-        long tmpMb) {
+        long tmpMb,
+        String workerMode,
+        String workerDefaultMode,
+        Map<String, String> workerBinaries) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
+    public static final java.util.List<String> WORKER_MODES = java.util.List.of("embedded", "process");
 
     public ServerConfig {
         if (!FILES_BACKENDS.contains(filesBackend)) {
             throw new IllegalArgumentException("AUTOMATELY_FILES_BACKEND must be one of " + FILES_BACKENDS + " (it was " + filesBackend + ")");
+        }
+        if (!WORKER_MODES.contains(workerMode)) {
+            throw new IllegalArgumentException("AUTOMATELY_WORKER_MODE must be one of " + WORKER_MODES + " (it was " + workerMode + ")");
         }
         if (secretsKey != null && secretsKey.length() < automately.core.storage.SecretBox.MIN_KEY_LENGTH) {
             throw new IllegalArgumentException("AUTOMATELY_SECRETS_KEY must be at least " + automately.core.storage.SecretBox.MIN_KEY_LENGTH + " characters");
@@ -185,7 +192,29 @@ public record ServerConfig(
                 Duration.ofSeconds(Long.parseLong(env.getOrDefault("AUTOMATELY_AUDIT_EXPORT_INTERVAL_S", "300").trim())),
                 // A job's /tmp (D-079): this much in memory (all of it without a data directory), then spilled up to the total.
                 Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MEMORY_MB", env.get("AUTOMATELY_DATA_DIR") == null ? "64" : "8").trim()),
-                Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MB", "1024").trim()));
+                Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MB", "1024").trim()),
+                env.getOrDefault("AUTOMATELY_WORKER_MODE", "embedded").trim().toLowerCase(java.util.Locale.ROOT),
+                env.getOrDefault("AUTOMATELY_WORKER_DEFAULT_MODE", env.getOrDefault("AUTOMATELY_WORKER_ENGINE", "javet")).trim().toLowerCase(java.util.Locale.ROOT),
+                parseWorkerBinaries(env));
+    }
+
+    private static Map<String, String> parseWorkerBinaries(Map<String, String> env) {
+        Map<String, String> binaries = new java.util.HashMap<>();
+        String genericBinary = blankToNull(env.get("AUTOMATELY_WORKER_BINARY"));
+        if (genericBinary != null) {
+            binaries.put("default", genericBinary);
+            binaries.put("javet", genericBinary);
+            binaries.put("graaljs", genericBinary);
+        }
+        for (Map.Entry<String, String> entry : env.entrySet()) {
+            if (entry.getKey().startsWith("AUTOMATELY_WORKER_BINARY_")) {
+                String mode = entry.getKey().substring("AUTOMATELY_WORKER_BINARY_".length()).toLowerCase(java.util.Locale.ROOT);
+                if (!entry.getValue().isBlank()) {
+                    binaries.put(mode, entry.getValue().trim());
+                }
+            }
+        }
+        return Map.copyOf(binaries);
     }
 
     private static boolean clusterTlsRequired(String value) {

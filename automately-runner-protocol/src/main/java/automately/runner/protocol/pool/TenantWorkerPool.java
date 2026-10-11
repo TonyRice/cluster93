@@ -45,6 +45,7 @@ public class TenantWorkerPool {
     private final int heapMb;
     private final ReusePolicy reusePolicy;
     private final CgroupMemoryLimiter cgroupLimiter;
+    private final automately.runner.protocol.server.NodeRpcAuthorizer authorizer;
 
     private final Queue<WorkerProcessHandle> warmUnboundQueue = new ArrayDeque<>();
     private final Map<String, List<WorkerProcessHandle>> tenantWarmQueue = new ConcurrentHashMap<>();
@@ -56,10 +57,14 @@ public class TenantWorkerPool {
     private record PendingAcquire(String tenantId, Promise<WorkerProcessHandle> promise) {}
 
     public TenantWorkerPool(Vertx vertx) {
-        this(vertx, System.getProperty("automately.worker.binary"), 2, 16, 128, ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter());
+        this(vertx, System.getProperty("automately.worker.binary"), 2, 16, 128, ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), automately.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
     }
 
     public TenantWorkerPool(Vertx vertx, String binaryPath, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter) {
+        this(vertx, binaryPath, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, automately.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
+    }
+
+    public TenantWorkerPool(Vertx vertx, String binaryPath, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, automately.runner.protocol.server.NodeRpcAuthorizer authorizer) {
         this.vertx = Objects.requireNonNull(vertx, "vertx");
         this.binaryPath = binaryPath;
         this.minWarm = Math.max(0, minWarm);
@@ -67,6 +72,7 @@ public class TenantWorkerPool {
         this.heapMb = Math.max(16, heapMb);
         this.reusePolicy = Objects.requireNonNull(reusePolicy, "reusePolicy");
         this.cgroupLimiter = Objects.requireNonNull(cgroupLimiter, "cgroupLimiter");
+        this.authorizer = Objects.requireNonNull(authorizer, "authorizer");
 
         // Maintain warm unbound pool
         ensureWarmPool();
@@ -243,7 +249,7 @@ public class TenantWorkerPool {
             ReadStream<io.vertx.core.buffer.Buffer> input = StreamBridge.readStream(vertx, process.getInputStream());
 
             String workerId = "worker-" + pid;
-            NodeWorkerChannel channel = new NodeWorkerChannel(workerId, output, input);
+            NodeWorkerChannel channel = new NodeWorkerChannel(workerId, output, input, new automately.runner.protocol.flow.CreditManager(), authorizer);
             WorkerProcessHandle handle = new WorkerProcessHandle(process, channel);
 
             channel.awaitHello().onComplete(ar -> {

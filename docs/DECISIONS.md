@@ -2537,9 +2537,25 @@ It's written for people, because the console will show the same response as a "N
    - Unlike stdio pipes which require virtual-thread stream pumping, Vert.x `NetSocket` directly implements `ReadStream<Buffer>` and `WriteStream<Buffer>`, allowing zero-copy, event-loop native framed IPC.
    - Added `--socket <path>` CLI option to `WorkerMain ipc` mode.
 
+### D-130 — Per-Tenant Multi-Mode Worker Pools, Fine-Grained RPC Authorization, and Server Bootstrap Wiring
+**Date:** 2026-10-10 · **Status:** Accepted. Extends D-127 and D-129.
+
+**Decision:**
+1. **Per-Tenant Multi-Mode Worker Pools (`TenantWorkerPoolManager`):**
+   - Workers are partitioned strictly by `(tenantId, mode)`. Unbound warm workers are spawned per tenant profile, guaranteeing memory isolation and zero cross-tenant contamination.
+   - Operators can define custom worker binary paths per mode via `AUTOMATELY_WORKER_BINARY_<MODE>` (e.g. `AUTOMATELY_WORKER_BINARY_DEFAULT`, `AUTOMATELY_WORKER_BINARY_HIGHMEM`), configured through `ServerConfig`.
+2. **Zero-Trust Host RPC Authorization (`NodeRpcAuthorizer`):**
+   - Introduces `NodeRpcAuthorizer` interface guarding every incoming `CALL` frame on `NodeWorkerChannel`.
+   - Before executing any host API RPC method, the channel verifies authorization against tenant and job context, returning `FORBIDDEN` if unauthorized.
+3. **Server Bootstrap Integration:**
+   - Updated `ServerConfig` with `workerMode` (`embedded` or `process`), `workerDefaultMode`, and `workerBinaries`.
+   - Wired `WorkerProcessRuntime` backed by `TenantWorkerPoolManager` into `Automately` server bootstrap when `workerMode == process`.
+4. **End-to-End Capability Verification:**
+   - Verified via `WorkerEngineIntegrationTest#testFullCapabilitiesOverWorkerProtocol`: guest JavaScript executes streaming file uploads (`files.write`), KV operations (`kv.set`/`kv.get`), and unauthorized call interception (`jobs.get` -> `FORBIDDEN`).
+
 **Evidence:**
-- 7 new unit and integration tests added across `StreamMultiplexerTest`, `TenantWorkerPoolTest`, and `UdsTransportTest`, bringing `automately-runner-protocol` test count to 20 (all passing).
-- Full pre-commit reactor build (`./mvnw verify -pl automately-runner-protocol,automately-worker -am -DskipITs`) succeeded in 53 s with 0 JVM crashes.
+- All 24 unit and integration tests pass in `automately-runner-protocol`.
+- All 148 server tests pass cleanly with 0 regressions.
 
 
 

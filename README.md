@@ -247,7 +247,9 @@ Runs on one machine vary by up to 2x; [docs/benchmarks.md](docs/benchmarks.md) h
 | `AUTOMATELY_ORPHAN_GRACE_MS` | 3 × heartbeat | Extra wait before a job's node is treated as dead |
 | `AUTOMATELY_REQUEUE_AFTER_MS` | `10000` | An attempt no node picked up is dispatched again after this |
 | `AUTOMATELY_STOP_GRACE_MS` | `5000` | How long a stopped job or service gets to finish before it's terminated |
-| `AUTOMATELY_MAX_SERVICES_PER_TENANT` | `10` | Enabled services per tenant |
+| `AUTOMATELY_WORKER_MODE` | `embedded` | Runtime isolation mode: `embedded` (in-process V8 isolate) or `process` (out-of-process tenant worker pool) (D-130) |
+| `AUTOMATELY_WORKER_DEFAULT_MODE` | `default` | Default worker binary profile mode when multiple binaries are defined |
+| `AUTOMATELY_WORKER_BINARY_<MODE>` | | Custom binary path for worker profile `<MODE>` (e.g., `AUTOMATELY_WORKER_BINARY_DEFAULT`) |
 | `AUTOMATELY_INGRESS_PORT` | `8000` | Services' HTTP traffic |
 | `AUTOMATELY_INGRESS_DOMAIN` | `localhost` | Automatic hosts are `<service>--<tenant>.<domain>` |
 | `AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS` | `60000` | A proxied request with no bytes moving either way for this long is closed |

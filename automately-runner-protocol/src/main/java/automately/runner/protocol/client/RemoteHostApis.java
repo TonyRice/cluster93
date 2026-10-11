@@ -399,7 +399,40 @@ public final class RemoteHostApis implements HostApis {
 
         @Override
         public Future<FileWriter> create(String path, String contentType) {
-            return Future.failedFuture(new UnsupportedOperationException("Streaming file create is handled via stream frames"));
+            int streamId = connection.nextCallId();
+            JsonObject meta = new JsonObject()
+                    .put("runId", runId)
+                    .put("path", path)
+                    .put("contentType", contentType);
+
+            return connection.streamMultiplexer().openStream(streamId, "files.create", meta)
+                    .map(v -> {
+                        var outStream = connection.streamMultiplexer().createOutputStream(streamId);
+                        return new FileWriter() {
+                            @Override
+                            public Future<Void> write(Buffer data) {
+                                return outStream.write(data);
+                            }
+
+                            @Override
+                            public Future<automately.core.files.FileInfo> finish() {
+                                return outStream.end().compose(vEnd -> {
+                                    return call("files.stat", new JsonObject().put("path", path))
+                                            .map(res -> {
+                                                if (res.value() instanceof JsonObject obj) {
+                                                    return automately.core.files.FileInfo.fromJson(obj);
+                                                }
+                                                return null;
+                                            });
+                                });
+                            }
+
+                            @Override
+                            public Future<Void> abort() {
+                                return connection.streamMultiplexer().resetStream(streamId, "ABORTED", 499);
+                            }
+                        };
+                    });
         }
 
         @Override
