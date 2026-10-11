@@ -144,6 +144,20 @@ Frame Header (12 Bytes)
 - **Worker (Compute Domain):** Polyfills, JS event loop, user code execution, pure crypto, zlib, text encoding.
 - **Node (Authority Domain):** KV persistence, VFS file storage, egress network gate, tenant secrets, HTTP ingress, durable job queues.
 
+### Multiplexing & Flow Control (`StreamMultiplexer`)
+- Streaming channels (file downloads/uploads, HTTP streaming request/response bodies, TCP/TLS sockets) multiplex over the shared framed connection via `0x30 OPEN`, `0x31 DATA`, `0x32 END`, `0x33 RESET`, and `0x34 CREDIT`.
+- Governed by HTTP/2-style flow control windows via [`CreditManager`](../automately-runner-protocol/src/main/java/automately/runner/protocol/flow/CreditManager.java): 256 KiB initial stream window, 4 MiB global connection limit.
+- Senders slice writes into 64 KiB chunks and pause on window depletion. Receivers automatically emit `CREDIT` replenishment frames once 16 KiB or more of data has been consumed.
+
+### Warm Worker Pool & Memory Isolation (`TenantWorkerPool`)
+- [`TenantWorkerPool`](../automately-runner-protocol/src/main/java/automately/runner/protocol/pool/TenantWorkerPool.java) maintains a pool of pre-spawned worker processes in `UNBOUND` state, eliminating the 40–800 ms process startup latency for incoming jobs.
+- Binds workers to tenants on demand via `BIND` (`UNBOUND` -> `BOUND` -> `BUSY` -> `BOUND` -> `TERMINATED`).
+- Enforces Linux cgroups v2 memory bounds ([`CgroupMemoryLimiter`](../automately-runner-protocol/src/main/java/automately/runner/protocol/pool/CgroupMemoryLimiter.java)) by assigning worker PIDs to `/sys/fs/cgroup/automately/worker-<pid>` with `memory.max` and `memory.high` caps, and detecting kernel OOM kills via `memory.events`. Gracefully falls back to heap options in unprivileged environments.
+
+### Non-Blocking Domain Socket Transport (`UdsServerTransport`, `UdsClientTransport`)
+- Supports high-throughput Unix Domain Sockets over filesystem `.sock` nodes via Netty domain socket transport (`SocketAddress.domainSocketAddress`).
+- Vert.x `NetSocket` implements both `ReadStream<Buffer>` and `WriteStream<Buffer>` natively, avoiding virtual thread standard I/O bridging overhead for container and local worker IPC.
+
 ---
 
 ## 5. Storage & Cluster Architecture
