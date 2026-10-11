@@ -5,7 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 
 ## [Unreleased]
 
-### Added
+- **`automately-runner-protocol` module & IPC binary infrastructure (D-128)**:
+  - Length-prefixed binary frame encoder/decoder (`Frame`, `FrameType`, `FrameCodec`) with 12-byte header, split JSON metadata, and raw contiguous byte buffers up to 1 MiB.
+  - HTTP/2-style flow-control credit windows (`CreditManager`, 256 KiB per stream, 4 MiB global connection limit).
+  - Complete strongly-typed message models: `HelloMessage`, `WelcomeMessage`, `BindMessage`, `RunMessage`, `CallMessage`, `ResultMessage`, `ErrorMessage`, `CreditMessage`, `LogMessage`, `StateMessage`.
+  - Worker-side `RemoteHostApis` proxy delegating authority operations (`kv.*`, `bus.*`, `queue.*`, `files.*`, `fs.*`, `secrets.*`, `jobs.*`, `dns.*`) over IPC while keeping pure computation (`crypto`, `zlib`) local without roundtrips.
+  - Node-side `NodeWorkerChannel` and `NodeRpcDispatcher` enforcing zero-trust allowlists, automatic tenant injection, and 1,024 in-flight call quotas.
+  - `StreamBridge` adapting standard Java `InputStream`/`OutputStream` pipes into Vert.x `ReadStream<Buffer>`/`WriteStream<Buffer>`.
+  - `WorkerProcessRuntime` implementing `ScriptRuntime` to run jobs in out-of-process worker subprocesses over stdio.
+  - `WorkerMain ipc`: added IPC daemon mode to `automately-worker`.
+- **Codebase Architecture Map & Javadoc Setup**:
+  - Authored [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) documenting core subsystems, file locations, `HostApis` authority partitioning, and runtime mechanics.
+  - Configured `maven-javadoc-plugin` aggregate documentation (`./mvnw javadoc:aggregate`) with clean doclint rules, resolving historical broken tags in `StateSink`, `IgniteFileStore`, and `Builtins`.
 - **`docs/design/worker-node-protocol.md`**: dedicated normative specification for the In-Cluster Worker ↔ Node IPC protocol (D-127). Defines length-prefixed binary framing (1 MiB max frame, split JSON and raw contiguous bytes), HTTP/2-style flow-control credit windows (256 KiB stream, 4 MiB connection), full RPC lifecycle (`HELLO`, `BIND`, `RUN`, `CALL`, `RESULT`, `CREDIT`, `STATE`, `STATS`), authority partitioning, and zero-trust security invariants. Distinguishes in-cluster workers (child processes, gVisor containers, Firecracker microVMs) from external `automately-link` devices.
 - **`D-127` in `docs/DECISIONS.md`**: establishes operator-configurable engine selection (`AUTOMATELY_WORKER_ENGINE=graaljs|javet`). Both GraalJS (validated with 137/137 tests passing, stopping 7/9 memory attacks) and Javet (V8, 2–9× faster on object/JSON code) are retained as supported first-class engines behind the `JsEngine` SPI.
 - **`benchmarks/engines/README.md`**: comprehensive guide documenting why the benchmark suite exists, its functional purpose, engine sandboxing and performance dimensions, and detailed usage instructions for building and running.

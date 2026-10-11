@@ -1,5 +1,6 @@
 package automately.cluster.ignite.store;
 
+import automately.core.files.BlobStore;
 import automately.core.files.BlobStores;
 import automately.core.files.FileInfo;
 import automately.core.files.ClusterFileStore;

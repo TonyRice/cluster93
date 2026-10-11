@@ -2495,3 +2495,28 @@ It's written for people, because the console will show the same response as a "N
 - Maintaining both engine adapters across future JavaScript feature polyfills (guarded by the shared 137-test conformance suite).
 - Implementing the binary frame codec and RPC dispatcher in Step 4 (`automately-runner-protocol`).
 
+### D-128 — Implementation of in-cluster worker-node IPC framing, RemoteHostApis proxy, and codebase architecture guide
+**Date:** 2026-10-10 · **Status:** Accepted. Implements D-127 Step 4 in module `automately-runner-protocol`. Specification: [worker-node-protocol.md](design/worker-node-protocol.md).
+
+**Decision:**
+1. **`automately-runner-protocol` Module Created:**
+   - Houses the wire-format binary frame encoder and streaming chunk reassembler (`FrameCodec`, `Frame`, `FrameType`).
+   - Implements HTTP/2-style flow control windows (`CreditManager`) with 256 KiB initial stream windows and 4 MiB connection-wide memory caps.
+   - Houses domain message models (`HelloMessage`, `WelcomeMessage`, `BindMessage`, `RunMessage`, `CallMessage`, `ResultMessage`, `ErrorMessage`, `CreditMessage`, `LogMessage`, `StateMessage`).
+2. **Worker ↔ Node Role Partitioning:**
+   - `RemoteHostApis` acts as a zero-overhead proxy on the worker: authority operations (`kv`, `bus`, `queue`, `files`, `fs`, `secrets`, `jobs`, `dns`, `serve`) emit correlated `CALL` frames awaiting `RESULT`/`ERROR` from the node.
+   - Pure computation (`crypto`, `zlib`) runs locally in the worker isolate with 0 network or IPC round trips.
+   - `NodeWorkerChannel` and `NodeRpcDispatcher` validate methods against an allowlist, enforce quotas (1,024 concurrent in-flight RPCs), and automatically stamp tenant identity without trusting worker self-reported tenants.
+3. **Subprocess Execution Abstraction:**
+   - `StreamBridge` transparently wraps standard Java `InputStream` and `OutputStream` into non-blocking Vert.x `ReadStream<Buffer>` and `WriteStream<Buffer>` via virtual threads.
+   - `WorkerProcessRuntime` allows node schedulers to execute jobs in subprocess workers (GraalVM native images or Java child processes).
+   - `WorkerMain ipc` adds the daemon runner mode to `automately-worker`.
+4. **Codebase Architecture Navigation & Javadoc Integration:**
+   - Added [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) providing a high-level subsystem and file reference map.
+   - Configured `maven-javadoc-plugin` aggregate documentation (`./mvnw javadoc:aggregate`) with clean doclint rules, resolving historical broken tags in `StateSink`, `IgniteFileStore`, and `Builtins`.
+
+**Evidence:**
+- `automately-runner-protocol` passes all 13 unit and integration tests covering frame chunking, boundary fragmentation, 1 MiB max frame enforcement, credit depletion backpressure, and bidirectional `RemoteHostApis` ↔ `NodeHostApis` RPC execution.
+- Multi-module pre-commit verification (`./mvnw verify -pl automately-runner-protocol,automately-worker -am -DskipITs`) builds and tests cleanly in 55 s with 0 JVM crashes.
+
+

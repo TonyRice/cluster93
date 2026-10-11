@@ -201,7 +201,8 @@ The API is **contract-first**: [`openapi.yaml`](automately-server/src/main/resou
 | `automately-runtime-js` | The engine-neutral runtime (D-126): the bindings, an event loop per run (timers, stop requests, async host calls), the prelude and the Node and web polyfills, plus the conformance suite every engine runs |
 | `automately-runtime-javet` | V8 through Javet: the runtime's engine today, an isolate per run |
 | `automately-runtime-graaljs` | Embedded GraalJS, in a polyglot isolate with a heap limit per run: a second engine passing the same conformance suite, for comparison (not used by the server yet) |
-| `automately-worker` | The tenant worker's seed (D-126): one engine built as a GraalVM native image (`worker-javet`, `worker-graaljs`), with the engine comparison's commands; `benchmarks/engines/` builds and runs it |
+| `automately-runner-protocol` | In-cluster worker-node IPC binary protocol (D-127, D-128): length-prefixed frame codec, credit-based flow control, `RemoteHostApis` proxy, and node-side RPC dispatcher |
+| `automately-worker` | The in-cluster tenant worker runner (D-126, D-127): one engine built as a GraalVM native image (`worker-javet`, `worker-graaljs`) with IPC daemon mode (`worker ipc`) and engine benchmark commands |
 | `automately-cluster-ignite` | The cluster is the database: Ignite bootstrap, durable tables, the Ignite stores |
 | `automately-server` | Bootstrap, REST API, HTTP ingress, the shaded jar |
 

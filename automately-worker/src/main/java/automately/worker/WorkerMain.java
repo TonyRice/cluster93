@@ -15,6 +15,10 @@ import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
+import automately.runner.protocol.client.WorkerClientConnection;
+import automately.runner.protocol.client.WorkerDaemon;
+import automately.runner.protocol.transport.StreamBridge;
+
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -23,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.ServiceLoader;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -56,6 +61,16 @@ public final class WorkerMain {
                 .orElseThrow(() -> new IllegalStateException("This worker was built without an engine: build it with -Pjavet or -Pgraaljs"));
         int heapMb = intOption(args, "--heap-mb", 128);
         Vertx vertx = Vertx.vertx();
+        if ("ipc".equals(args[0])) {
+            try {
+                ScriptRuntime runtime = engine.runtime(vertx, heapMb, Math.max(2, intOption(args, "--threads", 2)));
+                ipc(vertx, runtime, engine.name());
+            } catch (Exception e) {
+                System.err.println("Worker IPC daemon failed: " + e.getMessage());
+                System.exit(1);
+            }
+            return;
+        }
         int code = 0;
         try {
             ScriptRuntime runtime = engine.runtime(vertx, heapMb, Math.max(2, intOption(args, "--threads", 2)));
@@ -224,6 +239,19 @@ public final class WorkerMain {
         } catch (java.io.IOException e) {
             throw new java.io.UncheckedIOException(e);
         }
+    }
+
+    private static void ipc(Vertx vertx, ScriptRuntime runtime, String engineName) throws Exception {
+        WorkerClientConnection conn = new WorkerClientConnection(
+                StreamBridge.writeStream(vertx, System.out),
+                StreamBridge.readStream(vertx, System.in)
+        );
+        WorkerDaemon daemon = new WorkerDaemon(conn, runtime, engineName);
+        daemon.start().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        CountDownLatch latch = new CountDownLatch(1);
+        conn.setErrorHandler(err -> latch.countDown());
+        latch.await();
     }
 
     /** Unused, but keeps JsonArray's class reachable for scripts' outputs in a native image. */

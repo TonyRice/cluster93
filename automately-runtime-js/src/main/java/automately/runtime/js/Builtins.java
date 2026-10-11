@@ -22,7 +22,7 @@ public final class Builtins {
 
     /**
      * Runs before the job's module: the prelude's files in one closure. It captures the host object, removes it from the
-     * global scope, installs the APIs frozen, and returns the functions the event loop calls ({@link ScriptEntryPoints}).
+     * global scope, installs the APIs frozen, and returns the functions the event loop calls ({@link EntryPoints}).
      * None of those become visible to the script.
      */
     public static final String PRELUDE = loadPrelude();
