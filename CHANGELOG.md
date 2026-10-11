@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
 
 ## [Unreleased]
 
+- **End-to-End Worker Engine Integration Suite (`WorkerEngineIntegrationTest`)**:
+  - Full-stack integration test standing up Netty Unix Domain Socket server/client transports, `NodeWorkerChannel`, `WorkerDaemon`, and `RemoteHostApis` executing real guest JavaScript.
+  - Verifies both **Javet** (V8 isolates) and **GraalJS** (polyglot isolates) runners invoking cluster-backed host APIs (`kv.set`, `kv.get`), emitting durable checkpoints (`ctx.saveCheckpoint`), and completing execution roundtrips.
 - **Stream Multiplexing, Warm Tenant Worker Pool Supervisor, and Unix Domain Socket Transport (D-129)**:
   - `StreamMultiplexer`: bidirectional streaming channel multiplexer (`OPEN`, `DATA`, `END`, `RESET`) with chunk slicing (64 KiB), credit-based backpressure (`CreditManager`), and automatic replenish frames (`CREDIT`) upon data consumption.
   - `TenantWorkerPool`: maintains a pool of warm, pre-spawned worker processes in `UNBOUND` state, binding them on demand via `BIND` to eliminate cold-start overhead, with configurable reuse policies (`FRESH_PER_JOB` and `REUSE_SAME_TENANT`).

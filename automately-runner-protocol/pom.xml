@@ -45,5 +45,15 @@
             <artifactId>assertj-core</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>automately</groupId>
+            <artifactId>automately-runtime-javet</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>automately</groupId>
+            <artifactId>automately-runtime-graaljs</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
