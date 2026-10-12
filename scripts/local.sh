@@ -12,6 +12,8 @@
 #                                        tenant, provisions the `admin` operator, saves its
 #                                        login and prints the MCP config.
 #   scripts/local.sh start               Start the configured node in the background.
+#   scripts/local.sh run                 Run the configured node in the foreground.
+#   scripts/local.sh seed                Ensure system/dev tenants, deploy console and admin operator.
 #   scripts/local.sh stop                Stop it (SIGTERM, then SIGKILL after 30s).
 #   scripts/local.sh restart             stop, then start.
 #   scripts/local.sh status              PID, /health, /v1/nodes, and update detection.
@@ -346,6 +348,40 @@ cmd_start() {
   done
   echo "Error: the node did not answer ${URL}/health within ${START_TIMEOUT_SECONDS}s; see $LOG_FILE" >&2
   exit 1
+}
+
+# --------------------------------------------------------------------------
+# run
+# --------------------------------------------------------------------------
+# Runs the configured node in the foreground (for process supervisors and daemon
+# task runners) instead of backgrounding it like cmd_start. `exec` replaces this
+# shell with the JVM, so the PID written to $PID_FILE stays the running server.
+cmd_run() {
+  load_env_file
+  if [[ ! -f "$SERVER_JAR" ]]; then
+    echo "Error: $SERVER_JAR is missing. Run: scripts/local.sh setup" >&2
+    exit 1
+  fi
+
+  mkdir -p "$AUTOMATELY_HOME" "$DATA_DIR" "$LOG_DIR"
+  echo $$ >"$PID_FILE"
+  echo "== running the local master node in the foreground (data: $DATA_DIR)" >&2
+  exec env \
+    JDK_JAVA_OPTIONS="$IGNITE_JVM_ARGS" \
+    AUTOMATELY_NODE_ID="$NODE_ID" \
+    AUTOMATELY_ROLES="$ROLES" \
+    AUTOMATELY_CLUSTERED=true \
+    AUTOMATELY_CLUSTER_SIZE=1 \
+    AUTOMATELY_CLUSTER_MEMBERS=127.0.0.1 \
+    AUTOMATELY_CLUSTER_TLS=off \
+    AUTOMATELY_ADMIN_TOKEN="$ADMIN_TOKEN" \
+    AUTOMATELY_DATA_DIR="$DATA_DIR" \
+    AUTOMATELY_EGRESS_ALLOW_PRIVATE=true \
+    AUTOMATELY_HTTP_PORT="$HTTP_PORT" \
+    AUTOMATELY_INGRESS_PORT="$INGRESS_PORT" \
+    AUTOMATELY_METRICS_PORT="$METRICS_PORT" \
+    AUTOMATELY_WORKER_MODE="$WORKER_MODE" \
+    "$(java_bin)" -jar "$SERVER_JAR"
 }
 
 # --------------------------------------------------------------------------
@@ -693,6 +729,8 @@ cmd_update() {
 case "${1:-}" in
   setup) shift; cmd_setup "$@" ;;
   start) cmd_start ;;
+  run) cmd_run ;;
+  seed) cmd_seed ;;
   stop) cmd_stop ;;
   restart) cmd_stop; cmd_start ;;
   status) cmd_status ;;
