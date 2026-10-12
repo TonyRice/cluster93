@@ -14,7 +14,7 @@ import java.util.Properties;
         subcommands = {LoginCommand.class, LogoutCommand.class, WhoamiCommand.class, RunCommand.class, JobsCommand.class,
                 ServicesCommand.class, DomainsCommand.class, FilesCommand.class, QueuesCommand.class, CallbacksCommand.class, SecretsCommand.class, PackagesCommand.class, DeployCommand.class, StorageCommand.class, EgressCommand.class, ClusterCommand.class, NodeCommand.class, TokensCommand.class, TenantsCommand.class,
                 MembersCommand.class, RolesCommand.class, GroupsCommand.class, InvitesCommand.class, UsersCommand.class, AuditCommand.class, ProfileCommand.class,
-                McpCommand.class, VersionCommand.class, UpgradeCommand.class, CommandLine.HelpCommand.class})
+                McpCommand.class, LocalCommand.class, VersionCommand.class, UpgradeCommand.class, CommandLine.HelpCommand.class})
 public final class Main implements Runnable {
 
     @Option(names = "--json", scope = ScopeType.INHERIT, description = "Print the API's JSON instead of a summary.")

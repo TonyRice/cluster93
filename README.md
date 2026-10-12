@@ -90,6 +90,45 @@ Data is stored persistently at `$HOME/.automately/data` (customizable via `scrip
 
 ---
 
+### Dedicated Local Master Node (Onboarding Wizard)
+
+For a permanent single-node cluster on your own machine — the API, ingress, worker and data roles in one durable process — use the guided installer. It asks for the essentials (or takes the defaults with `--yes`), builds whatever is missing, starts the node, seeds a tenant, saves the login and prints the MCP configuration:
+
+```bash
+scripts/local.sh setup          # interactive onboarding wizard
+scripts/local.sh setup --yes    # accept every default, non-interactive
+```
+
+State is written where you'd expect:
+
+| File | What it holds |
+|---|---|
+| `~/.automately/local.env` | Node ID, roles, data/log directories, ports, worker mode, admin token, tenant (mode `0600`) |
+| `~/.automately/node.meta` | Build provenance: install time, git commit and branch, version, server jar, CLI binary |
+| `~/.config/automately/config.json` | The saved login (`automately whoami` works immediately) |
+| `~/.automately/mcp.json` | Ready-to-paste MCP configuration for AI agents |
+
+Every operation is also available from the CLI, so you never need to remember the script's paths:
+
+```bash
+automately local status         # PID, /health, /v1/nodes, and an update check
+automately local start
+automately local stop
+automately local restart
+automately local logs --follow
+automately local mcp            # Claude Code, Cursor, Antigravity, and the stdio bridge
+```
+
+`status` compares the commit the running build came from against the checkout's `git HEAD` and flags any drift, so a stale node is never a mystery:
+
+```text
+⚠️  Update Available! Running build: 666cefa9…, Current repo HEAD: 8d4b1c02…. Run 'scripts/local.sh update' or 'automately local update'.
+```
+
+`scripts/local.sh update` rebuilds the server jar and worker from the current checkout, rewrites the provenance in `node.meta`, and restarts the node if it was running.
+
+---
+
 ### Docker Quickstart (3-Node Resilient Cluster)
 
 #### 1. Launch a Multi-Node Cluster
