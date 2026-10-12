@@ -55,22 +55,42 @@ class StreamMultiplexerCreditTest {
 
         int streamId = 13;
         AtomicLong received = new AtomicLong();
+        java.security.MessageDigest digest;
+        try {
+            digest = java.security.MessageDigest.getInstance("SHA-256");
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new AssertionError(e);
+        }
         CountDownLatch ended = new CountDownLatch(1);
         ReadStream<Buffer> in = server.createInputStream(streamId);
-        in.handler(buf -> received.addAndGet(buf.length()));
+        in.handler(buf -> {
+            received.addAndGet(buf.length());
+            digest.update(buf.getBytes());
+        });
         in.endHandler(v -> ended.countDown());
 
         WriteStream<Buffer> out = client.createOutputStream(streamId);
+        java.security.MessageDigest expected;
+        try {
+            expected = java.security.MessageDigest.getInstance("SHA-256");
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new AssertionError(e);
+        }
         byte[] payload = new byte[chunkBytes];
-        java.util.Arrays.fill(payload, (byte) 'x');
         List<Future<Void>> writes = new ArrayList<>();
         for (int sent = 0; sent < totalBytes; sent += chunkBytes) {
+            for (int i = 0; i < chunkBytes; i++) {
+                payload[i] = (byte) ((sent + i) * 31 + 7);
+            }
+            expected.update(payload);
             writes.add(out.write(Buffer.buffer(payload)));
         }
         out.end();
 
         assertTrue(ended.await(60, TimeUnit.SECONDS), "the stream should end without deadlocking");
         assertEquals(totalBytes, received.get());
+        assertEquals(java.util.HexFormat.of().formatHex(expected.digest()), java.util.HexFormat.of().formatHex(digest.digest()),
+                "the received bytes must match what was sent");
 
         running.set(false);
         serverPump.join(5_000);

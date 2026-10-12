@@ -74,10 +74,18 @@ public final class RemoteHostApis implements HostApis {
     private final Map<Integer, Promise<FetchedResponse>> pendingResponses = new ConcurrentHashMap<>();
     /** Socket requests awaiting their data stream, by the request stream's id. */
     private final Map<Integer, PendingSocket> pendingSockets = new ConcurrentHashMap<>();
+    /** File uploads awaiting the node's commit, by the {@code files.create} stream's id. */
+    private final Map<Integer, Promise<FileInfo>> pendingFileFinishes = new ConcurrentHashMap<>();
 
     private record PendingSocket(Promise<OutgoingSocket> promise, io.vertx.core.streams.WriteStream<Buffer> request) {}
-    /** The service's HTTP handler, once {@code ctx.serve}/{@code listen} registered it. */
-    private volatile Consumer<HttpExchange> serveHandler;
+    /** The service's {@code ctx.serve} handler; a Node server registers a port handler instead (D-123). */
+    private volatile Consumer<HttpExchange> mainHandler;
+    /**
+     * A Node server's handler by port. Insertion order is kept: the service's main host reaches {@code ctx.serve}, else
+     * the first server that listened, matching the node's {@link automately.core.host.ServeRegistry} (D-123).
+     */
+    private final Map<Integer, Consumer<HttpExchange>> portHandlers =
+            java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>());
 
     public RemoteHostApis(WorkerClientConnection connection, String runId) {
         this(connection, runId, 0);
@@ -249,13 +257,14 @@ public final class RemoteHostApis implements HostApis {
                 pending.promise().complete(socket(meta.getJsonObject("info", new JsonObject()), requestStreamId, open.streamId(), pending.request()));
             }
             case "http.request", "http.request.upgrade" -> {
-                Consumer<HttpExchange> handler = serveHandler;
+                Consumer<HttpExchange> handler = httpHandler(meta.getInteger("port"));
                 if (handler == null) {
                     connection.streamMultiplexer().resetStream(open.streamId(), "NOT_SERVING", 404);
                     return;
                 }
                 handler.accept(new RemoteHttpExchange(open));
             }
+            case "files.finish" -> completeFileFinish(meta, open.streamId());
             default -> connection.streamMultiplexer().resetStream(open.streamId(), "UNSUPPORTED_STREAM_TYPE", 400);
         }
     }
@@ -266,12 +275,54 @@ public final class RemoteHostApis implements HostApis {
             return;
         }
         if (meta.containsKey("error")) {
-            promise.tryFail(new HostException("Error", "request_failed", meta.getString("error")));
+            // Rebuild the node's failure, name and code included: the script sees TypeError/egress_denied, not a generic
+            // request_failed (D-132).
+            String name = meta.getString("errorName", "Error");
+            String code = meta.getString("errorCode", "request_failed");
+            promise.tryFail(new HostException(name, code, meta.getString("error")));
             connection.streamMultiplexer().resetStream(streamId, "error", 502);
             return;
         }
         ReadStream<Buffer> in = connection.streamMultiplexer().createInputStream(streamId);
         promise.complete(new FetchedResponse(meta.getJsonObject("meta", new JsonObject()), new ReadStreamBodyStream(in)));
+    }
+
+    /**
+     * The handler a request belongs to: the port's Node server when the request names one, else {@code ctx.serve}, else
+     * the first server that listened (the service's main host), matching the node's {@link automately.core.host.ServeRegistry}.
+     */
+    private Consumer<HttpExchange> httpHandler(Integer port) {
+        if (port != null) {
+            Consumer<HttpExchange> byPort = portHandlers.get(port);
+            if (byPort != null) {
+                return byPort;
+            }
+        }
+        Consumer<HttpExchange> main = mainHandler;
+        if (main != null) {
+            return main;
+        }
+        synchronized (portHandlers) {
+            var servers = portHandlers.values().iterator();
+            return servers.hasNext() ? servers.next() : null;
+        }
+    }
+
+    /** Completes a file upload's {@code finish()} when the node reports the commit (or its failure) (D-132). */
+    private void completeFileFinish(JsonObject meta, int streamId) {
+        int requestStreamId = meta.getInteger("requestStreamId", -1);
+        Promise<FileInfo> finish = pendingFileFinishes.remove(requestStreamId);
+        if (finish != null) {
+            if (meta.containsKey("error")) {
+                String name = meta.getString("errorName", "Error");
+                String code = meta.getString("errorCode", "request_failed");
+                finish.tryFail(new HostException(name, code, meta.getString("error")));
+            } else {
+                finish.tryComplete(FileInfo.fromJson(meta.getJsonObject("file")));
+            }
+        }
+        // The node opened this stream only to carry the result; close it so its credit is released.
+        connection.streamMultiplexer().resetStream(streamId, "done", 0);
     }
 
     private OutgoingSocket socket(JsonObject info, int requestStreamId, int dataStreamId, io.vertx.core.streams.WriteStream<Buffer> out) {
@@ -574,23 +625,51 @@ public final class RemoteHostApis implements HostApis {
                     .put("path", path)
                     .put("contentType", contentType);
 
+            // The node commits after the stream ends and answers on a files.finish stream; finish() awaits that commit
+            // instead of racing a files.stat that would still see the old (or no) version (D-132).
+            Promise<FileInfo> finishPromise = Promise.promise();
+            pendingFileFinishes.put(streamId, finishPromise);
+
             return connection.streamMultiplexer().openStream(streamId, "files.create", meta)
+                    .onFailure(err -> {
+                        pendingFileFinishes.remove(streamId);
+                        finishPromise.tryFail(err);
+                    })
                     .map(v -> {
                         var outStream = connection.streamMultiplexer().createOutputStream(streamId);
+                        outStream.exceptionHandler(finishPromise::tryFail);
                         return new FileWriter() {
                             @Override
                             public Future<Void> write(Buffer data) {
-                                return outStream.write(data);
+                                // The node can fail the create before the first chunk; surface its error (name and code),
+                                // not a bare stream reset.
+                                return finishPromise.future().failed()
+                                        ? Future.failedFuture(finishPromise.future().cause())
+                                        : outStream.write(data);
                             }
 
                             @Override
                             public Future<FileInfo> finish() {
-                                return outStream.end().compose(vEnd -> call("files.stat", new JsonObject().put("path", path))
-                                        .map(res -> res.value() instanceof JsonObject obj ? FileInfo.fromJson(obj) : null));
+                                return outStream.end()
+                                        .compose(vEnd -> finishPromise.future())
+                                        .recover(err -> {
+                                            // A node-side failure (a bad path, a quota) is the real answer; a fallback
+                                            // stat only covers a missing files.finish (an older node).
+                                            if (finishPromise.future().failed()) {
+                                                return Future.failedFuture(finishPromise.future().cause());
+                                            }
+                                            return call("files.stat", new JsonObject().put("path", path))
+                                                    .compose(res -> res.value() instanceof JsonObject obj
+                                                            ? Future.succeededFuture(FileInfo.fromJson(obj))
+                                                            : Future.failedFuture(err));
+                                        })
+                                        .onComplete(ar -> pendingFileFinishes.remove(streamId));
                             }
 
                             @Override
                             public Future<Void> abort() {
+                                pendingFileFinishes.remove(streamId);
+                                finishPromise.tryFail(new HostException("Error", "aborted", "The upload was aborted"));
                                 return connection.streamMultiplexer().resetStream(streamId, "ABORTED", 499);
                             }
                         };
@@ -699,16 +778,26 @@ public final class RemoteHostApis implements HostApis {
     private final class RemoteHttp implements HttpApi {
         @Override
         public Future<Registration> serve(Consumer<HttpExchange> handler) {
-            serveHandler = handler;
-            return call("serve.listen", new JsonObject())
-                    .map(r -> () -> call("serve.unlisten", new JsonObject()).mapEmpty());
+            return call("serve.listen", new JsonObject()).map(r -> {
+                mainHandler = handler;
+                return () -> {
+                    mainHandler = null;
+                    return call("serve.unlisten", new JsonObject()).mapEmpty();
+                };
+            });
         }
 
         @Override
         public Future<Registration> listen(int port, Consumer<HttpExchange> handler) {
-            serveHandler = handler;
-            return call("serve.listen", new JsonObject().put("port", port))
-                    .map(r -> () -> call("serve.unlisten", new JsonObject().put("port", port)).mapEmpty());
+            // Register only once the node accepts the port: a second listen that fails with EADDRINUSE (a Node 'error')
+            // must not steal the handler already serving there.
+            return call("serve.listen", new JsonObject().put("port", port)).map(r -> {
+                portHandlers.put(port, handler);
+                return () -> {
+                    portHandlers.remove(port);
+                    return call("serve.unlisten", new JsonObject().put("port", port)).mapEmpty();
+                };
+            });
         }
     }
 
@@ -731,17 +820,32 @@ public final class RemoteHostApis implements HostApis {
     /** A {@link BodyStream} over one direction of a multiplexed stream; starts paused, like the embedded one. */
     static final class ReadStreamBodyStream implements BodyStream {
         private final ReadStream<Buffer> in;
+        /** Runs on any stream error before a body consumer's own callback; the exchange uses it for 'close' (D-123). */
+        private Consumer<Throwable> onError = err -> { };
 
         ReadStreamBodyStream(ReadStream<Buffer> in) {
             this.in = in;
             this.in.pause();
+            this.in.exceptionHandler(err -> onError.accept(err));
+        }
+
+        /** Adds an error callback that always runs, alongside any the body consumer registers. */
+        ReadStreamBodyStream onError(Consumer<Throwable> handler) {
+            Consumer<Throwable> previous = onError;
+            onError = err -> {
+                previous.accept(err);
+                handler.accept(err);
+            };
+            return this;
         }
 
         @Override
         public void handler(Consumer<Buffer> chunk, Runnable end, Consumer<Throwable> error) {
             in.handler(chunk::accept);
             in.endHandler(v -> end.run());
-            in.exceptionHandler(error::accept);
+            if (error != null) {
+                onError(error);
+            }
         }
 
         @Override
@@ -766,13 +870,16 @@ public final class RemoteHostApis implements HostApis {
         private final JsonObject request;
         private final boolean upgrade;
         private final BodyStream body;
+        private final Promise<Boolean> closedPromise = Promise.promise();
         private io.vertx.core.streams.WriteStream<Buffer> responseOut;
 
         RemoteHttpExchange(OpenStreamMessage open) {
             this.streamId = open.streamId();
             this.request = open.metadata().getJsonObject("request", new JsonObject());
             this.upgrade = open.metadata().getBoolean("upgrade", false);
-            this.body = new ReadStreamBodyStream(connection.streamMultiplexer().createInputStream(streamId));
+            // The node resets the request stream when the client leaves before the response ends (Node's 'close', D-123).
+            this.body = new ReadStreamBodyStream(connection.streamMultiplexer().createInputStream(streamId))
+                    .onError(err -> closedPromise.tryComplete(true));
         }
 
         int streamId() {
@@ -807,6 +914,13 @@ public final class RemoteHostApis implements HostApis {
             JsonObject openMeta = meta.copy().put("runId", runId).put("requestStreamId", streamId);
             connection.streamMultiplexer().openStream(responseStreamId, "http.response", openMeta);
             responseOut = connection.streamMultiplexer().createOutputStream(responseStreamId);
+            // The node resets this stream when the client leaves before the response ends (Node's 'close', D-123).
+            responseOut.exceptionHandler(err -> closedPromise.tryComplete(true));
+        }
+
+        @Override
+        public Future<Boolean> closed() {
+            return closedPromise.future();
         }
 
         @Override
@@ -815,14 +929,25 @@ public final class RemoteHostApis implements HostApis {
         }
 
         @Override
+        public void trailers(JsonArray rawTrailers) {
+            // The node owns the client connection, so hand the trailers over before end(), findable by this exchange's id.
+            if (rawTrailers == null || rawTrailers.isEmpty()) {
+                return;
+            }
+            call("serve.trailers", new JsonObject().put("exchangeId", streamId).put("trailers", rawTrailers));
+        }
+
+        @Override
         public void end() {
             if (responseOut != null) {
+                closedPromise.tryComplete(false);
                 responseOut.end();
             }
         }
 
         @Override
         public void fail(int status, String message) {
+            closedPromise.tryComplete(true);
             if (responseOut == null) {
                 openResponse(new JsonObject().put("status", status).put("error", message));
             }

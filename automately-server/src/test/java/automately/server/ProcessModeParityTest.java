@@ -241,6 +241,13 @@ class ProcessModeParityTest {
         JsonObject output = done.getJsonObject("output");
         assertThat(output.getInteger("attempt")).isEqualTo(2);
         assertThat(output.getJsonArray("skipped")).as("step \"one\" was memoized and not re-run").contains("one");
+
+        // All three steps are durably recorded: "one" in attempt 1, "two"/"three" in attempt 2. A STATE commit that
+        // raced the run's result must still have landed before the run is reported finished (D-128).
+        JsonObject steps = getJson(survivor, "/v1/jobs/" + id + "/steps");
+        assertThat(steps.getJsonArray("steps").stream()
+                .map(s -> ((JsonObject) s).getString("name") + "@" + ((JsonObject) s).getInteger("attempt")))
+                .as("every step is recorded for its attempt").containsExactly("one@1", "two@2", "three@2");
     }
 
     // --- helpers ---
@@ -365,6 +372,7 @@ class ProcessModeParityTest {
 
     private static void awaitServiceRunning(String name) throws Exception {
         awaitJson(nodeA, "/v1/services/" + name, s -> "RUNNING".equals(s.getString("status")));
+        Thread.sleep(1000); // let the run register its handlers
     }
 
     /** Polls the ingress until the service is actually serving (its {@code ctx.serve} has registered). */

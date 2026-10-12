@@ -78,6 +78,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
     public RunningExecution execute(Execution execution, LogSink logs, StateSink state, HostApis host) {
         int channelId = channelSequence.getAndIncrement();
         Promise<ExecutionResult> promise = Promise.promise();
+        long start = System.nanoTime();
 
         if (poolManager != null) {
             AtomicReference<WorkerProcessHandle> handleRef = new AtomicReference<>();
@@ -89,6 +90,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
                 WorkerProcessHandle handle = ar.result();
                 handleRef.set(handle);
                 pumpStderr(handle.process().getErrorStream(), logs);
+                automately.core.metrics.Metrics.of(vertx).isolateStarted(Duration.ofNanos(System.nanoTime() - start));
 
                 handle.run(channelId, execution, host, logs, state)
                         .onComplete(runRes -> {
@@ -138,6 +140,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
                 WorkerProcessHandle handle = ar.result();
                 handleRef.set(handle);
                 pumpStderr(handle.process().getErrorStream(), logs);
+                automately.core.metrics.Metrics.of(vertx).isolateStarted(Duration.ofNanos(System.nanoTime() - start));
 
                 handle.run(channelId, execution, host, logs, state)
                         .onComplete(runRes -> {
@@ -194,6 +197,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
         NodeWorkerChannel channel = new NodeWorkerChannel(workerId, output, input);
 
         channel.awaitHello()
+                .onSuccess(hello -> automately.core.metrics.Metrics.of(vertx).isolateStarted(Duration.ofNanos(System.nanoTime() - start)))
                 .compose(hello -> channel.bind(execution.tenant(), new JsonObject().put("heapMb", heapMb), new JsonObject()))
                 .compose(v -> channel.run(channelId, execution, host, logs, state))
                 .onComplete(ar -> {

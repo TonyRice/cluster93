@@ -139,11 +139,13 @@ public final class FrameCodec {
                 FrameType type = FrameType.fromCode(typeCode);
                 Frame frame = new Frame(type, flags, channelId, json, binary);
 
-                // Advance accumulator
+                // Advance accumulator. The leftover bytes must go into a growable buffer: Buffer.slice() returns a
+                // fixed-capacity view, so appending the next chunk to it throws and silently kills the parser, which
+                // stalls any frame that doesn't line up with a read boundary (large bodies).
                 if (accumulator.length() == totalFrameBytes) {
                     accumulator = Buffer.buffer();
                 } else {
-                    accumulator = accumulator.slice(totalFrameBytes, accumulator.length());
+                    accumulator = Buffer.buffer(accumulator.getBytes(totalFrameBytes, accumulator.length()));
                 }
 
                 frameHandler.handle(frame);

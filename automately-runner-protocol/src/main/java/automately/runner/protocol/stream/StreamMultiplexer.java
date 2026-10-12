@@ -198,10 +198,13 @@ public class StreamMultiplexer {
 
     private class InputStreamHandler implements ReadStream<Buffer> {
         private final int streamId;
-        private Handler<Buffer> dataHandler;
-        private Handler<Void> endHandler;
-        private Handler<Throwable> exceptionHandler;
-        private boolean paused = false;
+        // The parser's context: delivery must stay on it. The script's ack (another thread) resumes the stream, and
+        // draining there would race the parser and reorder chunks (a service upload came out shuffled, D-132).
+        private final io.vertx.core.Context context = io.vertx.core.Vertx.currentContext();
+        private volatile Handler<Buffer> dataHandler;
+        private volatile Handler<Void> endHandler;
+        private volatile Handler<Throwable> exceptionHandler;
+        private volatile boolean paused = false;
         private final Queue<Buffer> pendingQueue = new ArrayDeque<>();
         private boolean ended = false;
         private int unackedBytes = 0;
@@ -212,10 +215,11 @@ public class StreamMultiplexer {
 
         void onData(Buffer data, boolean isEnd) {
             if (data != null && data.length() > 0) {
-                if (paused || dataHandler == null) {
-                    pendingQueue.add(data);
-                } else {
-                    deliverData(data);
+                // Always queue, then drain here: the order a chunk arrived in is the order it is delivered in, even if
+                // the script's ack has just resumed the stream from another thread.
+                pendingQueue.add(data);
+                if (!paused && dataHandler != null) {
+                    drainPending();
                 }
             }
             if (isEnd) {
@@ -280,7 +284,17 @@ public class StreamMultiplexer {
         @Override
         public ReadStream<Buffer> resume() {
             this.paused = false;
-            drainPending();
+            // Drain on the parser's context so a chunk is never delivered out of order; fall back to a direct drain when
+            // there is no Vert.x context (the standalone multiplexer tests) or it is shutting down.
+            if (context != null) {
+                try {
+                    context.runOnContext(v -> drainPending());
+                } catch (java.util.concurrent.RejectedExecutionException e) {
+                    drainPending();
+                }
+            } else {
+                drainPending();
+            }
             return this;
         }
 

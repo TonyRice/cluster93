@@ -29,7 +29,7 @@ public final class NodeRpcDispatcher {
             "files.stat", "files.list", "files.delete", "files.respond",
             "dns.lookup", "dns.resolve",
             "jobs.get", "jobs.run", "jobs.result", "jobs.stop", "jobs.setCallback", "jobs.events", "jobs.unevents",
-            "serve.listen", "serve.unlisten",
+            "serve.listen", "serve.unlisten", "serve.trailers",
             "execution.close"
     );
 
@@ -65,6 +65,9 @@ public final class NodeRpcDispatcher {
                 }
                 case "serve.unlisten" -> {
                     return requireChannel(channel).serveUnlisten(runId, params).map(ignored -> new ResultMessage(callId, null));
+                }
+                case "serve.trailers" -> {
+                    return requireChannel(channel).serveTrailers(runId, params).map(ignored -> new ResultMessage(callId, null));
                 }
                 case "bus.subscribe", "bus.handle", "queue.consume", "jobs.events" -> {
                     return requireChannel(channel).registerListener(runId, method, params).map(ignored -> new ResultMessage(callId, null));

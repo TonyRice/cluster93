@@ -63,18 +63,30 @@ public final class JavetEngine implements JsEngine {
     }
 
     /**
-     * Writes the ICU data shipped with the runtime to a file V8 can map, once per process. V8 needs a path, and the
-     * data is in the jar, so it goes to a temporary file that's removed when the JVM exits.
+     * Writes the ICU data shipped with the runtime to a file V8 can map, once per host. V8 needs a path, and the
+     * data is in the jar, so it goes to a shared file in the temp directory that is reused across processes.
      */
     private static String icuDataFile() {
-        try (java.io.InputStream in = JavetEngine.class.getResourceAsStream("icu/" + ICU_DATA)) {
-            if (in == null) {
-                throw new IllegalStateException("Missing ICU data (icu/" + ICU_DATA + "): the build downloads it; run ./mvnw package");
+        String tmpDir = System.getProperty("java.io.tmpdir", "/tmp");
+        java.nio.file.Path target = java.nio.file.Path.of(tmpDir, "automately-" + ICU_DATA);
+        try {
+            if (java.nio.file.Files.exists(target) && java.nio.file.Files.size(target) > 0) {
+                return target.toString();
             }
-            java.nio.file.Path file = java.nio.file.Files.createTempFile("automately-" + ICU_DATA.replace(".dat", "-"), ".dat");
-            file.toFile().deleteOnExit();
-            java.nio.file.Files.copy(in, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            return file.toString();
+            try (java.io.InputStream in = JavetEngine.class.getResourceAsStream("icu/" + ICU_DATA)) {
+                if (in == null) {
+                    throw new IllegalStateException("Missing ICU data (icu/" + ICU_DATA + "): the build downloads it; run ./mvnw package");
+                }
+                java.nio.file.Path tmp = java.nio.file.Files.createTempFile(java.nio.file.Path.of(tmpDir), "automately-icu-", ".tmp");
+                java.nio.file.Files.copy(in, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                try {
+                    java.nio.file.Files.move(tmp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } catch (java.io.IOException ignored) {
+                    // Another process wrote it concurrently
+                    java.nio.file.Files.deleteIfExists(tmp);
+                }
+                return target.toString();
+            }
         } catch (java.io.IOException e) {
             throw new java.io.UncheckedIOException(e);
         }

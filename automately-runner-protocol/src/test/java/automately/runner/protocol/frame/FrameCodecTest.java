@@ -85,6 +85,27 @@ class FrameCodecTest {
     }
 
     @Test
+    void parsesLargeFramesSplitAtReadBoundaries() {
+        // The StreamBridge reader hands the parser fixed 8 KiB reads, so a large DATA frame's end never lines up with a
+        // read: the leftover must stay in a growable buffer or the next append throws and the parser silently dies.
+        byte[] pattern = new byte[8192];
+        for (int i = 0; i < pattern.length; i++) {
+            pattern[i] = (byte) (i * 31 + 7);
+        }
+        Buffer binary = Buffer.buffer(pattern);
+        Buffer encoded = FrameCodec.encode(new Frame(FrameType.DATA, Frame.FLAG_NONE, 4, new JsonObject(), binary));
+
+        List<Frame> decoded = new ArrayList<>();
+        FrameCodec.FrameParser parser = FrameCodec.parser(decoded::add, err -> { throw new RuntimeException(err); });
+        for (int i = 0; i < encoded.length(); i += 8192) {
+            parser.handle(encoded.slice(i, Math.min(encoded.length(), i + 8192)));
+        }
+
+        assertThat(decoded).hasSize(1);
+        assertThat(decoded.getFirst().binary().getBytes()).isEqualTo(pattern);
+    }
+
+    @Test
     void enforcesMaxFrameLengthLimit() {
         Buffer hugeBuffer = Buffer.buffer(new byte[FrameCodec.MAX_FRAME_LENGTH + 10]);
         Frame oversizedFrame = new Frame(FrameType.DATA, Frame.FLAG_NONE, 1, new JsonObject(), hugeBuffer);

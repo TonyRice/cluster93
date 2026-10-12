@@ -273,27 +273,13 @@ Automately is configured via environment variables:
 
 ## Roadmap
 
-1. ~~**Spike**~~ ✅ Clustered runtime, V8 isolate execution, API, SSE
-2. ~~**Orphaned Jobs**~~ ✅ `onOrphan` policies, attempt fencing, `ctx.step` checkpoints, chaos recovery ([design](docs/design/orphaned-jobs.md))
-3. ~~**Supervised Services**~~ ✅ Long-running services, isolate event loops, automatic restart backoff ([design](docs/design/services.md))
-4. ~~**Host APIs**~~ ✅ `kv`, `bus`, durable queues, `fetch`, HTTP hosting, verified custom domains ([design](docs/design/host-apis.md))
-5. ~~**Durable Storage & Files**~~ ✅ Embedded Apache Ignite 2.18, WAL persistence, streamed VFS with HTTP ranges ([design](docs/design/durability-and-streaming.md))
-6. ~~**API, Auth, CLI & MCP**~~ ✅ OpenAPI 3.1 contract validation, scoped bearer tokens, rate limits, native CLI, built-in MCP server ([guide](docs/guides/mcp.md))
-7. ~~**Observability & Polish**~~ ✅ Prometheus metrics, Grafana dashboards, chaos test script, security threat model
-8. ~~**Security Groundwork**~~ ✅ Mutual TLS between nodes, encrypted secrets, signed releases, RBAC, tamper-evident audit log
-9. ~~**Virtual File System & Packages**~~ ✅ Directory trees, mounts (S3/disk), immutable package registry with content-addressed blobs ([design](docs/design/vfs.md), [packages](docs/design/packages.md))
-10. ~~**Node.js & Web Standards Reach**~~ ✅ Node polyfills (`crypto`, `stream`, `zlib`, `net`, `tls`, `http`, `http2`, `dns`), Web globals (`fetch`, `WebSocket`, `Blob`), verified against Express 5, Fastify 5, Koa 3, ws, and real database drivers ([design](docs/design/network-reach.md))
-11. ~~**Engine-Neutral Runtime & Worker IPC**~~ ✅ `automately-runtime-js` SPI, GraalJS beside Javet V8, binary IPC framing (`automately-runner-protocol`), Unix Domain Socket streaming, warm tenant worker pools with Linux cgroups v2 memory limits, and full out-of-process feature parity (streaming host APIs, listeners, context restoration) now that `AUTOMATELY_WORKER_MODE=process` is the default (D-126 to D-132)
-12. **Differentiated Node Roles & Capability-Based Scheduling** *(In Design)*:
-    - Decouple cluster nodes into specialized roles:
-      - **API / Ingress Gateway Nodes:** Terminate public TLS, validate OpenAPI requests, handle token auth, route ingress traffic; execute zero untrusted code.
-      - **Storage / Data Nodes:** Run durable Apache Ignite persistence, WAL, and VFS chunks without CPU contention from script workloads.
-      - **Compute Worker Nodes:** Run on private subnets hosting sandboxed execution engines with kernel cgroups boundaries.
-    - Scheduler capability matching: Route jobs to nodes advertising matching runtime capabilities (`capabilities: ["js:v8", "js:graaljs"]`).
-13. **Polyglot Serverless Compute (Python)** *(Planned)*:
-    - Dedicated Python worker daemon communicating over `automately-runner-protocol` binary framing, bringing Python jobs and microservices to the cluster.
-14. **Containerized / MicroVM Runtimes** *(Planned)*:
-    - gVisor / Firecracker runner backend for native binaries and untrusted dependencies.
+For the master implementation roadmap, active milestones, and upcoming work, see **[`ROADMAP.md`](ROADMAP.md)**:
+
+- **Phases 1–4 (Complete):** Core cluster, dual engines (V8/GraalJS), VFS storage, and out-of-process isolation with Linux cgroups.
+- **Phase 5 (Complete):** Architecture guide, aggregate Javadoc verification under JDK 21, and process-mode stability.
+- **Phase 6 (Active / Next):** Web Management Console with WebAuthn Passkeys & browser identity sessions ([`ideas/console.md`](ideas/console.md)).
+- **Phase 7 (Upcoming):** Official Node runtime in rootless Podman + gVisor ([`docs/design/node-runtime.md`](docs/design/node-runtime.md)).
+- **Phases 8 & 9 (Future):** Differentiated node roles ([`ideas/node-roles.md`](ideas/node-roles.md)) & polyglot Python compute ([`ideas/python.md`](ideas/python.md)).
 
 ---
 

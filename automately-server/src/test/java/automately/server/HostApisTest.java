@@ -490,7 +490,7 @@ class HostApisTest {
 
     private static void awaitServiceRunning(String name) throws Exception {
         awaitJson(nodeA, TENANT, "/v1/services/" + name, s -> "RUNNING".equals(s.getString("status")));
-        Thread.sleep(200); // let the run register its handlers
+        Thread.sleep(1000); // let the run register its handlers
     }
 
     private static JsonObject runJob(RunningNode node, String tenant, String script) throws Exception {

@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -71,7 +72,7 @@ public final class NodeVerticle extends VerticleBase {
     private final automately.core.secrets.TenantSecrets secrets;
 
     /** Jobs this node has accepted, by job id. The execution is null until the script has started. */
-    private final Map<String, Slot> slots = new HashMap<>();
+    private final Map<String, Slot> slots = new ConcurrentHashMap<>();
     private long heartbeatTimer;
     private boolean stopping;
 
@@ -309,7 +310,7 @@ public final class NodeVerticle extends VerticleBase {
 
     /** Cancels attempts this node no longer owns, and stops attempts someone asked to cancel. */
     private void checkRunningJobs() {
-        slots.forEach((jobId, slot) -> {
+        Map.copyOf(slots).forEach((jobId, slot) -> {
             if (slot.execution() == null) {
                 return;
             }

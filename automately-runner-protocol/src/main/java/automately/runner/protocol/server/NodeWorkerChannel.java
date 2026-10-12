@@ -1,5 +1,7 @@
 package automately.runner.protocol.server;
 
+import automately.core.files.FileInfo;
+import automately.core.job.JobStatus;
 import automately.core.runtime.Execution;
 import automately.core.runtime.ExecutionResult;
 import automately.core.runtime.FetchedResponse;
@@ -24,7 +26,6 @@ import automately.runner.protocol.message.HelloMessage;
 import automately.runner.protocol.message.LogMessage;
 import automately.runner.protocol.message.OpenStreamMessage;
 import automately.runner.protocol.message.ReplyMessage;
-import automately.runner.protocol.message.ResultMessage;
 import automately.runner.protocol.message.ResultRunMessage;
 import automately.runner.protocol.message.RunMessage;
 import automately.runner.protocol.message.StateMessage;
@@ -80,15 +81,80 @@ public class NodeWorkerChannel {
     private final Map<String, ActiveRun> activeRuns = new ConcurrentHashMap<>();
     private final Map<String, PendingEvent> pendingEvents = new ConcurrentHashMap<>();
     private final Map<Integer, HttpExchange> pendingExchanges = new ConcurrentHashMap<>();
+    /** The response stream each forwarded exchange's answer rides, by the request stream's id (D-123). */
+    private final Map<Integer, Integer> responseStreamIds = new ConcurrentHashMap<>();
 
     private record PendingEvent(String runId, Inbound inbound) {}
 
     private record ActiveRun(int channelId, String runId, HostApis hostApis, LogSink logs, StateSink state,
                              Map<Integer, automately.core.files.FileWriter> writers,
                              Map<String, Registration> registrations,
+                             StateCommits stateCommits,
                              Promise<ExecutionResult> completion) {
         ActiveRun(int channelId, String runId, HostApis hostApis, LogSink logs, StateSink state, Promise<ExecutionResult> completion) {
-            this(channelId, runId, hostApis, logs, state, new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), completion);
+            this(channelId, runId, hostApis, logs, state, new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), new StateCommits(), completion);
+        }
+    }
+
+    /**
+     * Counts a run's in-flight state commits so the run's completion can wait for them. A STATE frame can race the
+     * RESULT_RUN that ends the run: the commit runs off the event loop, so without this a step recorded just before
+     * the worker reported its result could still be in flight when the caller observes the run finish (D-128).
+     *
+     * <p>Thread-safe: {@code track} may be called on the event loop while a commit's completion callback runs on a
+     * worker or another context.
+     */
+    private static final class StateCommits {
+        private int inFlight;
+        private Promise<Void> idle;
+
+        /** Schedules {@code commit} (off the event loop when an executor is available) and tracks it to completion. */
+        void track(Vertx executor, Runnable commit) {
+            Future<Void> done;
+            if (executor != null) {
+                done = executor.executeBlocking(() -> {
+                    commit.run();
+                    return null;
+                });
+            } else {
+                try {
+                    commit.run();
+                    done = Future.succeededFuture();
+                } catch (RuntimeException e) {
+                    done = Future.failedFuture(e);
+                }
+            }
+            synchronized (this) {
+                inFlight++;
+            }
+            done.onComplete(ar -> completeOne());
+        }
+
+        /** A future that completes once every commit tracked so far has landed; already complete when none is. */
+        Future<Void> whenIdle() {
+            synchronized (this) {
+                if (inFlight <= 0) {
+                    return Future.succeededFuture();
+                }
+                if (idle == null) {
+                    idle = Promise.promise();
+                }
+                return idle.future();
+            }
+        }
+
+        private void completeOne() {
+            Promise<Void> toComplete = null;
+            synchronized (this) {
+                if (--inFlight <= 0) {
+                    inFlight = 0;
+                    toComplete = idle;
+                    idle = null;
+                }
+            }
+            if (toComplete != null) {
+                toComplete.tryComplete();
+            }
         }
     }
 
@@ -311,14 +377,7 @@ public class NodeWorkerChannel {
             commit = () -> sink.saveCheckpoint(state.value());
         }
         Vertx executor = resolveVertx();
-        if (executor != null) {
-            executor.executeBlocking(() -> {
-                commit.run();
-                return null;
-            });
-        } else {
-            commit.run();
-        }
+        run.stateCommits().track(executor, commit);
     }
 
     private Vertx resolveVertx() {
@@ -338,14 +397,23 @@ public class NodeWorkerChannel {
             if ("FAILED".equalsIgnoreCase(result.status())) {
                 res = ExecutionResult.failed(result.error() != null ? result.error() : "Execution failed");
             } else if ("CANCELLED".equalsIgnoreCase(result.status())) {
-                res = ExecutionResult.cancelled(result.error() != null ? result.error() : "Execution cancelled");
+                res = new ExecutionResult(JobStatus.CANCELLED, result.output(), result.error() != null ? result.error() : "Execution cancelled");
             } else if ("TIMED_OUT".equalsIgnoreCase(result.status())) {
                 res = ExecutionResult.timedOut(result.error() != null ? result.error() : "Execution timed out");
             } else {
                 res = ExecutionResult.succeeded(result.output());
             }
-            run.completion().tryComplete(res);
+            settle(run, res);
         }
+    }
+
+    /**
+     * Completes a run once its in-flight state commits have landed, so a step or checkpoint that raced the run's
+     * RESULT_RUN is durable before the caller sees the run finish (D-128). Strictly non-blocking: the completion rides
+     * the commit futures' callbacks on the event loop; when no commit is in flight it completes immediately.
+     */
+    private void settle(ActiveRun run, ExecutionResult res) {
+        run.stateCommits().whenIdle().onComplete(ar -> run.completion().tryComplete(res));
     }
 
     private void cleanupRun(ActiveRun run) {
@@ -411,7 +479,11 @@ public class NodeWorkerChannel {
         run.hostApis().files().create(path, contentType).onComplete(arWriter -> {
             if (arWriter.failed()) {
                 LOG.error("Worker {}: failed to create file {}: {}", workerId, path, arWriter.cause().getMessage());
-                streamMultiplexer.resetStream(streamId, arWriter.cause().getMessage(), 500);
+                sendFileFinish(run, streamId, arWriter.cause(), null);
+                // The failure already reached the worker as a files.finish stream; drain and discard what it still sends
+                // and release the stream at its end, so its write/finish surface the real error rather than a reset.
+                inStream.handler(chunk -> { });
+                inStream.endHandler(v -> streamMultiplexer.resetStream(streamId, arWriter.cause().getMessage(), 500));
                 return;
             }
             var writer = arWriter.result();
@@ -420,9 +492,9 @@ public class NodeWorkerChannel {
             inStream.endHandler(v -> writer.finish().onComplete(arFinish -> {
                 run.writers().remove(streamId);
                 if (arFinish.succeeded()) {
-                    send(new ResultMessage(streamId, arFinish.result().toViewJson()).toFrame());
+                    sendFileFinish(run, streamId, null, arFinish.result());
                 } else {
-                    send(new ErrorMessage(streamId, "FILE_FINISH_FAILED", arFinish.cause().getMessage()).toFrame());
+                    sendFileFinish(run, streamId, arFinish.cause(), null);
                 }
             }));
             inStream.exceptionHandler(err -> {
@@ -430,6 +502,25 @@ public class NodeWorkerChannel {
                 writer.abort();
             });
         });
+    }
+
+    /**
+     * Answers a {@code files.create} with the committed file (or the failure) on a {@code files.finish} stream, so the
+     * worker's {@code finish()} awaits the commit instead of racing a {@code files.stat} (D-132). The worker closes it.
+     */
+    private void sendFileFinish(ActiveRun run, int requestStreamId, Throwable error, FileInfo info) {
+        int finishStreamId = nodeStreamSeq.getAndAdd(2);
+        JsonObject meta = new JsonObject()
+                .put("runId", run.runId())
+                .put("requestStreamId", requestStreamId);
+        if (error != null) {
+            meta.put("errorName", error instanceof HostException host ? host.errorName() : "Error");
+            meta.put("errorCode", error instanceof HostException host ? host.code() : "FILE_FINISH_FAILED");
+            meta.put("error", error.getMessage() != null ? error.getMessage() : "the upload failed");
+        } else {
+            meta.put("file", info.toViewJson());
+        }
+        streamMultiplexer.openStream(finishStreamId, "files.finish", meta);
     }
 
     private void onFilesOpen(ActiveRun run, int streamId, JsonObject meta) {
@@ -524,9 +615,15 @@ public class NodeWorkerChannel {
      */
     private void pipeError(ActiveRun run, int requestStreamId, String responseType, Throwable error) {
         int dataStreamId = nodeStreamSeq.getAndAdd(2);
+        // Keep the failure's name and code: the worker rebuilds the same HostException, so the script sees, for example,
+        // TypeError/egress_denied rather than a generic failure (D-132).
+        String errorName = error instanceof HostException host ? host.errorName() : "Error";
+        String errorCode = error instanceof HostException host ? host.code() : "request_failed";
         JsonObject meta = new JsonObject()
                 .put("runId", run.runId())
                 .put("requestStreamId", requestStreamId)
+                .put("errorName", errorName)
+                .put("errorCode", errorCode)
                 .put("error", error != null && error.getMessage() != null ? error.getMessage() : "the request failed");
         streamMultiplexer.openStream(dataStreamId, responseType, meta).onComplete(arOpen -> {
             if (arOpen.succeeded()) {
@@ -537,7 +634,8 @@ public class NodeWorkerChannel {
 
     private void onHttpResponse(ActiveRun run, int streamId, JsonObject meta) {
         int requestStreamId = meta.getInteger("requestStreamId", -1);
-        HttpExchange exchange = pendingExchanges.remove(requestStreamId);
+        // Keep the exchange until the response ends: the worker's serve.trailers RPC must still find it here.
+        HttpExchange exchange = pendingExchanges.get(requestStreamId);
         if (exchange == null) {
             streamMultiplexer.resetStream(streamId, "UNKNOWN_EXCHANGE", 404);
             return;
@@ -547,15 +645,44 @@ public class NodeWorkerChannel {
         if (rawHeaders != null) {
             exchange.respond(meta.getInteger("status", 200), statusMessage, rawHeaders);
         } else if (meta.containsKey("error")) {
+            pendingExchanges.remove(requestStreamId);
             exchange.fail(meta.getInteger("status", 500), meta.getString("error"));
             return;
         } else {
             exchange.respond(meta.getInteger("status", 200), meta.getJsonObject("headers", new JsonObject()));
         }
+        // Remember which response stream answers this exchange, so a client disconnect can reset it too (D-123).
+        responseStreamIds.put(requestStreamId, streamId);
         var inStream = streamMultiplexer.createInputStream(streamId);
-        inStream.handler(exchange::write);
-        inStream.endHandler(v -> exchange.end());
-        inStream.exceptionHandler(err -> exchange.fail(500, String.valueOf(err.getMessage())));
+        // Pause the worker's response stream while the client socket is full: its credits are only refunded once the
+        // chunk is really taken, so a fast generator is held back instead of buffering without limit (D-123).
+        inStream.handler(chunk -> {
+            Future<Void> written = exchange.write(chunk);
+            if (!written.isComplete()) {
+                inStream.pause();
+                written.onComplete(ar -> inStream.resume());
+            }
+        });
+        inStream.endHandler(v -> {
+            pendingExchanges.remove(requestStreamId);
+            responseStreamIds.remove(requestStreamId);
+            exchange.end();
+        });
+        inStream.exceptionHandler(err -> {
+            pendingExchanges.remove(requestStreamId);
+            responseStreamIds.remove(requestStreamId);
+            exchange.fail(500, String.valueOf(err.getMessage()));
+        });
+    }
+
+    /** {@code serve.trailers}: trailers the worker's response adds before its end (D-123). */
+    public Future<Void> serveTrailers(String runId, JsonObject params) {
+        int exchangeId = params.getInteger("exchangeId", -1);
+        HttpExchange exchange = pendingExchanges.get(exchangeId);
+        if (exchange != null) {
+            exchange.trailers(params.getJsonArray("trailers"));
+        }
+        return Future.succeededFuture();
     }
 
     // ---------------------------------------------------------------------------------------
@@ -566,7 +693,7 @@ public class NodeWorkerChannel {
     public Future<Void> serveListen(String runId, JsonObject params) {
         ActiveRun run = activeRun(runId);
         Integer port = params.getInteger("port");
-        Consumer<HttpExchange> proxy = exchange -> serveExchange(run, exchange);
+        Consumer<HttpExchange> proxy = exchange -> serveExchange(run, exchange, port);
         String key = "serve:" + (port == null ? "main" : port);
         if (run.registrations().containsKey(key)) {
             return Future.failedFuture(new HostException("Error", "already_serving", "ctx.serve was already called in this run"));
@@ -667,19 +794,36 @@ public class NodeWorkerChannel {
     }
 
     /** Forwards one ingress exchange to the worker, as a request stream, and awaits its response stream. */
-    private void serveExchange(ActiveRun run, HttpExchange exchange) {
+    private void serveExchange(ActiveRun run, HttpExchange exchange, Integer registeredPort) {
         int streamId = nodeStreamSeq.getAndAdd(2);
         boolean upgrade = exchange.request().getBoolean("upgrade", false);
         JsonObject meta = new JsonObject()
                 .put("runId", run.runId())
                 .put("request", exchange.request())
                 .put("upgrade", upgrade);
-        String type = upgrade ? "http.request.upgrade" : "http.request";
-        // Register the exchange before opening the stream: the worker may answer as soon as it sees the OPEN, and the
-        // response stream must find this exchange.
-        if (!upgrade) {
-            pendingExchanges.put(streamId, exchange);
+        // Tell the worker which server this is: the port the handler was registered under, else the ingress's declared
+        // port. The main host has neither, so the worker falls back to ctx.serve, then the first server (D-123).
+        Integer port = registeredPort != null ? registeredPort : exchange.request().getInteger("port");
+        if (port != null) {
+            meta.put("port", port);
         }
+        String type = upgrade ? "http.request.upgrade" : "http.request";
+        // The client left before the worker finished: reset both streams, so its ServerResponse emits 'close' (D-123).
+        exchange.closed().onSuccess(clientLeft -> {
+            if (Boolean.TRUE.equals(clientLeft)) {
+                streamMultiplexer.resetStream(streamId, "CLIENT_CLOSED", 499);
+                Integer responseStreamId = responseStreamIds.get(streamId);
+                if (responseStreamId != null) {
+                    streamMultiplexer.resetStream(responseStreamId, "CLIENT_CLOSED", 499);
+                }
+                pendingExchanges.remove(streamId);
+                responseStreamIds.remove(streamId);
+            }
+        });
+        // Register the exchange before opening the stream: the worker may answer as soon as it sees the OPEN, and the
+        // response stream must find this exchange. An upgrade request is registered too: a server with no 'upgrade'
+        // listener answers it as an ordinary one, over an http.response stream (D-125).
+        pendingExchanges.put(streamId, exchange);
         streamMultiplexer.openStream(streamId, type, meta).onComplete(arOpen -> {
             if (arOpen.failed()) {
                 pendingExchanges.remove(streamId);
@@ -707,9 +851,16 @@ public class NodeWorkerChannel {
 
             WriteStream<Buffer> out = streamMultiplexer.createOutputStream(streamId);
             exchange.body().handler(
-                    chunk -> out.write(chunk),
+                    chunk -> {
+                        out.write(chunk);
+                        // The worker isn't keeping up with the client's upload: stop reading until the queue drains.
+                        if (out.writeQueueFull()) {
+                            exchange.body().pause();
+                        }
+                    },
                     () -> out.end(),
                     err -> out.end());
+            out.drainHandler(v -> exchange.body().resume());
             exchange.body().resume();
         });
     }
@@ -722,7 +873,11 @@ public class NodeWorkerChannel {
         if (!broken.compareAndSet(false, true)) {
             return;
         }
-        LOG.error("Worker {}: protocol error", workerId, err);
+        if (activeRuns.isEmpty()) {
+            LOG.debug("Worker {}: connection closed: {}", workerId, err != null ? err.getMessage() : "clean");
+        } else {
+            LOG.error("Worker {}: protocol error with active runs", workerId, err);
+        }
         String message = err != null && err.getMessage() != null ? err.getMessage() : "connection closed";
         for (ActiveRun run : activeRuns.values()) {
             cleanupRun(run);

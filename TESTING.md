@@ -164,42 +164,75 @@ If module dependencies are not already installed in the local repository, add
 
 ## 4. Server Runtime Testing (`automately-server`)
 
-The server can execute jobs in two worker modes, selected by
-`AUTOMATELY_WORKER_MODE`. Both must be exercised for a worker-facing change.
+The server executes guest workloads in two worker modes, configured by
+`AUTOMATELY_WORKER_MODE` (`process` or `embedded`). Out-of-process execution
+is the production default (`AUTOMATELY_WORKER_MODE=process`), with embedded JVM
+isolates retained as a development and regression fallback. Both must be exercised
+for worker-facing changes.
 
-### 4.1 Embedded mode (in-process isolate, default)
+### 4.1 Process mode (out-of-process worker, production default)
 
-Workers run as in-process isolates inside the server JVM. This is the fastest
-loop and the default (`AUTOMATELY_WORKER_MODE=embedded`):
+In process mode, guest JavaScript runs inside separate OS worker processes supervised
+by `TenantWorkerPoolManager` and isolated by Linux cgroups v2. Workers communicate
+with the node over a framed duplex IPC channel with 256 KiB stream flow control and
+4 MiB connection windows.
+
+Run the full server suite in process mode (excluding `DockerClusterIT`):
+
+```bash
+AUTOMATELY_WORKER_MODE=process ./mvnw test -pl automately-server -am \
+  -Dtest='automately.server.**,!DockerClusterIT' \
+  -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+When no native worker binary is built, the server automatically discovers and spawns
+a worker JVM process with `WorkerMain` on the current classpath. To test against
+a pre-compiled GraalVM native-image worker (see §5):
+
+```bash
+AUTOMATELY_WORKER_MODE=process \
+AUTOMATELY_WORKER_BINARY=bin/worker-javet \
+./mvnw test -pl automately-server -am \
+  -Dtest='automately.server.**,!DockerClusterIT' \
+  -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+The guest engine is configured with `AUTOMATELY_WORKER_ENGINE` (`javet` or `graaljs`),
+or per-profile binaries with `AUTOMATELY_WORKER_BINARY_<MODE>`.
+
+### 4.2 Multi-node cluster end-to-end parity (`ProcessModeParityTest`)
+
+To verify end-to-end cluster parity across separate machines where Node A proxies
+requests to a worker running on Node B:
+
+```bash
+./mvnw test -pl automately-server -am \
+  -Dtest='ProcessModeParityTest' \
+  -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+This suite spins up a real two-node Apache Ignite cluster (`nodeA` and `nodeB`) in
+process mode and verifies:
+1. **Cross-Node Ingress Routing (`servesHttp`):** A long-running service (`ctx.serve`)
+   hosted on one node is reachable through the public HTTP ingress of **both** Node A
+   and Node B via cluster forwarding (`InternalHttpVerticle`).
+2. **Outbound Egress & Sockets:** Child processes successfully `fetch()` and open raw
+   TCP sockets (`net.connect`) through the node's egress security gate.
+3. **Dynamic Packages:** A job imports a dynamically published package (`parity-strings`).
+4. **Inter-Service Bus RPC:** A worker process answers `bus.request()` via `bus.handle()`.
+5. **Worker Crash Resilience:** Segfaults / SIGKILL are caught immediately, and in-flight
+   promises fail without hanging.
+
+### 4.3 Embedded mode (in-process isolate regression testing)
+
+In embedded mode, workers run as in-process Javet or GraalJS isolates inside the server
+JVM. Run the embedded suite to ensure zero regressions:
 
 ```bash
 AUTOMATELY_WORKER_MODE=embedded ./mvnw test -pl automately-server -am \
   -Dtest='automately.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
-
-Relevant suites include `JobsFromScriptsTest`, `ServicesTest`, `HostApisTest`,
-`StreamingTest`, `FilesTest`, `ClusterTest`, and the boundary-enforcing
-`ArchitectureTest`.
-
-### 4.2 Process mode (out-of-process native worker)
-
-Workers run as separate native processes managed by the tenant pool, talking over
-UDS. Point the server at a built binary with `AUTOMATELY_WORKER_BINARY`
-(see §5 to build one). Run the process-mode job suite:
-
-```bash
-AUTOMATELY_WORKER_MODE=process \
-AUTOMATELY_WORKER_BINARY=bin/worker-javet \
-./mvnw test -pl automately-server -am \
-  -Dtest='automately.server.JobsFromScriptsTest' \
-  -Dsurefire.failIfNoSpecifiedTests=false
-```
-
-The engine is chosen with `AUTOMATELY_WORKER_ENGINE` (`javet` or `graaljs`), and
-per-profile binaries with `AUTOMATELY_WORKER_BINARY_<MODE>`. Verify a
-worker-facing change in process mode for **both** engines before considering it
-complete.
 
 ---
 
@@ -287,13 +320,22 @@ ENGINES="graaljs" ./build.sh    # GraalJS only
 # Pre-commit verification of touched modules (always -am)
 ./mvnw verify -pl automately-runner-protocol,automately-server -am -DskipITs
 
-# Server suite, embedded mode, docker IT excluded
+# Server suite, process mode (production default, docker IT excluded)
+AUTOMATELY_WORKER_MODE=process ./mvnw test -pl automately-server -am \
+  -Dtest='automately.server.**,!DockerClusterIT' -Dsurefire.failIfNoSpecifiedTests=false
+
+# Full process-mode parity & cluster ingress suite
+AUTOMATELY_WORKER_MODE=process ./mvnw test -pl automately-server -am \
+  -Dtest='ProcessModeParityTest,McpTest,JobsFromScriptsTest,ServicesTest' \
+  -Dsurefire.failIfNoSpecifiedTests=false
+
+# Server suite, embedded mode (regression check, docker IT excluded)
 AUTOMATELY_WORKER_MODE=embedded ./mvnw test -pl automately-server -am \
   -Dtest='automately.server.**,!DockerClusterIT' -Dsurefire.failIfNoSpecifiedTests=false
 
-# Server suite, process mode against a native worker
+# Server suite, process mode against a native worker binary
 AUTOMATELY_WORKER_MODE=process AUTOMATELY_WORKER_BINARY=bin/worker-javet \
-  ./mvnw test -pl automately-server -am -Dtest='automately.server.JobsFromScriptsTest' \
+  ./mvnw test -pl automately-server -am -Dtest='automately.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 
 # Build native workers
