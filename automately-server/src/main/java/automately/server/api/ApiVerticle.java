@@ -74,6 +74,7 @@ public final class ApiVerticle extends VerticleBase {
     private final automately.core.files.FileTree fileTree;
     private final automately.core.files.FileLinks fileLinks;
     private final automately.core.packages.PackageStore packages;
+    private final automately.core.apps.AppStore apps;
     private final java.security.SecureRandom auditIds = new java.security.SecureRandom();
     /** Revokes a node's certificate (D-066); null when the cluster doesn't use node certificates. */
     private final java.util.function.Function<String, Future<JsonObject>> revokeNode;
@@ -95,10 +96,11 @@ public final class ApiVerticle extends VerticleBase {
                        automately.core.queue.QueueService queues, automately.core.callback.CallbackSecrets callbackSecrets,
                        automately.core.secrets.TenantSecrets secrets, automately.core.identity.Identity identity,
                        automately.core.audit.AuditLog audit, automately.core.files.FileTree fileTree, automately.core.files.FileLinks fileLinks,
-                       automately.core.packages.PackageStore packages,
+                       automately.core.packages.PackageStore packages, automately.core.apps.AppStore apps,
                        automately.core.auth.RateLimiter limiter, automately.core.host.egress.EgressPolicies egressPolicies,
                        java.util.function.Function<String, Future<JsonObject>> revokeNode,
                        java.util.function.Supplier<Future<List<String>>> notReady) {
+        this.apps = apps;
         this.revokeNode = revokeNode;
         this.notReady = notReady;
         this.queues = queues;
@@ -205,6 +207,7 @@ public final class ApiVerticle extends VerticleBase {
         router.get("/v1/jobs/:id/steps").handler(this::getSteps);
         router.post("/v1/jobs/:id/cancel").handler(this::cancelJob);
         new ServiceRoutes(config, services, jobs, scheduler, domains, txt, hostRouter, packages).mount(router);
+        new AppsRoutes(apps).mount(router);
         router.route().last().handler(ctx -> error(ctx, 404, "not_found", "No such route"));
         router.route().failureHandler(this::failure);
 

@@ -141,6 +141,20 @@ class ContractTest {
         calls.check("releaseDomain", "DELETE", "/v1/services/web/domains/shop.example.com", tenant, null);
         calls.check("deleteService", "DELETE", "/v1/services/web", tenant, null);
 
+        // Apps and their deployments (docs/design/apps-and-console.md).
+        calls.check("createDeployment", "POST", "/v1/apps/demo/deployments", tenant, new JsonObject()
+                .put("deploymentId", "dpl_a").put("commitHash", "abc123").put("manifest", new JsonObject().put("name", "demo")));
+        calls.check("createDeployment", "POST", "/v1/apps/demo/deployments", tenant, new JsonObject()
+                .put("deploymentId", "dpl_b").put("manifest", new JsonObject().put("name", "demo")));
+        calls.check("listApps", "GET", "/v1/apps", tenant, null);
+        calls.check("listDeployments", "GET", "/v1/apps/demo/deployments", tenant, null);
+        calls.check("getDeployment", "GET", "/v1/apps/demo/deployments/dpl_a", tenant, null);
+        calls.check("promoteApp", "POST", "/v1/apps/demo/promote", tenant, new JsonObject().put("deploymentId", "dpl_a"));
+        calls.check("promoteApp", "POST", "/v1/apps/demo/promote", tenant, new JsonObject().put("deploymentId", "dpl_b"));
+        calls.check("getApp", "GET", "/v1/apps/demo", tenant, null);
+        calls.check("rollbackApp", "POST", "/v1/apps/demo/rollback", tenant, null);
+        calls.check("deleteApp", "DELETE", "/v1/apps/demo", tenant, null);
+
         HttpResponse<Buffer> stored = await(client.put(node.httpPort(), "localhost", "/v1/files/site/index.html")
                 .putHeader("Authorization", tenant).putHeader("Content-Type", "text/html").sendBuffer(Buffer.buffer("<h1>hi</h1>")));
         calls.validate("putFile", stored);

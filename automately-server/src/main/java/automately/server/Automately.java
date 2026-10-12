@@ -137,7 +137,7 @@ public final class Automately {
                     }).onFailure(err -> LOG.warn("Couldn't add existing files to the directory tree: {}", err.getMessage()));
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
                             fileStore, blobs, capacity, durable.auth, durable.storage, routed, diskRootShared, durable.queues,
-                            durable.records, durable.audit);
+                            durable.records, durable.audit, new automately.core.apps.SharedDataAppStore(vertx));
                     return wire(config, txt, vertx, stores, cluster, security);
                 })
                 .recover(err -> {
@@ -291,7 +291,8 @@ public final class Automately {
     record Stores(JobStore jobs, JobStateStore state, ServiceStore services, DomainStore domains, KvStore kv, FileStore files,
                   BlobStore blobs, StorageCapacity capacity, AuthStore auth, StorageConfigStore storage, TenantBlobStores routed,
                   java.util.concurrent.atomic.AtomicBoolean diskRootShared, automately.core.queue.QueueStore queues,
-                  automately.core.identity.Records.Factory records, automately.core.audit.AuditLog audit) {
+                  automately.core.identity.Records.Factory records, automately.core.audit.AuditLog audit,
+                  automately.core.apps.AppStore apps) {
 
         static Stores inMemory(Vertx vertx, ServerConfig config) {
             // In-memory data lives on the JVM heap, so that's what admission control watches (D-038).
@@ -304,7 +305,7 @@ public final class Automately {
                     new SharedDataDomainStore(vertx), new SharedDataKvStore(vertx),
                     new SharedDataFileStore(vertx, routed), blobs, capacity, new SharedDataAuthStore(vertx), storage, routed, diskRootShared,
                     new automately.core.queue.SharedDataQueueStore(vertx), automately.core.identity.SharedDataRecords.factory(vertx),
-                    new automately.core.audit.MemoryAuditLog());
+                    new automately.core.audit.MemoryAuditLog(), new automately.core.apps.SharedDataAppStore(vertx));
         }
     }
 
@@ -435,7 +436,7 @@ public final class Automately {
         ApiVerticle api = apiRole ? new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter,
                 visibleFiles, quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
-                queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, packages, limiter, egressPolicies,
+                queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, packages, stores.apps(), limiter, egressPolicies,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
                 () -> readiness(nodes, instanceId, cluster)) : null;
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
@@ -459,9 +460,14 @@ public final class Automately {
             InternalHttpVerticle endpoint = security.tls() == null
                     ? new InternalHttpVerticle(config.internalPort(), secret, serving, new io.vertx.core.http.HttpServerOptions(), config.maxUpgradedPerRun())
                     : new InternalHttpVerticle(config.internalPort(), null, serving, ClusterSecurity.internalServer(security.tls()), config.maxUpgradedPerRun());
+            // Apps are resolved by host before ordinary service routing (docs/design/apps-and-console.md).
+            automately.server.ingress.AppRouter appRouter = new automately.server.ingress.AppRouter(stores.apps(), visibleFiles,
+                    config.ingressDomain(), config.consoleDomain(),
+                    automately.server.ingress.CidrMatcher.parse(config.consoleAllowedCidrs()));
             IngressVerticle ingress = ingressRole ? new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes,
                     security.tls() == null ? secret : null, config.ingressIdleTimeout(), config.ingressUpgradedIdleTimeout(), config.maxRequestBytes(),
-                    security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls())) : null;
+                    security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls()),
+                    appRouter, visibleFiles, () -> api == null ? -1 : api.port()) : null;
             return vertx.deployVerticle(endpoint)
                     .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, nodeCapacity, jobs, state, nodes,
                             runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port(),

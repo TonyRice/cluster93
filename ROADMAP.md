@@ -134,6 +134,13 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 5. Recent Key Achievements & Bug Fixes
 
+- **Apps Primitive — Server, Ingress Router, Security & REST API (Phase 6.1):**
+  - `apps:read`/`apps:write` scopes (`Scopes`, `openapi.yaml`) and `/v1/apps` REST operations (list/get/delete apps, list/get/create deployments, promote, rollback) in `AppsRoutes`, with `RouteScopes` rules and full OpenAPI 3.1 schemas.
+  - `AppStore` instantiated in `Automately.Stores` and wired into `ApiVerticle` and `IngressVerticle`.
+  - `AppRouter` resolves app hosts (console domain → `system`/`console`, preview `<deployId>--<app>--<tenant>`, canonical `<app>--<tenant>`, and `X-Automately-App`/`X-Automately-Tenant` test headers) and evaluates manifest routes: service proxy, same-origin `api:` rewrite, VFS static streaming via `FileResponder` (ETag/304/Range + manifest headers), and SPA fallback to `/index.html`.
+  - `CidrMatcher` parses and matches IPv4/IPv6 CIDRs; the console host enforces `AUTOMATELY_CONSOLE_ALLOWED_CIDRS` with 403 for unauthorized clients.
+  - `ServerConfig` gains `AUTOMATELY_CONSOLE_DOMAIN` and `AUTOMATELY_CONSOLE_ALLOWED_CIDRS`; `IngressVerticle` consults `AppRouter` before ordinary service routing, so app and service hosts share the ingress domain.
+  - Tests: `CidrMatcherTest`, `AppRouterTest`, `AppsRoutesTest` (including an end-to-end ingress static-serving check), `ContractTest` and `ServerConfigTest` additions.
 - **Standalone Node Storage Isolation & Immediate Activation:**
   - `scripts/dev.sh` now keeps its Ignite store in `${AUTOMATELY_HOME}/dev-data` and `scripts/local.sh` its permanent master in `${AUTOMATELY_HOME}/master-data`, so development testing and the master node can no longer share a `db/` folder, WAL or Ignite baseline.
   - `IgniteCluster.firstStart` is node-identity aware: it checks for this node's own `db/<masked consistent id>` store instead of any shared `db/`, so a directory another identity wrote to is no longer mistaken for a restart.

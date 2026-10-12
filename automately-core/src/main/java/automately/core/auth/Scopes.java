@@ -37,12 +37,15 @@ public final class Scopes {
     public static final String PACKAGES_WRITE = "packages:write";
     /** Blocking, unblocking and purging versions (D-092): owners and admins, not developers. */
     public static final String PACKAGES_ADMIN = "packages:admin";
+    /** Apps and their deployments (docs/design/apps-and-console.md). */
+    public static final String APPS_READ = "apps:read";
+    public static final String APPS_WRITE = "apps:write";
 
     /** Every scope a tenant token can hold, besides {@link #ALL}. */
     public static final List<String> KNOWN = List.of(JOBS_READ, JOBS_WRITE, SERVICES_READ, SERVICES_WRITE, FILES_READ, FILES_WRITE,
             BUS_PUBLISH, BUS_REQUEST, QUEUES_READ, QUEUES_WRITE, TOKENS_WRITE, NODES_READ, STORAGE_READ, STORAGE_WRITE,
             SECRETS_READ, SECRETS_WRITE, SECRETS_USE, MEMBERS_READ, MEMBERS_WRITE, AUDIT_READ, PACKAGES_READ, PACKAGES_WRITE,
-            PACKAGES_ADMIN);
+            PACKAGES_ADMIN, APPS_READ, APPS_WRITE);
 
     private Scopes() {
     }

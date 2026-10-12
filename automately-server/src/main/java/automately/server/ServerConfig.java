@@ -45,6 +45,8 @@ import java.util.UUID;
  *                      serves a role it lists, and a node without {@code worker} takes no tenant compute (docs/design/node-roles.md)
  * @param capabilities  execution engines this node advertises for capability matching, such as {@code js:v8} or {@code js:graaljs}
  *                      (empty means advertise no special capabilities, so any worker node matches)
+ * @param consoleDomain the host the web console answers on (docs/design/apps-and-console.md); null disables console-host handling
+ * @param consoleAllowedCidrs client CIDRs allowed to reach the console host; empty means no network restriction
  */
 public record ServerConfig(
         String nodeId,
@@ -104,7 +106,9 @@ public record ServerConfig(
         String workerDefaultMode,
         Map<String, String> workerBinaries,
         Set<String> roles,
-        Set<String> capabilities) {
+        Set<String> capabilities,
+        String consoleDomain,
+        List<String> consoleAllowedCidrs) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
     public static final java.util.List<String> WORKER_MODES = java.util.List.of("embedded", "process");
@@ -217,7 +221,16 @@ public record ServerConfig(
                 env.getOrDefault("AUTOMATELY_WORKER_DEFAULT_MODE", env.getOrDefault("AUTOMATELY_WORKER_ENGINE", "javet")).trim().toLowerCase(java.util.Locale.ROOT),
                 parseWorkerBinaries(env),
                 parseSet(env.getOrDefault("AUTOMATELY_ROLES", String.join(",", ROLES))),
-                parseSet(env.getOrDefault("AUTOMATELY_CAPABILITIES", "")));
+                parseSet(env.getOrDefault("AUTOMATELY_CAPABILITIES", "")),
+                // The console's host binding and the networks allowed to reach it (docs/design/apps-and-console.md).
+                blankToNull(env.get("AUTOMATELY_CONSOLE_DOMAIN")) == null ? null
+                        : env.get("AUTOMATELY_CONSOLE_DOMAIN").trim().toLowerCase(java.util.Locale.ROOT),
+                parseList(env.getOrDefault("AUTOMATELY_CONSOLE_ALLOWED_CIDRS", "")));
+    }
+
+    /** A comma-separated list, trimmed, empty entries dropped, in the order given. */
+    private static List<String> parseList(String value) {
+        return Arrays.stream(value.split(",")).map(String::trim).filter(entry -> !entry.isEmpty()).toList();
     }
 
     /** A comma-separated list, trimmed, empty entries dropped, in the order given. */

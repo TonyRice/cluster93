@@ -47,6 +47,7 @@ tags:
   - name: audit
   - name: packages
   - name: egress
+  - name: apps
 
 paths:
   /health:
@@ -946,6 +947,163 @@ paths:
         - bearer: ['services:write']
       responses:
         '200': { $ref: '#/components/responses/Domain' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/apps:
+    get:
+      operationId: listApps
+      tags: [apps]
+      summary: Your apps
+      security:
+        - bearer: ['apps:read']
+      responses:
+        '200':
+          description: Apps.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apps]
+                properties:
+                  apps:
+                    type: array
+                    items: { $ref: '#/components/schemas/App' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/apps/{app}:
+    parameters:
+      - $ref: '#/components/parameters/appName'
+    get:
+      operationId: getApp
+      tags: [apps]
+      summary: One app, and which deployment is live
+      security:
+        - bearer: ['apps:read']
+      responses:
+        '200':
+          description: The app.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/App' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteApp
+      tags: [apps]
+      summary: Remove an app and every deployment it has
+      security:
+        - bearer: ['apps:write']
+      responses:
+        '204': { description: 'Removed.' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/apps/{app}/deployments:
+    parameters:
+      - $ref: '#/components/parameters/appName'
+    get:
+      operationId: listDeployments
+      tags: [apps]
+      summary: An app's deployments, oldest first
+      security:
+        - bearer: ['apps:read']
+      responses:
+        '200':
+          description: Deployments.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deployments]
+                properties:
+                  deployments:
+                    type: array
+                    items: { $ref: '#/components/schemas/AppDeployment' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createDeployment
+      tags: [apps]
+      summary: Register an immutable deployment (its static assets already uploaded to its VFS prefix)
+      security:
+        - bearer: ['apps:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manifest]
+              properties:
+                deploymentId: { type: string, minLength: 1, maxLength: 128, description: 'A content-addressed id, unique within the app; one is minted when left out.' }
+                commitHash: { type: [string, 'null'], maxLength: 200, description: 'The git commit it was built from, or null.' }
+                manifest: { type: object, description: 'The parsed automately.json.' }
+                vfsPrefix: { type: [string, 'null'], maxLength: 1024, description: 'Where its assets live; derived from the app and deployment id when left out.' }
+                serviceRevision: { type: [integer, 'null'], minimum: 1, description: 'The backend service revision to run, or null.' }
+      responses:
+        '201':
+          description: Registered.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppDeployment' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/apps/{app}/deployments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/appName'
+      - $ref: '#/components/parameters/deploymentId'
+    get:
+      operationId: getDeployment
+      tags: [apps]
+      summary: One deployment
+      security:
+        - bearer: ['apps:read']
+      responses:
+        '200':
+          description: The deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppDeployment' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/apps/{app}/promote:
+    parameters:
+      - $ref: '#/components/parameters/appName'
+    post:
+      operationId: promoteApp
+      tags: [apps]
+      summary: Point an app at one of its deployments
+      security:
+        - bearer: ['apps:write']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deploymentId]
+              properties:
+                deploymentId: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: The app, now pointing at the deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/App' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/apps/{app}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/appName'
+    post:
+      operationId: rollbackApp
+      tags: [apps]
+      summary: Point an app back at the deployment promoted before the current one
+      security:
+        - bearer: ['apps:write']
+      responses:
+        '200':
+          description: The app, rolled back.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/App' }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/dirs:
@@ -2386,7 +2544,8 @@ components:
         `atly_…` tenant tokens, or the admin token. Scopes: `jobs:read`, `jobs:write`, `services:read`,
         `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`,
         `nodes:read`, `storage:read`, `storage:write`, `secrets:read`, `secrets:write`, `secrets:use`,
-        `members:read`, `members:write`, `audit:read`, `packages:read`, `packages:write`, `packages:admin`, or `*`. Operations marked `admin` need an operator's
+        `members:read`, `members:write`, `audit:read`, `packages:read`, `packages:write`, `packages:admin`, `apps:read`,
+        `apps:write`, or `*`. Operations marked `admin` need an operator's
         token or the admin token; `me` operations need a user's own personal token.
 
   parameters:
@@ -2485,6 +2644,16 @@ components:
       name: cursor
       in: query
       schema: { type: string }
+    appName:
+      name: app
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$' }
+    deploymentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
 
   requestBodies:
     Transfer:
@@ -2527,7 +2696,8 @@ components:
                   enum: ['*', 'jobs:read', 'jobs:write', 'services:read', 'services:write', 'files:read', 'files:write',
                          'bus:publish', 'bus:request', 'queues:read', 'queues:write', 'tokens:write', 'nodes:read',
                          'storage:read', 'storage:write', 'secrets:read', 'secrets:write', 'secrets:use',
-                         'members:read', 'members:write', 'audit:read', 'packages:read', 'packages:write', 'packages:admin']
+                         'members:read', 'members:write', 'audit:read', 'packages:read', 'packages:write', 'packages:admin',
+                         'apps:read', 'apps:write']
               expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
 
   responses:
@@ -3089,6 +3259,30 @@ components:
       type: [object, 'null']
       description: The exact package versions the script imports, decided when it was submitted (or the service defined), so every attempt runs the same code. Null if it imports none.
       additionalProperties: { type: string }
+    App:
+      type: object
+      required: [tenant, name, updatedAt, deploymentHistory]
+      properties:
+        tenant: { type: string }
+        name: { type: string }
+        activeDeploymentId: { type: [string, 'null'], description: 'The promoted deployment; null for an app with nothing live yet.' }
+        updatedAt: { type: integer }
+        deploymentHistory:
+          type: array
+          description: The deployments promoted through, oldest first; the active one is last.
+          items: { type: string }
+    AppDeployment:
+      type: object
+      required: [tenant, app, deploymentId, createdAt, manifest, vfsPrefix]
+      properties:
+        tenant: { type: string }
+        app: { type: string }
+        deploymentId: { type: string }
+        createdAt: { type: integer }
+        commitHash: { type: [string, 'null'] }
+        manifest: { type: object, description: 'The parsed automately.json.' }
+        vfsPrefix: { type: string, description: 'The VFS directory holding its static assets.' }
+        serviceRevision: { type: [integer, 'null'] }
     Service:
       type: object
       required: [name, status, enabled, revision, runs, hosts]

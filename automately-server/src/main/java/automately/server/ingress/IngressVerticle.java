@@ -1,7 +1,10 @@
 package automately.server.ingress;
 
+import automately.core.files.FileResponder;
+import automately.core.files.FileStore;
 import automately.core.host.HostRouter;
 import automately.core.host.InternalHttpVerticle;
+import automately.core.host.ServerExchange;
 import automately.core.job.JobStatus;
 import automately.core.job.JobStore;
 import automately.core.node.NodeInfo;
@@ -52,8 +55,13 @@ public final class IngressVerticle extends VerticleBase {
     private final Duration idleTimeout;
     private final Duration upgradedIdleTimeout;
     private final long maxRequestBytes;
+    private final AppRouter appRouter;
+    private final FileStore files;
+    /** The local API's port, resolved at request time because the API is deployed after the ingress is built. */
+    private final java.util.function.IntSupplier apiPort;
     private HttpServer server;
     private HttpClient client;
+    private HttpClient apiClient;
 
     private final java.util.function.UnaryOperator<HttpClientOptions> internalTls;
 
@@ -61,10 +69,14 @@ public final class IngressVerticle extends VerticleBase {
      * @param secret      D-036's shared secret for the internal endpoint, or null when node certificates secure it (D-066)
      * @param internalTls adds TLS with this node's certificate to the client for the internal endpoint (identity if none)
      * @param upgradedIdleTimeout how long an upgraded connection (a WebSocket) may go without a byte either way (D-125)
+     * @param appRouter   apps' host and route resolution, tried before ordinary service routing
+     * @param files       the VFS, for serving an app's static assets directly
+     * @param apiPort     this node's API port, for the same-origin {@code api:} rewrite
      */
     public IngressVerticle(int port, HostRouter router, ServiceStore services, JobStore jobs, NodeRegistry nodes, String secret,
                            Duration idleTimeout, Duration upgradedIdleTimeout, long maxRequestBytes,
-                           java.util.function.UnaryOperator<HttpClientOptions> internalTls) {
+                           java.util.function.UnaryOperator<HttpClientOptions> internalTls, AppRouter appRouter, FileStore files,
+                           java.util.function.IntSupplier apiPort) {
         this.upgradedIdleTimeout = upgradedIdleTimeout;
         this.internalTls = internalTls;
         this.port = port;
@@ -75,6 +87,9 @@ public final class IngressVerticle extends VerticleBase {
         this.secret = secret;
         this.idleTimeout = idleTimeout;
         this.maxRequestBytes = maxRequestBytes;
+        this.appRouter = appRouter;
+        this.files = files;
+        this.apiPort = apiPort;
     }
 
     public int port() {
@@ -84,6 +99,8 @@ public final class IngressVerticle extends VerticleBase {
     @Override
     public Future<?> start() {
         client = vertx.createHttpClient(internalTls.apply(new HttpClientOptions().setKeepAlive(true)), new PoolOptions().setHttp1MaxSize(256));
+        // The API rewrite talks to this node's own API in plain HTTP; it never carries the internal secret (D-066).
+        apiClient = vertx.createHttpClient(new HttpClientOptions().setKeepAlive(true), new PoolOptions().setHttp1MaxSize(64));
         // Expect: 100-continue is answered at once, as Node's server does without a 'checkContinue' listener (D-123).
         return vertx.createHttpServer(new io.vertx.core.http.HttpServerOptions().setHandle100ContinueAutomatically(true))
                 .requestHandler(this::handle).listen(port).onSuccess(bound -> server = bound);
@@ -97,7 +114,33 @@ public final class IngressVerticle extends VerticleBase {
             error(request, 413, "Request body is over " + maxRequestBytes + " bytes", false);
             return;
         }
-        resolve(host, request.uri()).onComplete(ar -> {
+        appRouter.route(appRequest(request, host)).onComplete(ar -> {
+            if (ar.failed()) {
+                LOG.warn("Ingress routing failed for {}", host, ar.cause());
+                error(request, 502, "Bad gateway", false);
+                return;
+            }
+            dispatch(request, host, ar.result());
+        });
+    }
+
+    /** Acts on what {@link AppRouter} decided, falling back to ordinary service routing for {@code NotAnApp}. */
+    private void dispatch(HttpServerRequest request, String host, AppRouter.Decision decision) {
+        switch (decision) {
+            case AppRouter.Decision.Denied denied -> error(request, 403, denied.message(), false);
+            case AppRouter.Decision.Error failure -> error(request, failure.status(), failure.message(), false);
+            case AppRouter.Decision.Proxy proxy -> proxied(request, host,
+                    resolveService(proxy.tenant(), proxy.service(), proxy.uri(), null, host));
+            case AppRouter.Decision.Api api -> proxyApi(request, host, api.uri());
+            case AppRouter.Decision.Static asset -> serveStatic(request, asset);
+            case AppRouter.Decision.Redirect redirect -> redirect(request, redirect);
+            case AppRouter.Decision.NotAnApp ignored -> proxied(request, host, resolve(host, request.uri()));
+        }
+    }
+
+    /** Proxies to a resolved target, or answers the routing error it carries. */
+    private void proxied(HttpServerRequest request, String host, Future<Target> resolved) {
+        resolved.onComplete(ar -> {
             if (ar.failed()) {
                 LOG.warn("Ingress routing failed for {}", host, ar.cause());
                 error(request, 502, "Bad gateway", false);
@@ -110,6 +153,14 @@ public final class IngressVerticle extends VerticleBase {
             }
             proxy(request, host, target);
         });
+    }
+
+    /** The request as {@link AppRouter} sees it: lower-cased headers, the client address, path and query apart. */
+    private static AppRouter.Request appRequest(HttpServerRequest request, String host) {
+        JsonObject headers = new JsonObject();
+        request.headers().forEach(h -> headers.put(h.getKey().toLowerCase(Locale.ROOT), h.getValue()));
+        String remote = request.remoteAddress() == null ? null : request.remoteAddress().hostAddress();
+        return new AppRouter.Request(host, request.method().name(), request.path(), request.query(), remote, headers);
     }
 
     /**
@@ -128,51 +179,67 @@ public final class IngressVerticle extends VerticleBase {
     }
 
     private Future<Target> resolve(String host, String uri) {
-        return router.route(host).compose(route -> {
-            if (route == null) {
+        return router.route(host).compose(route -> route == null
+                ? Future.succeededFuture(Target.error(404, "No service is served at " + host))
+                : resolveService(route.tenant(), route.service(), uri, route.port(), host));
+    }
+
+    /** Where a named service's request goes: its current run's node, and the port its host or path selects. */
+    private Future<Target> resolveService(String tenant, String service, String uri, Integer declaredPort, String host) {
+        return services.get(tenant, service).compose(found -> {
+            if (found == null) {
                 return Future.succeededFuture(Target.error(404, "No service is served at " + host));
             }
-            return services.get(route.tenant(), route.service()).compose(service -> {
-                if (service == null) {
-                    return Future.succeededFuture(Target.error(404, "No service is served at " + host));
+            // Which server (D-112, D-123): the host's or domain's port, else a declared path prefix, else the main one.
+            java.util.List<automately.core.service.ServicePorts.Port> ports = automately.core.service.ServicePorts.of(found.ports());
+            Integer port = declaredPort;
+            String forwardUri = uri;
+            String prefix = null;
+            if (port == null) {
+                automately.core.service.ServicePorts.Match match = automately.core.service.ServicePorts.match(ports, uri);
+                if (match != null) {
+                    port = match.port();
+                    prefix = match.prefix();
+                    forwardUri = match.uri();
                 }
-                // Which server (D-112, D-123): the host's or domain's port, else a declared path prefix, else the main one.
-                java.util.List<automately.core.service.ServicePorts.Port> ports = automately.core.service.ServicePorts.of(service.ports());
-                Integer port = route.port();
-                String forwardUri = uri;
-                String prefix = null;
-                if (port == null) {
-                    automately.core.service.ServicePorts.Match match = automately.core.service.ServicePorts.match(ports, uri);
-                    if (match != null) {
-                        port = match.port();
-                        prefix = match.prefix();
-                        forwardUri = match.uri();
-                    }
+            }
+            automately.core.service.ServicePorts.Port declared = port == null ? null : automately.core.service.ServicePorts.declared(ports, port);
+            if (declared != null && !declared.expose()) {
+                return Future.succeededFuture(Target.error(404, "No service is served at " + host));
+            }
+            Target routed = new Target(null, null, port, forwardUri, prefix, 0, null);
+            if (found.currentJobId() == null) {
+                return Future.succeededFuture(Target.error(503, "The service is not running"));
+            }
+            return jobs.get(found.currentJobId()).compose(job -> {
+                if (job == null || job.status() != JobStatus.RUNNING) {
+                    return Future.succeededFuture(Target.error(503, "The service is starting"));
                 }
-                automately.core.service.ServicePorts.Port declared = port == null ? null : automately.core.service.ServicePorts.declared(ports, port);
-                if (declared != null && !declared.expose()) {
-                    return Future.succeededFuture(Target.error(404, "No service is served at " + host));
-                }
-                Target routed = new Target(null, null, port, forwardUri, prefix, 0, null);
-                if (service.currentJobId() == null) {
-                    return Future.succeededFuture(Target.error(503, "The service is not running"));
-                }
-                return jobs.get(service.currentJobId()).compose(job -> {
-                    if (job == null || job.status() != JobStatus.RUNNING) {
-                        return Future.succeededFuture(Target.error(503, "The service is starting"));
-                    }
-                    return nodes.liveNodes().map(live -> live.stream()
-                            .filter(node -> node.instanceId().equals(job.nodeInstance()) && node.endpoint() != null)
-                            .map(NodeInfo::endpoint)
-                            .findFirst()
-                            .map(endpoint -> routed.at(endpoint, job.id()))
-                            .orElse(Target.error(503, "The service's node is unavailable")));
-                });
+                return nodes.liveNodes().map(live -> live.stream()
+                        .filter(node -> node.instanceId().equals(job.nodeInstance()) && node.endpoint() != null)
+                        .map(NodeInfo::endpoint)
+                        .findFirst()
+                        .map(endpoint -> routed.at(endpoint, job.id()))
+                        .orElse(Target.error(503, "The service's node is unavailable")));
             });
         });
     }
 
     private void proxy(HttpServerRequest request, String host, Target target) {
+        proxy(request, host, target, client, true);
+    }
+
+    /** Proxies to this node's own API for an app's {@code api:} rewrite; the API is a plain, public endpoint. */
+    private void proxyApi(HttpServerRequest request, String host, String uri) {
+        int port = apiPort.getAsInt();
+        if (port <= 0) {
+            error(request, 503, "This node doesn't serve the API", false);
+            return;
+        }
+        proxy(request, host, new Target("127.0.0.1:" + port, null, null, uri, null, 0, null), apiClient, false);
+    }
+
+    private void proxy(HttpServerRequest request, String host, Target target, HttpClient httpClient, boolean internal) {
         int colon = target.endpoint().lastIndexOf(':');
         MultiMap headers = MultiMap.caseInsensitiveMultiMap();
         request.headers().forEach(h -> {
@@ -181,39 +248,43 @@ public final class IngressVerticle extends VerticleBase {
                 headers.add(h.getKey(), h.getValue());
             }
         });
-        // The request as the client sent it, for Node servers (D-123): its own headers in order and spelling, hop-by-hop
-        // ones included, its address and its HTTP version. A client can't set these: x-automately-* are dropped above.
-        // The client's own X-Forwarded-* are left out: only the ingress's reach the service, appended on the node (its
-        // X-Forwarded-For carries the client's chain, then the address the ingress saw), so none can be spoofed.
-        io.vertx.core.json.JsonArray raw = new io.vertx.core.json.JsonArray();
-        request.headers().forEach(h -> {
-            String lower = h.getKey().toLowerCase(Locale.ROOT);
-            if (!lower.startsWith("x-automately-") && !lower.startsWith("x-forwarded-")) {
-                raw.add(h.getKey()).add(h.getValue());
+        if (internal) {
+            // The request as the client sent it, for Node servers (D-123): its own headers in order and spelling, hop-by-hop
+            // ones included, its address and its HTTP version. A client can't set these: x-automately-* are dropped above.
+            // The client's own X-Forwarded-* are left out: only the ingress's reach the service, appended on the node (its
+            // X-Forwarded-For carries the client's chain, then the address the ingress saw), so none can be spoofed.
+            io.vertx.core.json.JsonArray raw = new io.vertx.core.json.JsonArray();
+            request.headers().forEach(h -> {
+                String lower = h.getKey().toLowerCase(Locale.ROOT);
+                if (!lower.startsWith("x-automately-") && !lower.startsWith("x-forwarded-")) {
+                    raw.add(h.getKey()).add(h.getValue());
+                }
+            });
+            headers.set(InternalHttpVerticle.RAW_HEADERS_HEADER, raw.encode());
+            if (request.remoteAddress() != null) {
+                headers.set(InternalHttpVerticle.REMOTE_HEADER, request.remoteAddress().hostAddress() + ":" + request.remoteAddress().port());
             }
-        });
-        headers.set(InternalHttpVerticle.RAW_HEADERS_HEADER, raw.encode());
-        if (request.remoteAddress() != null) {
-            headers.set(InternalHttpVerticle.REMOTE_HEADER, request.remoteAddress().hostAddress() + ":" + request.remoteAddress().port());
+            headers.set(InternalHttpVerticle.VERSION_HEADER, switch (request.version()) {
+                case HTTP_1_0 -> "1.0";
+                case HTTP_2 -> "2.0";
+                default -> "1.1";
+            });
         }
-        headers.set(InternalHttpVerticle.VERSION_HEADER, switch (request.version()) {
-            case HTTP_1_0 -> "1.0";
-            case HTTP_2 -> "2.0";
-            default -> "1.1";
-        });
         String forwardedFor = request.getHeader("X-Forwarded-For");
         String remote = request.remoteAddress() == null ? "unknown" : request.remoteAddress().hostAddress();
         headers.set("X-Forwarded-For", forwardedFor == null ? remote : forwardedFor + ", " + remote);
         headers.set("X-Forwarded-Host", host);
         headers.set("X-Forwarded-Proto", request.isSSL() ? "https" : "http");
-        if (secret != null) {
-            headers.set(InternalHttpVerticle.SECRET_HEADER, secret);
-        } else {
-            headers.remove(InternalHttpVerticle.SECRET_HEADER);
-        }
-        headers.set(InternalHttpVerticle.JOB_HEADER, target.jobId());
-        if (target.port() != null) {
-            headers.set(InternalHttpVerticle.PORT_HEADER, String.valueOf(target.port()));
+        if (internal) {
+            if (secret != null) {
+                headers.set(InternalHttpVerticle.SECRET_HEADER, secret);
+            } else {
+                headers.remove(InternalHttpVerticle.SECRET_HEADER);
+            }
+            headers.set(InternalHttpVerticle.JOB_HEADER, target.jobId());
+            if (target.port() != null) {
+                headers.set(InternalHttpVerticle.PORT_HEADER, String.valueOf(target.port()));
+            }
         }
         // A request asking to upgrade (a WebSocket) keeps its Connection and Upgrade, so the service can answer 101 (D-125).
         boolean upgrade = asksToUpgrade(request);
@@ -221,10 +292,12 @@ public final class IngressVerticle extends VerticleBase {
             headers.set("Connection", "Upgrade");
             headers.set("Upgrade", request.getHeader("Upgrade"));
         }
-        // Only the ingress says what prefix it took off; a client's own claim is dropped.
-        headers.remove("X-Forwarded-Prefix");
-        if (target.prefix() != null) {
-            headers.set("X-Forwarded-Prefix", target.prefix());
+        if (internal) {
+            // Only the ingress says what prefix it took off; a client's own claim is dropped.
+            headers.remove("X-Forwarded-Prefix");
+            if (target.prefix() != null) {
+                headers.set("X-Forwarded-Prefix", target.prefix());
+            }
         }
         RequestOptions options = new RequestOptions()
                 .setMethod(request.method())
@@ -235,7 +308,7 @@ public final class IngressVerticle extends VerticleBase {
                 .setConnectTimeout(5_000);
 
         HttpServerResponse response = request.response();
-        client.request(options).onFailure(err -> {
+        httpClient.request(options).onFailure(err -> {
             // The node is gone or unreachable; the cluster will move the service.
             error(request, 503, "The service's node is unavailable", true);
         }).onSuccess(upstream -> {
@@ -271,6 +344,31 @@ public final class IngressVerticle extends VerticleBase {
             upstream.response().onFailure(err -> upstreamFailed(request, err)).onSuccess(answer -> relay(request, answer, idle));
             streamBody(request, upstream, idle);
         });
+    }
+
+    /** Streams an app's static asset from the VFS, with ETag, Range and the manifest's headers (D-...). */
+    private void serveStatic(HttpServerRequest request, AppRouter.Decision.Static asset) {
+        ServerExchange exchange = new ServerExchange(request, vertx.getOrCreateContext());
+        JsonObject requestHeaders = new JsonObject();
+        request.headers().forEach(h -> requestHeaders.put(h.getKey().toLowerCase(Locale.ROOT), h.getValue()));
+        FileResponder.respond(files, asset.tenant(), asset.path(), request.method().name(), requestHeaders, asset.headers(), exchange)
+                .onFailure(err -> {
+                    if (!request.response().headWritten()) {
+                        LOG.warn("Serving app asset {} failed", asset.path(), err);
+                        error(request, 500, "Could not serve the app asset", false);
+                    }
+                });
+    }
+
+    /** An app route's 3xx: the client is sent to the destination. */
+    private static void redirect(HttpServerRequest request, AppRouter.Decision.Redirect redirect) {
+        HttpServerResponse response = request.response();
+        automately.core.http.EarlyAnswer.dropEntityHeaders(response);
+        for (java.util.Map.Entry<String, Object> header : redirect.headers()) {
+            response.putHeader(header.getKey(), String.valueOf(header.getValue()));
+        }
+        response.setStatusCode(redirect.status()).putHeader("Location", redirect.location()).putHeader("Server", "automately");
+        response.end();
     }
 
     /** Sends the service's answer back to the client as it streams in. */

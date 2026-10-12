@@ -65,4 +65,20 @@ class ServerConfigTest {
     void clusteredDataDirectoryStaysUnsetWithoutAnExplicitPath() {
         assertThat(ServerConfig.fromEnv(Map.of("AUTOMATELY_CLUSTERED", "true")).dataDirectory()).isNull();
     }
+
+    @Test
+    @DisplayName("The console host is off by default and parsed (lower-cased) from AUTOMATELY_CONSOLE_DOMAIN")
+    void consoleDomainIsParsedFromEnv() {
+        assertThat(ServerConfig.fromEnv(Map.of()).consoleDomain()).isNull();
+        assertThat(ServerConfig.fromEnv(Map.of("AUTOMATELY_CONSOLE_DOMAIN", " Console.Internal.Example "))
+                .consoleDomain()).isEqualTo("console.internal.example");
+    }
+
+    @Test
+    @DisplayName("AUTOMATELY_CONSOLE_ALLOWED_CIDRS is a comma-separated list, trimmed, empty entries dropped")
+    void consoleAllowedCidrsAreParsedFromEnv() {
+        assertThat(ServerConfig.fromEnv(Map.of()).consoleAllowedCidrs()).isEmpty();
+        assertThat(ServerConfig.fromEnv(Map.of("AUTOMATELY_CONSOLE_ALLOWED_CIDRS", " 127.0.0.1/32 , 10.0.0.0/8 ,,"))
+                .consoleAllowedCidrs()).containsExactly("127.0.0.1/32", "10.0.0.0/8");
+    }
 }

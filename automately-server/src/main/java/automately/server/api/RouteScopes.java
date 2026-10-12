@@ -128,6 +128,16 @@ final class RouteScopes {
             rule("GET", "/v1/jobs/" + SEG + "/steps", "getJobSteps", Who.TENANT, Scopes.JOBS_READ),
             rule("POST", "/v1/jobs/" + SEG + "/cancel", "cancelJob", Who.TENANT, Scopes.JOBS_WRITE),
 
+            // Apps and their deployments (docs/design/apps-and-console.md).
+            rule("GET", "/v1/apps", "listApps", Who.TENANT, Scopes.APPS_READ),
+            rule("GET", "/v1/apps/" + SEG, "getApp", Who.TENANT, Scopes.APPS_READ),
+            rule("DELETE", "/v1/apps/" + SEG, "deleteApp", Who.TENANT, Scopes.APPS_WRITE),
+            rule("GET", "/v1/apps/" + SEG + "/deployments", "listDeployments", Who.TENANT, Scopes.APPS_READ),
+            json("POST", "/v1/apps/" + SEG + "/deployments", "createDeployment", Who.TENANT, Scopes.APPS_WRITE, MANIFEST),
+            rule("GET", "/v1/apps/" + SEG + "/deployments/" + SEG, "getDeployment", Who.TENANT, Scopes.APPS_READ),
+            json("POST", "/v1/apps/" + SEG + "/promote", "promoteApp", Who.TENANT, Scopes.APPS_WRITE, SMALL),
+            rule("POST", "/v1/apps/" + SEG + "/rollback", "rollbackApp", Who.TENANT, Scopes.APPS_WRITE),
+
             rule("GET", "/v1/services", "listServices", Who.TENANT, Scopes.SERVICES_READ),
             rule("GET", "/v1/services/" + SEG, "getService", Who.TENANT, Scopes.SERVICES_READ),
             json("PUT", "/v1/services/" + SEG, "putService", Who.TENANT, Scopes.SERVICES_WRITE, SCRIPT),
