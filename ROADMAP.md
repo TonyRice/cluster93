@@ -134,6 +134,10 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 5. Recent Key Achievements & Bug Fixes
 
+- **Apps CLI — Deploy, Serve, Promote, Roll Back & Remove (Phase 6.1, Phase 3 CLI):**
+  - `AppsCommand` adds `automately apps` with `deploy` (reads `automately.json`, honors `distDir`, falls back to `out/`, `dist/`, `build/` or the project root; uploads the static export to `/.apps/<app>/deployments/<id>/` via `PUT /v1/files`; registers the immutable deployment with an optional git commit; auto-promotes unless `--no-promote`), `ls`/`list`, `get`, `deployments`, `promote`, `rollback`, and `rm`/`delete` (with `--yes`).
+  - Deploy prints the app name, deployment id, file count and size, plus the preview (`<deploymentId>--<app>--<tenant>`) and canonical (`<app>--<tenant>`) URLs derived from `AUTOMATELY_INGRESS_URL` (or the cluster URL); every command supports `--json`.
+  - `Main` registers `AppsCommand`; `AppsCliTest` drives the whole lifecycle against a real in-process node, including serving the promoted static site through the ingress and the SPA fallback.
 - **Apps Primitive — Server, Ingress Router, Security & REST API (Phase 6.1):**
   - `apps:read`/`apps:write` scopes (`Scopes`, `openapi.yaml`) and `/v1/apps` REST operations (list/get/delete apps, list/get/create deployments, promote, rollback) in `AppsRoutes`, with `RouteScopes` rules and full OpenAPI 3.1 schemas.
   - `AppStore` instantiated in `Automately.Stores` and wired into `ApiVerticle` and `IngressVerticle`.
