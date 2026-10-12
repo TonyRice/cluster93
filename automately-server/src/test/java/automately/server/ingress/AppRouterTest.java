@@ -208,6 +208,32 @@ class AppRouterTest {
     }
 
     @Test
+    @DisplayName("An exact static file is served even when a catch-all SPA rewrite matches it")
+    void staticFileTakesPrecedenceOverCatchAllRewrite() throws Exception {
+        String manifest = """
+                {
+                  "name": "console",
+                  "routes": [
+                    {"src": "/v1/(.*)", "dest": "api:/v1/$1"},
+                    {"src": ".*", "dest": "/index.html", "status": 200}
+                  ],
+                  "headers": [
+                    {"source": "/_next/static/(.*)", "headers": {"Cache-Control": "public, max-age=31536000, immutable"}}
+                  ]
+                }
+                """;
+        deploy("system", "console", "dpl_c", manifest);
+        files.put(assetPrefix("console", "dpl_c") + "/_next/static/chunks/app.js");
+        await(apps.promote("system", "console", "dpl_c"));
+
+        AppRouter.Decision decision = await(router.route(request("console.internal.test", "/_next/static/chunks/app.js", "10.1.2.3")));
+        assertThat(decision).isInstanceOf(AppRouter.Decision.Static.class);
+        AppRouter.Decision.Static asset = (AppRouter.Decision.Static) decision;
+        assertThat(asset.path()).isEqualTo(assetPrefix("console", "dpl_c") + "/_next/static/chunks/app.js");
+        assertThat(asset.headers().getString("cache-control")).isEqualTo("public, max-age=31536000, immutable");
+    }
+
+    @Test
     @DisplayName("A host that names no app falls back to ordinary service routing")
     void unknownHostIsNotAnApp() throws Exception {
         assertThat(await(router.route(request("other.example.com", "/", "127.0.0.1"))))

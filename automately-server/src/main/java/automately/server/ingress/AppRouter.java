@@ -181,8 +181,25 @@ public final class AppRouter {
                 : apps.getDeployment(tenant, app, record.activeDeploymentId()));
     }
 
-    /** A static asset from the deployment's VFS prefix, falling back to {@code /index.html} when it isn't there. */
+    /**
+     * A static asset from the deployment's VFS prefix. An exact file at the request's own path wins over the route's
+     * rewrite destination, so a catch-all SPA route (e.g. {@code .* -> /index.html}) cannot shadow a real asset such
+     * as {@code /_next/static/chunks/app.js}. Otherwise the rewrite destination is served, falling back to
+     * {@code /index.html} for client-side routing.
+     */
     private Future<Decision> staticAsset(AppDeployment deployment, String path, Request request, JsonObject headers) {
+        String requested = relative(request.path());
+        if (FileStore.invalidPath(requested) == null) {
+            String exact = vfsPath(deployment, requested);
+            return files.stat(deployment.tenant(), exact).compose(file -> file != null
+                    ? Future.succeededFuture(new Decision.Static(deployment.tenant(), exact, headers))
+                    : resolveAsset(deployment, path, request, headers));
+        }
+        return resolveAsset(deployment, path, request, headers);
+    }
+
+    /** The rewrite destination as an asset, falling back to {@code /index.html} when it isn't there. */
+    private Future<Decision> resolveAsset(AppDeployment deployment, String path, Request request, JsonObject headers) {
         String relative = relative(path);
         String invalid = FileStore.invalidPath(relative);
         if (invalid != null) {
