@@ -4,10 +4,11 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.Optional;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -40,6 +41,10 @@ import java.util.UUID;
  * @param jobRetention  finished jobs older than this are deleted
  * @param clusterSize   nodes a brand-new durable cluster waits for before activating
  * @param clusterMembers Hazelcast TCP/IP join addresses, e.g. {@code node1,node2,node3}; a host without a port is probed from {@code clusterPort} upwards
+ * @param roles         the personas this node plays ({@code api}, {@code ingress}, {@code worker}, {@code data}); a node only
+ *                      serves a role it lists, and a node without {@code worker} takes no tenant compute (docs/design/node-roles.md)
+ * @param capabilities  execution engines this node advertises for capability matching, such as {@code js:v8} or {@code js:graaljs}
+ *                      (empty means advertise no special capabilities, so any worker node matches)
  */
 public record ServerConfig(
         String nodeId,
@@ -97,10 +102,14 @@ public record ServerConfig(
         long tmpMb,
         String workerMode,
         String workerDefaultMode,
-        Map<String, String> workerBinaries) {
+        Map<String, String> workerBinaries,
+        Set<String> roles,
+        Set<String> capabilities) {
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
     public static final java.util.List<String> WORKER_MODES = java.util.List.of("embedded", "process");
+    /** The personas a node can play (docs/design/node-roles.md): every role is on by default, as in development. */
+    public static final java.util.List<String> ROLES = java.util.List.of("api", "ingress", "worker", "data");
 
     public ServerConfig {
         if (!FILES_BACKENDS.contains(filesBackend)) {
@@ -108,6 +117,14 @@ public record ServerConfig(
         }
         if (!WORKER_MODES.contains(workerMode)) {
             throw new IllegalArgumentException("AUTOMATELY_WORKER_MODE must be one of " + WORKER_MODES + " (it was " + workerMode + ")");
+        }
+        if (roles.isEmpty()) {
+            throw new IllegalArgumentException("AUTOMATELY_ROLES must name at least one of " + ROLES);
+        }
+        for (String role : roles) {
+            if (!ROLES.contains(role)) {
+                throw new IllegalArgumentException("AUTOMATELY_ROLES must be a comma-separated subset of " + ROLES + " (it named " + role + ")");
+            }
         }
         if (secretsKey != null && secretsKey.length() < automately.core.storage.SecretBox.MIN_KEY_LENGTH) {
             throw new IllegalArgumentException("AUTOMATELY_SECRETS_KEY must be at least " + automately.core.storage.SecretBox.MIN_KEY_LENGTH + " characters");
@@ -126,6 +143,8 @@ public record ServerConfig(
 
     public static ServerConfig fromEnv(Map<String, String> env) {
         Duration heartbeat = Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_HEARTBEAT_MS", "1000")));
+        // Resolved once so the /tmp default and the durable directory agree on whether this node persists.
+        Path dataDirectory = dataDirectory(env);
         return new ServerConfig(
                 env.getOrDefault("AUTOMATELY_NODE_ID", defaultNodeId()),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_HTTP_PORT", "8080")),
@@ -158,7 +177,8 @@ public record ServerConfig(
                 Long.parseLong(env.getOrDefault("AUTOMATELY_TENANT_STORAGE_MB", "1024")) * 1024 * 1024,
                 Long.parseLong(env.getOrDefault("AUTOMATELY_PACKAGE_CACHE_MB", "64")) * 1024 * 1024,
                 Long.parseLong(env.getOrDefault("AUTOMATELY_MIN_FREE_DISK_MB", "1024")) * 1024 * 1024,
-                Optional.ofNullable(env.get("AUTOMATELY_DATA_DIR")).filter(dir -> !dir.isBlank()).map(Path::of).orElse(null),
+                // Durable data location; a standalone node defaults to $HOME/.automately/data (dev.sh, a bare `java -jar`).
+                dataDirectory,
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_DATA_BACKUPS", "1")),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_DATA_MEMORY_MB", "256")),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_BASELINE_ADJUST_MS", "60000"))),
@@ -191,11 +211,41 @@ public record ServerConfig(
                 automately.core.files.s3.S3Settings.auditFromEnv(env),
                 Duration.ofSeconds(Long.parseLong(env.getOrDefault("AUTOMATELY_AUDIT_EXPORT_INTERVAL_S", "300").trim())),
                 // A job's /tmp (D-079): this much in memory (all of it without a data directory), then spilled up to the total.
-                Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MEMORY_MB", env.get("AUTOMATELY_DATA_DIR") == null ? "64" : "8").trim()),
+                Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MEMORY_MB", dataDirectory == null ? "64" : "8").trim()),
                 Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MB", "1024").trim()),
                 env.getOrDefault("AUTOMATELY_WORKER_MODE", "process").trim().toLowerCase(java.util.Locale.ROOT),
                 env.getOrDefault("AUTOMATELY_WORKER_DEFAULT_MODE", env.getOrDefault("AUTOMATELY_WORKER_ENGINE", "javet")).trim().toLowerCase(java.util.Locale.ROOT),
-                parseWorkerBinaries(env));
+                parseWorkerBinaries(env),
+                parseSet(env.getOrDefault("AUTOMATELY_ROLES", String.join(",", ROLES))),
+                parseSet(env.getOrDefault("AUTOMATELY_CAPABILITIES", "")));
+    }
+
+    /** A comma-separated list, trimmed, empty entries dropped, in the order given. */
+    private static Set<String> parseSet(String value) {
+        Set<String> parsed = new LinkedHashSet<>();
+        for (String entry : value.split(",")) {
+            String trimmed = entry.trim();
+            if (!trimmed.isEmpty()) {
+                parsed.add(trimmed);
+            }
+        }
+        return Set.copyOf(parsed);
+    }
+
+    /**
+     * Where durable data lives: {@code AUTOMATELY_DATA_DIR} when set, else {@code $HOME/.automately/data} for a standalone
+     * node. A clustered node without an explicit directory stays in memory: several nodes on one host (tests, a local
+     * cluster) need their own directories, which the operator names.
+     */
+    private static Path dataDirectory(Map<String, String> env) {
+        String explicit = blankToNull(env.get("AUTOMATELY_DATA_DIR"));
+        if (explicit != null) {
+            return Path.of(explicit);
+        }
+        if (Boolean.parseBoolean(env.getOrDefault("AUTOMATELY_CLUSTERED", "false"))) {
+            return null;
+        }
+        return Path.of(System.getProperty("user.home"), ".automately", "data");
     }
 
     private static Map<String, String> parseWorkerBinaries(Map<String, String> env) {

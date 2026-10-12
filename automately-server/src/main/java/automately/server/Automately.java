@@ -426,12 +426,18 @@ public final class Automately {
                     .compose(audit::prune)
                     .onFailure(err -> LOG.warn("Pruning the audit log failed: {}", err.getMessage()));
         });
-        ApiVerticle api = new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter, visibleFiles,
-                quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
+        // Which personas this node plays (docs/design/node-roles.md). A node that isn't a worker takes no tenant compute.
+        boolean apiRole = config.roles().contains("api");
+        boolean ingressRole = config.roles().contains("ingress");
+        int nodeCapacity = config.roles().contains("worker") ? config.capacity() : 0;
+        LOG.info("Node {} roles: {} (capacity {}, capabilities {})", config.nodeId(), config.roles(), nodeCapacity,
+                config.capabilities().isEmpty() ? "none" : config.capabilities());
+        ApiVerticle api = apiRole ? new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter,
+                visibleFiles, quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
                 queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, packages, limiter, egressPolicies,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
-                () -> readiness(nodes, instanceId, cluster));
+                () -> readiness(nodes, instanceId, cluster)) : null;
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         // A node whose file backend can't be used refuses to start, saying why, rather than failing uploads later.
         // Tenant disk providers need a disk root every node sees (D-057); a single node always does.
@@ -453,11 +459,11 @@ public final class Automately {
             InternalHttpVerticle endpoint = security.tls() == null
                     ? new InternalHttpVerticle(config.internalPort(), secret, serving, new io.vertx.core.http.HttpServerOptions(), config.maxUpgradedPerRun())
                     : new InternalHttpVerticle(config.internalPort(), null, serving, ClusterSecurity.internalServer(security.tls()), config.maxUpgradedPerRun());
-            IngressVerticle ingress = new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes,
+            IngressVerticle ingress = ingressRole ? new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes,
                     security.tls() == null ? secret : null, config.ingressIdleTimeout(), config.ingressUpgradedIdleTimeout(), config.maxRequestBytes(),
-                    security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls()));
+                    security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls())) : null;
             return vertx.deployVerticle(endpoint)
-                    .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, config.capacity(), jobs, state, nodes,
+                    .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, nodeCapacity, jobs, state, nodes,
                             runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port(),
                             new automately.core.packages.PackageLoader(packages, config.packageCacheBytes(),
                                     automately.core.metrics.Metrics.of(vertx)), tenantSecrets)))
@@ -478,10 +484,11 @@ public final class Automately {
                                     cluster.stop();
                                 }
                             })))
-                    .compose(id -> vertx.deployVerticle(api))
-                    .compose(id -> vertx.deployVerticle(ingress))
+                    .compose(id -> apiRole ? vertx.deployVerticle(api) : Future.succeededFuture())
+                    .compose(id -> ingressRole ? vertx.deployVerticle(ingress) : Future.succeededFuture())
                     .compose(id -> serveMetrics(vertx, config, instanceId, nodes, cluster))
-                    .map(metricsPort -> new RunningNode(config.nodeId(), instanceId, vertx, api.port(), ingress.port(), cluster, api.routes(),
+                    .map(metricsPort -> new RunningNode(config.nodeId(), instanceId, vertx, apiRole ? api.port() : -1,
+                            ingressRole ? ingress.port() : -1, cluster, apiRole ? api.routes() : List.of(),
                             metricsPort, endpoint.port(), workerPoolRef.get() == null ? null : workerPoolRef.get()::close));
         }).recover(err -> {
             // Not waited for: this runs on one of Vert.x's own threads, which a close can't report back to.

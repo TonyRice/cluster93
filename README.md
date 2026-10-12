@@ -59,7 +59,40 @@ The automated demo spins up a 3-node cluster and demonstrates live failover:
 
 ## Quickstart
 
-### 1. Launch a Local Cluster
+### Local Development (Zero Docker, Single Command)
+
+To run a persistent local single-node cluster directly on your machine without Docker:
+
+```bash
+# 1. Build the server, GraalVM native CLI, and worker isolate
+scripts/dev.sh build
+
+# 2. Start the local cluster in the background (persists to ~/.automately/data)
+scripts/dev.sh start
+
+# 3. Create the 'dev' tenant, mint a full-access token, configure ~/.config/automately/config.json, and print MCP config
+scripts/dev.sh seed
+
+# 4. Run any JavaScript ES-module job via the native CLI
+automately run examples/01-hello-job.js
+
+# 5. Run the full curated test suite covering jobs, steps, KV, event bus, queues, and VFS
+scripts/dev.sh test-examples
+
+# Check cluster health and status
+scripts/dev.sh status
+
+# Stop the local server
+scripts/dev.sh stop
+```
+
+Data is stored persistently at `$HOME/.automately/data` (customizable via `scripts/dev.sh start --data-dir <path>`). The native `automately` binary is installed directly into `~/.local/bin/automately` (and `bin/automately`).
+
+---
+
+### Docker Quickstart (3-Node Resilient Cluster)
+
+#### 1. Launch a Multi-Node Cluster
 
 ```bash
 export AUTOMATELY_ADMIN_TOKEN=$(openssl rand -hex 32)

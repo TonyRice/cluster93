@@ -107,8 +107,13 @@ public final class JobScheduler {
         });
     }
 
+    /**
+     * Nodes a job attempt may be placed on, least loaded first. A node must have capacity left and be a compute node:
+     * a node playing no {@code worker} role advertises capacity 0 (docs/design/node-roles.md), so it is never chosen.
+     */
     static List<NodeInfo> candidates(List<NodeInfo> live) {
         return live.stream()
+                .filter(node -> node.capacity() > 0)
                 .filter(NodeInfo::hasCapacity)
                 .sorted(Comparator.comparingDouble(NodeInfo::load).thenComparing(NodeInfo::id))
                 .toList();
