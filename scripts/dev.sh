@@ -2,7 +2,8 @@
 # Local development stack orchestrator for Automately.
 #
 # Builds the server jar and the native CLI, starts a single-node clustered server with
-# durable Ignite WAL persistence, seeds a `dev` tenant and token, prints the MCP
+# durable Ignite WAL persistence, seeds a `dev` tenant and a provisioned `admin` operator
+# (its personal token saved as the CLI default), prints the setup banner and the MCP
 # configuration for agents, runs the example scripts, and stops the server again.
 #
 # Usage:
@@ -11,8 +12,10 @@
 #                                         $HOME/.automately/dev-data). Waits for /health.
 #   scripts/dev.sh stop                   Stop the server started by `start`.
 #   scripts/dev.sh status                 Show /health and /v1/nodes.
-#   scripts/dev.sh seed                   Create the `dev` tenant, mint an all-scoped token, save
-#                                         $HOME/.config/automately/config.json and print MCP config.
+#   scripts/dev.sh seed                   Ensure the `system` and `dev` tenants, provision the
+#                                         `admin` operator, save its token to
+#                                         $HOME/.config/automately/config.json, print the setup
+#                                         banner and the MCP config.
 #   scripts/dev.sh test-examples          Run examples/01..06 against the running server.
 #   scripts/dev.sh restart                stop, then start.
 #
@@ -36,6 +39,8 @@ SERVER_JAR="${REPO_ROOT}/automately-server/target/automately.jar"
 ADMIN_TOKEN="dev-admin-token-1234567890abcdef"
 URL="http://localhost:8080"
 MCP_URL="${URL}/mcp"
+# The developer workspace tenant seeded alongside system; override with TENANT=... in the environment.
+TENANT="${TENANT:-dev}"
 
 # Apache Ignite 2.18 on JDK 21 needs these module opens (pom.xml's ignite.jvm.args, the Dockerfile's
 # JDK_JAVA_OPTIONS). Without them the server fails at startup with InaccessibleObjectException.
@@ -95,6 +100,92 @@ mint_token() {
     token=$(printf '%s' "$response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
   fi
   printf '%s' "$token"
+}
+
+# A top-level JSON string field, parsed by python3 when available, else with sed.
+json_string() {
+  local response="$1" field="$2" value
+  value=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1],""))' "$field" 2>/dev/null || true)
+  if [[ -z "$value" ]]; then
+    value=$(printf '%s' "$response" | sed -n "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p")
+  fi
+  printf '%s' "$value"
+}
+
+# The personal token inside a redeem response: the mint nests the secret at token.token.
+redeem_token() {
+  local response="$1" token
+  token=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",{}).get("token",""))' 2>/dev/null || true)
+  if [[ -z "$token" ]]; then
+    token=$(printf '%s' "$response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*{[^}]*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  fi
+  printf '%s' "$token"
+}
+
+# Provisions the default 'admin' operator: an operator invite minted with the admin token, redeemed as 'admin'.
+# Prints the operator personal token; reuses the saved one if 'admin' already exists on a re-run.
+provision_admin() {
+  echo "== provisioning the 'admin' operator" >&2
+  local invited code redeemed token
+  invited=$(curl -sS -m 10 -X POST "${URL}/v1/admin/invites" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"note":"dev operator"}')
+  code=$(json_string "$invited" code)
+  if [[ -z "$code" ]]; then
+    echo "   (no operator invite: ${invited})" >&2
+    saved_operator_token
+    return 0
+  fi
+  redeemed=$(curl -sS -m 10 -X POST "${URL}/v1/invites/redeem" \
+    -H "Content-Type: application/json" \
+    -d "{\"code\":\"${code}\",\"name\":\"admin\",\"tokenName\":\"operator\"}")
+  token=$(redeem_token "$redeemed")
+  if [[ -z "$token" ]]; then
+    echo "   ('admin' already exists; reusing the saved operator token)" >&2
+    saved_operator_token
+    return 0
+  fi
+  printf '%s' "$token"
+}
+
+# The operator token in the saved login, when it still identifies as the 'admin' operator.
+saved_operator_token() {
+  local token who user
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    return 0
+  fi
+  token=$(python3 - "$CONFIG_FILE" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("token", ""))
+except Exception:
+    pass
+PY
+)
+  [[ -n "$token" ]] || return 0
+  who=$(curl -sS -m 5 -H "Authorization: Bearer ${token}" "${URL}/v1/whoami" 2>/dev/null || true)
+  user=$(json_string "$who" user)
+  if [[ "$user" == "admin" ]]; then
+    printf '%s' "$token"
+  fi
+}
+
+# The setup completion banner: where the console and API are, and who the CLI now is.
+print_setup_banner() {
+  local token="$1"
+  cat >&2 <<BANNER
+
+================================================================
+  Automately development stack is ready
+================================================================
+  Web Console URL: http://localhost:8000
+  API URL:         ${URL}
+  Operator User:   admin
+  Token:           ${token}
+================================================================
+  Saved to ${CONFIG_FILE}; 'automately' now uses the operator login.
+BANNER
 }
 
 # --------------------------------------------------------------------------
@@ -264,35 +355,34 @@ cmd_seed() {
     fi
   fi
 
-  echo "== ensuring tenant 'dev'" >&2
+  # The CLI's default identity is the operator personal token; it is what the console and MCP also use.
+  local operator_token token
+  operator_token=$(provision_admin)
+  if [[ -z "$operator_token" ]]; then
+    echo "Error: couldn't provision the 'admin' operator (is the admin token right?)" >&2
+    exit 1
+  fi
+
+  echo "== ensuring tenant '${TENANT}'" >&2
   local created
   created=$(curl -sS -m 10 -X POST "${URL}/v1/tenants" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d '{"name":"dev"}')
+    -d "{\"name\":\"${TENANT}\"}")
   echo "   ${created}" >&2
-
-  echo "== minting a token for 'dev'" >&2
-  local minted token
-  minted=$(curl -sS -m 10 -X POST "${URL}/v1/tenants/dev/tokens" \
-    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d '{"name":"dev-token","scopes":["*"]}')
-  token=$(mint_token "$minted")
-  if [[ -z "$token" ]]; then
-    echo "Error: could not read a token from: $minted" >&2
-    exit 1
-  fi
 
   mkdir -p "$(dirname "$CONFIG_FILE")"
   umask 077
   cat >"$CONFIG_FILE" <<JSON
 {
   "url": "${URL}",
-  "token": "${token}"
+  "token": "${operator_token}"
 }
 JSON
-  echo "== saved the login to $CONFIG_FILE" >&2
+  echo "== saved the operator login to $CONFIG_FILE" >&2
+
+  token="$operator_token"
+  print_setup_banner "$operator_token"
 
   cat <<MCP
 

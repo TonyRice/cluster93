@@ -2,14 +2,15 @@
 # Dedicated local master node installer and onboarding orchestrator for Automately.
 #
 # Runs a single permanent node on this machine: the API, ingress, worker, data and console roles
-# in one process, with durable Apache Ignite persistence, a seeded tenant and a saved
-# login, so `automately` works straight afterwards. It also tracks the git commit it
-# was built from and tells you when the repository has moved ahead of the running build.
+# in one process, with durable Apache Ignite persistence, a seeded tenant, a provisioned `admin`
+# operator and its saved login, so `automately` works straight afterwards. It also tracks the git
+# commit it was built from and tells you when the repository has moved ahead of the running build.
 #
 # Usage:
 #   scripts/local.sh setup [--yes|-y]    Guided onboarding; writes ~/.automately/local.env,
 #                                        builds what's missing, starts the node, seeds the
-#                                        tenant, saves the login and prints the MCP config.
+#                                        tenant, provisions the `admin` operator, saves its
+#                                        login and prints the MCP config.
 #   scripts/local.sh start               Start the configured node in the background.
 #   scripts/local.sh stop                Stop it (SIGTERM, then SIGKILL after 30s).
 #   scripts/local.sh restart             stop, then start.
@@ -360,6 +361,83 @@ mint_token() {
   printf '%s' "$token"
 }
 
+# A top-level JSON string field, parsed by python3 when available, else with sed.
+json_string() {
+  local response="$1" field="$2" value
+  value=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1],""))' "$field" 2>/dev/null || true)
+  if [[ -z "$value" ]]; then
+    value=$(printf '%s' "$response" | sed -n "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p")
+  fi
+  printf '%s' "$value"
+}
+
+# The personal token inside a redeem response: the mint nests the secret at token.token.
+redeem_token() {
+  local response="$1" token
+  token=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",{}).get("token",""))' 2>/dev/null || true)
+  if [[ -z "$token" ]]; then
+    token=$(printf '%s' "$response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*{[^}]*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  fi
+  printf '%s' "$token"
+}
+
+# Provisions the default 'admin' operator: an operator invite minted with the admin token, redeemed as 'admin'.
+# Prints the operator personal token; reuses the saved one if 'admin' already exists on a re-run.
+provision_admin() {
+  echo "== provisioning the 'admin' operator" >&2
+  local invited code redeemed token
+  invited=$(curl -sS -m 10 -X POST "${URL}/v1/admin/invites" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"note":"local master operator"}')
+  code=$(json_string "$invited" code)
+  if [[ -z "$code" ]]; then
+    echo "   (no operator invite: ${invited})" >&2
+    saved_operator_token
+    return 0
+  fi
+  redeemed=$(curl -sS -m 10 -X POST "${URL}/v1/invites/redeem" \
+    -H "Content-Type: application/json" \
+    -d "{\"code\":\"${code}\",\"name\":\"admin\",\"tokenName\":\"operator\"}")
+  token=$(redeem_token "$redeemed")
+  if [[ -z "$token" ]]; then
+    echo "   ('admin' already exists; reusing the saved operator token)" >&2
+    saved_operator_token
+    return 0
+  fi
+  printf '%s' "$token"
+}
+
+# The operator token in the saved login, when it still identifies as the 'admin' operator.
+saved_operator_token() {
+  local saved token who user
+  saved=$(saved_url_and_token || true)
+  token=$(printf '%s\n' "$saved" | sed -n 's/^TOKEN=//p')
+  [[ -n "$token" ]] || return 0
+  who=$(curl -sS -m 5 -H "Authorization: Bearer ${token}" "${URL}/v1/whoami" 2>/dev/null || true)
+  user=$(json_string "$who" user)
+  if [[ "$user" == "admin" ]]; then
+    printf '%s' "$token"
+  fi
+}
+
+# The setup completion banner: where the console and API are, and who the CLI now is.
+print_setup_banner() {
+  local token="$1"
+  cat >&2 <<BANNER
+
+================================================================
+  Automately local master is ready
+================================================================
+  Web Console URL: http://localhost:${INGRESS_PORT}
+  API URL:         http://localhost:${HTTP_PORT}
+  Operator User:   admin
+  Token:           ${token}
+================================================================
+  Saved to ${CONFIG_FILE}; 'automately' now uses the operator login.
+BANNER
+}
+
 # Publishes the console SPA to system/console with the installed CLI, falling back to the shaded jar.
 deploy_console() {
   local token="$1"
@@ -403,34 +481,32 @@ cmd_seed() {
     fi
   fi
 
+  # The CLI's default identity is the operator personal token; it is what the console and MCP also use.
+  local operator_token
+  operator_token=$(provision_admin)
+  if [[ -z "$operator_token" ]]; then
+    echo "Error: couldn't provision the 'admin' operator (is the admin token right?)" >&2
+    exit 1
+  fi
+
   echo "== ensuring tenant '${TENANT}'" >&2
   curl -sS -m 10 -X POST "${URL}/v1/tenants" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"name\":\"${TENANT}\"}" >/dev/null || true
 
-  echo "== minting a token for '${TENANT}'" >&2
-  local minted token
-  minted=$(curl -sS -m 10 -X POST "${URL}/v1/tenants/${TENANT}/tokens" \
-    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d '{"name":"local","scopes":["*"]}')
-  token=$(mint_token "$minted")
-  if [[ -z "$token" ]]; then
-    echo "Error: could not read a token from: $minted" >&2
-    exit 1
-  fi
-
   mkdir -p "$(dirname "$CONFIG_FILE")"
   umask 077
   cat >"$CONFIG_FILE" <<JSON
 {
   "url": "${URL}",
-  "token": "${token}"
+  "token": "${operator_token}"
 }
 JSON
   chmod 600 "$CONFIG_FILE"
-  echo "== saved the login to $CONFIG_FILE" >&2
+  echo "== saved the operator login to $CONFIG_FILE" >&2
+
+  print_setup_banner "$operator_token"
 }
 
 # --------------------------------------------------------------------------

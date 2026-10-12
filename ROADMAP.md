@@ -137,6 +137,11 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 5. Recent Key Achievements & Bug Fixes
 
+- **CLI Help Grouping & Default Operator Onboarding (Developer Ergonomics):**
+  - `automately --help` no longer prints a flat ~30-command list: `Main` replaces picocli's single command-list section with five categorized sections — **Developer & Applications**, **Platform Resources**, **Identity & Access**, **Cluster & Local Node**, and **Tools & Automation** — while subcommands keep their own command lists (e.g. `automately help local`).
+  - New `MainHelpTest` locks the category headings, the command-to-category mapping, and that only the top-level list is categorized (no `Commands:` heading at the top, but subcommands still show theirs).
+  - `scripts/local.sh` and `scripts/dev.sh` `cmd_seed` now always ensure the reserved `system` tenant, deploy the web console to `system/console`, mint an operator invite with `ADMIN_TOKEN` and redeem it as the `admin` user to mint an **Operator Personal Token**, ensure the developer workspace tenant (`$TENANT`, default `local` / `dev`), save that operator token as the CLI default in `~/.config/automately/config.json`, and print a setup-completion banner (Web Console URL, API URL, Operator User, Token). Re-runs reuse the saved operator token, so seeding is idempotent.
+
 - **Console Node Role & `system/console` Auto-Provisioning (Phase 6):**
   - `ServerConfig.ROLES` gains `console`, designating the node that serves the management web console; the role defaults on for a development node (`api,ingress,worker,data,console`).
   - `AppRouter` now takes the node's roles and refuses the console host (returning `NotAnApp`) unless the node plays `console`; with no `AUTOMATELY_CONSOLE_DOMAIN` set, a console-role node additionally answers the bare `localhost`/`127.0.0.1` host with `system/console`.
