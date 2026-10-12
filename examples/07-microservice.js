@@ -8,6 +8,7 @@
 // See docs/scripting/services.md.
 export default async (input, ctx) => {
   await ctx.serve(async (req) => ({
+    body: 'hello world',
     status: 'ok',
     method: req.method,
     path: req.path,
