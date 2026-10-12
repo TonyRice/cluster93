@@ -42,7 +42,9 @@ START_TIMEOUT_SECONDS="${START_TIMEOUT_SECONDS:-60}"
 # Defaults the onboarding wizard offers.
 DEFAULT_NODE_ID="local-master"
 DEFAULT_ROLES="api,ingress,worker,data"
-DEFAULT_DATA_DIR="${AUTOMATELY_HOME}/data"
+# The permanent master keeps its own store, separate from the ephemeral directory scripts/dev.sh uses,
+# so an Ignite baseline written by development testing can never collide with the master's database.
+DEFAULT_DATA_DIR="${AUTOMATELY_HOME}/master-data"
 DEFAULT_LOG_DIR="${AUTOMATELY_HOME}/logs"
 DEFAULT_HTTP_PORT="8080"
 DEFAULT_INGRESS_PORT="8000"
@@ -140,7 +142,7 @@ write_env_file() {
   umask 077
   cat >"$ENV_FILE" <<ENV
 # Automately local master node configuration (scripts/local.sh setup).
-# Read by `scripts/local.sh start|status|mcp` and `automately local ...`.
+# Read by scripts/local.sh (start, status, mcp) and automately local ...
 NODE_ID="${NODE_ID}"
 ROLES="${ROLES}"
 DATA_DIR="${DATA_DIR}"
@@ -189,7 +191,7 @@ ensure_build() {
   if [[ ! -x "$CLI_BINARY" ]]; then
     echo "== building the native automately CLI" >&2
     if ! "$REPO_ROOT/scripts/build-cli.sh"; then
-      echo "   (native CLI build skipped; `automately local` works from the jar too)" >&2
+      echo "   (native CLI build skipped; 'automately local' works from the jar too)" >&2
     fi
   fi
   if [[ ! -x "$WORKER_BINARY" ]]; then
@@ -322,7 +324,7 @@ cmd_start() {
     AUTOMATELY_INGRESS_PORT="$INGRESS_PORT" \
     AUTOMATELY_METRICS_PORT="$METRICS_PORT" \
     AUTOMATELY_WORKER_MODE="$WORKER_MODE" \
-    nohup "$(java_bin)" -jar "$SERVER_JAR" >"$LOG_FILE" 2>&1 &
+    nohup "$(java_bin)" -jar "$SERVER_JAR" </dev/null >"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
   disown "$!" 2>/dev/null || true
   echo "   pid $(cat "$PID_FILE"), log $LOG_FILE" >&2

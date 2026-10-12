@@ -7,7 +7,6 @@ import picocli.CommandLine.Option;
 
 import java.io.IOException;
 import java.io.PrintStream;
-import java.io.RandomAccessFile;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -39,6 +38,8 @@ final class LocalCommand extends Base {
 
     static final String DEFAULT_NODE_ID = "local-master";
     static final String DEFAULT_ROLES = "api,ingress,worker,data";
+    /** The master's own store, apart from the {@code dev-data} directory {@code scripts/dev.sh} uses. */
+    static final String DEFAULT_DATA_DIR = "master-data";
     static final String DEFAULT_HTTP_PORT = "8080";
     static final String DEFAULT_INGRESS_PORT = "8000";
     static final String DEFAULT_METRICS_PORT = "9090";
@@ -475,7 +476,7 @@ final class LocalCommand extends Base {
             Files.createDirectories(log.getParent());
             ProcessBuilder builder = new ProcessBuilder(javaBinary(io), "-jar", jar.toString());
             builder.command().addAll(1, IGNITE_OPENS);
-            builder.environment().putAll(serverEnvironment(config));
+            builder.environment().putAll(serverEnvironment(config, io));
             builder.redirectOutput(log.toFile());
             builder.redirectErrorStream(true);
             Process process = builder.start();
@@ -492,7 +493,7 @@ final class LocalCommand extends Base {
         throw new CliException("The node didn't answer " + base + "/health within 30s; see " + log);
     }
 
-    static Map<String, String> serverEnvironment(Map<String, String> config) {
+    static Map<String, String> serverEnvironment(Map<String, String> config, Io io) {
         Map<String, String> env = new LinkedHashMap<>();
         env.put("AUTOMATELY_NODE_ID", config.getOrDefault("NODE_ID", DEFAULT_NODE_ID));
         env.put("AUTOMATELY_ROLES", config.getOrDefault("ROLES", DEFAULT_ROLES));
@@ -500,7 +501,7 @@ final class LocalCommand extends Base {
         env.put("AUTOMATELY_CLUSTER_SIZE", "1");
         env.put("AUTOMATELY_CLUSTER_MEMBERS", "127.0.0.1");
         env.put("AUTOMATELY_CLUSTER_TLS", "off");
-        env.put("AUTOMATELY_DATA_DIR", config.getOrDefault("DATA_DIR", localHomePath(config)));
+        env.put("AUTOMATELY_DATA_DIR", config.getOrDefault("DATA_DIR", localHome(io).resolve(DEFAULT_DATA_DIR).toString()));
         env.put("AUTOMATELY_EGRESS_ALLOW_PRIVATE", "true");
         env.put("AUTOMATELY_ADMIN_TOKEN", config.getOrDefault("ADMIN_TOKEN", ""));
         env.put("AUTOMATELY_HTTP_PORT", config.getOrDefault("HTTP_PORT", DEFAULT_HTTP_PORT));
@@ -508,11 +509,6 @@ final class LocalCommand extends Base {
         env.put("AUTOMATELY_METRICS_PORT", config.getOrDefault("METRICS_PORT", DEFAULT_METRICS_PORT));
         env.put("AUTOMATELY_WORKER_MODE", config.getOrDefault("WORKER_MODE", DEFAULT_WORKER_MODE));
         return env;
-    }
-
-    private static String localHomePath(Map<String, String> config) {
-        String home = config.get("AUTOMATELY_HOME");
-        return home != null ? home + "/data" : "";
     }
 
     static Path serverJar(Io io) {

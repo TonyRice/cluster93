@@ -4,7 +4,7 @@
 **Author / Organization:** Adam & Lynn Incorporated <tony@adamnlynn.com>  
 **License:** MPL-2.0  
 **Repository:** `git@github.com:adamnlynn/automately-v2.git` (`main`)  
-**Last Updated:** 2026-10-11  
+**Last Updated:** 2026-10-12  
 
 ---
 
@@ -134,6 +134,11 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 5. Recent Key Achievements & Bug Fixes
 
+- **Standalone Node Storage Isolation & Immediate Activation:**
+  - `scripts/dev.sh` now keeps its Ignite store in `${AUTOMATELY_HOME}/dev-data` and `scripts/local.sh` its permanent master in `${AUTOMATELY_HOME}/master-data`, so development testing and the master node can no longer share a `db/` folder, WAL or Ignite baseline.
+  - `IgniteCluster.firstStart` is node-identity aware: it checks for this node's own `db/<masked consistent id>` store instead of any shared `db/`, so a directory another identity wrote to is no longer mistaken for a restart.
+  - `IgniteCluster.awaitActive` activates a standalone (`initialClusterSize == 1`) single server immediately when there is no baseline, or when the baseline names only absent nodes of another identity, instead of stalling; multi-node clustered waiting and backups validation are unchanged.
+  - `LocalCommand`'s launch fallback now matches the orchestrator (`master-data`), and the `scripts/local.sh` heredoc no longer evaluates backticked prose as commands.
 - **`NodeVerticle` Thread Safety Fix:** Replaced `HashMap` with `ConcurrentHashMap` for `slots` and snapshot copies in `checkRunningJobs()`, preventing `ConcurrentModificationException` during concurrent job completion/cancellation.
 - **Unified Test Script (`scripts/test-all.sh`):** Added default logging to `lasttest.txt`, real-time console streaming, and instant failure summaries with grepped error lines.
 - **Full Process-Mode Parity (D-132, commit `87cc57c`):**

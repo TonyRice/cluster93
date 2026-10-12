@@ -17,6 +17,7 @@ import org.apache.ignite.configuration.DataStorageConfiguration;
 import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.configuration.SqlConfiguration;
 import org.apache.ignite.calcite.CalciteQueryEngineConfiguration;
+import org.apache.ignite.internal.util.IgniteUtils;
 import org.apache.ignite.logger.slf4j.Slf4jLogger;
 import org.apache.ignite.spi.communication.tcp.TcpCommunicationSpi;
 import org.apache.ignite.spi.discovery.tcp.TcpDiscoverySpi;
@@ -64,9 +65,11 @@ public final class IgniteCluster {
         }
         System.setProperty("IGNITE_UPDATE_NOTIFIER", "false");
         System.setProperty("IGNITE_NO_ASCII", "true");
-        // Decided before Ignite starts: a node that already has a database on disk is restarting, and must
-        // never activate the cluster itself (that raced Ignite's own auto-activation and halted the JVM).
-        boolean firstStart = !settings.persistent() || !Files.isDirectory(settings.dataDirectory().resolve("db"));
+        // Decided before Ignite starts: a node that already has its own database on disk is restarting, and must
+        // never activate the cluster itself (that raced Ignite's own auto-activation and halted the JVM). A data
+        // directory another identity has written to (development beside the permanent master, say) holds a db/
+        // folder too, so the check is for *this* node's store, not merely that the shared db/ exists.
+        boolean firstStart = !settings.persistent() || !nodeDatabasePresent(settings);
         Ignite ignite = Ignition.start(configuration(settings));
         awaitActive(ignite, settings, firstStart);
         BinaryWarmup.vertxTypes(ignite);
@@ -83,19 +86,31 @@ public final class IgniteCluster {
 
     /**
      * Waits until the cluster is active (D-031). On a node's very first start, with no baseline yet, it activates
-     * the cluster. A restarting node never does: Ignite activates by itself once every baseline (data-holding)
-     * node is back.
+     * the cluster. A restarting clustered node never does: Ignite activates by itself once every baseline
+     * (data-holding) node is back.
      * If some never come back, the cluster is re-baselined without them after {@code baselineAdjust}, but only
      * if no more are missing than there are backups, so no data can be lost; otherwise it keeps waiting.
+     * A {@code initialClusterSize} of one is the standalone case and never waits: a single node with no baseline,
+     * or a baseline that names only nodes of another identity, has nothing to protect, so it activates at once
+     * rather than stalling on nodes that will never return.
      */
     static void awaitActive(Ignite ignite, IgniteSettings settings, boolean firstStart) {
         long waitingSince = System.currentTimeMillis();
         long lastReport = 0;
+        Object self = ignite.cluster().localNode().consistentId();
         while (ignite.cluster().state() != ClusterState.ACTIVE) {
             var baseline = ignite.cluster().currentBaselineTopology();
+            var serverNodes = ignite.cluster().forServers().nodes();
+            int servers = serverNodes.size();
             if (baseline == null) {
-                int servers = ignite.cluster().forServers().nodes().size();
                 if (firstStart && (!settings.persistent() || servers >= settings.initialClusterSize())) {
+                    ignite.cluster().state(ClusterState.ACTIVE);
+                    break;
+                }
+                // A standalone node has nothing and no one to wait for. Even when it reused a data directory
+                // another identity wrote to (so its own store is absent and firstStart can't be trusted), waiting
+                // for a baseline that will never appear would stall it forever: activate now.
+                if (settings.initialClusterSize() == 1 && servers == 1) {
                     ignite.cluster().state(ClusterState.ACTIVE);
                     break;
                 }
@@ -106,8 +121,16 @@ public final class IgniteCluster {
                 sleep(250);
                 continue;
             }
-            java.util.Set<Object> present = ignite.cluster().forServers().nodes().stream()
+            java.util.Set<Object> present = serverNodes.stream()
                     .map(org.apache.ignite.cluster.ClusterNode::consistentId).collect(java.util.stream.Collectors.toSet());
+            // A standalone cluster whose baseline names only absent nodes of another identity (a data directory
+            // reused from a different node id) holds no local data to protect: activate instead of waiting the
+            // full baseline-adjust timeout for nodes that will never return.
+            if (settings.initialClusterSize() == 1 && servers == 1 && !present.contains(self)) {
+                LOG.warn("Standalone node: baseline {} names no node of this identity; activating now instead of waiting", baseline);
+                ignite.cluster().state(ClusterState.ACTIVE);
+                break;
+            }
             List<Object> missing = baseline.stream().map(org.apache.ignite.cluster.BaselineNode::consistentId)
                     .filter(id -> !present.contains(id)).toList();
             long waited = System.currentTimeMillis() - waitingSince;
@@ -137,6 +160,17 @@ public final class IgniteCluster {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while waiting for the cluster to activate", e);
         }
+    }
+
+    /**
+     * Whether this node already has its own durable store on disk. Ignite keeps a node's local database in
+     * {@code <dataDirectory>/db/<masked consistent id>}, so a data directory another identity has written to must
+     * not be mistaken for this node's own: doing so left {@link #awaitActive} waiting for a baseline this node
+     * never had. The masking rules Ignite uses to turn the consistent id into a folder name are reused here.
+     */
+    static boolean nodeDatabasePresent(IgniteSettings settings) {
+        return settings.persistent()
+                && Files.isDirectory(settings.dataDirectory().resolve("db").resolve(IgniteUtils.maskForFileName(settings.nodeId())));
     }
 
     static IgniteConfiguration configuration(IgniteSettings settings) {

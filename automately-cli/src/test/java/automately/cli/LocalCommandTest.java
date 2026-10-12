@@ -95,6 +95,15 @@ class LocalCommandTest {
     }
 
     @Test
+    void theServerEnvironmentFallsBackToTheMastersOwnDataDirectory() {
+        Map<String, String> env = LocalCommand.serverEnvironment(Map.of(), io());
+
+        // scripts/local.sh installs the master under ${AUTOMATELY_HOME}/master-data; the fallback must match,
+        // so it never points the node at the shared directory scripts/dev.sh uses.
+        assertThat(env.get("AUTOMATELY_DATA_DIR")).isEqualTo(home.resolve("master-data").toString());
+    }
+
+    @Test
     void statusJsonHasTheState() throws Exception {
         writeLocalEnv();
 

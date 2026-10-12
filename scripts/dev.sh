@@ -8,7 +8,7 @@
 # Usage:
 #   scripts/dev.sh build                  Build the server jar, native CLI and javet worker.
 #   scripts/dev.sh start [--data-dir DIR] Start the server in the background (default data dir:
-#                                         $HOME/.automately/data). Waits for /health.
+#                                         $HOME/.automately/dev-data). Waits for /health.
 #   scripts/dev.sh stop                   Stop the server started by `start`.
 #   scripts/dev.sh status                 Show /health and /v1/nodes.
 #   scripts/dev.sh seed                   Create the `dev` tenant, mint an all-scoped token, save
@@ -26,7 +26,9 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO_ROOT"
 
 AUTOMATELY_HOME="${HOME}/.automately"
-DEFAULT_DATA_DIR="${AUTOMATELY_HOME}/data"
+# Development testing keeps its own store, so an ephemeral dev cluster never shares an Ignite
+# baseline (or its WAL) with the permanent master node scripts/local.sh installs.
+DEFAULT_DATA_DIR="${AUTOMATELY_HOME}/dev-data"
 PID_FILE="${AUTOMATELY_HOME}/automately.pid"
 LOG_FILE="${AUTOMATELY_HOME}/server.log"
 CONFIG_FILE="${HOME}/.config/automately/config.json"
@@ -153,7 +155,7 @@ cmd_start() {
     AUTOMATELY_INGRESS_PORT=8000 \
     AUTOMATELY_METRICS_PORT=9090 \
     AUTOMATELY_WORKER_MODE=process \
-    nohup "$(java_bin)" -jar "$SERVER_JAR" >"$LOG_FILE" 2>&1 &
+    nohup "$(java_bin)" -jar "$SERVER_JAR" </dev/null >"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
   disown "$!" 2>/dev/null || true
   echo "   pid $(cat "$PID_FILE"), log $LOG_FILE" >&2
