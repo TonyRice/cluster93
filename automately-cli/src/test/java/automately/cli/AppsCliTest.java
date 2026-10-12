@@ -187,6 +187,23 @@ class AppsCliTest {
         assertThat(cli("apps", "get", "gone").code()).isEqualTo(1);
     }
 
+    @Test
+    void deploysConsoleStaticExport() throws Exception {
+        Path consoleDir = Path.of("../console");
+        if (!Files.exists(consoleDir.resolve("out/index.html"))) {
+            return;
+        }
+        String tenant = "system-console";
+        loginAsNewTenant(tenant);
+        Result deployed = cli(ingressEnv(), "", "apps", "deploy", consoleDir.toString());
+        assertThat(deployed.code()).as(deployed.err()).isZero();
+        assertThat(deployed.out()).contains("Deployed console");
+
+        HttpResponse<String> served = ingressGet("/index.html", tenant, "console");
+        assertThat(served.statusCode()).isEqualTo(200);
+        assertThat(served.body()).contains("Automately");
+    }
+
     // ----------------------------------------------------------------------
     // helpers
     // ----------------------------------------------------------------------

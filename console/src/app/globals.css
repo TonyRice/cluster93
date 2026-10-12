@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Automately Console design tokens.
+ *
+ * Kept as raw RGB channels so Tailwind's `<alpha-value>` opacity modifiers work
+ * (e.g. `bg-surface/60`). The palette is a dark, modern zinc/slate blend with a
+ * single cyan accent for interactive affordances.
+ */
+:root {
+  --bg: 9 11 16; /* near-black slate */
+  --surface: 18 21 28; /* panel */
+  --elevated: 26 30 39; /* raised panel / hover */
+  --border: 42 47 58; /* hairline borders */
+  --fg: 235 238 244; /* primary text */
+  --muted: 148 156 171; /* secondary text */
+  --subtle: 98 106 122; /* tertiary text */
+  --accent: 34 211 238; /* cyan-400 */
+  --positive: 52 211 153; /* emerald-400 */
+  --warning: 251 191 36; /* amber-400 */
+  --danger: 248 113 113; /* red-400 */
+  color-scheme: dark;
+}
+
+@layer base {
+  * {
+    border-color: rgb(var(--border));
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  ::selection {
+    background-color: rgb(var(--accent) / 0.3);
+  }
+
+  /* A slim, unobtrusive scrollbar that matches the dark shell. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--border));
+    border-radius: 9999px;
+    border: 2px solid rgb(var(--bg));
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--subtle));
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-xl border border-border/80 bg-surface shadow-panel;
+  }
+
+  .panel-header {
+    @apply flex items-center justify-between gap-4 border-b border-border/80 px-5 py-4;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2
+      focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply border-transparent bg-accent/90 text-background hover:bg-accent;
+  }
+
+  .btn-ghost {
+    @apply border-border/80 bg-transparent text-muted hover:bg-elevated hover:text-foreground;
+  }
+
+  .btn-danger {
+    @apply border-danger/40 bg-transparent text-danger hover:bg-danger/10;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-border/80 bg-background/60 px-3 py-2 text-sm text-foreground
+      placeholder:text-subtle focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/30;
+  }
+
+  .stat-value {
+    @apply text-2xl font-semibold tabular-nums tracking-tight text-foreground;
+  }
+
+  .stat-label {
+    @apply text-xs font-medium uppercase tracking-wider text-subtle;
+  }
+}

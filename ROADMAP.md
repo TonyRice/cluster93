@@ -89,17 +89,19 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 4. Upcoming Work
 
-### Phase 6: Web Management Console & Browser Identity Sessions (NEXT)
+### Phase 6: Web Management Console & Browser Identity Sessions (IN PROGRESS)
 - **Reference Spec:** `ideas/console.md` (builds upon D-070 to D-074 identity foundation).
+- **Delivered so far:**
+  - The console SPA is scaffolded in `console/` as a **Next.js 15 App Router** app with static export and deployed as an Automately app (see the achievement above). It currently authenticates with a bearer token and covers operator topology plus tenant jobs/services/apps/files. The browser session layer, real-time job logs, and the audit explorer remain.
 - **Core Objectives:**
   1. **Browser Session Layer:**
      - WebAuthn Passkeys (`java-webauthn-server` or `webauthn4j`) and OIDC PKCE flow.
      - `__Host-` session cookies (`HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`).
      - Session token minting for tenant interactions (`POST /v1/me/tokens` into memory).
   2. **Single-Page Application (SPA):**
-     - Framework: Vite + React + TanStack Router + TanStack Query + Tailwind CSS / shadcn/ui.
-     - Strictly typed API client generated from `openapi.yaml` via `openapi-typescript`.
-     - Zero cold starts: pure static assets bundled inside `automately-server` jar under `/console/` (or via ingress).
+     - Framework: Next.js App Router, static export (`output: 'export'`), Tailwind CSS — shipped as the `console` app via the apps primitive.
+     - Strictly typed API client against `openapi.yaml` (currently hand-mirrored in `console/src/lib/types.ts`; generated types are a future hardening step).
+     - Zero cold starts: pure static assets served from the tenant VFS by the ingress (or bundled inside the `automately-server` jar under `/console/`).
   3. **Functional Views:**
      - **Jobs & Workflows:** Real-time streaming console logs (`/v1/jobs/{id}/events` via fetch streaming), step inspection (`ctx.step`), attempt history, manual cancel.
      - **Services:** Real-time health, supervisor status, restart backoffs, route inspector.
@@ -133,6 +135,13 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 ---
 
 ## 5. Recent Key Achievements & Bug Fixes
+
+- **Web Console — Next.js App Deployed as an Automately App (`console/`):**
+  - New self-contained Next.js 15 (App Router) app built for static export (`output: 'export'`, `distDir: 'out'`, `trailingSlash: true`, `images.unoptimized`) and deployable as the `console` app through the apps primitive.
+  - `automately.json` manifest rewrites same-origin `/v1/*` to `api:/v1/$1` (zero CORS), falls back to `/index.html` for SPA routes, and serves `/_next/static/*` immutably.
+  - Dark zinc/slate Tailwind UI: shared `Header` (connection + scope badges, logout) and `Sidebar`; `LoginView` for bearer-token entry; `OperatorView` (cluster topology with per-node capacity/roles, health, storage utilization, and the D-044 tenant-isolation notice); and `TenantView` composed of `JobsTab` (status badges, duration, cancel), `ServicesTab` (status, hosts, revision, restart/stop), `AppsTab` (deployments, preview/canonical URLs, promote/rollback), and `FilesTab` (path, size, MIME type, modified).
+  - Typed client (`src/lib/api.ts`) targets same-origin `/v1/*`, stores the bearer token in `localStorage`, attaches `Authorization: Bearer`, and clears the token and returns to the login prompt on any `401`; interfaces in `src/lib/types.ts` mirror the OpenAPI models.
+  - Verified: `cd console && npm install && npm run build` emits a static `out/` with `index.html`, `404.html`, and `_next/static/` chunks.
 
 - **Apps CLI — Deploy, Serve, Promote, Roll Back & Remove (Phase 6.1, Phase 3 CLI):**
   - `AppsCommand` adds `automately apps` with `deploy` (reads `automately.json`, honors `distDir`, falls back to `out/`, `dist/`, `build/` or the project root; uploads the static export to `/.apps/<app>/deployments/<id>/` via `PUT /v1/files`; registers the immutable deployment with an optional git commit; auto-promotes unless `--no-promote`), `ls`/`list`, `get`, `deployments`, `promote`, `rollback`, and `rm`/`delete` (with `--yes`).
