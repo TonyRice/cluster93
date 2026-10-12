@@ -137,6 +137,12 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 5. Recent Key Achievements & Bug Fixes
 
+- **Local Master Node Orchestration & Web Console Live Verification (Phase 6):**
+  - Added foreground `run` command to `scripts/local.sh` with PID file tracking and `exec env ...`, enabling clean supervision under daemon task runners and system process supervisors without background subshell or cgroup termination.
+  - Exposed `seed` as a top-level command in `scripts/local.sh` for on-demand re-provisioning without resetting configuration.
+  - Successfully seeded the running master node: ensured `system` tenant, built and deployed Next.js web console (`console/`) to `system/console` via `automately apps deploy`, provisioned default `admin` operator (`admin: true`), and verified live serving at `http://localhost:8000` with HTTP 200 HTML and asset delivery.
+  - Verified D-044 security isolation with `admin` operator personal token (`whoami.admin == true`): operator manages cluster/nodes/tenants/users while tenant data remains strictly isolated.
+
 - **CLI Help Grouping & Default Operator Onboarding (Developer Ergonomics):**
   - `automately --help` no longer prints a flat ~30-command list: `Main` replaces picocli's single command-list section with five categorized sections — **Developer & Applications**, **Platform Resources**, **Identity & Access**, **Cluster & Local Node**, and **Tools & Automation** — while subcommands keep their own command lists (e.g. `automately help local`).
   - New `MainHelpTest` locks the category headings, the command-to-category mapping, and that only the top-level list is categorized (no `Commands:` heading at the top, but subcommands still show theirs).
