@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dedicated local master node installer and onboarding orchestrator for Automately.
 #
-# Runs a single permanent node on this machine: the API, ingress, worker and data roles
+# Runs a single permanent node on this machine: the API, ingress, worker, data and console roles
 # in one process, with durable Apache Ignite persistence, a seeded tenant and a saved
 # login, so `automately` works straight afterwards. It also tracks the git commit it
 # was built from and tells you when the repository has moved ahead of the running build.
@@ -41,7 +41,7 @@ START_TIMEOUT_SECONDS="${START_TIMEOUT_SECONDS:-60}"
 
 # Defaults the onboarding wizard offers.
 DEFAULT_NODE_ID="local-master"
-DEFAULT_ROLES="api,ingress,worker,data"
+DEFAULT_ROLES="api,ingress,worker,data,console"
 # The permanent master keeps its own store, separate from the ephemeral directory scripts/dev.sh uses,
 # so an Ignite baseline written by development testing can never collide with the master's database.
 DEFAULT_DATA_DIR="${AUTOMATELY_HOME}/master-data"
@@ -226,7 +226,7 @@ cmd_setup() {
   fi
 
   NODE_ID=$(ask "Node ID" "$DEFAULT_NODE_ID")
-  ROLES=$(ask "Roles (api,ingress,worker,data)" "$DEFAULT_ROLES")
+  ROLES=$(ask "Roles (api,ingress,worker,data,console)" "$DEFAULT_ROLES")
   DATA_DIR=$(ask "Data directory" "$DEFAULT_DATA_DIR")
   LOG_DIR=$(ask "Log directory" "$DEFAULT_LOG_DIR")
   HTTP_PORT=$(ask "HTTP/API port" "$DEFAULT_HTTP_PORT")
@@ -350,8 +350,59 @@ cmd_start() {
 # --------------------------------------------------------------------------
 # seed
 # --------------------------------------------------------------------------
+# The token inside a mint response: the JSON "token" field, parsed by python3 when available, else with sed.
+mint_token() {
+  local response="$1" token
+  token=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)
+  if [[ -z "$token" ]]; then
+    token=$(printf '%s' "$response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  fi
+  printf '%s' "$token"
+}
+
+# Publishes the console SPA to system/console with the installed CLI, falling back to the shaded jar.
+deploy_console() {
+  local token="$1"
+  if [[ -x "$CLI_BINARY" ]]; then
+    "$CLI_BINARY" --url "$URL" --token "$token" apps deploy "$REPO_ROOT/console"
+  elif [[ -f "$REPO_ROOT/automately-cli/target/automately-cli.jar" ]]; then
+    "$(java_bin)" -jar "$REPO_ROOT/automately-cli/target/automately-cli.jar" \
+      --url "$URL" --token "$token" apps deploy "$REPO_ROOT/console"
+  else
+    echo "   (no automately CLI built; skipping the console deploy)" >&2
+    return 1
+  fi
+}
+
 cmd_seed() {
   load_env_file
+
+  echo "== ensuring system tenant 'system'" >&2
+  curl -sS -m 10 -X POST "${URL}/v1/tenants" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"system"}' >/dev/null || true
+
+  # A console-role node serves the web console at system/console; deploy it when the SPA is built and a CLI exists.
+  if [[ ",${ROLES}," == *",console,"* ]] && [[ -d "$REPO_ROOT/console" ]]; then
+    if [[ ! -f "$REPO_ROOT/console/out/index.html" ]] && command -v npm >/dev/null 2>&1; then
+      echo "== building the console SPA (npm run build)" >&2
+      (cd "$REPO_ROOT/console" && npm run build) || echo "   (console build failed; skipping the console deploy)" >&2
+    fi
+    if [[ -f "$REPO_ROOT/console/out/index.html" ]]; then
+      echo "== minting a token for 'system'" >&2
+      local system_minted system_token
+      system_minted=$(curl -sS -m 10 -X POST "${URL}/v1/tenants/system/tokens" \
+        -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d '{"name":"console-deploy","scopes":["*"]}')
+      system_token=$(mint_token "$system_minted")
+      if [[ -n "$system_token" ]] && deploy_console "$system_token"; then
+        echo "== console app deployed to system/console: http://localhost:${INGRESS_PORT}" >&2
+      fi
+    fi
+  fi
+
   echo "== ensuring tenant '${TENANT}'" >&2
   curl -sS -m 10 -X POST "${URL}/v1/tenants" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
@@ -364,10 +415,7 @@ cmd_seed() {
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     -d '{"name":"local","scopes":["*"]}')
-  token=$(printf '%s' "$minted" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)
-  if [[ -z "$token" ]]; then
-    token=$(printf '%s' "$minted" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-  fi
+  token=$(mint_token "$minted")
   if [[ -z "$token" ]]; then
     echo "Error: could not read a token from: $minted" >&2
     exit 1

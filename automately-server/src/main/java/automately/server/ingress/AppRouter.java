@@ -9,6 +9,7 @@ import io.vertx.core.json.JsonObject;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -36,17 +37,22 @@ public final class AppRouter {
     private final String ingressDomain;
     private final String consoleDomain;
     private final CidrMatcher consoleAllowed;
+    /** The personas this node plays: only a node with {@code console} serves the console app (docs/design/node-roles.md). */
+    private final Set<String> roles;
 
     /**
      * @param consoleDomain the host bound to the console, or null to disable console-host handling
      * @param consoleAllowed the networks allowed to reach the console host, or null for no restriction
+     * @param roles the personas this node plays; the console app is only served when this contains {@code console}
      */
-    public AppRouter(AppStore apps, FileStore files, String ingressDomain, String consoleDomain, CidrMatcher consoleAllowed) {
+    public AppRouter(AppStore apps, FileStore files, String ingressDomain, String consoleDomain, CidrMatcher consoleAllowed,
+                     Set<String> roles) {
         this.apps = apps;
         this.files = files;
         this.ingressDomain = ingressDomain == null ? "" : ingressDomain.toLowerCase(Locale.ROOT);
         this.consoleDomain = consoleDomain == null || consoleDomain.isBlank() ? null : consoleDomain.trim().toLowerCase(Locale.ROOT);
         this.consoleAllowed = consoleAllowed == null ? CidrMatcher.parse(List.of()) : consoleAllowed;
+        this.roles = roles == null ? Set.of() : Set.copyOf(roles);
     }
 
     /** One request's host, method, path and query, the client address, and lower-cased headers. */
@@ -93,10 +99,7 @@ public final class AppRouter {
     public Future<Decision> route(Request request) {
         String host = normalise(request.host());
         if (consoleDomain != null && host.equals(consoleDomain)) {
-            if (!consoleAllowed.matches(request.remoteAddress())) {
-                return Future.succeededFuture(new Decision.Denied("The console is restricted to its allowed networks"));
-            }
-            return evaluate(resolve(CONSOLE_TENANT, CONSOLE_APP, null), request);
+            return console(request);
         }
         // Test headers name the app directly, so a test can exercise app routing without DNS.
         String headerApp = header(request, "x-automately-app");
@@ -104,11 +107,34 @@ public final class AppRouter {
         if (headerApp != null && headerTenant != null) {
             return evaluate(resolve(headerTenant, headerApp, null), request);
         }
+        // Local development: with no console domain, a console-role node answers on the machine's own bare host.
+        if (consoleDomain == null && isLocalConsoleHost(host)) {
+            return console(request);
+        }
         Resolved fromHost = fromHost(host);
         if (fromHost == null) {
             return Future.succeededFuture(new Decision.NotAnApp());
         }
         return evaluate(resolve(fromHost.tenant(), fromHost.app(), fromHost.deploymentId()), request);
+    }
+
+    /**
+     * The reserved console app, but only on a node that plays the {@code console} role (docs/design/node-roles.md);
+     * a node without it refuses the console host, so the request falls through to ordinary service routing.
+     */
+    private Future<Decision> console(Request request) {
+        if (!roles.contains("console")) {
+            return Future.succeededFuture(new Decision.NotAnApp());
+        }
+        if (!consoleAllowed.matches(request.remoteAddress())) {
+            return Future.succeededFuture(new Decision.Denied("The console is restricted to its allowed networks"));
+        }
+        return evaluate(resolve(CONSOLE_TENANT, CONSOLE_APP, null), request);
+    }
+
+    /** A bare host that names no tenant or app: {@code localhost} or the loopback IPv4 address, as in local development. */
+    private static boolean isLocalConsoleHost(String host) {
+        return host.equals("localhost") || host.equals("127.0.0.1");
     }
 
     private Future<Decision> evaluate(Future<AppDeployment> resolved, Request request) {

@@ -41,8 +41,9 @@ import java.util.UUID;
  * @param jobRetention  finished jobs older than this are deleted
  * @param clusterSize   nodes a brand-new durable cluster waits for before activating
  * @param clusterMembers Hazelcast TCP/IP join addresses, e.g. {@code node1,node2,node3}; a host without a port is probed from {@code clusterPort} upwards
- * @param roles         the personas this node plays ({@code api}, {@code ingress}, {@code worker}, {@code data}); a node only
- *                      serves a role it lists, and a node without {@code worker} takes no tenant compute (docs/design/node-roles.md)
+ * @param roles         the personas this node plays ({@code api}, {@code ingress}, {@code worker}, {@code data}, {@code console}); a node only
+ *                      serves a role it lists, a node without {@code worker} takes no tenant compute, and {@code console}
+ *                      designates the node that serves the management web console (docs/design/node-roles.md)
  * @param capabilities  execution engines this node advertises for capability matching, such as {@code js:v8} or {@code js:graaljs}
  *                      (empty means advertise no special capabilities, so any worker node matches)
  * @param consoleDomain the host the web console answers on (docs/design/apps-and-console.md); null disables console-host handling
@@ -113,7 +114,7 @@ public record ServerConfig(
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
     public static final java.util.List<String> WORKER_MODES = java.util.List.of("embedded", "process");
     /** The personas a node can play (docs/design/node-roles.md): every role is on by default, as in development. */
-    public static final java.util.List<String> ROLES = java.util.List.of("api", "ingress", "worker", "data");
+    public static final java.util.List<String> ROLES = java.util.List.of("api", "ingress", "worker", "data", "console");
 
     public ServerConfig {
         if (!FILES_BACKENDS.contains(filesBackend)) {

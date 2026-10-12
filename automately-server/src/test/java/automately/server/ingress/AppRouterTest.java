@@ -20,15 +20,19 @@ import org.junit.jupiter.api.Test;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link AppRouter}: console-host CIDR enforcement, host resolution (preview, canonical, test headers), and route
- * evaluation (service proxy, API rewrite, static asset, SPA fallback).
+ * {@link AppRouter}: console-role gating and CIDR enforcement, host resolution (preview, canonical, local-dev fallback,
+ * test headers), and route evaluation (service proxy, API rewrite, static asset, SPA fallback).
  */
 class AppRouterTest {
+
+    /** A full development node: every persona, including the console. */
+    private static final Set<String> ALL_ROLES = Set.of("api", "ingress", "worker", "data", "console");
 
     private static final String ROUTES = """
             {
@@ -54,7 +58,7 @@ class AppRouterTest {
         apps = new SharedDataAppStore(vertx);
         files = new FakeFiles();
         router = new AppRouter(apps, files, "apps.test", "console.internal.test",
-                CidrMatcher.parse(List.of("127.0.0.1/32", "10.0.0.0/8")));
+                CidrMatcher.parse(List.of("127.0.0.1/32", "10.0.0.0/8")), ALL_ROLES);
     }
 
     @AfterEach
@@ -87,6 +91,41 @@ class AppRouterTest {
         AppRouter.Decision decision = await(router.route(request("console.internal.test", "/", "10.1.2.3")));
         assertThat(decision).isInstanceOf(AppRouter.Decision.Static.class);
         assertThat(((AppRouter.Decision.Static) decision).path()).isEqualTo(assetPrefix("console", "dpl_c") + "/index.html");
+    }
+
+    @Test
+    @DisplayName("A node without the console role refuses the console host, falling through to service routing")
+    void consoleHostWithoutTheRoleIsNotAnApp() throws Exception {
+        deploy("system", "console", "dpl_c", "{\"name\": \"console\"}");
+        await(apps.promote("system", "console", "dpl_c"));
+        AppRouter withoutConsole = new AppRouter(apps, files, "apps.test", "console.internal.test",
+                CidrMatcher.parse(List.of()), Set.of("api", "ingress", "worker", "data"));
+
+        assertThat(await(withoutConsole.route(request("console.internal.test", "/", "10.1.2.3"))))
+                .isInstanceOf(AppRouter.Decision.NotAnApp.class);
+    }
+
+    @Test
+    @DisplayName("With no console domain, a console-role node serves the console on localhost")
+    void localDevFallbackRoutesLocalhostToTheConsole() throws Exception {
+        deploy("system", "console", "dpl_c", "{\"name\": \"console\"}");
+        await(apps.promote("system", "console", "dpl_c"));
+        AppRouter local = new AppRouter(apps, files, "localhost", null, null, ALL_ROLES);
+
+        AppRouter.Decision decision = await(local.route(request("localhost", "/", "127.0.0.1")));
+        assertThat(decision).isInstanceOf(AppRouter.Decision.Static.class);
+        assertThat(((AppRouter.Decision.Static) decision).path()).isEqualTo(assetPrefix("console", "dpl_c") + "/index.html");
+    }
+
+    @Test
+    @DisplayName("With no console domain, a node without the console role doesn't answer localhost as the console")
+    void localDevFallbackNeedsTheConsoleRole() throws Exception {
+        deploy("system", "console", "dpl_c", "{\"name\": \"console\"}");
+        await(apps.promote("system", "console", "dpl_c"));
+        AppRouter local = new AppRouter(apps, files, "localhost", null, null, Set.of("api", "ingress", "worker", "data"));
+
+        assertThat(await(local.route(request("localhost", "/", "127.0.0.1"))))
+                .isInstanceOf(AppRouter.Decision.NotAnApp.class);
     }
 
     @Test

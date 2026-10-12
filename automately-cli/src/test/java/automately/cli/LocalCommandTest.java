@@ -56,7 +56,7 @@ class LocalCommandTest {
         Files.writeString(home.resolve("local.env"), """
                 # Automately local master node configuration.
                 NODE_ID="local-master"
-                ROLES="api,ingress,worker,data"
+                ROLES="api,ingress,worker,data,console"
                 DATA_DIR="%s"
                 LOG_DIR="%s"
                 HTTP_PORT="8080"
@@ -86,7 +86,7 @@ class LocalCommandTest {
         assertThat(result.out())
                 .contains("Local master node")
                 .contains("local-master")
-                .contains("api,ingress,worker,data")
+                .contains("api,ingress,worker,data,console")
                 .contains(home.resolve("data").toString())
                 .contains("http://localhost:8080")
                 .contains("http://localhost:8000")

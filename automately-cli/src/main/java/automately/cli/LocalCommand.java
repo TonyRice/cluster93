@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
  * <p>{@code scripts/local.sh} is the orchestrator and the source of truth for the configuration in
  * {@code $HOME/.automately/local.env}. This command inspects that state (and its provenance in
  * {@code node.meta}), and drives the node, so the same operations are available from the CLI that
- * installed the binary. The node it launches plays the {@code api,ingress,worker,data} roles at once.
+ * installed the binary. The node it launches plays the {@code api,ingress,worker,data,console} roles at once.
  */
 @Command(name = "local", description = "Manage the local Automately master node.",
         subcommands = {LocalCommand.Status.class, LocalCommand.Start.class, LocalCommand.Stop.class,
@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit;
 final class LocalCommand extends Base {
 
     static final String DEFAULT_NODE_ID = "local-master";
-    static final String DEFAULT_ROLES = "api,ingress,worker,data";
+    static final String DEFAULT_ROLES = "api,ingress,worker,data,console";
     /** The master's own store, apart from the {@code dev-data} directory {@code scripts/dev.sh} uses. */
     static final String DEFAULT_DATA_DIR = "master-data";
     static final String DEFAULT_HTTP_PORT = "8080";

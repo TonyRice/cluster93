@@ -87,6 +87,16 @@ cli_bin() {
   fi
 }
 
+# The token inside a mint response: the JSON "token" field, parsed by python3 when available, else with sed.
+mint_token() {
+  local response="$1" token
+  token=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)
+  if [[ -z "$token" ]]; then
+    token=$(printf '%s' "$response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  fi
+  printf '%s' "$token"
+}
+
 # --------------------------------------------------------------------------
 # build
 # --------------------------------------------------------------------------
@@ -144,6 +154,7 @@ cmd_start() {
   env \
     JDK_JAVA_OPTIONS="$IGNITE_JVM_ARGS" \
     AUTOMATELY_NODE_ID=local-dev \
+    AUTOMATELY_ROLES=api,ingress,worker,data,console \
     AUTOMATELY_CLUSTERED=true \
     AUTOMATELY_CLUSTER_SIZE=1 \
     AUTOMATELY_CLUSTER_MEMBERS=127.0.0.1 \
@@ -226,6 +237,33 @@ cmd_status() {
 # seed
 # --------------------------------------------------------------------------
 cmd_seed() {
+  echo "== ensuring tenant 'system'" >&2
+  curl -sS -m 10 -X POST "${URL}/v1/tenants" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"system"}' >/dev/null || true
+
+  # A console-role node serves the web console at system/console; deploy it when the SPA is built and a CLI exists.
+  if [[ -f "$REPO_ROOT/console/out/index.html" ]]; then
+    local cli
+    cli=$(cli_bin)
+    if [[ -n "$cli" ]]; then
+      echo "== deploying the console to system/console" >&2
+      local system_minted system_token
+      system_minted=$(curl -sS -m 10 -X POST "${URL}/v1/tenants/system/tokens" \
+        -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d '{"name":"console-deploy","scopes":["*"]}')
+      system_token=$(mint_token "$system_minted")
+      if [[ -n "$system_token" ]]; then
+        "$cli" --url "$URL" --token "$system_token" apps deploy "$REPO_ROOT/console"
+        echo "== console app deployed to system/console: http://localhost:8000" >&2
+      fi
+    else
+      echo "   (no automately CLI on PATH; skipping the console deploy)" >&2
+    fi
+  fi
+
   echo "== ensuring tenant 'dev'" >&2
   local created
   created=$(curl -sS -m 10 -X POST "${URL}/v1/tenants" \
@@ -240,10 +278,7 @@ cmd_seed() {
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     -d '{"name":"dev-token","scopes":["*"]}')
-  token=$(printf '%s' "$minted" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)
-  if [[ -z "$token" ]]; then
-    token=$(printf '%s' "$minted" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-  fi
+  token=$(mint_token "$minted")
   if [[ -z "$token" ]]; then
     echo "Error: could not read a token from: $minted" >&2
     exit 1

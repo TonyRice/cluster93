@@ -463,7 +463,7 @@ public final class Automately {
             // Apps are resolved by host before ordinary service routing (docs/design/apps-and-console.md).
             automately.server.ingress.AppRouter appRouter = new automately.server.ingress.AppRouter(stores.apps(), visibleFiles,
                     config.ingressDomain(), config.consoleDomain(),
-                    automately.server.ingress.CidrMatcher.parse(config.consoleAllowedCidrs()));
+                    automately.server.ingress.CidrMatcher.parse(config.consoleAllowedCidrs()), config.roles());
             IngressVerticle ingress = ingressRole ? new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes,
                     security.tls() == null ? secret : null, config.ingressIdleTimeout(), config.ingressUpgradedIdleTimeout(), config.maxRequestBytes(),
                     security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls()),

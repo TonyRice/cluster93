@@ -15,7 +15,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class ServerConfigTest {
 
-    private static final Set<String> ALL_ROLES = Set.of("api", "ingress", "worker", "data");
+    private static final Set<String> ALL_ROLES = Set.of("api", "ingress", "worker", "data", "console");
+
+    @Test
+    @DisplayName("The console role is one of the personas a node may play")
+    void rolesIncludeConsole() {
+        assertThat(ServerConfig.ROLES).contains("console");
+    }
 
     @Test
     @DisplayName("Roles default to every persona, so an unconfigured node is a full development node")

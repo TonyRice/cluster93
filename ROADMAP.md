@@ -93,6 +93,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 - **Reference Spec:** `ideas/console.md` (builds upon D-070 to D-074 identity foundation).
 - **Delivered so far:**
   - The console SPA is scaffolded in `console/` as a **Next.js 15 App Router** app with static export and deployed as an Automately app (see the achievement above). It currently authenticates with a bearer token and covers operator topology plus tenant jobs/services/apps/files. The browser session layer, real-time job logs, and the audit explorer remain.
+  - The `console` node role (`AUTOMATELY_ROLES=...,console`) gates who may serve the console app, and `scripts/local.sh`/`scripts/dev.sh` now provision the reserved `system` tenant and auto-deploy `console/` to `system/console`, served on `localhost` when no `AUTOMATELY_CONSOLE_DOMAIN` is set.
 - **Core Objectives:**
   1. **Browser Session Layer:**
      - WebAuthn Passkeys (`java-webauthn-server` or `webauthn4j`) and OIDC PKCE flow.
@@ -135,6 +136,11 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 ---
 
 ## 5. Recent Key Achievements & Bug Fixes
+
+- **Console Node Role & `system/console` Auto-Provisioning (Phase 6):**
+  - `ServerConfig.ROLES` gains `console`, designating the node that serves the management web console; the role defaults on for a development node (`api,ingress,worker,data,console`).
+  - `AppRouter` now takes the node's roles and refuses the console host (returning `NotAnApp`) unless the node plays `console`; with no `AUTOMATELY_CONSOLE_DOMAIN` set, a console-role node additionally answers the bare `localhost`/`127.0.0.1` host with `system/console`.
+  - `LocalCommand.DEFAULT_ROLES` and `scripts/local.sh`/`scripts/dev.sh` default to the console role; `cmd_seed` ensures the reserved `system` tenant, builds `console/` when `npm` is available, mints a `system` token and deploys `console/` via the CLI (native binary or shaded-jar fallback) — then continues with the developer tenant.
 
 - **Web Console — Next.js App Deployed as an Automately App (`console/`):**
   - New self-contained Next.js 15 (App Router) app built for static export (`output: 'export'`, `distDir: 'out'`, `trailingSlash: true`, `images.unoptimized`) and deployable as the `console` app through the apps primitive.
