@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cluster93</groupId>
+        <artifactId>cluster93-parent</artifactId>
+        <version>2.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>cluster93-runtime-javet</artifactId>
+    <name>Cluster93 Runtime (Javet V8)</name>
+    <description>Runs jobs in V8 isolates via Javet: the engine-neutral runtime's V8 adapter (D-126).</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>cluster93</groupId>
+            <artifactId>cluster93-runtime-js</artifactId>
+        </dependency>
+        <!-- The conformance suite (D-126), run here against V8. -->
+        <dependency>
+            <groupId>cluster93</groupId>
+            <artifactId>cluster93-runtime-js</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <!-- The test DNS server from core's tests (D-122). -->
+        <dependency>
+            <groupId>cluster93</groupId>
+            <artifactId>cluster93-core</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.caoccao.javet</groupId>
+            <artifactId>javet</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.caoccao.javet</groupId>
+            <artifactId>javet-v8-linux-x86_64-i18n</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Runs the engine-neutral conformance suite (cluster93-runtime-js's tests) on this engine. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <dependenciesToScan>
+                        <dependency>c93:cluster93-runtime-js</dependency>
+                    </dependenciesToScan>
+                </configuration>
+            </plugin>
+            <!--
+              ICU's data for V8's i18n build: Intl, and Unicode property escapes in regular expressions (D-093). The
+              official ICU release, checked against its SHA-256 and unpacked with its licence into the runtime's
+              resources. Its major version must match the ICU compiled into Javet's V8 (78 for Javet 6.0.2).
+            -->
+            <plugin>
+                <groupId>com.googlecode.maven-download-plugin</groupId>
+                <artifactId>download-maven-plugin</artifactId>
+                <version>1.13.0</version>
+                <executions>
+                    <execution>
+                        <id>icu-data</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>wget</goal>
+                        </goals>
+                        <configuration>
+                            <uri>https://github.com/unicode-org/icu/releases/download/release-78.3/icu4c-78.3-data-bin-l.zip</uri>
+                            <sha256>982619632b78887f1895b063e96e8c3cc7f99283337c8abbd05aa71635de613c</sha256>
+                            <unpack>true</unpack>
+                            <outputDirectory>${project.build.outputDirectory}/cluster93/runtime/javet/icu</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

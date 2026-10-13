@@ -1,6 +1,6 @@
 /**
- * TypeScript models mirroring the Automately OpenAPI contract
- * (`automately-server/src/main/resources/openapi.yaml`).
+ * TypeScript models mirroring the Cluster93 OpenAPI contract
+ * (`cluster93-server/src/main/resources/openapi.yaml`).
  *
  * Fields documented as optional in the contract are marked optional here so the
  * console keeps compiling if a newer, narrower server response omits them.

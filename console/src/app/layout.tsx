@@ -2,10 +2,10 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Automately Console',
+  title: 'Cluster93 Console',
   description:
-    'Management console for the Automately clustered sandboxed runtime — cluster, jobs, services, apps, and storage.',
-  applicationName: 'Automately',
+    'Management console for the Cluster93 clustered sandboxed runtime — cluster, jobs, services, apps, and storage.',
+  applicationName: 'Cluster93',
   robots: { index: false, follow: false },
 };
 

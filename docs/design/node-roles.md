@@ -30,17 +30,17 @@ A node's roles and capabilities come from the environment, read by `ServerConfig
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `AUTOMATELY_ROLES` | Comma-separated subset of `api`, `ingress`, `worker`, `data`. | `api,ingress,worker,data` (a full development node) |
-| `AUTOMATELY_CAPABILITIES` | Execution engines the node advertises, e.g. `js:v8,js:graaljs,node,python3`. | empty (matches any requirement) |
-| `AUTOMATELY_CAPACITY` | Concurrent isolated runs a **worker** node accepts. | `8` |
-| `AUTOMATELY_DATA_DIR` | Durable storage. | `$HOME/.automately/data` on a standalone node; unset (in memory) on a clustered node without one |
+| `C93_ROLES` | Comma-separated subset of `api`, `ingress`, `worker`, `data`. | `api,ingress,worker,data` (a full development node) |
+| `C93_CAPABILITIES` | Execution engines the node advertises, e.g. `js:v8,js:graaljs,node,python3`. | empty (matches any requirement) |
+| `C93_CAPACITY` | Concurrent isolated runs a **worker** node accepts. | `8` |
+| `C93_DATA_DIR` | Durable storage. | `$HOME/.cluster93/data` on a standalone node; unset (in memory) on a clustered node without one |
 
 Rules:
 
-- A role not in the list is refused at startup: `AUTOMATELY_ROLES must be a comma-separated subset of
+- A role not in the list is refused at startup: `C93_ROLES must be a comma-separated subset of
   [api, ingress, worker, data]`.
 - At least one role is required; an empty list is refused.
-- **A node without the `worker` role advertises capacity 0**, whatever `AUTOMATELY_CAPACITY` says. It
+- **A node without the `worker` role advertises capacity 0**, whatever `C93_CAPACITY` says. It
   registers and heartbeats like any node (so its API or replay of control messages still works) but no
   job attempt is ever placed on it.
 - A role a node lists but the deployment doesn't give it the resources for is a configuration error, not
@@ -68,7 +68,7 @@ how the tiers reach each other.
 
 ## 3. What each role deploys
 
-`Automately.wire` starts only the pieces a node's roles name:
+`Cluster93.wire` starts only the pieces a node's roles name:
 
 | Subsystem | Deployed when |
 |---|---|
@@ -77,7 +77,7 @@ how the tiers reach each other.
 | `NodeVerticle` (compute slots, receives attempts) | always, with capacity 0 unless `roles` contains `worker` |
 | `InternalHttpVerticle` | always (the ingress and services proxy through it) |
 | `OrphanReaper`, `ServiceSupervisor`, `RetentionVerticle`, `FileGarbageVerticle`, `PackageGarbageVerticle` | always (leadership is decided per heartbeat, so several tiers can carry them) |
-| metrics endpoint | always, on `AUTOMATELY_METRICS_PORT` |
+| metrics endpoint | always, on `C93_METRICS_PORT` |
 
 `RunningNode.httpPort()` and `ingressPort()` are `-1` when the API or ingress isn't deployed, and
 `apiRoutes()` is empty.
@@ -111,7 +111,7 @@ node satisfies is rejected, naming the requirement, rather than dispatched to a 
                                             ▼
                       ┌──────────────────────────────────────────┐
                       │              Edge tier                    │
-                      │        AUTOMATELY_ROLES=api,ingress       │
+                      │        C93_ROLES=api,ingress       │
                       │   :8080 REST+MCP, :8000 ingress, :9090    │
                       │        Capacity 0 — no guest code         │
                       └────────────────────┬─────────────────────┘
@@ -120,51 +120,51 @@ node satisfies is rejected, naming the requirement, rather than dispatched to a 
                        ▼                                         ▼
         ┌─────────────────────────────┐           ┌─────────────────────────────┐
         │         Data tier           │           │        Compute tier         │
-        │    AUTOMATELY_ROLES=data    │           │   AUTOMATELY_ROLES=worker   │
+        │    C93_ROLES=data    │           │   C93_ROLES=worker   │
         │  Ignite WAL, data region,   │           │  Sandboxed isolates, cgroup │
         │  VFS chunks, partition bkp  │           │  memory limits, no inbound  │
         │  Capacity 0                 │           │  public ports               │
         └─────────────────────────────┘           └─────────────────────────────┘
 ```
 
-Every node sets `AUTOMATELY_CLUSTER_MEMBERS` to the same discovery address (or addresses) and
-`AUTOMATELY_CLUSTER_TLS=required` with node certificates ([cluster-security](cluster-security.md)) so
+Every node sets `C93_CLUSTER_MEMBERS` to the same discovery address (or addresses) and
+`C93_CLUSTER_TLS=required` with node certificates ([cluster-security](cluster-security.md)) so
 that joining the cluster is itself an authenticated act.
 
 ### Configuration examples
 
 ```bash
 # Edge node: REST API + ingress, no guest code.
-AUTOMATELY_ROLES=api,ingress
-AUTOMATELY_CAPACITY=0
-AUTOMATELY_HTTP_PORT=8080
-AUTOMATELY_INGRESS_PORT=8000
-AUTOMATELY_METRICS_PORT=9090
+C93_ROLES=api,ingress
+C93_CAPACITY=0
+C93_HTTP_PORT=8080
+C93_INGRESS_PORT=8000
+C93_METRICS_PORT=9090
 
 # Compute node: sandboxed execution only, private subnet.
-AUTOMATELY_ROLES=worker
-AUTOMATELY_CAPACITY=32
-AUTOMATELY_CAPABILITIES=js:v8,js:graaljs
-AUTOMATELY_HTTP_PORT=off
-AUTOMATELY_INGRESS_PORT=off
+C93_ROLES=worker
+C93_CAPACITY=32
+C93_CAPABILITIES=js:v8,js:graaljs
+C93_HTTP_PORT=off
+C93_INGRESS_PORT=off
 
 # Database node: Ignite persistence, no guest code.
-AUTOMATELY_ROLES=data
-AUTOMATELY_CAPACITY=0
-AUTOMATELY_DATA_DIR=/var/lib/automately/data
-AUTOMATELY_DATA_MEMORY_MB=4096
-AUTOMATELY_HTTP_PORT=off
-AUTOMATELY_INGRESS_PORT=off
+C93_ROLES=data
+C93_CAPACITY=0
+C93_DATA_DIR=/var/lib/cluster93/data
+C93_DATA_MEMORY_MB=4096
+C93_HTTP_PORT=off
+C93_INGRESS_PORT=off
 ```
 
 ## 6. Migration
 
-- **Existing deployments need no change:** with no `AUTOMATELY_ROLES` every node is a full
+- **Existing deployments need no change:** with no `C93_ROLES` every node is a full
   `api,ingress,worker,data` node, exactly as before.
 - **Splitting an existing cluster** is a rolling change: bring up the new tier first (for example a
   `data` node that joins and takes partitions), then redeploy the old nodes with narrowed roles. A node
   that stops being a worker simply advertises capacity 0; in-flight jobs on it finish (or are reaped by
   the orphan policy, `docs/scripting/job-context.md`).
 - **Local development** is unchanged: `scripts/dev.sh start` runs one `api,ingress,worker,data` node
-  with an explicit `AUTOMATELY_DATA_DIR` under `$HOME/.automately/data`, so the single node is durable
+  with an explicit `C93_DATA_DIR` under `$HOME/.cluster93/data`, so the single node is durable
   and exercises the same code paths as a tiered production cluster.

@@ -3,7 +3,7 @@
 **Status:** accepted (Tony, 2026-10-07). Decisions: D-075 (this design), D-076 (directories). It's built in five parts, and the build status is at the end.
 
 ## Where it comes from
-2017's Automately had one: `automately.core.file`.
+2017's Cluster93 had one: `cluster93.core.file`.
 - **A per-user Java NIO `FileSystem`:** `UserFileSystem`, `UserFilePath`, `UserFileChannel`.
 - **Real directories:** `VirtualFile` with `pathAlias` and `isDirectory`.
 - **Pluggable stores:** local, S3 and Azure.
@@ -83,7 +83,7 @@ One tree per tenant, rooted at `/`:
 - **Appending:** `fs.appendFile` and append-mode handles write a **new version** made of the old bytes followed by the new ones. It's published atomically when the handle closes, so readers never see half an append.
   - **On cluster storage,** this can reuse the old chunks instead of copying them (the chunk store is keyed `fileId:index`), so appending to a big log is cheap. That's an optimisation for later; v1 copies.
 - **Writing at a position** (`fs.write(fd, buf, 0, n, position)`): the file is copied into `/tmp`, edited there, and published as a new version on close.
-  - **Limit:** files edited in place are capped at 64 MB (`AUTOMATELY_FS_EDIT_MB`). Larger ones must be rewritten as streams. That covers SQLite-style and config-file editing without promising a database file system.
+  - **Limit:** files edited in place are capped at 64 MB (`C93_FS_EDIT_MB`). Larger ones must be rewritten as streams. That covers SQLite-style and config-file editing without promising a database file system.
 - **Open handles:** a handle reads a fixed version, so a file replaced while it's open keeps reading the old one, as the 10-minute grace already allows. A handle not closed by the end of the job is discarded, like an unfinished upload today.
 
 ## 6. Mounts replace prefix routes
@@ -99,8 +99,8 @@ One tree per tenant, rooted at `/`:
 - **Per job, in node memory, gone when the job ends.** It's a private view: two jobs never see each other's `/tmp`.
   - **For services,** `/tmp` lasts as long as the run, so a service can keep a cache there.
 - **Memory first, then disk (Tony).**
-  - **In memory:** each job keeps up to 8 MB of `/tmp` in memory (`AUTOMATELY_TMP_MEMORY_MB`), counted against the node's heap admission (D-038).
-  - **Beyond that:** on nodes with a data directory, the rest spills to `<data dir>/tmp/<job id>/`, up to 1 GB per job (`AUTOMATELY_TMP_MB`). That space is checked against the node's minimum free disk, like durable writes (`AUTOMATELY_MIN_FREE_DISK_MB`).
+  - **In memory:** each job keeps up to 8 MB of `/tmp` in memory (`C93_TMP_MEMORY_MB`), counted against the node's heap admission (D-038).
+  - **Beyond that:** on nodes with a data directory, the rest spills to `<data dir>/tmp/<job id>/`, up to 1 GB per job (`C93_TMP_MB`). That space is checked against the node's minimum free disk, like durable writes (`C93_MIN_FREE_DISK_MB`).
   - **Nodes without a data directory** (in-memory development nodes) stay memory-only, with a 64 MB cap.
   - **Cleanup:** the folder is deleted when the job ends, and a node clears all of `<data dir>/tmp/` when it starts, so nothing from a crash survives.
   - **Running out:** going over the limit fails with `ENOSPC`; the node running low fails with `insufficient_storage`. Either way the node keeps running.
@@ -116,7 +116,7 @@ One tree per tenant, rooted at `/`:
 Node code uses `fs.readFileSync`, `existsSync` and friends, so the host API has blocking variants.
 - **How:** the call blocks the isolate's own thread until the host answers. Each isolate has its own thread, so nothing else on the node waits.
 - **Limits:**
-  - a timeout per call (`AUTOMATELY_FS_SYNC_TIMEOUT_MS`, 30 s), after which the call throws `ETIMEDOUT`
+  - a timeout per call (`C93_FS_SYNC_TIMEOUT_MS`, 30 s), after which the call throws `ETIMEDOUT`
   - synchronous reads capped at 32 MB, the same as `files.read` buffers today
 - **The cost, stated plainly:** while a sync call waits, that isolate does nothing else. Its timers wait, and a service handling several requests in one isolate stalls them all. Node has the same property; it's worse here because storage is a network hop away.
   - **Mitigations:** `/tmp` sync calls are memory-fast. The deploy check warns when sync `fs` calls appear inside `ctx.serve` handlers. The docs steer services to `fs/promises`.
@@ -129,7 +129,7 @@ Node code uses `fs.readFileSync`, `existsSync` and friends, so the host API has 
 ## 11. Public links
 - **What:** `POST /v1/files/{path}/link {expiresInSeconds}` (or `fs.link` in scripts) returns a URL anyone can fetch until it expires. It's 2017's public file tokens.
 - **How:**
-  - **The signature:** the URL carries the tenant, path, file version and expiry, signed with HMAC under a key derived from `AUTOMATELY_SECRETS_KEY` and a per-tenant link secret.
+  - **The signature:** the URL carries the tenant, path, file version and expiry, signed with HMAC under a key derived from `C93_SECRETS_KEY` and a per-tenant link secret.
   - **Serving:** the ingress checks the signature and serves the file with Range and ETag like any other. No token or session is involved, and nothing is stored per link.
   - **Pinned to a version:** a link points at the version that existed when it was made. Replacing the file stops the old link (open question 3).
 - **Revoking:** rotating the tenant's link secret revokes every link it has made (open question 4). It needs a secrets key; without one, links are unavailable, as secrets are (D-068).
@@ -139,7 +139,7 @@ Node code uses `fs.readFileSync`, `existsSync` and friends, so the host API has 
 **Scripts:**
 - **`files` stays exactly as it is.**
 - **A new `fs` module**, Node-shaped: `fs/promises` (`readFile`, `writeFile`, `appendFile`, `mkdir`, `readdir`, `stat`, `rename`, `copyFile`, `rm`, `open` → handle) and the sync versions.
-  - **Import it** as `import fs from 'automately:fs'` now. With Node compatibility, the bundler maps `fs` and `node:fs` to it.
+  - **Import it** as `import fs from 'c93:fs'` now. With Node compatibility, the bundler maps `fs` and `node:fs` to it.
 - **Both sit on one new host API, `FsApi`,** so `files` becomes a thin wrapper and the two can't drift apart.
 
 **REST:**
@@ -161,7 +161,7 @@ Node code uses `fs.readFileSync`, `existsSync` and friends, so the host API has 
 ## 13. What it gives the steps after it
 - **Modules:** `/packages` is where published versions appear, read-only; the blobs stay in the reserved `.packages` store.
 - **Node compatibility:** `fs` with sync calls is the hardest part, done here.
-- **Apps:** deployments use the same content-addressed blobs, and `automately apps deploy` uploads only what's new.
+- **Apps:** deployments use the same content-addressed blobs, and `c93 apps deploy` uploads only what's new.
 - **The console:** its file manager is a pure client of `/v1/dirs` and move/copy/link.
 - **Links:** a device's shared folder becomes a mount implementing the same interface.
 
@@ -189,7 +189,7 @@ Node code uses `fs.readFileSync`, `existsSync` and friends, so the host API has 
 3. **Public links:** pinned to the version they were made for; replacing the file stops the old link.
 4. **Revoking public links:** all at once, by rotating the tenant's link secret. Nothing is stored per link.
 5. **Moving bytes between providers:** later, as its own step.
-6. **The name:** "files" everywhere (`/v1/files`, `automately files`, `files` in scripts), plus the `fs` module. The docs call the feature "the file system".
+6. **The name:** "files" everywhere (`/v1/files`, `c93 files`, `files` in scripts), plus the `fs` module. The docs call the feature "the file system".
 
 ## Is it cluster-friendly?
 Yes; nothing depends on which node a request lands on.

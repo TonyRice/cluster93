@@ -1,7 +1,7 @@
 // 02 — Resilient steps and checkpoints.
 //
 // Run it:
-//   automately run examples/02-resilient-steps.js --on-orphan resume --max-attempts 3
+//   c93 run examples/02-resilient-steps.js --on-orphan resume --max-attempts 3
 //
 // ctx.step runs a unit of work at most once per job: on a resumed attempt its stored result comes back
 // and the function isn't called again. ctx.saveCheckpoint stores progress within a run. See

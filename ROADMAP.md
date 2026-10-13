@@ -1,9 +1,9 @@
-# Automately — Master Implementation Roadmap & Active Memory
+# Cluster93 — Master Implementation Roadmap & Active Memory
 
 **File:** `ROADMAP.md`  
 **Author / Organization:** Adam & Lynn Incorporated <tony@adamnlynn.com>  
 **License:** MPL-2.0  
-**Repository:** `git@github.com:adamnlynn/automately-v2.git` (`main`)  
+**Repository:** `git@github.com:adamnlynn/cluster93.git` (`main`)  
 **Last Updated:** 2026-10-13  
 
 ---
@@ -20,7 +20,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
    - Any trade-off, invariant, or architectural pattern chosen during implementation must be assigned a `D-xxx` decision record. Never rewrite or delete past decisions; supersede them.
 4. **Preserve Operational Invariants:**
    - Author / Committer attribution: `Adam & Lynn Incorporated <tony@adamnlynn.com>`.
-   - Architectural isolation: `automately-core` depends *only* on `vertx-core`; Apache Ignite is strictly confined to `automately-cluster-ignite`.
+   - Architectural isolation: `cluster93-core` depends *only* on `vertx-core`; Apache Ignite is strictly confined to `cluster93-cluster-ignite`.
    - Quality gates: Always check for crash logs (`find . -name 'hs_err_pid*.log'`). Run `./mvnw verify -pl <module> -am -DskipITs` (or `./scripts/test-all.sh`). Never run `DockerClusterIT` unless Tony explicitly requests it.
    - Protected docs: Do not overwrite user edits to `README.md`, `CHANGELOG.md`, `NOTES.md`, `SECURITY.md`, `docs/DECISIONS.md`.
 
@@ -38,8 +38,8 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
                                     │
 ┌───────────────────────────────────▼────────────────────────────────────┐
 │ Phase 4: In-Cluster Worker Protocol & Out-of-Process Isolation (DONE)  │
-│ • automately-runner-protocol: 12-byte frames, credit flow control, UDS │
-│ • automately-worker daemon, binary discovery, JVM fallback (D-131)     │
+│ • cluster93-runner-protocol: 12-byte frames, credit flow control, UDS │
+│ • cluster93-worker daemon, binary discovery, JVM fallback (D-131)     │
 │ • Full process-mode parity: streaming APIs, events, cgroups (D-132)   │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
@@ -54,7 +54,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 │ Phase 6: Web Management Console & Identity Sessions (NEXT)             │
 │ • Target Spec: ideas/console.md (D-070 to D-074 identity foundation)   │
 │ • WebAuthn Passkeys, OIDC PKCE flow, and __Host- session cookies       │
-│ • Vite + React + TanStack Router SPA bundled in automately-server      │
+│ • Vite + React + TanStack Router SPA bundled in cluster93-server      │
 │ • Real-time job logs (SSE), VFS file browser, service supervisor UI    │
 │ • Strict typing via openapi-typescript against OpenAPI contract        │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -74,7 +74,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ### Phase 5: Architecture Documentation & Maven Javadoc Aggregation
 - **Task 5.1 — Master Documentation (`DOCUMENTATION.md`):**
-  - Documented core architectural subsystems: `HostApis`, `NodeHostApis`, `ScriptRunner`, engine adapters, storage SPIs, network gates, and `automately-runner-protocol`.
+  - Documented core architectural subsystems: `HostApis`, `NodeHostApis`, `ScriptRunner`, engine adapters, storage SPIs, network gates, and `cluster93-runner-protocol`.
   - Maintained canonical cross-references and links to `docs/ARCHITECTURE.md` and `docs/DECISIONS.md`.
 - **Task 5.2 — Clean Aggregate Javadoc (`./mvnw javadoc:aggregate`):**
   - Configured aggregate Javadoc generation under JDK 21 (`maven-javadoc-plugin` 3.11.2 with `<doclint>all,-missing</doclint>` and `<release>21</release>`).
@@ -83,7 +83,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
   - Automated test runner `./scripts/test-all.sh` outputs to `lasttest.txt` by default and summarizes failures.
   - Resolved `ConcurrentModificationException` in `NodeVerticle.checkRunningJobs()`.
   - Resolved process-mode `STATE` durability race condition in `NodeWorkerChannel` (tracked pending state commits before completing execution result; passed `ChaosTest` and hardened `ProcessModeParityTest`).
-  - Clean run across all test suites under `AUTOMATELY_WORKER_MODE=process`.
+  - Clean run across all test suites under `C93_WORKER_MODE=process`.
 
 ---
 
@@ -92,8 +92,8 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 ### Phase 6: Web Management Console & Browser Identity Sessions (IN PROGRESS)
 - **Reference Spec:** `ideas/console.md` (builds upon D-070 to D-074 identity foundation).
 - **Delivered so far:**
-  - The console SPA is scaffolded in `console/` as a **Next.js 15 App Router** app with static export and deployed as an Automately app (see the achievement above). It currently authenticates with a bearer token and covers operator topology plus tenant jobs/services/apps/files. The browser session layer, real-time job logs, and the audit explorer remain.
-  - The `console` node role (`AUTOMATELY_ROLES=...,console`) gates who may serve the console app, and `scripts/local.sh`/`scripts/dev.sh` now provision the reserved `system` tenant and auto-deploy `console/` to `system/console`, served on `localhost` when no `AUTOMATELY_CONSOLE_DOMAIN` is set.
+  - The console SPA is scaffolded in `console/` as a **Next.js 15 App Router** app with static export and deployed as a Cluster93 app (see the achievement above). It currently authenticates with a bearer token and covers operator topology plus tenant jobs/services/apps/files. The browser session layer, real-time job logs, and the audit explorer remain.
+  - The `console` node role (`C93_ROLES=...,console`) gates who may serve the console app, and `scripts/local.sh`/`scripts/dev.sh` now provision the reserved `system` tenant and auto-deploy `console/` to `system/console`, served on `localhost` when no `C93_CONSOLE_DOMAIN` is set.
 - **Core Objectives:**
   1. **Browser Session Layer:**
      - WebAuthn Passkeys (`java-webauthn-server` or `webauthn4j`) and OIDC PKCE flow.
@@ -102,7 +102,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
   2. **Single-Page Application (SPA):**
      - Framework: Next.js App Router, static export (`output: 'export'`), Tailwind CSS — shipped as the `console` app via the apps primitive.
      - Strictly typed API client against `openapi.yaml` (currently hand-mirrored in `console/src/lib/types.ts`; generated types are a future hardening step).
-     - Zero cold starts: pure static assets served from the tenant VFS by the ingress (or bundled inside the `automately-server` jar under `/console/`).
+     - Zero cold starts: pure static assets served from the tenant VFS by the ingress (or bundled inside the `cluster93-server` jar under `/console/`).
   3. **Functional Views:**
      - **Jobs & Workflows:** Real-time streaming console logs (`/v1/jobs/{id}/events` via fetch streaming), step inspection (`ctx.step`), attempt history, manual cancel.
      - **Services:** Real-time health, supervisor status, restart backoffs, route inspector.
@@ -113,7 +113,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 - **Reference Spec:** `docs/design/node-runtime.md` (D-084, D-085, D-086).
 - **Core Requirements:**
   1. **Runtime Type `"node"`:** Enable execution of native Node.js workloads that require `.node` C++ addons, `child_process`, `worker_threads`, and frameworks like Express/Fastify/Next.js.
-  2. **Official Node + JS Runner:** Lightweight Node runner package implementing Automately globals over the runner protocol IPC stream.
+  2. **Official Node + JS Runner:** Lightweight Node runner package implementing Cluster93 globals over the runner protocol IPC stream.
   3. **Container Sandboxing:** Rootless Podman containerization with gVisor (`runsc`) user-space kernel for untrusted tenants.
   4. **Zero-Trust Network Tunneling:** Container runs `--network none`; all egress (`fetch`, `net.Socket`) and ingress (`ctx.serve`) are piped through the UDS protocol channel.
   5. **Layered Artifacts:** Deployments split into content-addressed tar layers (`node_modules`, app source) without running untrusted install scripts on cluster nodes.
@@ -130,7 +130,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 ### Phase 9: Polyglot Serverless Compute (Python)
 - **Reference Spec:** `ideas/python.md`.
 - **Core Requirements:**
-  1. Dedicated Python worker daemon communicating over `automately-runner-protocol` binary framing, bringing Python background jobs and ASGI microservices to the cluster.
+  1. Dedicated Python worker daemon communicating over `cluster93-runner-protocol` binary framing, bringing Python background jobs and ASGI microservices to the cluster.
 
 
 ---
@@ -140,14 +140,14 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 - **Dual Worker Compilation, GraalVM Helper & GraalJS Default Engine:**
   - New `scripts/detect-graalvm.sh` resolves the GraalVM SDK once (`GRAALVM_HOME`, `JAVA_HOME`, SDKMAN `current`/`*graal*` candidates, then `PATH`); sourced by `scripts/build-workers.sh` and `scripts/build-cli.sh` instead of each carrying its own discovery logic.
   - `scripts/local.sh` and `scripts/dev.sh` now build both native workers (`bin/worker-javet` and `bin/worker-graaljs`) via `build-workers.sh all` when either is missing (and on `local update`), so the engines can be switched back and forth seamlessly.
-  - `ServerConfig` defaults `AUTOMATELY_WORKER_DEFAULT_MODE` (and the legacy `AUTOMATELY_WORKER_ENGINE`) to `graaljs`, auto-registers both workers from `bin/`, and selects the `"default"` binary according to the default mode. `scripts/local.sh` records both worker paths in `node.meta` and honors `DEFAULT_WORKER_ENGINE`/`WORKER_ENGINE` in `local.env`.
-  - `ProcessModeDefaultTest` locks the `graaljs` default, the `"default"` binary pointing at `graaljs`, and the `javet` switch via `AUTOMATELY_WORKER_DEFAULT_MODE`.
+  - `ServerConfig` defaults `C93_WORKER_DEFAULT_MODE` (and the legacy `C93_WORKER_ENGINE`) to `graaljs`, auto-registers both workers from `bin/`, and selects the `"default"` binary according to the default mode. `scripts/local.sh` records both worker paths in `node.meta` and honors `DEFAULT_WORKER_ENGINE`/`WORKER_ENGINE` in `local.env`.
+  - `ProcessModeDefaultTest` locks the `graaljs` default, the `"default"` binary pointing at `graaljs`, and the `javet` switch via `C93_WORKER_DEFAULT_MODE`.
 
 - **Member Management & Password Lifecycle (Phase 6):**
   - **Self-Service Password Updates:** Added `PUT /v1/me/password` (`updateMyPassword`) across `openapi.yaml`, `RouteScopes.java`, and `IdentityRoutes.java`. A user sets a first password without a current one, or changes an existing one by proving it (`Kdf.scrypt` + `MessageDigest.isEqual`); wrong or missing current passwords answer `401`.
   - **`hasPassword` Everywhere:** `/v1/whoami`, `/v1/me`, `/v1/users`, and `/v1/users/{name}` now expose `hasPassword` (and the `User`/`Whoami` OpenAPI schemas document it), so the console can offer password management.
   - **Operator Invite Lifecycle:** Added `GET /v1/admin/invites` (`listOperatorInvites`) and `DELETE /v1/admin/invites/{id}` (`revokeOperatorInvite`) so the console can list and withdraw operator invites, complementing the existing `POST /v1/admin/invites`.
-  - **CLI Password Flow:** `automately login --invite CODE --password …` (with interactive prompt) sets a password on redemption, and `automately profile passwd` (`--password` / `--current-password`, prompting otherwise) changes it. `scripts/local.sh` `provision_admin` now prompts for (or generates) an admin console password and passes it when redeeming the operator invite.
+  - **CLI Password Flow:** `c93 login --invite CODE --password …` (with interactive prompt) sets a password on redemption, and `c93 profile passwd` (`--password` / `--current-password`, prompting otherwise) changes it. `scripts/local.sh` `provision_admin` now prompts for (or generates) an admin console password and passes it when redeeming the operator invite.
   - **Web Console Identity Tabs:** `LoginView` gains a "Redeem Invite" mode (code, username, password, confirm); the sidebar gains `Users & Invites` (operator) and `Members & Invites` (tenant), backed by new `UsersTab` / `MembersTab` components and `api.ts` methods (`updatePassword`, `redeemInvite`, `getMembers`, `getTenantInvites`, `createTenantInvite`, `revokeTenantInvite`, `getUsers`, `getAdminInvites`, `createAdminInvite`, `revokeAdminInvite`).
   - **Coverage:** Added `AuthTest.usersSetAndChangeTheirPassword`, `IngressAuthIntegrationTest.ingressPasswordUpdateRoundTrips`, `CliTest.redeemingAnInviteSetsTheConsolePassword`, `LoginView` redeem tests, and `UsersTab`/`MembersTab` component tests, plus `ContractTest` coverage for the new operations.
 
@@ -155,17 +155,17 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
   - **Vitest & React Testing Library Test Harness:** Established a pure web test harness in `console/` using Vitest, React Testing Library, and jsdom with path alias resolution and in-memory DOM shims.
   - **Component & API Client Tests:** Added 26 unit and component tests across `api.test.ts` (token lifecycle, tenant scoping, error handling, unauthorized interception), `OperatorView.test.tsx` (capacity and utilization metrics without jargon), `Header.test.tsx` (tenant context switcher), and `LoginView.test.tsx` (credentials exchange).
   - **Intuitive Cluster Capacity Metrics:** Replaced cryptic "Available Headroom" / "idle slots ready for work" cards in `OperatorView.tsx` with clean, professional compute metrics: Compute Nodes, Worker Concurrency, Active Executions (with percentage load and progress bar), and Available Slots.
-  - **Ingress Cross-Tenant Header Forwarding:** Fixed `IngressVerticle.proxy()` to allow `X-Automately-Tenant` on public API proxy rewrites (`proxyApi`), allowing operators to scope API queries without encountering 403 Forbidden errors.
+  - **Ingress Cross-Tenant Header Forwarding:** Fixed `IngressVerticle.proxy()` to allow `X-Cluster93-Tenant` on public API proxy rewrites (`proxyApi`), allowing operators to scope API queries without encountering 403 Forbidden errors.
 
 - **Username & Password Authentication Architecture (D-133, Phase 6):**
   - **Core Scrypt Password Hashing:** Extended `Identity` with `CREDENTIALS` record kind, random 16-byte cryptographic salts, and `Kdf.scrypt` hashing with constant-time `MessageDigest.isEqual` comparison.
   - **Public Login Endpoint:** Added `POST /v1/auth/login` to `openapi.yaml`, `RouteScopes.java`, and `IdentityRoutes.java`. Validates user credentials and mints a 30-day personal session token (`atly_...`).
   - **Web Console Dual-Mode Login:** Redesigned `LoginView.tsx` with Username & Password + optional Tenant as the primary interface, retaining an expandable "Sign in with API token" fallback for CLI and token power users.
-  - **Full Pre-commit Verification:** Passed `IdentityTest`, `AuthTest`, `ContractTest`, `./mvnw verify -pl automately-core,automately-server -am -DskipITs`, and `npm test` (26/26 passed) with 0 regressions.
+  - **Full Pre-commit Verification:** Passed `IdentityTest`, `AuthTest`, `ContractTest`, `./mvnw verify -pl cluster93-core,cluster93-server -am -DskipITs`, and `npm test` (26/26 passed) with 0 regressions.
 
 - **Admin Tenant Visibility, Worker Concurrency Metrics & VFS File Explorer (Phase 6):**
-  - **Operator Cross-Tenant Context Routing:** Evolved `ApiVerticle` authorization to allow cluster operators and the admin token (`principal.admin() == true`) to inspect and administer any tenant's workloads (jobs, services, apps, files) by passing `X-Automately-Tenant` or `?tenant=<name>`. Replaced rigid D-044/D-070 rejection strings with helpful guidance.
-  - **CLI Ergonomics & Jargon Removal:** Added an inherited `--tenant <name>` option to `automately` CLI, attaching `X-Automately-Tenant` on API requests. Purged internal decision tags (`(D-044)`, `(D-070)`, `(D-071)`, `(D-083)`, `(D-084)`, `(D-092)`, `(D-112)`) from command descriptions and user error messages.
+  - **Operator Cross-Tenant Context Routing:** Evolved `ApiVerticle` authorization to allow cluster operators and the admin token (`principal.admin() == true`) to inspect and administer any tenant's workloads (jobs, services, apps, files) by passing `X-Cluster93-Tenant` or `?tenant=<name>`. Replaced rigid D-044/D-070 rejection strings with helpful guidance.
+  - **CLI Ergonomics & Jargon Removal:** Added an inherited `--tenant <name>` option to `c93` CLI, attaching `X-Cluster93-Tenant` on API requests. Purged internal decision tags (`(D-044)`, `(D-070)`, `(D-071)`, `(D-083)`, `(D-084)`, `(D-092)`, `(D-112)`) from command descriptions and user error messages.
   - **Web Console Tenant Context Switcher:** Added interactive dropdown to `Header.tsx` allowing operators to seamlessly toggle between Cluster Infrastructure and any tenant workspace (`local`, `system`, or user-created), dynamically updating the API client's target tenant context.
   - **Tenants Management & Workspace Inspection:** Removed `D044Notice` banner and added a dedicated Tenants tab and overview card to list all cluster tenants with creation dates, 1-click workspace inspection, and inline tenant creation.
   - **Hierarchical VFS File Explorer:** Upgraded `FilesTab.tsx` into a full directory tree browser with folder navigation, clickable breadcrumbs, file size/MIME badges, search filtering, and an in-browser File Content Preview Modal for reading text, JSON, code, HTML, and markdown files directly.
@@ -173,67 +173,67 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 - **Local Master Node Orchestration & Web Console Live Verification (Phase 6):**
   - Added foreground `run` command to `scripts/local.sh` with PID file tracking and `exec env ...`, enabling clean supervision under daemon task runners and system process supervisors without background subshell or cgroup termination.
   - Exposed `seed` as a top-level command in `scripts/local.sh` for on-demand re-provisioning without resetting configuration.
-  - Successfully seeded the running master node: ensured `system` tenant, built and deployed Next.js web console (`console/`) to `system/console` via `automately apps deploy`, provisioned default `admin` operator (`admin: true`), and verified live serving at `http://localhost:8000` with HTTP 200 HTML and asset delivery.
+  - Successfully seeded the running master node: ensured `system` tenant, built and deployed Next.js web console (`console/`) to `system/console` via `c93 apps deploy`, provisioned default `admin` operator (`admin: true`), and verified live serving at `http://localhost:8000` with HTTP 200 HTML and asset delivery.
   - Verified D-044 security isolation with `admin` operator personal token (`whoami.admin == true`): operator manages cluster/nodes/tenants/users while tenant data remains strictly isolated.
 
 - **Durable App Storage & Local Start Console Auto-Provisioning (Phase 6.2):**
-  - Implemented `IgniteAppStore` on Apache Ignite with durable tables `APPS` (`tenant`, `name`) and `APP_DEPLOYMENTS` (`tenant`, `app`, `deploymentId`), registered in `IgniteStores.TABLES` and wired into clustered `Automately` server startup. App registrations, deployment histories, promotion state, and rollbacks now survive full cluster stops and restarts.
+  - Implemented `IgniteAppStore` on Apache Ignite with durable tables `APPS` (`tenant`, `name`) and `APP_DEPLOYMENTS` (`tenant`, `app`, `deploymentId`), registered in `IgniteStores.TABLES` and wired into clustered `Cluster93` server startup. App registrations, deployment histories, promotion state, and rollbacks now survive full cluster stops and restarts.
   - Comprehensive contract test suite in `IgniteAppStoreTest` covers deployment idempotency, version conflicts, promotions, rollbacks, deletions, and concurrent compare-and-set updates.
-  - Updated `scripts/local.sh` and `scripts/dev.sh` to extract idempotent `ensure_console()`: ensures `system` tenant, verifies active web console availability on the ingress port, and automatically builds/deploys the console SPA upon startup (`automately local start` / `scripts/local.sh start`).
+  - Updated `scripts/local.sh` and `scripts/dev.sh` to extract idempotent `ensure_console()`: ensures `system` tenant, verifies active web console availability on the ingress port, and automatically builds/deploys the console SPA upon startup (`c93 local start` / `scripts/local.sh start`).
 
 - **Single-Node Restart Job & Service Recovery (Phase 6.3):**
-  - Added in-script execution capability declarations via `ScriptConfig` (`automately.core.job.ScriptConfig`): scripts can declare `export const config = { onOrphan: 'resume' | 'retry', maxAttempts: N, timeoutMs: T };` (or direct exports `export const onOrphan = ...`). `ApiVerticle` automatically adopts script-declared policies when omitted from the request body while preserving CLI/API flag overrides, safely falling back to `fail` if neither declares a policy.
+  - Added in-script execution capability declarations via `ScriptConfig` (`cluster93.core.job.ScriptConfig`): scripts can declare `export const config = { onOrphan: 'resume' | 'retry', maxAttempts: N, timeoutMs: T };` (or direct exports `export const onOrphan = ...`). `ApiVerticle` automatically adopts script-declared policies when omitted from the request body while preserving CLI/API flag overrides, safely falling back to `fail` if neither declares a policy.
   - Accelerated recovery on restart: `OrphanReaper` and `ServiceSupervisor` now execute an immediate `sweep()` upon startup instead of idling for their initial periodic timer interval.
   - Implemented fast-path orphan reaping for known-dead instances: when a job's node matches this node's `nodeId` but has an older `nodeInstance`, the job is immediately reaped and re-queued without waiting for the 15–30s orphan grace period.
   - `ServiceSupervisor` promptly resumes runs on dead node instances and provisions fresh runs carrying forward previous state.
   - Verified with 20 unit tests in `ScriptConfigTest` and full cluster crash/restart end-to-end integration test in `SingleNodeRestartRecoveryTest`.
 
 - **Repo Path Auto-Detection & Recovery Hardening (Phase 6.4):**
-  - Enabled `automately local` commands (`automately local update`, `start`, `setup`) to reliably find the system repository from anywhere on the machine outside the git checkout: `scripts/local.sh` persists `REPO_ROOT` to `local.env` and `node.meta`, and `LocalCommand.java` resolves it in order from `AUTOMATELY_REPO`, `local.env`, `node.meta`, and CWD git walks. Verified in `LocalCommandTest`.
-  - Added automatic web console rebuild and redeployment to `automately local update` via `ensure_console`, with curl exit guarding under `set -e`.
+  - Enabled `c93 local` commands (`c93 local update`, `start`, `setup`) to reliably find the system repository from anywhere on the machine outside the git checkout: `scripts/local.sh` persists `REPO_ROOT` to `local.env` and `node.meta`, and `LocalCommand.java` resolves it in order from `C93_REPO`, `local.env`, `node.meta`, and CWD git walks. Verified in `LocalCommandTest`.
+  - Added automatic web console rebuild and redeployment to `c93 local update` via `ensure_console`, with curl exit guarding under `set -e`.
   - Partition safety in `OrphanReaper`: removed the `soleNode` shortcut, ensuring rolling restarts, temporary GC pauses, and network partitions in multi-node clusters always observe the full 3-heartbeat grace period.
   - Hardened `ScriptConfig`: replaced regexes with a string- and comment-aware balanced-brace depth scanner supporting nested structures and numeric separators (`30_000`).
   - Added end-to-end app and deployment persistence verification to `FullRestartTest`.
 
 - **CLI Versioning, Git Metadata & Update Detection (Phase 6.5):**
-  - Added `<git.commit>` and `<build.time>` build-time metadata properties in `automately-cli/pom.xml` and resource filtering into `automately-cli.properties`.
+  - Added `<git.commit>` and `<build.time>` build-time metadata properties in `cluster93-cli/pom.xml` and resource filtering into `cluster93-cli.properties`.
   - Added accessor methods `Main.commit()`, `Main.builtAt()`, and `Main.shortCommit()`.
-  - Updated `VersionCommand` to support `--json`, display git commit and build timestamp, and auto-detect the local repository root (using `LocalCommand.findRepoRoot()`). When a repo is present, it inspects `HEAD` to indicate whether the CLI is up to date or has an update available (`run 'automately local update' or 'scripts/build-cli.sh' to recompile`).
+  - Updated `VersionCommand` to support `--json`, display git commit and build timestamp, and auto-detect the local repository root (using `LocalCommand.findRepoRoot()`). When a repo is present, it inspects `HEAD` to indicate whether the CLI is up to date or has an update available (`run 'c93 local update' or 'scripts/build-cli.sh' to recompile`).
   - Updated `LocalCommand.status` to display the active CLI commit and update status alongside the cluster status.
   - Updated `scripts/build-cli.sh` to extract the current git commit and UTC build timestamp, passing them via `-Dgit.commit` and `-Dbuild.time` during native image and jar packaging.
   - Updated `scripts/local.sh:cmd_update` to re-run `scripts/build-cli.sh` when a native CLI binary exists, ensuring the native CLI stays in sync after repo updates.
   - Verified with 7 unit tests in `VersionCommandTest` (version formatting, commit display, repo detection, update detection, and JSON schema).
 
 - **CLI Help Grouping & Default Operator Onboarding (Developer Ergonomics):**
-  - `automately --help` no longer prints a flat ~30-command list: `Main` replaces picocli's single command-list section with five categorized sections — **Developer & Applications**, **Platform Resources**, **Identity & Access**, **Cluster & Local Node**, and **Tools & Automation** — while subcommands keep their own command lists (e.g. `automately help local`).
+  - `c93 --help` no longer prints a flat ~30-command list: `Main` replaces picocli's single command-list section with five categorized sections — **Developer & Applications**, **Platform Resources**, **Identity & Access**, **Cluster & Local Node**, and **Tools & Automation** — while subcommands keep their own command lists (e.g. `c93 help local`).
   - New `MainHelpTest` locks the category headings, the command-to-category mapping, and that only the top-level list is categorized (no `Commands:` heading at the top, but subcommands still show theirs).
-  - `scripts/local.sh` and `scripts/dev.sh` `cmd_seed` now always ensure the reserved `system` tenant, deploy the web console to `system/console`, mint an operator invite with `ADMIN_TOKEN` and redeem it as the `admin` user to mint an **Operator Personal Token**, ensure the developer workspace tenant (`$TENANT`, default `local` / `dev`), save that operator token as the CLI default in `~/.config/automately/config.json`, and print a setup-completion banner (Web Console URL, API URL, Operator User, Token). Re-runs reuse the saved operator token, so seeding is idempotent.
+  - `scripts/local.sh` and `scripts/dev.sh` `cmd_seed` now always ensure the reserved `system` tenant, deploy the web console to `system/console`, mint an operator invite with `ADMIN_TOKEN` and redeem it as the `admin` user to mint an **Operator Personal Token**, ensure the developer workspace tenant (`$TENANT`, default `local` / `dev`), save that operator token as the CLI default in `~/.config/cluster93/config.json`, and print a setup-completion banner (Web Console URL, API URL, Operator User, Token). Re-runs reuse the saved operator token, so seeding is idempotent.
 
 - **Console Node Role & `system/console` Auto-Provisioning (Phase 6):**
   - `ServerConfig.ROLES` gains `console`, designating the node that serves the management web console; the role defaults on for a development node (`api,ingress,worker,data,console`).
-  - `AppRouter` now takes the node's roles and refuses the console host (returning `NotAnApp`) unless the node plays `console`; with no `AUTOMATELY_CONSOLE_DOMAIN` set, a console-role node additionally answers the bare `localhost`/`127.0.0.1` host with `system/console`.
+  - `AppRouter` now takes the node's roles and refuses the console host (returning `NotAnApp`) unless the node plays `console`; with no `C93_CONSOLE_DOMAIN` set, a console-role node additionally answers the bare `localhost`/`127.0.0.1` host with `system/console`.
   - `LocalCommand.DEFAULT_ROLES` and `scripts/local.sh`/`scripts/dev.sh` default to the console role; `cmd_seed` ensures the reserved `system` tenant, builds `console/` when `npm` is available, mints a `system` token and deploys `console/` via the CLI (native binary or shaded-jar fallback) — then continues with the developer tenant.
 
-- **Web Console — Next.js App Deployed as an Automately App (`console/`):**
+- **Web Console — Next.js App Deployed as a Cluster93 App (`console/`):**
   - New self-contained Next.js 15 (App Router) app built for static export (`output: 'export'`, `distDir: 'out'`, `trailingSlash: true`, `images.unoptimized`) and deployable as the `console` app through the apps primitive.
-  - `automately.json` manifest rewrites same-origin `/v1/*` to `api:/v1/$1` (zero CORS), falls back to `/index.html` for SPA routes, and serves `/_next/static/*` immutably.
+  - `cluster93.json` manifest rewrites same-origin `/v1/*` to `api:/v1/$1` (zero CORS), falls back to `/index.html` for SPA routes, and serves `/_next/static/*` immutably.
   - Dark zinc/slate Tailwind UI: shared `Header` (connection + scope badges, logout) and `Sidebar`; `LoginView` for bearer-token entry; `OperatorView` (cluster topology with per-node capacity/roles, health, storage utilization, and the D-044 tenant-isolation notice); and `TenantView` composed of `JobsTab` (status badges, duration, cancel), `ServicesTab` (status, hosts, revision, restart/stop), `AppsTab` (deployments, preview/canonical URLs, promote/rollback), and `FilesTab` (path, size, MIME type, modified).
   - Typed client (`src/lib/api.ts`) targets same-origin `/v1/*`, stores the bearer token in `localStorage`, attaches `Authorization: Bearer`, and clears the token and returns to the login prompt on any `401`; interfaces in `src/lib/types.ts` mirror the OpenAPI models.
   - Verified: `cd console && npm install && npm run build` emits a static `out/` with `index.html`, `404.html`, and `_next/static/` chunks.
 
 - **Apps CLI — Deploy, Serve, Promote, Roll Back & Remove (Phase 6.1, Phase 3 CLI):**
-  - `AppsCommand` adds `automately apps` with `deploy` (reads `automately.json`, honors `distDir`, falls back to `out/`, `dist/`, `build/` or the project root; uploads the static export to `/.apps/<app>/deployments/<id>/` via `PUT /v1/files`; registers the immutable deployment with an optional git commit; auto-promotes unless `--no-promote`), `ls`/`list`, `get`, `deployments`, `promote`, `rollback`, and `rm`/`delete` (with `--yes`).
-  - Deploy prints the app name, deployment id, file count and size, plus the preview (`<deploymentId>--<app>--<tenant>`) and canonical (`<app>--<tenant>`) URLs derived from `AUTOMATELY_INGRESS_URL` (or the cluster URL); every command supports `--json`.
+  - `AppsCommand` adds `c93 apps` with `deploy` (reads `cluster93.json`, honors `distDir`, falls back to `out/`, `dist/`, `build/` or the project root; uploads the static export to `/.apps/<app>/deployments/<id>/` via `PUT /v1/files`; registers the immutable deployment with an optional git commit; auto-promotes unless `--no-promote`), `ls`/`list`, `get`, `deployments`, `promote`, `rollback`, and `rm`/`delete` (with `--yes`).
+  - Deploy prints the app name, deployment id, file count and size, plus the preview (`<deploymentId>--<app>--<tenant>`) and canonical (`<app>--<tenant>`) URLs derived from `C93_INGRESS_URL` (or the cluster URL); every command supports `--json`.
   - `Main` registers `AppsCommand`; `AppsCliTest` drives the whole lifecycle against a real in-process node, including serving the promoted static site through the ingress and the SPA fallback.
 - **Apps Primitive — Server, Ingress Router, Security & REST API (Phase 6.1):**
   - `apps:read`/`apps:write` scopes (`Scopes`, `openapi.yaml`) and `/v1/apps` REST operations (list/get/delete apps, list/get/create deployments, promote, rollback) in `AppsRoutes`, with `RouteScopes` rules and full OpenAPI 3.1 schemas.
-  - `AppStore` instantiated in `Automately.Stores` and wired into `ApiVerticle` and `IngressVerticle`.
-  - `AppRouter` resolves app hosts (console domain → `system`/`console`, preview `<deployId>--<app>--<tenant>`, canonical `<app>--<tenant>`, and `X-Automately-App`/`X-Automately-Tenant` test headers) and evaluates manifest routes: service proxy, same-origin `api:` rewrite, VFS static streaming via `FileResponder` (ETag/304/Range + manifest headers), and SPA fallback to `/index.html`.
-  - `CidrMatcher` parses and matches IPv4/IPv6 CIDRs; the console host enforces `AUTOMATELY_CONSOLE_ALLOWED_CIDRS` with 403 for unauthorized clients.
-  - `ServerConfig` gains `AUTOMATELY_CONSOLE_DOMAIN` and `AUTOMATELY_CONSOLE_ALLOWED_CIDRS`; `IngressVerticle` consults `AppRouter` before ordinary service routing, so app and service hosts share the ingress domain.
+  - `AppStore` instantiated in `Cluster93.Stores` and wired into `ApiVerticle` and `IngressVerticle`.
+  - `AppRouter` resolves app hosts (console domain → `system`/`console`, preview `<deployId>--<app>--<tenant>`, canonical `<app>--<tenant>`, and `X-Cluster93-App`/`X-Cluster93-Tenant` test headers) and evaluates manifest routes: service proxy, same-origin `api:` rewrite, VFS static streaming via `FileResponder` (ETag/304/Range + manifest headers), and SPA fallback to `/index.html`.
+  - `CidrMatcher` parses and matches IPv4/IPv6 CIDRs; the console host enforces `C93_CONSOLE_ALLOWED_CIDRS` with 403 for unauthorized clients.
+  - `ServerConfig` gains `C93_CONSOLE_DOMAIN` and `C93_CONSOLE_ALLOWED_CIDRS`; `IngressVerticle` consults `AppRouter` before ordinary service routing, so app and service hosts share the ingress domain.
   - Tests: `CidrMatcherTest`, `AppRouterTest`, `AppsRoutesTest` (including an end-to-end ingress static-serving check), `ContractTest` and `ServerConfigTest` additions.
 - **Standalone Node Storage Isolation & Immediate Activation:**
-  - `scripts/dev.sh` now keeps its Ignite store in `${AUTOMATELY_HOME}/dev-data` and `scripts/local.sh` its permanent master in `${AUTOMATELY_HOME}/master-data`, so development testing and the master node can no longer share a `db/` folder, WAL or Ignite baseline.
+  - `scripts/dev.sh` now keeps its Ignite store in `${C93_HOME}/dev-data` and `scripts/local.sh` its permanent master in `${C93_HOME}/master-data`, so development testing and the master node can no longer share a `db/` folder, WAL or Ignite baseline.
   - `IgniteCluster.firstStart` is node-identity aware: it checks for this node's own `db/<masked consistent id>` store instead of any shared `db/`, so a directory another identity wrote to is no longer mistaken for a restart.
   - `IgniteCluster.awaitActive` activates a standalone (`initialClusterSize == 1`) single server immediately when there is no baseline, or when the baseline names only absent nodes of another identity, instead of stalling; multi-node clustered waiting and backups validation are unchanged.
   - `LocalCommand`'s launch fallback now matches the orchestrator (`master-data`), and the `scripts/local.sh` heredoc no longer evaluates backticked prose as commands.
@@ -245,5 +245,5 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
   - Immediate worker crash / EOF detection via `input.endHandler()`.
   - Non-blocking state commits (`vertx.executeBlocking`) keeping event loop responsive.
 - **Default Process Mode (D-131, commit `8e428e8`):**
-  - Set `AUTOMATELY_WORKER_MODE=process` by default.
+  - Set `C93_WORKER_MODE=process` by default.
   - Dynamic discovery of native worker binaries in `bin/` with seamless child-JVM fallback.

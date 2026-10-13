@@ -1,4 +1,4 @@
-# Design and plan: preserving Automately's core scripting features
+# Design and plan: preserving Cluster93's core scripting features
 
 *Planned 2026-10-07, before the phase 5 demo. Tony chose the queue API shape and the scope (all four parts, then the demo).*
 
@@ -7,8 +7,8 @@ A review of the 2017 Nashorn code against the rewrite found three core features 
 
 | 2017 | Where | Now |
 |---|---|---|
-| **Completion callbacks.** A job's `callbackUrl` (from its config or `Automately.setCallbackUrl()`) got a POST when the job finished | `JobServer.java` around the `callbackUrl` POST, `AutomatelyObject.setCallbackUrl` | Missing: callers poll `GET /v1/jobs/{id}` or follow the event stream |
-| **Jobs starting and following jobs** from a script: `Automately.startJob(script, config, callback, wait)`, `getJob`, `stopJob` | `AutomatelyObject.java` | Missing |
+| **Completion callbacks.** A job's `callbackUrl` (from its config or `Cluster93.setCallbackUrl()`) got a POST when the job finished | `JobServer.java` around the `callbackUrl` POST, `Cluster93Object.setCallbackUrl` | Missing: callers poll `GET /v1/jobs/{id}` or follow the event stream |
+| **Jobs starting and following jobs** from a script: `Cluster93.startJob(script, config, callback, wait)`, `getJob`, `stopJob` | `Cluster93Object.java` | Missing |
 | **Messaging between jobs and services**: `messagebus` with `registerHandler`, `publish`, `send` with a reply and a timeout | `MessageBusObject.java`, `MessageObject.java` | `bus` covers publish/subscribe and request/reply, at most once. There's no queue: a message nobody listens for is lost |
 
 The review also found that the APIs scripts see were built from one 475-line JavaScript string over a generic `call(op, json)`. In 2017 they were Java objects. Tony asked for objects again.
@@ -50,7 +50,7 @@ await q.stats();        // { ready, inFlight, dead }
 - **Delivery goes through an internal queue (part 2),** so retries and failover are shared. Whoever records the terminal status enqueues the delivery: the node finishing the job, the reaper orphaning it, or a cancel.
 - **The POST:**
   - **Body:** `{ jobId, status, output, error, attempts, data }`. `data` comes back as it was sent.
-  - **Signature:** `Automately-Signature: t=…,v1=HMAC-SHA256(secret, t + "." + body)`.
+  - **Signature:** `Cluster93-Signature: t=…,v1=HMAC-SHA256(secret, t + "." + body)`.
   - **Network:** the request passes the egress policy (D-026).
   - **Retries:** a failed POST is retried with backoff, then given up and counted.
 - **Secret:** one per tenant (`GET /v1/callbacks/secret`, `POST …/rotate`), sealed like storage credentials (D-057).

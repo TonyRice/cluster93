@@ -1,0 +1,192 @@
+package cluster93.server;
+
+import cluster93.server.Cluster93.RunningNode;
+import io.vertx.core.Future;
+import io.vertx.core.Vertx;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.client.HttpResponse;
+import io.vertx.ext.web.client.WebClient;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * The cluster is the database (D-030): stop every node, start them again from their data directories, and
+ * everything is still there: finished jobs, kv, files, domains, and the service, which is running again and
+ * continues from its checkpoint.
+ */
+class FullRestartTest {
+
+    private static final String TENANT = "acme";
+
+    @TempDir
+    Path data;
+
+    private final List<RunningNode> nodes = new ArrayList<>();
+    private Vertx clientVertx;
+    private WebClient client;
+
+    @AfterEach
+    void stopAll() throws Exception {
+        stopNodes();
+        if (clientVertx != null) {
+            await(clientVertx.close());
+        }
+    }
+
+    private ServerConfig config(String nodeId) {
+        return ServerConfig.fromEnv(TestTls.secure(Map.ofEntries(
+                Map.entry("C93_NODE_ID", nodeId),
+                Map.entry("C93_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
+                Map.entry("C93_RATE_LIMIT_PER_MINUTE", "0"),
+                Map.entry("C93_METRICS_PORT", "0"),
+                Map.entry("C93_HTTP_PORT", "0"),
+                Map.entry("C93_INGRESS_PORT", "0"),
+                Map.entry("C93_INTERNAL_PORT", "0"),
+                Map.entry("C93_ADVERTISE_HOST", "127.0.0.1"),
+                Map.entry("C93_CAPACITY", "2"),
+                Map.entry("C93_MAX_HEAP_MB", "64"),
+                Map.entry("C93_HEARTBEAT_MS", "200"),
+                Map.entry("C93_ORPHAN_GRACE_MS", "400"),
+                Map.entry("C93_DATA_DIR", data.resolve(nodeId).toString()),
+                Map.entry("C93_DATA_MEMORY_MB", "128"),
+                Map.entry("C93_BASELINE_ADJUST_MS", "2000"),
+                Map.entry("C93_CLUSTER_SIZE", "3"),
+                Map.entry("C93_CLUSTERED", "true"),
+                Map.entry("C93_CLUSTER_PORT", "21701"),
+                Map.entry("C93_CLUSTER_MEMBERS", "127.0.0.1"))));
+    }
+
+    /** Nodes of a persistent cluster wait for each other on restart, so they're started in parallel, like a real cluster. */
+    private void startNodes() throws Exception {
+        List<CompletableFuture<RunningNode>> starting = new ArrayList<>();
+        for (String id : List.of("node-a", "node-b", "node-c")) {
+            starting.add(CompletableFuture.supplyAsync(() -> {
+                try {
+                    return await(Cluster93.start(config(id)));
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            }));
+        }
+        for (CompletableFuture<RunningNode> node : starting) {
+            nodes.add(node.get(120, TimeUnit.SECONDS));
+        }
+        TestAuth.use(nodes.getFirst());
+        awaitJson("/v1/nodes", json -> json.getJsonArray("nodes").size() == 3);
+    }
+
+    private void stopNodes() throws Exception {
+        List<CompletableFuture<Void>> stopping = nodes.stream()
+                .map(node -> node.stop().toCompletionStage().toCompletableFuture().exceptionally(e -> null))
+                .toList();
+        for (CompletableFuture<Void> stop : stopping) {
+            stop.get(60, TimeUnit.SECONDS);
+        }
+        nodes.clear();
+    }
+
+    @Test
+    void everythingComesBackAfterEveryNodeRestarts() throws Exception {
+        clientVertx = Vertx.vertx();
+        client = WebClient.create(clientVertx);
+        startNodes();
+
+        assertThat(put("/v1/services/counter", new JsonObject().put("script", ChaosTest.COUNTING_SERVICE)).statusCode()).isEqualTo(201);
+        JsonObject running = awaitJson("/v1/services/counter", s -> "RUNNING".equals(s.getString("status")));
+        String firstRun = running.getString("currentJobId");
+        awaitJson("/v1/jobs/" + firstRun + "/steps", s -> s.getValue("checkpoint") != null
+                && ((JsonObject) s.getValue("checkpoint")).getInteger("count") >= 5);
+        String jobId = runJob("export default async () => { await kv.set('greeting', 'survives'); return 'stored'; }");
+        assertThat(post("/v1/services/counter/domains", new JsonObject().put("domain", "shop.example.com")).statusCode()).isEqualTo(201);
+        byte[] file = new byte[3 * 1024 * 1024 + 123];
+        new java.util.Random(7).nextBytes(file);
+        HttpResponse<Buffer> uploaded = await(client.put(nodes.getFirst().httpPort(), "localhost", "/v1/files/assets/blob.bin")
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendBuffer(Buffer.buffer(file)));
+        assertThat(uploaded.statusCode()).as(uploaded.bodyAsString()).isEqualTo(201);
+
+        HttpResponse<Buffer> deployed = post("/v1/apps/shop/deployments",
+                new JsonObject().put("deploymentId", "dpl_restart").put("manifest", new JsonObject().put("name", "shop")));
+        assertThat(deployed.statusCode()).as(deployed.bodyAsString()).isEqualTo(201);
+        assertThat(post("/v1/apps/shop/promote", new JsonObject().put("deploymentId", "dpl_restart")).statusCode())
+                .as("shop is promoted before the restart").isEqualTo(200);
+
+        stopNodes();
+        startNodes();
+
+        assertThat(get("/v1/jobs/" + jobId).bodyAsJsonObject().getString("output")).isEqualTo("stored");
+        JsonObject kvJob = get("/v1/jobs/" + runJob("export default () => kv.get('greeting')")).bodyAsJsonObject();
+        assertThat(kvJob.getString("output")).isEqualTo("survives");
+        assertThat(get("/v1/services/counter/domains").bodyAsJsonObject().getJsonArray("domains")).hasSize(1);
+        HttpResponse<Buffer> downloaded = await(client.get(nodes.getLast().httpPort(), "localhost", "/v1/files/assets/blob.bin")
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).send());
+        assertThat(downloaded.statusCode()).isEqualTo(200);
+        assertThat(downloaded.getHeader("ETag")).isEqualTo(uploaded.getHeader("ETag"));
+        assertThat(downloaded.body().getBytes()).as("the file survived").isEqualTo(file);
+
+        JsonArray apps = get("/v1/apps").bodyAsJsonObject().getJsonArray("apps");
+        assertThat(apps).hasSize(1);
+        assertThat(apps.getJsonObject(0).getString("name")).isEqualTo("shop");
+        assertThat(get("/v1/apps/shop").bodyAsJsonObject().getString("activeDeploymentId"))
+                .as("the promoted deployment survived the full restart").isEqualTo("dpl_restart");
+
+        JsonObject restarted = awaitJson("/v1/services/counter", s -> "RUNNING".equals(s.getString("status")) && s.getInteger("runs") >= 2);
+        String secondRun = restarted.getString("currentJobId");
+        assertThat(secondRun).isNotEqualTo(firstRun);
+        JsonObject steps = awaitJson("/v1/jobs/" + secondRun + "/steps", s -> s.getValue("checkpoint") != null);
+        assertThat(((JsonObject) steps.getValue("checkpoint")).getInteger("count")).as("continued from before the restart").isGreaterThanOrEqualTo(5);
+    }
+
+    private String runJob(String script) throws Exception {
+        HttpResponse<Buffer> submitted = post("/v1/jobs", new JsonObject().put("script", script).put("timeoutMs", 10_000));
+        assertThat(submitted.statusCode()).as(submitted.bodyAsString()).isEqualTo(202);
+        String id = submitted.bodyAsJsonObject().getString("id");
+        awaitJson("/v1/jobs/" + id, j -> "SUCCEEDED".equals(j.getString("status")));
+        return id;
+    }
+
+    private HttpResponse<Buffer> get(String path) throws Exception {
+        return await(client.get(nodes.getFirst().httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).send());
+    }
+
+    private HttpResponse<Buffer> post(String path, JsonObject body) throws Exception {
+        return await(client.post(nodes.getFirst().httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(body));
+    }
+
+    private HttpResponse<Buffer> put(String path, JsonObject body) throws Exception {
+        return await(client.put(nodes.getFirst().httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(body));
+    }
+
+    private JsonObject awaitJson(String path, Predicate<JsonObject> condition) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        JsonObject last = null;
+        while (System.nanoTime() < deadline) {
+            HttpResponse<Buffer> response = get(path);
+            if (response.statusCode() == 200) {
+                last = response.bodyAsJsonObject();
+                if (condition.test(last)) {
+                    return last;
+                }
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("Condition never met for " + path + "; last: " + (last == null ? null : last.encodePrettily()));
+    }
+
+    private static <T> T await(Future<T> future) throws Exception {
+        return future.toCompletionStage().toCompletableFuture().get(120, TimeUnit.SECONDS);
+    }
+}

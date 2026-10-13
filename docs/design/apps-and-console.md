@@ -1,4 +1,4 @@
-# Architecture & Design Specification: Automately Apps & The Web Console
+# Architecture & Design Specification: Cluster93 Apps & The Web Console
 
 **Status:** Draft  
 **Target:** Phase 6 (Apps Primitive & Management Console)  
@@ -9,10 +9,10 @@
 ## 1. Executive Summary
 
 This specification unifies two major platform primitives:
-1. **Automately Apps:** A first-class deployment model enabling developers to deploy full-stack web applications (Next.js, Vite, Remix, static frontends) comprising:
-   - **Content-addressed static frontend assets** stored and served directly from Automately's Virtual File System (VFS).
-   - **An optional supervised backend service** running as an Automately service (`automately.core.service.ServiceSupervisor`), sharing the same origin via Ingress without CORS.
-   - **Single-origin ingress routing** (`automately.json`) supporting client-side SPA fallback, static asset caching, and dynamic `/api/*` or server-side routing to the backend service.
+1. **Cluster93 Apps:** A first-class deployment model enabling developers to deploy full-stack web applications (Next.js, Vite, Remix, static frontends) comprising:
+   - **Content-addressed static frontend assets** stored and served directly from Cluster93's Virtual File System (VFS).
+   - **An optional supervised backend service** running as a Cluster93 service (`cluster93.core.service.ServiceSupervisor`), sharing the same origin via Ingress without CORS.
+   - **Single-origin ingress routing** (`cluster93.json`) supporting client-side SPA fallback, static asset caching, and dynamic `/api/*` or server-side routing to the backend service.
 2. **The Web Management Console:** Designed and hosted **as the platform's canonical first-party App**, proving the capability of the runtime.
    - Built with **Next.js (App Router)** and **Tailwind CSS / shadcn/ui**.
    - Strictly typed against the contract-first OpenAPI specification (`openapi.yaml`).
@@ -21,9 +21,9 @@ This specification unifies two major platform primitives:
 
 ---
 
-## 2. Automately Apps: Concept & Lifecycle
+## 2. Cluster93 Apps: Concept & Lifecycle
 
-An **App** in Automately is an atomic, immutable bundle containing static client assets and an optional backend service.
+An **App** in Cluster93 is an atomic, immutable bundle containing static client assets and an optional backend service.
 
 ```
                               Public Ingress (:8000)
@@ -50,7 +50,7 @@ An **App** in Automately is an atomic, immutable bundle containing static client
   - `/.apps/<app-name>/active`: Stores the JSON pointer referencing the currently promoted deployment ID and its backend service revision.
   - Rolling back an app simply updates this pointer atomically (D-077).
 
-### 2.2 App Manifest (`automately.json`)
+### 2.2 App Manifest (`cluster93.json`)
 Placed at the root of the project to declare routing, static outputs, and backend linkage:
 
 ```json
@@ -90,19 +90,19 @@ Placed at the root of the project to declare routing, static outputs, and backen
 }
 ```
 
-### 2.3 Deployment Workflow (`automately apps deploy`)
+### 2.3 Deployment Workflow (`c93 apps deploy`)
 1. **Developer Build:** Developer runs `next build` (with `output: 'export'` for static or hybrid backend output).
 2. **Hash & Sync:** The CLI hashes local files and checks which chunk hashes already exist on the cluster (`POST /v1/apps/{name}/manifest`).
 3. **Upload Missing Chunks:** Uploads only newly modified blobs.
 4. **Deploy & Preview:** An immutable deployment ID is minted. The deployment is accessible immediately via preview URL:
    `https://<deploy-hash>--<app>--<tenant>.<ingress-domain>`
-5. **Promotion:** `automately apps promote <app> <deploy-hash>` shifts the canonical host (`<app>--<tenant>.<domain>` or custom domain) to the new deployment with zero downtime.
+5. **Promotion:** `c93 apps promote <app> <deploy-hash>` shifts the canonical host (`<app>--<tenant>.<domain>` or custom domain) to the new deployment with zero downtime.
 
 ---
 
 ## 3. Server-Side Routing & Ingress Engine
 
-The ingress proxy (`automately.server.ingress.IngressProxy`) is extended with an **AppRouter**:
+The ingress proxy (`cluster93.server.ingress.IngressProxy`) is extended with an **AppRouter**:
 
 1. **Host Matching:**
    - Matches incoming HTTP request against registered apps (system apps, tenant apps, and custom domains).
@@ -118,9 +118,9 @@ The ingress proxy (`automately.server.ingress.IngressProxy`) is extended with an
 
 ---
 
-## 4. The Web Console as an Automately App
+## 4. The Web Console as a Cluster93 App
 
-The Automately Web Console is deployed as an app named `console` in the reserved `system` tenant.
+The Cluster93 Web Console is deployed as an app named `console` in the reserved `system` tenant.
 
 ### 4.1 Technology Stack
 - **Framework:** Next.js (App Router).
@@ -132,12 +132,12 @@ The Automately Web Console is deployed as an app named `console` in the reserved
 The Console must **never be inadvertently exposed** on the public web. It enforces three lines of defense:
 
 1. **Custom Host / Subdomain Binding:**
-   - Operators configure `AUTOMATELY_CONSOLE_DOMAIN` (e.g. `console.internal.company.com`).
+   - Operators configure `C93_CONSOLE_DOMAIN` (e.g. `console.internal.company.com`).
    - Requests arriving on any other host or IP return `404 Not Found`.
 2. **Network / CIDR Access Control:**
-   - Ingress enforces `AUTOMATELY_CONSOLE_ALLOWED_CIDRS` (e.g. `127.0.0.1/32, 10.0.0.0/8`). Requests from unauthorized IPs are rejected with `403 Forbidden` before static assets or backend endpoints are touched.
+   - Ingress enforces `C93_CONSOLE_ALLOWED_CIDRS` (e.g. `127.0.0.1/32, 10.0.0.0/8`). Requests from unauthorized IPs are rejected with `403 Forbidden` before static assets or backend endpoints are touched.
 3. **Dedicated Node Role Isolation:**
-   - In a production cluster partitioned via Node Roles (`AUTOMATELY_ROLES`), the console app can be pinned strictly to an internal management node with no public IP.
+   - In a production cluster partitioned via Node Roles (`C93_ROLES`), the console app can be pinned strictly to an internal management node with no public IP.
 
 ---
 
@@ -184,7 +184,7 @@ Leveraging the **D-070** identity architecture, the Console presents distinct in
 ### Phase 6.1: The Apps Primitive (Backend & Ingress)
 - Add `/v1/apps` routes to `openapi.yaml` and implement `AppVerticle`.
 - Create `AppRouter` in Ingress to resolve app routes, static assets from VFS, SPA fallback, and proxying to backend services.
-- Add `automately apps deploy` and `automately apps promote` to `automately-cli`.
+- Add `c93 apps deploy` and `c93 apps promote` to `cluster93-cli`.
 
 ### Phase 6.2: Console Next.js Application
 - Scaffold Next.js App Router project in `console/` with Tailwind CSS, shadcn/ui, and OpenAPI TypeScript client.

@@ -16,7 +16,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Automately benchmarks (phase 5, milestone 3). One file, no dependencies: {@code java Bench.java <scenario> ...}.
+ * Cluster93 benchmarks (phase 5, milestone 3). One file, no dependencies: {@code java Bench.java <scenario> ...}.
  * Talks to a running cluster's API with a tenant token, like any client; prints one Markdown table row per scenario.
  *
  * <pre>

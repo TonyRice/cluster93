@@ -1,6 +1,6 @@
-# Automately
+# Cluster93
 
-A self-hostable, clustered serverless platform for resilient background jobs and supervised HTTP/WebSocket services—bringing the execution model of **Cloudflare Workers** and **AWS Lambda** to your own infrastructure with zero external database dependencies.
+A self-hostable, clustered, distributed backend platform for resilient background jobs and supervised HTTP/WebSocket services—bringing the execution model of **Cloudflare Workers** and **AWS Lambda** to your own infrastructure with zero external database dependencies.
 
 You submit code to any node. The cluster schedules it on the least-loaded worker inside an isolated sandbox, streams execution live, and handles state, messaging, and storage out of the box.
 
@@ -14,13 +14,16 @@ You submit code to any node. The cluster schedules it on the least-loaded worker
 > - **Node.js & Web Standards:** Native support for `node:http`, `node:net`, `node:tls`, `node:crypto`, `node:stream`, `fetch`, `WebSocket`, and real npm packages (Express 5, Fastify 5, Koa 3, `pg`, `mysql2`, `ioredis`, `mongodb`).
 > - **Built-in AI & Tooling:** First-class **Model Context Protocol (MCP)** server on every node over Streamable HTTP, a contract-first OpenAPI 3.1 REST API, and single-binary native CLI.
 
+> **Heritage:** Cluster93 is a continuation of the open-source **Automately**
+> platform (founded 2014, acquired before 2018). [See the archived original →][wayback]
+
 ---
 
 ## Install the CLI
 
 ```bash
-curl -fsSL https://github.com/adamnlynn/automately-v2/releases/latest/download/install.sh | sh     # Linux, macOS
-irm https://github.com/adamnlynn/automately-v2/releases/latest/download/install.ps1 | iex           # Windows
+curl -fsSL https://github.com/adamnlynn/cluster93/releases/latest/download/install.sh | sh     # Linux, macOS
+irm https://github.com/adamnlynn/cluster93/releases/latest/download/install.ps1 | iex           # Windows
 ```
 
 Native binaries compile via GraalVM with zero JVM requirements on the client. See the [CLI guide](docs/guides/cli.md). To connect AI agents via MCP, see the [MCP guide](docs/guides/mcp.md).
@@ -67,14 +70,14 @@ To run a persistent local single-node cluster directly on your machine without D
 # 1. Build the server, GraalVM native CLI, and worker isolate
 scripts/dev.sh build
 
-# 2. Start the local cluster in the background (persists to ~/.automately/data)
+# 2. Start the local cluster in the background (persists to ~/.cluster93/data)
 scripts/dev.sh start
 
-# 3. Create the 'dev' tenant, mint a full-access token, configure ~/.config/automately/config.json, and print MCP config
+# 3. Create the 'dev' tenant, mint a full-access token, configure ~/.config/cluster93/config.json, and print MCP config
 scripts/dev.sh seed
 
 # 4. Run any JavaScript ES-module job via the native CLI
-automately run examples/01-hello-job.js
+c93 run examples/01-hello-job.js
 
 # 5. Run the full curated test suite covering jobs, steps, KV, event bus, queues, and VFS
 scripts/dev.sh test-examples
@@ -86,7 +89,7 @@ scripts/dev.sh status
 scripts/dev.sh stop
 ```
 
-Data is stored persistently at `$HOME/.automately/data` (customizable via `scripts/dev.sh start --data-dir <path>`). The native `automately` binary is installed directly into `~/.local/bin/automately` (and `bin/automately`).
+Data is stored persistently at `$HOME/.cluster93/data` (customizable via `scripts/dev.sh start --data-dir <path>`). The native `c93` binary is installed directly into `~/.local/bin/c93` (and `bin/c93`).
 
 ---
 
@@ -103,26 +106,26 @@ State is written where you'd expect:
 
 | File | What it holds |
 |---|---|
-| `~/.automately/local.env` | Node ID, roles, data/log directories, ports, worker mode, admin token, tenant (mode `0600`) |
-| `~/.automately/node.meta` | Build provenance: install time, git commit and branch, version, server jar, CLI binary |
-| `~/.config/automately/config.json` | The saved login (`automately whoami` works immediately) |
-| `~/.automately/mcp.json` | Ready-to-paste MCP configuration for AI agents |
+| `~/.cluster93/local.env` | Node ID, roles, data/log directories, ports, worker mode, admin token, tenant (mode `0600`) |
+| `~/.cluster93/node.meta` | Build provenance: install time, git commit and branch, version, server jar, CLI binary |
+| `~/.config/cluster93/config.json` | The saved login (`c93 whoami` works immediately) |
+| `~/.cluster93/mcp.json` | Ready-to-paste MCP configuration for AI agents |
 
 Every operation is also available from the CLI, so you never need to remember the script's paths:
 
 ```bash
-automately local status         # PID, /health, /v1/nodes, and an update check
-automately local start
-automately local stop
-automately local restart
-automately local logs --follow
-automately local mcp            # Claude Code, Cursor, Antigravity, and the stdio bridge
+c93 local status         # PID, /health, /v1/nodes, and an update check
+c93 local start
+c93 local stop
+c93 local restart
+c93 local logs --follow
+c93 local mcp            # Claude Code, Cursor, Antigravity, and the stdio bridge
 ```
 
 `status` compares the commit the running build came from against the checkout's `git HEAD` and flags any drift, so a stale node is never a mystery:
 
 ```text
-⚠️  Update Available! Running build: 666cefa9…, Current repo HEAD: 8d4b1c02…. Run 'scripts/local.sh update' or 'automately local update'.
+⚠️  Update Available! Running build: 666cefa9…, Current repo HEAD: 8d4b1c02…. Run 'scripts/local.sh update' or 'c93 local update'.
 ```
 
 `scripts/local.sh update` rebuilds the server jar and worker from the current checkout, rewrites the provenance in `node.meta`, and restarts the node if it was running.
@@ -134,9 +137,9 @@ automately local mcp            # Claude Code, Cursor, Antigravity, and the stdi
 #### 1. Launch a Multi-Node Cluster
 
 ```bash
-export AUTOMATELY_ADMIN_TOKEN=$(openssl rand -hex 32)
+export C93_ADMIN_TOKEN=$(openssl rand -hex 32)
 docker compose up --build -d        # Starts three nodes on :8081, :8082, :8083
-ADMIN="Authorization: Bearer $AUTOMATELY_ADMIN_TOKEN"
+ADMIN="Authorization: Bearer $C93_ADMIN_TOKEN"
 
 # Create a tenant and mint a scoped bearer token
 curl -s -X POST localhost:8081/v1/tenants -H "$ADMIN" -d '{"name": "demo"}'
@@ -160,12 +163,12 @@ curl -s -X POST localhost:8081/v1/jobs -H "$AUTH" \
 Stream logs and execution events in real time from any node via Server-Sent Events (SSE) or the CLI:
 ```bash
 curl -N localhost:8083/v1/jobs/<id>/events -H "$AUTH"
-automately jobs logs <id>                               # Live stream via CLI
+c93 jobs logs <id>                               # Live stream via CLI
 ```
 
 Or run directly with live console streaming:
 ```bash
-automately run job.js --input '{"count": 21}'           # Streams stderr logs live, stdout returns result
+c93 run job.js --input '{"count": 21}'           # Streams stderr logs live, stdout returns result
 ```
 
 ### 3. Deploy a Supervised HTTP Microservice
@@ -187,16 +190,16 @@ curl -H "Host: web--demo.localhost" http://localhost:8000/
 
 Or deploy and stream logs live via the CLI:
 ```bash
-automately login http://localhost:8081 --token "$TOKEN"
-automately services deploy web server.js
-automately services logs web                           # Follow live console output
+c93 login http://localhost:8081 --token "$TOKEN"
+c93 services deploy web server.js
+c93 services logs web                           # Follow live console output
 ```
 
 ---
 
 ## REST API & Contract
 
-Automately uses a **contract-first architecture**: [`openapi.yaml`](automately-server/src/main/resources/openapi.yaml) is the single source of truth. Every request is validated against the specification before reaching application handlers.
+Cluster93 uses a **contract-first architecture**: [`openapi.yaml`](cluster93-server/src/main/resources/openapi.yaml) is the single source of truth. Every request is validated against the specification before reaching application handlers.
 
 All `/v1` endpoints require an HTTP Bearer token:
 - **Admin Token:** Manages tenants, operators, and storage policies. Admin tokens cannot read or manipulate tenant data (D-044).
@@ -238,7 +241,7 @@ For complete schema details and parameter documentation, refer to the [API Endpo
                                   └──────────┬───────────┘
                                              ▼
                                   ┌──────────────────────┐
-                                  │  automately-worker   │
+                                  │  cluster93-worker   │
                                   │ (V8 / GraalJS native)│
                                   └──────────────────────┘
                          │
@@ -263,16 +266,16 @@ For complete schema details and parameter documentation, refer to the [API Endpo
 
 | Module | Responsibility | Key Classes |
 |---|---|---|
-| [`automately-core`](automately-core) | Job lifecycle, state transitions, scheduling, storage SPIs, services supervisor. Depends only on `vertx-core`. | `NodeVerticle`, `JobScheduler`, `ServiceSupervisor`, `NodeHostApis` |
-| [`automately-runtime-js`](automately-runtime-js) | Engine-neutral JS SPI, polyfills (`node:*`, web standards), event loop orchestration, and conformance test harness. | `JsEngine`, `JsContext`, `ScriptRunner`, `HostFunction` |
-| [`automately-runtime-javet`](automately-runtime-javet) | V8 engine adapter using Javet. Optimized for throughput and JSON manipulation. | `JavetEngine` |
-| [`automately-runtime-graaljs`](automately-runtime-graaljs) | GraalJS engine adapter. Memory-safe polyglot sandbox isolating host memory. | `GraalJsEngine` |
-| [`automately-runner-protocol`](automately-runner-protocol) | IPC binary framing codec, credit-based flow control, UDS transport, and warm tenant worker pool supervisor. | `FrameCodec`, `StreamMultiplexer`, `TenantWorkerPool`, `RemoteHostApis` |
-| [`automately-worker`](automately-worker) | Standalone native runner daemon for out-of-process execution. | `WorkerMain` |
-| [`automately-cluster-ignite`](automately-cluster-ignite) | Embedded Apache Ignite 2.18 persistence, WAL, replicated caches, and cluster manager. | `IgniteClusterManager`, `IgniteJobStore` |
-| [`automately-server`](automately-server) | REST API endpoints, OpenAPI validation, ingress proxy, WebSocket tunnels, and MCP server. | `Automately`, `ApiVerticle`, `IngressVerticle` |
-| [`automately-cli`](automately-cli) | Single-binary CLI client compiled with GraalVM Native Image. | `CliMain` |
-| [`automately-tls`](automately-tls) | Mutual TLS utilities, node join tokens, and cluster certificates. | `TlsConfig` |
+| [`cluster93-core`](cluster93-core) | Job lifecycle, state transitions, scheduling, storage SPIs, services supervisor. Depends only on `vertx-core`. | `NodeVerticle`, `JobScheduler`, `ServiceSupervisor`, `NodeHostApis` |
+| [`cluster93-runtime-js`](cluster93-runtime-js) | Engine-neutral JS SPI, polyfills (`node:*`, web standards), event loop orchestration, and conformance test harness. | `JsEngine`, `JsContext`, `ScriptRunner`, `HostFunction` |
+| [`cluster93-runtime-javet`](cluster93-runtime-javet) | V8 engine adapter using Javet. Optimized for throughput and JSON manipulation. | `JavetEngine` |
+| [`cluster93-runtime-graaljs`](cluster93-runtime-graaljs) | GraalJS engine adapter. Memory-safe polyglot sandbox isolating host memory. | `GraalJsEngine` |
+| [`cluster93-runner-protocol`](cluster93-runner-protocol) | IPC binary framing codec, credit-based flow control, UDS transport, and warm tenant worker pool supervisor. | `FrameCodec`, `StreamMultiplexer`, `TenantWorkerPool`, `RemoteHostApis` |
+| [`cluster93-worker`](cluster93-worker) | Standalone native runner daemon for out-of-process execution. | `WorkerMain` |
+| [`cluster93-cluster-ignite`](cluster93-cluster-ignite) | Embedded Apache Ignite 2.18 persistence, WAL, replicated caches, and cluster manager. | `IgniteClusterManager`, `IgniteJobStore` |
+| [`cluster93-server`](cluster93-server) | REST API endpoints, OpenAPI validation, ingress proxy, WebSocket tunnels, and MCP server. | `Cluster93`, `ApiVerticle`, `IngressVerticle` |
+| [`cluster93-cli`](cluster93-cli) | Single-binary CLI client compiled with GraalVM Native Image. | `CliMain` |
+| [`cluster93-tls`](cluster93-tls) | Mutual TLS utilities, node join tokens, and cluster certificates. | `TlsConfig` |
 
 For an in-depth component guide, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -280,7 +283,7 @@ For an in-depth component guide, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 
 ## Isolation & Security
 
-Automately enforces isolation across multiple layers:
+Cluster93 enforces isolation across multiple layers:
 
 1. **Dual JS Engines:**
    - **V8 (Javet):** Delivers maximum raw execution speed (2–9× faster on object/JSON-heavy code).
@@ -300,31 +303,31 @@ Threat models and defense boundaries are detailed in [SECURITY.md](SECURITY.md).
 
 ## Configuration
 
-Automately is configured via environment variables:
+Cluster93 is configured via environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `AUTOMATELY_NODE_ID` | `$(hostname)` | Unique identifier for this cluster node |
-| `AUTOMATELY_ADMIN_TOKEN` | *(Auto-generated)* | Cluster administrative token (at least 32 characters) |
-| `AUTOMATELY_RATE_LIMIT_PER_MINUTE` | `1200` | Allowed requests per tenant per minute across the cluster |
-| `AUTOMATELY_HTTP_PORT` | `8080` | REST API and MCP HTTP port (`0` = random) |
-| `AUTOMATELY_INGRESS_PORT` | `8000` | Ingress reverse proxy port for hosted services |
-| `AUTOMATELY_INGRESS_DOMAIN` | `localhost` | Base domain for service hostnames (`<service>--<tenant>.<domain>`) |
-| `AUTOMATELY_WORKER_MODE` | `process` | Execution mode: `process` (out-of-process worker pool with cgroups) or `embedded` (in-process isolate) |
-| `AUTOMATELY_WORKER_ENGINE` | `javet` | Runtime engine: `javet` (V8) or `graaljs` |
-| `AUTOMATELY_WORKER_DEFAULT_MODE` | `default` | Default worker binary profile mode |
-| `AUTOMATELY_WORKER_BINARY_<MODE>` | | Custom binary path for worker profile `<MODE>` |
-| `AUTOMATELY_CAPACITY` | `8` | Maximum concurrent job executions on this node |
-| `AUTOMATELY_MAX_HEAP_MB` | `128` | Per-isolate heap memory limit |
-| `AUTOMATELY_DEFAULT_TIMEOUT_MS` | `10000` | Default execution timeout for jobs |
-| `AUTOMATELY_CLUSTERED` | `false` | Enable multi-node clustering |
-| `AUTOMATELY_CLUSTER_MEMBERS` | `127.0.0.1` | Seed member addresses for cluster discovery |
-| `AUTOMATELY_CLUSTER_PORT` | `5701` | Ignite cluster discovery port |
-| `AUTOMATELY_CLUSTER_TLS` | `required` | Mutual TLS between cluster nodes (`required` or `off`) |
-| `AUTOMATELY_DATA_DIR` | *(In-memory)* | Local directory for durable Ignite database and WAL storage |
-| `AUTOMATELY_DATA_BACKUPS` | `1` | Copies of replicated partition data across nodes |
-| `AUTOMATELY_FILES_BACKEND` | `cluster` | Storage backend for VFS: `cluster` (replicated Ignite cache), `disk`, or `s3` |
-| `AUTOMATELY_METRICS_PORT` | `9090` | Prometheus `/metrics` endpoint |
+| `C93_NODE_ID` | `$(hostname)` | Unique identifier for this cluster node |
+| `C93_ADMIN_TOKEN` | *(Auto-generated)* | Cluster administrative token (at least 32 characters) |
+| `C93_RATE_LIMIT_PER_MINUTE` | `1200` | Allowed requests per tenant per minute across the cluster |
+| `C93_HTTP_PORT` | `8080` | REST API and MCP HTTP port (`0` = random) |
+| `C93_INGRESS_PORT` | `8000` | Ingress reverse proxy port for hosted services |
+| `C93_INGRESS_DOMAIN` | `localhost` | Base domain for service hostnames (`<service>--<tenant>.<domain>`) |
+| `C93_WORKER_MODE` | `process` | Execution mode: `process` (out-of-process worker pool with cgroups) or `embedded` (in-process isolate) |
+| `C93_WORKER_ENGINE` | `javet` | Runtime engine: `javet` (V8) or `graaljs` |
+| `C93_WORKER_DEFAULT_MODE` | `default` | Default worker binary profile mode |
+| `C93_WORKER_BINARY_<MODE>` | | Custom binary path for worker profile `<MODE>` |
+| `C93_CAPACITY` | `8` | Maximum concurrent job executions on this node |
+| `C93_MAX_HEAP_MB` | `128` | Per-isolate heap memory limit |
+| `C93_DEFAULT_TIMEOUT_MS` | `10000` | Default execution timeout for jobs |
+| `C93_CLUSTERED` | `false` | Enable multi-node clustering |
+| `C93_CLUSTER_MEMBERS` | `127.0.0.1` | Seed member addresses for cluster discovery |
+| `C93_CLUSTER_PORT` | `5701` | Ignite cluster discovery port |
+| `C93_CLUSTER_TLS` | `required` | Mutual TLS between cluster nodes (`required` or `off`) |
+| `C93_DATA_DIR` | *(In-memory)* | Local directory for durable Ignite database and WAL storage |
+| `C93_DATA_BACKUPS` | `1` | Copies of replicated partition data across nodes |
+| `C93_FILES_BACKEND` | `cluster` | Storage backend for VFS: `cluster` (replicated Ignite cache), `disk`, or `s3` |
+| `C93_METRICS_PORT` | `9090` | Prometheus `/metrics` endpoint |
 
 ---
 
@@ -335,7 +338,7 @@ Automately is configured via environment variables:
 ./mvnw verify -DskipITs
 
 # Run targeted engine tests
-./mvnw test -pl automately-runtime-javet -Dtest=ScriptRuntimeTest -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl cluster93-runtime-javet -Dtest=ScriptRuntimeTest -Dsurefire.failIfNoSpecifiedTests=false
 
 # Full verification including multi-container Docker cluster chaos tests
 ./mvnw verify
@@ -369,6 +372,28 @@ For the master implementation roadmap, active milestones, and upcoming work, see
 - [docs/guides/packages.md](docs/guides/packages.md): Publishing and importing versioned packages
 - [docs/scripting/host-apis.md](docs/scripting/host-apis.md): Guest JavaScript host APIs reference
 - [docs/scripting/node-compat.md](docs/scripting/node-compat.md): Node.js compatibility matrix and behavior details
+
+---
+
+## Heritage
+
+Cluster93 is the modern continuation of **Automately**, a clustered, distributed
+backend platform first published in 2014 and acquired before 2018. The original
+organization lived at [`github.com/Automately`][wayback] (`automate.ly`), where it
+shipped **`automately-core`** — *"a powerful clustered backend platform powering
+Automately Cloud"* — alongside `automately-sdk` (the official SDK CLI),
+`sdk-module`, `sdk-bash-installer`, `automately-java`, and a wide family of modules
+(`ssh-module`, `sessions`, `logify`, `sendgrid`, `slack-native`, `webdriver-module`,
+`public_modules`, …).
+
+This repository is a branch of that pre-acquisition codebase: the same idea — submit
+code, get a sandboxed, distributed runtime across a cluster — rebuilt from the ground
+up on Vert.x 5, embedded Apache Ignite 2.18, and dual V8/GraalJS isolates.
+
+*In memoriam — Automately. Founded 2014; open-sourced and acquired before 2018.
+The name is retired; the lineage carries on.*
+
+[wayback]: https://web.archive.org/web/20160204012506/https://github.com/Automately
 
 ---
 

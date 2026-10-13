@@ -18,10 +18,10 @@ A **package** is an immutable, versioned set of JavaScript files (ES modules) wi
 
 - **Once published, a version never changes.** A fix is a new version.
 - **Scripts, services and (later) apps can all be packages.** A job or service can run an entry point from one: `{ "package": "shop@1.4.0", "entry": "jobs/report.js" }`.
-- **The word users see is "packages"** (Tony): `automately packages publish`, `/v1/packages`. "Module" stays the JavaScript term for a file you import.
+- **The word users see is "packages"** (Tony): `c93 packages publish`, `/v1/packages`. "Module" stays the JavaScript term for a file you import.
 
 ## 2. Where they live
-Automately never fetches code from npm or the internet. Developers publish packages to it.
+Cluster93 never fetches code from npm or the internet. Developers publish packages to it.
 
 | What | Where | Why |
 |---|---|---|
@@ -38,7 +38,7 @@ Automately never fetches code from npm or the internet. Developers publish packa
 ## 3. Publishing
 ```bash
 cd my-lib && npm install          # as usual
-automately packages publish       # reads automately.json, or package.json
+c93 packages publish       # reads cluster93.json, or package.json
 ```
 1. **Bundling, on the developer's machine** (Tony): the CLI runs the project's own esbuild (`npx esbuild`, `--format=esm --platform=node`), turning the code and the npm dependencies it uses into plain ES modules.
    - **Source maps** come along, so errors point at the original files.
@@ -67,15 +67,15 @@ automately packages publish       # reads automately.json, or package.json
 ## 5. Loading: everything before the script runs
 Javet's module resolver runs synchronously on the isolate's thread, so the node fetches everything first:
 1. **Prefetch:** the node fetches every file in the lock, verifies each against its hash (dropping and refetching on a mismatch), and caches it by hash. Limits are 10 MB and 1 000 files per job. A fetch failure fails the attempt before an isolate is made.
-   - **The cache is bounded:** least-recently-used files go first, from memory and then from the data directory, within `AUTOMATELY_MIN_FREE_DISK_MB`. The Node runtime's artifacts share it.
+   - **The cache is bounded:** least-recently-used files go first, from memory and then from the data directory, within `C93_MIN_FREE_DISK_MB`. The Node runtime's artifacts share it.
 2. **Resolve:** inside the isolate, the resolver only maps names, with no I/O:
    - **Relative paths** stay inside the same package. Escaping its root is refused.
    - **Bare names** come from the lock and the package's `exports`.
-   - **Built-ins:** `fs`, `node:fs`, `fs/promises` (D-079), and `automately:*` names for the host APIs (`automately:kv` and so on).
+   - **Built-ins:** `fs`, `node:fs`, `fs/promises` (D-079), and `c93:*` names for the host APIs (`c93:kv` and so on).
    - **A package's own files:** `import.meta.url` is `file:///packages/<name>/<version>/<file>`. Reading a path under `/packages` with `fs` or `fetch(new URL('./data.json', import.meta.url))` is answered from the job's lock, read-only. So packages that ship templates, JSON or `.wasm` work.
    - **Refused with a clear error:** URLs, absolute paths, and names not in the lock.
 3. **Later:** V8's code cache, keyed by file hash, measured before it's adopted (as isolate pooling was, D-024).
-4. **As built (D-089):** Javet 6 supports neither `import()` nor `import.meta`, so each module's source is rewritten as it loads. A literal `import('x')` becomes a static import evaluated up front, and `import.meta` becomes `{url}`; line numbers don't change. The cache is in memory only for now (`AUTOMATELY_PACKAGE_CACHE_MB`).
+4. **As built (D-089):** Javet 6 supports neither `import()` nor `import.meta`, so each module's source is rewritten as it loads. A literal `import('x')` becomes a static import evaluated up front, and `import.meta` becomes `{url}`; line numbers don't change. The cache is in memory only for now (`C93_PACKAGE_CACHE_MB`).
 
 ## 6. Security
 - **The same sandbox:** a package is just more of the job's code, in the same isolate, under the same heap, time and host-API limits.
@@ -92,10 +92,10 @@ Javet's module resolver runs synchronously on the isolate's thread, so the node 
 - **The same rules cover Node artifacts,** which share this store.
 - **Garbage:** package files that no manifest references are collected, as file garbage is.
 - **Deleting a tenant** deletes its packages and their files.
-- **Listing:** `GET /v1/packages`, `GET /v1/packages/{name}`, and `automately packages ls · info · yank · block · purge`.
+- **Listing:** `GET /v1/packages`, `GET /v1/packages/{name}`, and `c93 packages ls · info · yank · block · purge`.
 
 ## 8. One deploy command, two runtimes
-`automately deploy` reads `automately.json`, whose **`runtime` field is there from day one**:
+`c93 deploy` reads `cluster93.json`, whose **`runtime` field is there from day one**:
 - **`"runtime": "isolate"`** (the default): bundle → package → service revision, as above.
 - **`"runtime": "node"`:** the Node runtime (§9).
 
@@ -107,7 +107,7 @@ An isolate has no libuv and can't load `.node` addons, so `sharp`, `bcrypt`, `ch
 - **Where native code runs:** the Node runtime, as a sandboxed container on the cluster or as unsandboxed Node on the tenant's own device. It's designed separately, because it needs the execution layer: capabilities, placement and the runner protocol.
 
 ## 10. Inline scripts, and what's open
-- **Inline scripts can import packages** (Tony, D-087). An inline script is a job sent as source text (`automately run report.js`, `POST /v1/jobs` with a script, an agent over MCP) rather than an entry point of a published package.
+- **Inline scripts can import packages** (Tony, D-087). An inline script is a job sent as source text (`c93 run report.js`, `POST /v1/jobs` with a script, an agent over MCP) rather than an entry point of a published package.
   - **The server finds the imports:** at submission it reads the script's static `import` statements and `import('literal')` calls, resolves each to the newest version that isn't yanked or blocked, and saves the lock on the job (§4). Retries run the same versions.
   - **Imports it can't see are refused:** `import(someVariable)` fails with a clear error, since everything must be fetched before the script starts (§5).
   - **Native code is refused at submission,** with the same message as publishing (§9), never halfway through a run.
@@ -118,7 +118,7 @@ An isolate has no libuv and can't load `.node` addons, so `sharp`, `bcrypt`, `ch
 ## 11. Building it
 1. ~~**Store and publish:**~~ ✅ `PACKAGE_VERSIONS` and `PACKAGE_BLOBS` (a contract test on both stores), the publish API, and the CLI's `publish`, `ls` and `info`, with esbuild and native detection (D-088).
 2. ~~**Resolve and load:**~~ ✅ the spike (cycles need the resolver's own module cache; Javet supports neither `import()` nor `import.meta`, so sources are rewritten), the lock on jobs, child jobs and service revisions, scanning at submission, prefetch with a memory cache, and the resolver (D-089). Stand-ins for Node's `path`, `events`, `buffer`, `url` and `util` (D-090). **Still to do:** the cache's disk tier.
-3. ~~**Services from packages:**~~ ✅ a version is a revision (`"package"` in place of `"script"`, and `automately deploy`); `automately:*` built-ins; `/packages` in `fs`; MCP tools (`publish_package`, `list_packages`, `package_info`); docs (D-091).
+3. ~~**Services from packages:**~~ ✅ a version is a revision (`"package"` in place of `"script"`, and `c93 deploy`); `c93:*` built-ins; `/packages` in `fs`; MCP tools (`publish_package`, `list_packages`, `package_info`); docs (D-091).
 4. ~~**Lifecycle:**~~ ✅ yank, block and purge (with `packages:admin`), garbage collection, metrics (cache hits, prefetch time) (D-092).
 
 ## 12. Review for holes (2026-10-08, D-085)

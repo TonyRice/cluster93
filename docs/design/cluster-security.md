@@ -4,16 +4,16 @@
 
 **What changed while building it (recorded in D-066 and D-067):**
 - **Revoking is forced, not cooperative.** It uses Ignite's discovery `failNode` rather than `stopNodes`, which asks the node to stop itself and, in one JVM, interrupted the other node.
-- **A join timeout.** A node whose certificate is refused stops trying after `AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS` instead of retrying forever.
+- **A join timeout.** A node whose certificate is refused stops trying after `C93_CLUSTER_JOIN_TIMEOUT_MS` instead of retrying forever.
 - **The event bus's trust** is the CA as PEM, because Vert.x copies event-bus options and loses wrapped trust managers. So it doesn't consult revocations; Ignite discovery does.
 - **Compose's `tls-init` service** makes the certificates for development, with `ca.key` in a volume.
 - **Revocation is by node, not serial.** A revocation records the node id and when; certificates issued to that node before then are refused, so inviting it again lets it back in. The exact issue time is in the serial, because certificate dates only have second precision.
 - **No `cluster renew` yet.** Renewing is `node invite <node>` again; nodes warn from 90 days before expiry. A bulk `cluster renew` can come later.
 
 ## Why
-Automately's tenant-facing surfaces are hardened: tokens, scopes, the OpenAPI contract, isolates, egress rules (SECURITY.md). **Node-to-node traffic isn't.** A probe of a running node (2026-10-07) found:
+Cluster93's tenant-facing surfaces are hardened: tokens, scopes, the OpenAPI contract, isolates, egress rules (SECURITY.md). **Node-to-node traffic isn't.** A probe of a running node (2026-10-07) found:
 
-| Port | What | Authenticated | Encrypted | Used by Automately |
+| Port | What | Authenticated | Encrypted | Used by Cluster93 |
 |---|---|---|---|---|
 | 5701… | Ignite discovery | **no** | **no** | yes |
 | 5801… | Ignite communication (data, replication) | **no** | **no** | yes |
@@ -28,10 +28,10 @@ All bind on every interface (`0.0.0.0`).
 
 SECURITY.md covers the first four ("put nodes on a private network"), but not 10800 or 11211.
 
-## Part A: close what Automately doesn't use (D-065)
+## Part A: close what Cluster93 doesn't use (D-065)
 Small, and worth doing right away, separately from the rest:
-- **Disable the connectors:** `IgniteConfiguration.setClientConnectorConfiguration(null)` and `setConnectorConfiguration(null)` turn off the thin-client/JDBC/ODBC connector and the REST command protocol. Nothing in Automately uses them.
-- **Bind to one interface:** Ignite discovery and communication bind to a configured address (`AUTOMATELY_CLUSTER_BIND`, defaulting to the advertised host) instead of every interface.
+- **Disable the connectors:** `IgniteConfiguration.setClientConnectorConfiguration(null)` and `setConnectorConfiguration(null)` turn off the thin-client/JDBC/ODBC connector and the REST command protocol. Nothing in Cluster93 uses them.
+- **Bind to one interface:** Ignite discovery and communication bind to a configured address (`C93_CLUSTER_BIND`, defaulting to the advertised host) instead of every interface.
 - **A test that checks the listening ports:** it starts a clustered node and asserts it listens **only** on the expected set (API, ingress, internal, metrics, discovery, communication, event bus). Any new listener fails the build until it's added on purpose.
 - **SECURITY.md** gains the finding and the fix.
 
@@ -42,7 +42,7 @@ Small, and worth doing right away, separately from the rest:
   - **Subject alternative names:** the node id and its advertised host or IP.
 - **On each node:** its private key, its certificate and the CA certificate, in the data directory (`<data>/tls/`, private key `0600`). A node restarts with what it has, needing nothing from anyone.
 - **The CA private key, which issues certificates, stays on the operator's machine (Tony, 2026-10-07).**
-  - **Where:** `automately cluster init` writes `ca.key` to the operator's machine, and **the cluster never stores it**, so a compromised node can't mint certificates.
+  - **Where:** `c93 cluster init` writes `ca.key` to the operator's machine, and **the cluster never stores it**, so a compromised node can't mint certificates.
   - **What uses it:** issuing and renewal happen in the operator's CLI.
   - **Bring your own:** trusting an existing CA (step-ca, Vault, a corporate one) is a later option.
 - **Revocation:** a list of revoked certificate serials in the cluster. Every TLS check consults it, and revoking a node also stops it in Ignite.
@@ -56,13 +56,13 @@ Small, and worth doing right away, separately from the rest:
 | Metrics (9090) | optional TLS; stays on the private network for Prometheus |
 
 **Modes:**
-- **`AUTOMATELY_CLUSTER_TLS=required`** is the default when clustered. A node without certificates **refuses to start**, with an error naming `automately cluster init` and `node join`.
+- **`C93_CLUSTER_TLS=required`** is the default when clustered. A node without certificates **refuses to start**, with an error naming `c93 cluster init` and `node join`.
 - **`off`** is for development and in-JVM tests only. It must be set explicitly and is logged as a warning at every start.
 
 ## Part D: creating a cluster, and joining one (D-067)
 **A new cluster:**
 ```bash
-automately cluster init --nodes node1,node2,node3 --out ./cluster-tls
+c93 cluster init --nodes node1,node2,node3 --out ./cluster-tls
 ```
 This writes the CA and a certificate for each listed node, in the style of CockroachDB's `cert create-ca` and `create-node`:
 - `ca.key`: keep it safe and back it up; the cluster never stores it
@@ -74,9 +74,9 @@ The compose file reads those `.join` files, so `docker compose up` (and the demo
 **Adding a node later: one line, signed on the operator's machine.**
 ```bash
 # on the operator's machine (ca.key is here)
-automately node invite node4 --host 10.0.0.14 --ca ./ca.key
+c93 node invite node4 --host 10.0.0.14 --ca ./ca.key
 # prints a line to run on the new machine:
-AUTOMATELY_JOIN=atly_nodebundle_H4sIAAAA…  docker compose up -d node4     # or: automately-server --join atly_nodebundle_…
+C93_JOIN=atly_nodebundle_H4sIAAAA…  docker compose up -d node4     # or: cluster93-server --join atly_nodebundle_…
 ```
 **What the CLI does, locally:** it generates node4's key pair, signs node4's certificate (subject alternative names: `node4`, `10.0.0.14`) with `ca.key`, and packs **node4's key, node4's certificate and the CA certificate** into one base64 string (gzipped, about 1–2 KB). The new node unpacks it into `<data>/tls/` and starts with TLS.
 
@@ -85,20 +85,20 @@ AUTOMATELY_JOIN=atly_nodebundle_H4sIAAAA…  docker compose up -d node4     # or
 **The bundle is a secret for node4 only:**
 - it can't create other nodes or sign anything
 - the certificate is bound to node4's name and address
-- if it leaks, `automately node revoke node4` ends it
+- if it leaks, `c93 node revoke node4` ends it
 
 **The strict variant: nothing secret travels.**
 ```bash
-automately-server --prepare node4                              # new machine: prints its public key; the private key never leaves
-automately node invite node4 --key <public key> --ca ./ca.key  # operator: prints a certificate-only line
+cluster93-server --prepare node4                              # new machine: prints its public key; the private key never leaves
+c93 node invite node4 --key <public key> --ca ./ca.key  # operator: prints a certificate-only line
 ```
 
 **Renewal needs the operator** (only `ca.key` signs):
 - **Lifetime:** node certificates last **3 years**.
-- **Renewing:** `automately cluster renew --ca ./ca.key` prints renewal lines for every node expiring within 90 days.
+- **Renewing:** `c93 cluster renew --ca ./ca.key` prints renewal lines for every node expiring within 90 days.
 - **Warnings:** nodes and the CLI warn from 90 days before expiry.
 
-**Removing a node:** `automately node revoke node4` adds its serial to the revoked list and stops it in Ignite.
+**Removing a node:** `c93 node revoke node4` adds its serial to the revoked list and stops it in Ignite.
 
 ## What this doesn't cover
 - **Links** (a later phase) reuse this CA as their trust root.

@@ -1,8 +1,8 @@
 {
-  "name": "automately-console",
+  "name": "cluster93-console",
   "version": "2.0.0",
   "private": true,
-  "description": "Automately Web Console — a static Next.js (App Router) app deployed on the Automately platform.",
+  "description": "Cluster93 Web Console — a static Next.js (App Router) app deployed on the Cluster93 platform.",
   "license": "MPL-2.0",
   "author": "Adam & Lynn Incorporated <tony@adamnlynn.com>",
   "scripts": {

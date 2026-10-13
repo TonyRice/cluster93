@@ -50,7 +50,7 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `diagnostics_channel` | Complete: channels, `tracingChannel` | JavaScript | D-114 |
 | `dns`, `dns/promises` | As Node's; answers show only what the tenant could reach | The host's resolver: the operating system for `lookup`, DNS servers for the rest | D-114, D-122 |
 | `stream/web` | The WHATWG streams, the same classes as the globals | JavaScript (web-streams-polyfill, vendored) | D-124 |
-| `automately:kv`, `:bus`, `:jobs`, `:files`, `:secrets`, `:fetch`, `:log` | The host APIs as modules | The host | D-091 |
+| `c93:kv`, `:bus`, `:jobs`, `:files`, `:secrets`, `:fetch`, `:log` | The host APIs as modules | The host | D-091 |
 
 **Refused:** `dgram`, `cluster`, `vm`, `inspector`, `readline`, `repl`, `domain`, `punycode`, `trace_events`, `wasi`, `sys`, `console` (as a module) and `constants`.
 - **When:** importing one stops the publish ("Node's "dns" module isn't available in the isolate …"). A CommonJS `require()` of one throws when it runs instead, with a warning at publish.
@@ -68,13 +68,13 @@ Every module can be imported with or without `node:` (`import fs from 'fs'` or `
 | `process` | The `process` stand-in (D-096); see [process](#process). |
 | `crypto`, `CryptoKey` | Web Crypto; see [Web Crypto](#web-crypto-the-global-crypto). |
 | `TextEncoder`, `TextDecoder` | UTF-8 only. Decoding follows the WHATWG rules, so a broken sequence gives one U+FFFD (D-103), or with `fatal: true` throws Node's `ERR_ENCODING_INVALID_ENCODED_DATA` (D-125). A leading byte-order mark isn't removed, and there's no `{ stream: true }`. |
-| `fetch`, `Headers`, `Request`, `Response`, `FormData` | Node's (undici's), through the egress gate (D-124): redirects followed, gzip and deflate decoded, Node's default request headers, multipart `FormData` both ways, and Node's errors. The host's older fetch is `automately:fetch` ([host APIs](host-apis.md#fetch-outbound-http)). |
+| `fetch`, `Headers`, `Request`, `Response`, `FormData` | Node's (undici's), through the egress gate (D-124): redirects followed, gzip and deflate decoded, Node's default request headers, multipart `FormData` both ways, and Node's errors. The host's older fetch is `c93:fetch` ([host APIs](host-apis.md#fetch-outbound-http)). |
 | `Blob`, `File` | Node's, and the same classes as `buffer`'s: parts, `type` normalisation, `endings`, `slice`, `text`/`arrayBuffer`/`bytes`/`stream`. |
 | `ReadableStream`, `WritableStream`, `TransformStream` and the rest of the WHATWG streams | Readers (default and BYOB), controllers, `pipeTo`/`pipeThrough`, `tee`, async iteration and the queuing strategies, from web-streams-polyfill 4.3.0, vendored. Some argument errors keep the polyfill's wording; the ones scripts meet (a bad `highWaterMark`) are Node's. |
 | `TextEncoderStream`, `TextDecoderStream`, `CompressionStream`, `DecompressionStream` | `gzip`, `deflate` and `deflate-raw`, on the host's zlib; Brotli decompresses but doesn't compress. |
 | `WebSocket`, `CloseEvent`, `ErrorEvent` | Node's (undici's) (D-125): the same handshake headers in the same order, events, binary types, errors and closing rules. The handshake goes through `node:http` over a socket of the job's own, so it's checked by the egress gate as a `tcp` connection, with TLS host names checked as `tls.connect` checks them. As in Node, incoming permessage-deflate is decompressed and nothing is compressed going out. |
 | `MessageChannel`, `MessagePort`, `MessageEvent`, `BroadcastChannel` | Within the job: messages are `structuredClone`d and delivered on a later turn, and ports have Node's `on`/`once`. `BroadcastChannel` reaches the channels of the same job only; there are no workers or other jobs to reach. |
-| `fs`, `kv`, `bus`, `jobs`, `files`, `secrets`, `log` | Automately's host APIs ([host APIs](host-apis.md)). |
+| `fs`, `kv`, `bus`, `jobs`, `files`, `secrets`, `log` | Cluster93's host APIs ([host APIs](host-apis.md)). |
 | `URL`, `URLSearchParams` | The WHATWG URL for the common cases, with `URL.canParse`/`URL.parse` (D-106). Hostnames aren't converted to punycode, and IPv6 isn't normalised. |
 | `AbortController`, `AbortSignal` | With `AbortSignal.abort`/`timeout`/`any`, `throwIfAborted`, and `onabort` running in the order it was set (D-106). `node:stream` and `timers/promises` use them. |
 | `EventTarget`, `Event`, `CustomEvent` | Listener objects (`handleEvent`), `once`, `signal` (to remove), `stopImmediatePropagation` and `preventDefault`. There's no capture or bubbling: there's no tree. A listener's error is reported, not thrown to the dispatcher. |
@@ -244,7 +244,7 @@ Node's own code: `readable-stream` 4.8.0 and `string_decoder` 1.3.0 (MIT), bundl
   - **Functions:** `pipeline`, `finished`, `compose`, `addAbortSignal`, `destroy`, `duplexPair`, `isReadable`/`isErrored`/`isDisturbed`, `get`/`setDefaultHighWaterMark`, `Readable.from` and async iteration.
   - **`stream/promises`:** `pipeline` and `finished`.
 - **Differs:**
-  - **Platform streams:** `fs.createReadStream`/`createWriteStream`, `http`'s requests and responses, and `zlib`'s streams are Node streams (D-109). So are `net`/`tls` sockets. The global `fetch`'s bodies are WHATWG streams (`Readable.fromWeb`); `automately:fetch` bodies and `files.stream` are async iterables (`Readable.from`).
+  - **Platform streams:** `fs.createReadStream`/`createWriteStream`, `http`'s requests and responses, and `zlib`'s streams are Node streams (D-109). So are `net`/`tls` sockets. The global `fetch`'s bodies are WHATWG streams (`Readable.fromWeb`); `c93:fetch` bodies and `files.stream` are async iterables (`Readable.from`).
   - **Web Streams:** `Readable`, `Writable` and `Duplex` have Node's `fromWeb`/`toWeb` (D-124).
 - **Where it comes from:** `scripts/vendor-stream` rebuilds it from hash-checked packages, and the output is committed.
 
@@ -324,7 +324,7 @@ Describes the job, never the machine (D-103):
 | `totalmem()`, `freemem()` | the isolate's heap limit |
 | `hostname()` | `localhost` |
 | `networkInterfaces()` | `{}` |
-| `userInfo()` | `{ username: 'automately', uid: -1, gid: -1, homedir: '/tmp', shell: null }` |
+| `userInfo()` | `{ username: 'c93', uid: -1, gid: -1, homedir: '/tmp', shell: null }` |
 | `platform()`, `type()`, `arch()`, `machine()`, `endianness()` | `linux`, `Linux`, `x64`, `x86_64`, `LE` |
 | `release()`, `version()` | `''`: no kernel is described |
 | `loadavg()` | `[0, 0, 0]` |
@@ -382,7 +382,7 @@ The client, as Node's, on the host's HTTP client (D-109). Every request goes thr
 
 Outbound TCP and TLS sockets, as Node's, on the host (D-116). The only restrictions are where they may go and how much they may use:
 - **Where:** every connection goes through the egress rules as `tcp` (D-111). The default cluster rule refuses the mail ports (25, 465, 587), and an operator can change it.
-- **How much** (the cluster policy's limits, shown by `automately egress`):
+- **How much** (the cluster policy's limits, shown by `c93 egress`):
   - at most 16 sockets open per script
   - at most 256 per tenant on each node
   - at most 120 new connections a minute per tenant on each node
@@ -410,7 +410,7 @@ Outbound TCP and TLS sockets, as Node's, on the host (D-116). The only restricti
   - **About 8 chunks wait on the host** for a script that isn't reading. After that the host stops reading, and TCP pushes back on the peer.
 - **Refused:**
   - **Unix sockets** (`path`).
-  - **Servers:** `net.createServer`, `net.Server`, `tls.createServer`, `tls.Server`. They never run on the cluster's nodes, where inbound traffic is HTTP by hostname (D-112); TCP and UDP servers belong on an Automately link's own host.
+  - **Servers:** `net.createServer`, `net.Server`, `tls.createServer`, `tls.Server`. They never run on the cluster's nodes, where inbound traffic is HTTP by hostname (D-112); TCP and UDP servers belong on a Cluster93 link's own host.
 
 **`tls`:**
 - **`tls.connect`** in Node's forms, and **`tls.connect({ socket })`**, which upgrades a connected `net.Socket` in place. That's how pg's SSLRequest, mysql2 and SMTP's STARTTLS work. The new `TLSSocket` takes over the connection, and the old socket closes with it, as in Node.
@@ -504,11 +504,11 @@ Node's (D-122), on the host's resolver: the one the egress gate uses for every c
   - **Errors:** `queryA ENOTFOUND <name>` and the rest: ENODATA, ESERVFAIL, EREFUSED, EFORMERR, ENOTIMP, ETIMEOUT, ECONNREFUSED, ECANCELLED.
 - **`Resolver` and `promises.Resolver`:** `timeout` and `tries`, `cancel()`, `getServers()`, `setServers()` and `setLocalAddress()`. The module's functions share one default resolver with `dns.promises`, as in Node.
 - **Servers:**
-  - **By default:** the cluster's, which is `AUTOMATELY_EGRESS_DNS` when an operator set it, else the system's.
+  - **By default:** the cluster's, which is `C93_EGRESS_DNS` when an operator set it, else the system's.
   - **A script's own (`setServers`):** each must pass the egress gate as a `dns` connection. A public resolver is fine; a server on a private network needs a rule (or the development switch), and a refused one fails the query with `ECONNREFUSED` and the reason.
 - **`lookupService(address, port)`:** the system's name for the address (or the address itself), and the service from `/etc/services`.
 - **What a script may see** (network-reach.md §8.2):
-  - **Internal names** answer `ENOTFOUND` unless a rule names them: single labels, `.local`, `.internal`, `.lan`, `.home.arpa`, `.localhost`, `.cluster.local`, `.svc`, and the zones in `AUTOMATELY_EGRESS_INTERNAL_DOMAINS`.
+  - **Internal names** answer `ENOTFOUND` unless a rule names them: single labels, `.local`, `.internal`, `.lan`, `.home.arpa`, `.localhost`, `.cluster.local`, `.svc`, and the zones in `C93_EGRESS_INTERNAL_DOMAINS`.
   - **Addresses** are shown only if the tenant could connect to them on some port. An allow rule for one port is enough; a deny rule hides an address only if it covers every port and every protocol or `dns`.
   - **Records naming internal hosts** (MX, SRV, CNAME, NS, SOA, NAPTR) are left out; an answer left empty is `ENODATA`.
   - **`reverse` and `lookupService`** answer only for addresses the tenant could connect to.
@@ -538,7 +538,7 @@ Node's `http.Server` (D-112, D-123), as `lib/_http_server.js` and `lib/_http_out
 - **`upgrade` (WebSockets, D-125):** a request that asks to upgrade goes to the `upgrade` listener, as in Node: `(req, socket, head)`, where `socket` is a real `net.Socket` on the client's connection. Without a listener (or when `shouldUpgradeCallback` says no) it's an ordinary request.
   - **The app answers on the socket**, as on Node. A `101` makes the connection a byte tunnel from the client, through the ingress, to the app. Any other answer (ws's `verifyClient` refusing with a 401) goes back as a response. Closing without answering closes the client's connection.
   - **What the ingress tunnels:** a GET over HTTP/1.1 with no body. Any other upgrade request is an ordinary one.
-  - **Limits:** `AUTOMATELY_SERVICE_MAX_WEBSOCKETS` upgraded connections per run (1,000; past it, a 503), and `AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS` with no byte either way (10 minutes). A run's upgraded sockets close when it ends, and `server.close()` waits for them, as Node's does.
+  - **Limits:** `C93_SERVICE_MAX_WEBSOCKETS` upgraded connections per run (1,000; past it, a 503), and `C93_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS` with no byte either way (10 minutes). A run's upgraded sockets close when it ends, and `server.close()` waits for them, as Node's does.
   - **The ws library's server** answers through the ingress exactly as under Node (`RealNpmPackagesTest`).
 - **`Expect: 100-continue`** is answered by the ingress at once, as Node's server does without a `checkContinue` listener.
 - **`https.createServer`** is accepted; `key` and `cert` are set aside, with a note in the log, since the ingress serves TLS.
@@ -551,7 +551,7 @@ Node's `http.Server` (D-112, D-123), as `lib/_http_server.js` and `lib/_http_out
   - **No per-connection events:** `connection`, `checkContinue` and `clientError` aren't emitted, since connections end at the ingress.
   - **A 101's reason phrase** is always "Switching Protocols", and `head` in `upgrade` is empty: what the client sends after the head comes as the socket's data.
   - **Keep-alive is the ingress's,** so `Connection` and `Keep-Alive` aren't sent from the app.
-  - **The ingress adds `Server: automately`.**
+  - **The ingress adds `Server: c93`.**
 
 ## `async_hooks` and `perf_hooks`
 
@@ -585,7 +585,7 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 
 ## Bundling
 
-`automately packages publish` and `automately deploy` bundle a project with esbuild into ES modules (D-088, D-093):
+`c93 packages publish` and `c93 deploy` bundle a project with esbuild into ES modules (D-088, D-093):
 - **Built-ins stay imports.** A `require('crypto')` in CommonJS code becomes an import of the isolate's module, not a bundled copy.
 - **Package exports resolve as Node resolves them:** an `import` takes a package's `import` condition, and a `require()` takes its `require` condition (D-116; before, `require()` got the ES-module file too, so pg's `require('pg-pool')` got a namespace object instead of the class).
 - **Globals are injected where used:** `Buffer` and `process` are imported, and `global` becomes `globalThis`.
@@ -600,9 +600,9 @@ Node's, complete, and pure: nothing leaves the isolate (D-114). got, mysql2, ior
 
 ## How compatibility is verified
 
-- **Against real Node:** `RealNpmPackagesTest` (run with `AUTOMATELY_TEST_REAL_NPM`) installs real libraries from a pinned lockfile, bundles them, runs each in the isolate, and requires **the same output as under real Node**.
+- **Against real Node:** `RealNpmPackagesTest` (run with `C93_TEST_REAL_NPM`) installs real libraries from a pinned lockfile, bundles them, runs each in the isolate, and requires **the same output as under real Node**.
   - **Libraries:** lodash-es, date-fns, dayjs, zod, marked, js-yaml, yaml, ajv, semver, immer, rxjs, mustache, eventemitter3, validator, uuid, nanoid, papaparse, csv-parse, jsonwebtoken (HS256, RS256, ES256, PS256), axios, node-fetch and got.
-  - **Drivers against real servers** (with `AUTOMATELY_TEST_REAL_SERVICES` too, since they need Docker for the servers):
+  - **Drivers against real servers** (with `C93_TEST_REAL_SERVICES` too, since they need Docker for the servers):
     - **pg:** Postgres 18, plain and over TLS through its SSLRequest upgrade, trusted by `ca` and refused for the wrong host name
     - **mysql2:** MySQL 8.4
     - **ioredis:** Redis 7, pub/sub included

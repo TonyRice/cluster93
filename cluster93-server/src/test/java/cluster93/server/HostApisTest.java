@@ -1,0 +1,528 @@
+package cluster93.server;
+
+import cluster93.server.Cluster93.RunningNode;
+import io.vertx.core.Future;
+import io.vertx.core.Vertx;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.client.HttpRequest;
+import io.vertx.ext.web.client.HttpResponse;
+import io.vertx.ext.web.client.WebClient;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/** kv, bus, fetch and HTTP hosting end to end on a real two-node cluster (docs/scripting/host-apis.md). */
+class HostApisTest {
+
+    private static final String TENANT = "acme";
+    private static final Map<String, List<String>> TXT_RECORDS = new ConcurrentHashMap<>();
+
+    private static RunningNode nodeA;
+    private static RunningNode nodeB;
+    private static Vertx clientVertx;
+    private static WebClient client;
+
+    @BeforeAll
+    static void startCluster() throws Exception {
+        nodeA = await(Cluster93.start(config("node-a"), vertx -> name -> Future.succeededFuture(TXT_RECORDS.getOrDefault(name, List.of()))));
+        TestAuth.use(nodeA);
+        nodeB = await(Cluster93.start(config("node-b"), vertx -> name -> Future.succeededFuture(TXT_RECORDS.getOrDefault(name, List.of()))));
+        clientVertx = Vertx.vertx();
+        client = WebClient.create(clientVertx);
+        awaitJson(nodeA, TENANT, "/v1/nodes", json -> json.getJsonArray("nodes").size() == 2);
+    }
+
+    @AfterAll
+    static void stopCluster() throws Exception {
+        await(clientVertx.close());
+        await(nodeB.stop());
+        await(nodeA.stop());
+    }
+
+    @AfterEach
+    void deleteServices() throws Exception {
+        for (String tenant : List.of(TENANT, "globex")) {
+            for (Object service : get(nodeA, tenant, "/v1/services").bodyAsJsonObject().getJsonArray("services")) {
+                await(client.delete(nodeA.httpPort(), "localhost", "/v1/services/" + ((JsonObject) service).getString("name"))
+                        .putHeader("Authorization", TestAuth.bearer(tenant)).send());
+            }
+        }
+    }
+
+    private static ServerConfig config(String nodeId) {
+        return ServerConfig.fromEnv(TestTls.secure(Map.ofEntries(
+                Map.entry("C93_NODE_ID", nodeId),
+                Map.entry("C93_ADMIN_TOKEN", TestAuth.ADMIN_TOKEN),
+                Map.entry("C93_RATE_LIMIT_PER_MINUTE", "0"),
+                Map.entry("C93_METRICS_PORT", "0"),
+                Map.entry("C93_HTTP_PORT", "0"),
+                Map.entry("C93_INGRESS_PORT", "0"),
+                Map.entry("C93_INTERNAL_PORT", "0"),
+                Map.entry("C93_ADVERTISE_HOST", "127.0.0.1"),
+                Map.entry("C93_INGRESS_DOMAIN", "apps.test"),
+                Map.entry("C93_CAPACITY", "4"),
+                Map.entry("C93_MAX_HEAP_MB", "64"),
+                Map.entry("C93_HEARTBEAT_MS", "200"),
+                Map.entry("C93_STOP_GRACE_MS", "1000"),
+                Map.entry("C93_CLUSTERED", "true"),
+                Map.entry("C93_CLUSTER_PORT", "20701"),
+                Map.entry("C93_CLUSTER_MEMBERS", "127.0.0.1"))));
+    }
+
+    // --- kv ---
+
+    @Test
+    void kvIsSharedAcrossNodesAndIsolatedBetweenTenants() throws Exception {
+        JsonObject writer = runJob(nodeA, TENANT, """
+                export default async () => {
+                  await kv.set('greeting', { text: 'hello' });
+                  await kv.namespace('counters').increment('visits', 5);
+                  await kv.set('temp', 1, { ttlMs: 100 });
+                  return 'written';
+                }
+                """);
+        assertThat(writer.getString("status")).as(writer.encodePrettily()).isEqualTo("SUCCEEDED");
+        Thread.sleep(150);
+
+        JsonObject reader = runJob(nodeB, TENANT, """
+                export default async () => [
+                  await kv.get('greeting'),
+                  await kv.namespace('counters').increment('visits'),
+                  await kv.get('temp'),
+                  (await kv.list()).keys,
+                ]
+                """);
+        JsonObject otherTenant = runJob(nodeB, "globex", "export default () => kv.get('greeting')");
+
+        assertThat(reader.getJsonArray("output")).isEqualTo(new JsonArray()
+                .add(new JsonObject().put("text", "hello")).add(6).addNull().add(new JsonArray().add("greeting")));
+        assertThat(otherTenant.getValue("output")).isNull();
+    }
+
+    // --- queues (D-061) ---
+
+    @Test
+    void aServiceConsumesAQueueFedOverHttpFromTheOtherNode() throws Exception {
+        putService("mailer", """
+                export default async (input, ctx) => {
+                  await bus.queue('emails').consume(async (email, { attempt }) => {
+                    if (email.flaky && attempt === 1) throw new Error('smtp hiccup');
+                    await kv.namespace('sent').set(email.to, attempt);
+                  }, { concurrency: 4 });
+                  await ctx.stopRequested;
+                }
+                """);
+        awaitServiceRunning("mailer");
+
+        for (String to : List.of("a@example.com", "b@example.com")) {
+            HttpResponse<Buffer> pushed = await(client.post(nodeB.httpPort(), "localhost", "/v1/queues/emails")
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("message", new JsonObject().put("to", to))));
+            assertThat(pushed.statusCode()).as(pushed.bodyAsString()).isEqualTo(202);
+        }
+        await(client.post(nodeB.httpPort(), "localhost", "/v1/queues/emails").putHeader("Authorization", TestAuth.bearer(TENANT))
+                .sendJsonObject(new JsonObject().put("message", new JsonObject().put("to", "c@example.com").put("flaky", true))));
+
+        JsonObject sent = awaitJsonJob(nodeB, """
+                export default async () => {
+                  const sent = kv.namespace('sent');
+                  return { a: await sent.get('a@example.com'), b: await sent.get('b@example.com'), c: await sent.get('c@example.com') };
+                }
+                """, out -> out.getValue("c") != null);
+        assertThat(sent).isEqualTo(new JsonObject().put("a", 1).put("b", 1).put("c", 2));
+        awaitJson(nodeA, TENANT, "/v1/queues/emails", q -> q.getInteger("ready") == 0 && q.getInteger("inFlight") == 0);
+        assertThat(get(nodeA, "globex", "/v1/queues/emails").bodyAsJsonObject().getInteger("ready")).as("another tenant's queue").isZero();
+    }
+
+    /** Runs {@code script} as a job until its output satisfies {@code done}. */
+    private static JsonObject awaitJsonJob(RunningNode node, String script, Predicate<JsonObject> done) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+        JsonObject output = null;
+        while (System.nanoTime() < deadline) {
+            output = runJob(node, TENANT, script).getJsonObject("output");
+            if (output != null && done.test(output)) {
+                return output;
+            }
+            Thread.sleep(200);
+        }
+        throw new AssertionError("Never done; last output: " + output);
+    }
+
+    // --- bus ---
+
+    @Test
+    void aServiceAnswersRequestsFromJobsAndFromHttp() throws Exception {
+        putService("calculator", """
+                export default async (input, ctx) => {
+                  await bus.handle('add', (message) => message.a + message.b);
+                  return ctx.stopRequested;
+                }
+                """);
+        awaitServiceRunning("calculator");
+
+        JsonObject job = runJob(nodeB, TENANT, "export default () => bus.request('add', { a: 2, b: 40 })");
+        HttpResponse<Buffer> overHttp = await(client.post(nodeB.httpPort(), "localhost", "/v1/bus/add/request")
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("a", 1).put("b", 1)));
+        HttpResponse<Buffer> wrongTenant = await(client.post(nodeB.httpPort(), "localhost", "/v1/bus/add/request")
+                .putHeader("Authorization", TestAuth.bearer("globex")).sendJsonObject(new JsonObject().put("a", 1).put("b", 1)));
+
+        assertThat(job.getValue("output")).isEqualTo(42);
+        assertThat(overHttp.bodyAsJsonObject()).isEqualTo(new JsonObject().put("value", 2));
+        assertThat(wrongTenant.statusCode()).as("another tenant's topic of the same name has no handler").isEqualTo(404);
+    }
+
+    @Test
+    void publishedMessagesReachSubscribers() throws Exception {
+        putService("tally", """
+                export default async (input, ctx) => {
+                  await bus.subscribe('orders', async (order) => { await kv.increment('orders-seen', order.items); });
+                  return ctx.stopRequested;
+                }
+                """);
+        awaitServiceRunning("tally");
+        Thread.sleep(300);
+
+        for (int items : new int[]{1, 2, 3}) {
+            assertThat(await(client.post(nodeB.httpPort(), "localhost", "/v1/bus/orders").putHeader("Authorization", TestAuth.bearer(TENANT))
+                    .sendJsonObject(new JsonObject().put("items", items))).statusCode()).isEqualTo(202);
+        }
+
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        Object seen = null;
+        while (System.nanoTime() < deadline) {
+            seen = runJob(nodeA, TENANT, "export default () => kv.get('orders-seen')").getValue("output");
+            if (Integer.valueOf(6).equals(seen)) {
+                break;
+            }
+            Thread.sleep(100);
+        }
+        assertThat(seen).isEqualTo(6);
+    }
+
+    // --- fetch ---
+
+    @Test
+    void fetchToPrivateAddressesIsRefusedByDefault() throws Exception {
+        JsonObject job = runJob(nodeA, TENANT, """
+                import { fetch as hostFetch } from 'c93:fetch';
+                export default async () => {
+                  const url = 'http://127.0.0.1:%d/health';
+                  const host = await hostFetch(url).then(() => 'reached', (e) => [e.name, e.code]);
+                  // The global fetch is Node's (D-124): the gate's refusal is its cause.
+                  const node = await fetch(url).then(() => 'reached', (e) => [e.name, e.message, e.cause?.code]);
+                  return [host, node];
+                }
+                """.formatted(nodeA.httpPort()));
+
+        assertThat(job.getJsonArray("output")).isEqualTo(new JsonArray().add(new JsonArray().add("TypeError").add("egress_denied"))
+                .add(new JsonArray().add("TypeError").add("fetch failed").add("egress_denied")));
+    }
+
+    @Test
+    void anOperatorsRuleLetsATenantReachAPrivateAddressButNeverANode() throws Exception {
+        // 10.255.255.1 is private and unrouted: refused before connecting, or, once allowed, attempted and timed out.
+        String probe = """
+                import { fetch } from 'c93:fetch';
+                export default async () => {
+                  const tries = [];
+                  for (const url of ['http://10.255.255.1:9/', 'http://10.255.255.1:10/', 'http://127.0.0.1:%d/health']) {
+                    try { await fetch(url, { timeoutMs: 300 }); tries.push('reached'); }
+                    catch (e) { tries.push(e.code === 'egress_denied' ? e.message.replace(/^.*resolves to /, '') : e.code); }
+                  }
+                  return tries;
+                }
+                """.formatted(nodeA.httpPort());
+        JsonArray before = runJob(nodeA, TENANT, probe).getJsonArray("output");
+        assertThat(before.getString(0)).startsWith("a private or reserved address");
+        assertThat(before.getString(2)).startsWith("one of the cluster's own nodes");
+
+        HttpResponse<Buffer> set = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("allow", new JsonArray()
+                        .add(new JsonObject().put("to", "10.255.255.0/24").put("ports", new JsonArray().add(9)))
+                        .add(new JsonObject().put("to", "127.0.0.1/32").put("ports", new JsonArray().add("1-65535"))))));
+        assertThat(set.statusCode()).as(set.bodyAsString()).isEqualTo(200);
+        try {
+            // The tenant sees the whole policy: each step in order with why, its rules, and the limits.
+            JsonObject view = get(nodeB, TENANT, "/v1/egress-policy").bodyAsJsonObject();
+            assertThat(view.getJsonArray("rules").getJsonObject(0).getString("to")).isEqualTo("10.255.255.0/24");
+            assertThat(view.getJsonArray("steps").getJsonObject(0).getString("access")).isEqualTo("always refused");
+            assertThat(view.getJsonObject("posture").getString("value")).isEqualTo("public");
+            assertThat(view.getJsonArray("clusterRules").getJsonObject(0).getJsonArray("protocols")).containsExactly("tcp");
+            assertThat(view.getBoolean("developmentSwitch")).isFalse();
+            assertThat(view.getJsonObject("limits").getInteger("concurrentRequests")).isEqualTo(16);
+            assertThat(get(nodeB, "globex", "/v1/egress-policy").bodyAsJsonObject().getJsonArray("rules")).isEmpty();
+
+            // Node B hears of the change on the event bus; its cache would otherwise keep the old policy up to 5 s.
+            JsonArray after = eventually(() -> runJob(nodeB, TENANT, probe).getJsonArray("output"),
+                    out -> !out.getString(0).startsWith("a private or reserved address"));
+            assertThat(after.getString(0)).isIn("timeout", "network_error");          // allowed, so it tried
+            assertThat(after.getString(1)).startsWith("a private or reserved address"); // another port
+            assertThat(after.getString(2)).startsWith("one of the cluster's own nodes"); // no rule reaches a node
+            assertThat(runJob(nodeB, "globex", probe).getJsonArray("output").getString(0)).startsWith("a private or reserved address");
+
+            HttpResponse<Buffer> bad = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                    .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("allow", new JsonArray()
+                            .add(new JsonObject().put("to", "0.0.0.0/4").put("ports", new JsonArray().add(80))))));
+            assertThat(bad.statusCode()).isEqualTo(400);
+            assertThat(bad.bodyAsString()).contains("prefix length must be from 8 to 32");
+            HttpResponse<Buffer> notAdmin = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("allow", new JsonArray())));
+            assertThat(notAdmin.statusCode()).isEqualTo(403);
+        } finally {
+            await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                    .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("allow", new JsonArray())));
+        }
+    }
+
+    @Test
+    void clusterRulesApplyToEveryTenantAndATenantRuleCantUndoADeny() throws Exception {
+        String probe = """
+                import { fetch } from 'c93:fetch';
+                export default async () => {
+                  const tries = [];
+                  for (const url of ['http://10.255.255.1:9/', 'http://10.255.254.1:9/', 'http://93.184.216.34:9/']) {
+                    try { await fetch(url, { timeoutMs: 300 }); tries.push('reached'); }
+                    catch (e) { tries.push(e.code === 'egress_denied' ? e.message.replace(/^.* is not allowed: /, '') : e.code); }
+                  }
+                  return tries;
+                }
+                """;
+        HttpResponse<Buffer> cluster = await(client.put(nodeA.httpPort(), "localhost", "/v1/egress/cluster-policy")
+                .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject()
+                        .put("addressSets", new JsonObject().put("lab", new JsonArray().add("10.255.255.0/24")))
+                        .put("rules", new JsonArray()
+                                .add(new JsonObject().put("action", "deny").put("to", "@lab").put("note", "the lab network"))
+                                .add(new JsonObject().put("to", "10.255.254.0/24").put("ports", new JsonArray().add(9))))));
+        assertThat(cluster.statusCode()).as(cluster.bodyAsString()).isEqualTo(200);
+        assertThat(cluster.bodyAsJsonObject().getJsonObject("builtInSets").getString("link-local")).contains("169.254.169.254");
+        HttpResponse<Buffer> tenantAllow = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + TENANT + "/egress-policy")
+                .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("rules", new JsonArray()
+                        .add(new JsonObject().put("to", "10.255.255.0/24").put("ports", new JsonArray().add(9))))));
+        assertThat(tenantAllow.statusCode()).as(tenantAllow.bodyAsString()).isEqualTo(200);
+        try {
+            JsonArray tries = runJob(nodeA, TENANT, probe).getJsonArray("output");
+            assertThat(tries.getString(0)).isEqualTo("a cluster rule denies it (rule \"@lab\": the lab network)");
+            assertThat(tries.getString(1)).isIn("timeout", "network_error");     // the cluster's allow, for every tenant
+            assertThat(runJob(nodeA, "globex", probe).getJsonArray("output").getString(1)).isIn("timeout", "network_error");
+
+            // An allow-list tenant reaches only what a rule allows: not even a public address.
+            HttpResponse<Buffer> locked = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/globex/egress-policy")
+                    .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("posture", "allow-list")));
+            assertThat(locked.statusCode()).as(locked.bodyAsString()).isEqualTo(200);
+            assertThat(locked.bodyAsJsonObject().getJsonObject("posture").getString("from")).isEqualTo("tenant");
+            JsonArray globex = runJob(nodeA, "globex", probe).getJsonArray("output");
+            assertThat(globex.getString(1)).isIn("timeout", "network_error");
+            assertThat(globex.getString(2)).startsWith("no rule allows it");
+
+            // A tenant's rule may only name sets that exist; only operators change the cluster's policy.
+            HttpResponse<Buffer> unknownSet = await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/globex/egress-policy")
+                    .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject().put("rules", new JsonArray()
+                            .add(new JsonObject().put("action", "deny").put("to", "@nope")))));
+            assertThat(unknownSet.statusCode()).isEqualTo(400);
+            assertThat(unknownSet.bodyAsString()).contains("@lab");
+            HttpResponse<Buffer> notAdmin = await(client.put(nodeA.httpPort(), "localhost", "/v1/egress/cluster-policy")
+                    .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject()));
+            assertThat(notAdmin.statusCode()).isEqualTo(403);
+            assertThat(get(nodeB, TENANT, "/v1/egress-policy").bodyAsJsonObject().getJsonArray("clusterRules").getJsonObject(0)
+                    .getString("note")).isEqualTo("the lab network");
+        } finally {
+            await(client.put(nodeA.httpPort(), "localhost", "/v1/egress/cluster-policy").putHeader("Authorization", TestAuth.ADMIN)
+                    .sendJsonObject(cluster93.core.host.egress.ClusterEgress.DEFAULT.toJson()));
+            for (String tenant : java.util.List.of(TENANT, "globex")) {
+                await(client.put(nodeA.httpPort(), "localhost", "/v1/tenants/" + tenant + "/egress-policy")
+                        .putHeader("Authorization", TestAuth.ADMIN).sendJsonObject(new JsonObject()));
+            }
+        }
+    }
+
+    /** Retries {@code attempt} until {@code done} accepts its answer, for up to 6 s (longer than the policy cache). */
+    private static <T> T eventually(java.util.concurrent.Callable<T> attempt, java.util.function.Predicate<T> done) throws Exception {
+        long deadline = System.currentTimeMillis() + 6_000;
+        T answer = attempt.call();
+        while (!done.test(answer) && System.currentTimeMillis() < deadline) {
+            Thread.sleep(200);
+            answer = attempt.call();
+        }
+        return answer;
+    }
+
+    @Test
+    void nodeHttpGoesThroughTheSameGate() throws Exception {
+        JsonObject job = runJob(nodeA, TENANT, """
+                import http from 'node:http';
+                const attempt = (url) => new Promise((resolve) => {
+                  const req = http.get(url, () => resolve('answered'));
+                  req.on('error', (e) => resolve([e.code, e.message.replace(/^.*resolves to /, '').slice(0, 30)]));
+                });
+                export default async () => [await attempt('http://10.255.255.1:9/'), await attempt('http://127.0.0.1:%d/health')];
+                """.formatted(nodeA.httpPort()));
+
+        assertThat(job.getJsonArray("output").getJsonArray(0).getString(0)).isEqualTo("egress_denied");
+        assertThat(job.getJsonArray("output").getJsonArray(0).getString(1)).startsWith("a private or reserved address");
+        assertThat(job.getJsonArray("output").getJsonArray(1).getString(1)).startsWith("one of the cluster's own nodes");
+    }
+
+    // --- HTTP hosting ---
+
+    static final String WEB = """
+            export default async (input, ctx) => {
+              await ctx.serve(async (req) => {
+                if (req.path === '/hello') return `hello from run ${ctx.service.run}`;
+                if (req.path === '/echo') return { status: 201, headers: { 'x-served-by': 'c93' }, body: { method: req.method, q: req.query.q, body: await req.json() } };
+                return { status: 404, body: { error: 'no route' } };
+              });
+              return ctx.stopRequested;
+            }
+            """;
+
+    @Test
+    void servesHttpThroughAnyNodesIngress() throws Exception {
+        JsonObject service = putService("web", WEB);
+        assertThat(service.getJsonArray("hosts")).isEqualTo(new JsonArray().add("web--acme.apps.test"));
+        awaitServiceRunning("web");
+
+        for (RunningNode node : List.of(nodeA, nodeB)) {
+            HttpResponse<Buffer> hello = await(ingress(node, "web--acme.apps.test", "GET", "/hello").send());
+            assertThat(hello.statusCode()).as(hello.bodyAsString()).isEqualTo(200);
+            assertThat(hello.bodyAsString()).isEqualTo("hello from run 1");
+            assertThat(hello.getHeader("content-type")).isEqualTo("text/plain; charset=utf-8");
+        }
+        // HTTP/2 (cleartext, prior knowledge): the host arrives as :authority, not a Host header.
+        io.vertx.core.http.HttpClient h2 = clientVertx.createHttpClient(new io.vertx.core.http.HttpClientOptions()
+                .setProtocolVersion(io.vertx.core.http.HttpVersion.HTTP_2).setHttp2ClearTextUpgrade(false));
+        String overH2 = await(h2.request(new io.vertx.core.http.RequestOptions()
+                        .setServer(io.vertx.core.net.SocketAddress.inetSocketAddress(nodeA.ingressPort(), "127.0.0.1"))
+                        .setHost("web--acme.apps.test").setPort(nodeA.ingressPort()).setURI("/hello"))
+                .compose(req -> req.send().compose(res -> {
+                    assertThat(res.version()).isEqualTo(io.vertx.core.http.HttpVersion.HTTP_2);
+                    return res.body();
+                }))).toString();
+        assertThat(overH2).isEqualTo("hello from run 1");
+        await(h2.close());
+
+        HttpResponse<Buffer> echo = await(ingress(nodeB, "web--acme.apps.test:8000", "POST", "/echo?q=search")
+                .sendJsonObject(new JsonObject().put("n", 1)));
+        assertThat(echo.statusCode()).isEqualTo(201);
+        assertThat(echo.getHeader("x-served-by")).isEqualTo("c93");
+        assertThat(echo.bodyAsJsonObject()).isEqualTo(new JsonObject().put("method", "POST").put("q", "search").put("body", new JsonObject().put("n", 1)));
+    }
+
+    @Test
+    void unknownHostsAre404AndStoppedServicesAre503() throws Exception {
+        assertThat(await(ingress(nodeA, "nothing--acme.apps.test", "GET", "/").send()).statusCode()).isEqualTo(404);
+        assertThat(await(ingress(nodeA, "not-a-route.example.com", "GET", "/").send()).statusCode()).isEqualTo(404);
+
+        putService("web", WEB);
+        awaitServiceRunning("web");
+        await(client.post(nodeA.httpPort(), "localhost", "/v1/services/web/stop").putHeader("Authorization", TestAuth.bearer(TENANT)).send());
+        awaitJson(nodeA, TENANT, "/v1/services/web", s -> s.getValue("currentJobId") == null);
+
+        HttpResponse<Buffer> stopped = await(ingress(nodeA, "web--acme.apps.test", "GET", "/hello").send());
+        assertThat(stopped.statusCode()).isEqualTo(503);
+        assertThat(stopped.getHeader("retry-after")).isEqualTo("1");
+    }
+
+    @Test
+    void customDomainsRouteOnlyAfterTxtVerification() throws Exception {
+        putService("web", WEB);
+        awaitServiceRunning("web");
+
+        HttpResponse<Buffer> claimed = await(client.post(nodeA.httpPort(), "localhost", "/v1/services/web/domains")
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("domain", "Shop.Example.com")));
+        assertThat(claimed.statusCode()).as(claimed.bodyAsString()).isEqualTo(201);
+        JsonObject verification = claimed.bodyAsJsonObject().getJsonObject("verification");
+        assertThat(verification.getString("name")).isEqualTo("_cluster93.shop.example.com");
+
+        assertThat(await(ingress(nodeB, "shop.example.com", "GET", "/hello").send()).statusCode()).as("not verified yet").isEqualTo(404);
+        assertThat(post(nodeA, TENANT, "/v1/services/web/domains/shop.example.com/verify").statusCode()).isEqualTo(409);
+
+        HttpResponse<Buffer> stolen = await(client.post(nodeA.httpPort(), "localhost", "/v1/services/web/domains")
+                .putHeader("Authorization", TestAuth.bearer("globex")).sendJsonObject(new JsonObject().put("domain", "shop.example.com")));
+        assertThat(stolen.statusCode()).as("globex has no service named web").isEqualTo(404);
+
+        TXT_RECORDS.put("_cluster93.shop.example.com", List.of(verification.getString("value")));
+        HttpResponse<Buffer> verified = post(nodeA, TENANT, "/v1/services/web/domains/shop.example.com/verify");
+        assertThat(verified.statusCode()).isEqualTo(200);
+        assertThat(verified.bodyAsJsonObject().getBoolean("verified")).isTrue();
+
+        HttpResponse<Buffer> served = await(ingress(nodeB, "shop.example.com", "GET", "/hello").send());
+        assertThat(served.statusCode()).isEqualTo(200);
+        assertThat(get(nodeA, TENANT, "/v1/services/web").bodyAsJsonObject().getJsonArray("hosts")).contains("shop.example.com");
+
+        // Deleting the service releases the domain: it stops routing, and a new "web" doesn't inherit it.
+        await(client.delete(nodeA.httpPort(), "localhost", "/v1/services/web").putHeader("Authorization", TestAuth.bearer(TENANT)).send());
+        assertThat(await(ingress(nodeB, "shop.example.com", "GET", "/hello").send()).statusCode()).isEqualTo(404);
+        assertThat(putService("web", WEB).getJsonArray("hosts")).isEqualTo(new JsonArray().add("web--acme.apps.test"));
+    }
+
+    @Test
+    void namesWithDoubleHyphensAreRejected() throws Exception {
+        assertThat(await(client.put(nodeA.httpPort(), "localhost", "/v1/services/my--web").putHeader("Authorization", TestAuth.bearer(TENANT))
+                .sendJsonObject(new JsonObject().put("script", WEB))).statusCode()).isEqualTo(400);
+        // Tenant names become part of hostnames too, so the admin can't create one with "--".
+        assertThat(await(client.post(nodeA.httpPort(), "localhost", "/v1/tenants").putHeader("Authorization", TestAuth.ADMIN)
+                .sendJsonObject(new JsonObject().put("name", "a--b"))).statusCode()).isEqualTo(400);
+    }
+
+    // --- helpers ---
+
+    private static HttpRequest<Buffer> ingress(RunningNode node, String host, String method, String path) {
+        return client.request(io.vertx.core.http.HttpMethod.valueOf(method), node.ingressPort(), "localhost", path).putHeader("Host", host);
+    }
+
+    private static JsonObject putService(String name, String script) throws Exception {
+        HttpResponse<Buffer> response = await(client.put(nodeA.httpPort(), "localhost", "/v1/services/" + name)
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).sendJsonObject(new JsonObject().put("script", script)));
+        assertThat(response.statusCode()).as(response.bodyAsString()).isIn(200, 201);
+        return response.bodyAsJsonObject();
+    }
+
+    private static void awaitServiceRunning(String name) throws Exception {
+        awaitJson(nodeA, TENANT, "/v1/services/" + name, s -> "RUNNING".equals(s.getString("status")));
+        Thread.sleep(1000); // let the run register its handlers
+    }
+
+    private static JsonObject runJob(RunningNode node, String tenant, String script) throws Exception {
+        HttpResponse<Buffer> submitted = await(client.post(node.httpPort(), "localhost", "/v1/jobs").putHeader("Authorization", TestAuth.bearer(tenant))
+                .sendJsonObject(new JsonObject().put("script", script).put("timeoutMs", 10_000)));
+        assertThat(submitted.statusCode()).as(submitted.bodyAsString()).isEqualTo(202);
+        String id = submitted.bodyAsJsonObject().getString("id");
+        return awaitJson(node, tenant, "/v1/jobs/" + id, j -> !List.of("QUEUED", "RUNNING").contains(j.getString("status")));
+    }
+
+    private static HttpResponse<Buffer> get(RunningNode node, String tenant, String path) throws Exception {
+        return await(client.get(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(tenant)).send());
+    }
+
+    private static HttpResponse<Buffer> post(RunningNode node, String tenant, String path) throws Exception {
+        return await(client.post(node.httpPort(), "localhost", path).putHeader("Authorization", TestAuth.bearer(tenant)).send());
+    }
+
+    private static JsonObject awaitJson(RunningNode node, String tenant, String path, Predicate<JsonObject> condition) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+        JsonObject last = null;
+        while (System.nanoTime() < deadline) {
+            last = get(node, tenant, path).bodyAsJsonObject();
+            if (condition.test(last)) {
+                return last;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("Condition never met for " + path + "; last: " + (last == null ? null : last.encodePrettily()));
+    }
+
+    private static <T> T await(Future<T> future) throws Exception {
+        return future.toCompletionStage().toCompletableFuture().get(60, TimeUnit.SECONDS);
+    }
+}

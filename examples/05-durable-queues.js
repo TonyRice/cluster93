@@ -1,7 +1,7 @@
 // 05 — Durable queues.
 //
 // Run it:
-//   automately run examples/05-durable-queues.js
+//   c93 run examples/05-durable-queues.js
 //
 // A queue keeps messages in the cluster until a consumer has handled them (at least once), even if the
 // consumer's node dies. Consume them from a service with queue.consume. See docs/scripting/host-apis.md.

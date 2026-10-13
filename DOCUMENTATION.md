@@ -1,6 +1,6 @@
-# Automately Documentation Standard & Engineering Guide
+# Cluster93 Documentation Standard & Engineering Guide
 
-This document defines the structure, lifecycle, and authorship rules for all documentation across the Automately project.
+This document defines the structure, lifecycle, and authorship rules for all documentation across the Cluster93 project.
 
 ---
 
@@ -14,7 +14,7 @@ This document defines the structure, lifecycle, and authorship rules for all doc
 2. **Single Source of Truth (Zero Redundancy):**
    - Every architectural domain has exactly one canonical home.
    - **Do not duplicate exhaustive tables:** The complete 65-row OpenAPI route index lives in [`docs/api/endpoints.md`](docs/api/endpoints.md), not in `README.md`.
-   - **Contract-first:** The OpenAPI contract [`openapi.yaml`](automately-server/src/main/resources/openapi.yaml) is the ultimate source of truth for REST endpoints; API docs must mirror it exactly.
+   - **Contract-first:** The OpenAPI contract [`openapi.yaml`](cluster93-server/src/main/resources/openapi.yaml) is the ultimate source of truth for REST endpoints; API docs must mirror it exactly.
 
 3. **Immutability of Decision Records (ADRs):**
    - Entries in [`docs/DECISIONS.md`](docs/DECISIONS.md) are **append-only** and never deleted.
@@ -28,7 +28,7 @@ This document defines the structure, lifecycle, and authorship rules for all doc
 ## 2. Directory Taxonomy & Organization
 
 ```
-automately/
+cluster93/
 ├── README.md                      # Front door: Hook, mental model, verified status, quickstart, roadmap
 ├── SECURITY.md                    # Threat model, defense boundaries, and deployment security checklist
 ├── CHANGELOG.md                   # Keep-a-Changelog format grouped by release, referencing ADRs
@@ -63,7 +63,7 @@ automately/
     ├── README.md                  # Index of active ideas and graduated features
     ├── node-roles.md              # Differentiated node roles (Gateway vs Storage vs Worker)
     ├── node-runtime.md            # Native Node & gVisor container runtime
-    ├── links.md                   # External automately-link devices & capabilities
+    ├── links.md                   # External cluster93-link devices & capabilities
     ├── console.md                 # Web console & WebAuthn session architecture
     ├── python.md                  # Python serverless execution
     ├── apps.md                    # Static site hosting & API routing
@@ -77,7 +77,7 @@ automately/
 
 ### A. Root Documentation
 - **[`README.md`](README.md):** Must be concise and accessible to prospective users and hiring managers. Highlights the Cloudflare Workers / AWS Lambda mental model, verified Phase status, copy-paste quickstarts, and the high-level roadmap.
-- **[`SECURITY.md`](SECURITY.md):** The legal and operational contract for sandboxing. Defines who is trusted, who is hostile, and what each boundary defends. Updated whenever security boundaries, defaults (like `AUTOMATELY_WORKER_MODE=process`), or network gates change.
+- **[`SECURITY.md`](SECURITY.md):** The legal and operational contract for sandboxing. Defines who is trusted, who is hostile, and what each boundary defends. Updated whenever security boundaries, defaults (like `C93_WORKER_MODE=process`), or network gates change.
 - **[`CHANGELOG.md`](CHANGELOG.md):** Strictly updated under `[Unreleased]` for every commit that touches functionality. Always format with bold change titles, bulleted technical context, and decision references (`D-xxx`).
 
 ### B. Architectural Specifications (`docs/design/`)
@@ -105,7 +105,7 @@ automately/
 
 ### Markdown Standards (GFM)
 - Use standard GitHub Flavored Markdown.
-- **Clickable Symbol Links:** Always link file paths and symbols using markdown links (e.g. [`NodeHostApis`](automately-core/src/main/java/automately/core/host/NodeHostApis.java) or [`openapi.yaml`](automately-server/src/main/resources/openapi.yaml)).
+- **Clickable Symbol Links:** Always link file paths and symbols using markdown links (e.g. [`NodeHostApis`](cluster93-core/src/main/java/cluster93/core/host/NodeHostApis.java) or [`openapi.yaml`](cluster93-server/src/main/resources/openapi.yaml)).
 - **Mermaid Diagrams:** Use `flowchart TD`, `flowchart LR`, or `sequenceDiagram`. Always quote node labels containing special characters (e.g., `id["Label (Extra Info)"]`).
 
 ### High-Density Javadocs & Agent Context Optimization
@@ -122,15 +122,15 @@ For detailed module layouts, wire framing layouts, and flow control mechanisms, 
 
 | Subsystem | Canonical Contracts & Implementation Classes | Architectural Specification / ADR |
 |---|---|---|
-| **Host APIs (Guest Facing)** | [`HostApis`](automately-core/src/main/java/automately/core/runtime/api/HostApis.java), [`HostFunction`](automately-runtime-js/src/main/java/automately/runtime/js/HostFunction.java), [`StateSink`](automately-core/src/main/java/automately/core/runtime/StateSink.java) | [`docs/scripting/host-apis.md`](docs/scripting/host-apis.md), `D-025` |
-| **Node Authority APIs** | [`NodeHostApis`](automately-core/src/main/java/automately/core/host/NodeHostApis.java), [`SharedDataKvStore`](automately-core/src/main/java/automately/core/host/SharedDataKvStore.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4, `D-030` |
-| **Script Runner & Conformance** | [`ScriptRunner`](automately-runtime-js/src/main/java/automately/runtime/js/ScriptRunner.java), [`JsEngine`](automately-runtime-js/src/main/java/automately/runtime/js/JsEngine.java) | [`docs/design/engine-neutral-runtime.md`](docs/design/engine-neutral-runtime.md), `D-126`, `D-127` |
-| **Engine Adapters** | [`JavetEngine`](automately-runtime-javet/src/main/java/automately/runtime/javet/JavetEngine.java) (V8), [`GraalJsEngine`](automately-runtime-graaljs/src/main/java/automately/runtime/graaljs/GraalJsEngine.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3, `D-126` |
-| **Storage & Blob SPIs** | [`FileStore`](automately-core/src/main/java/automately/core/files/FileStore.java), [`BlobStore`](automately-core/src/main/java/automately/core/files/BlobStore.java), [`IgniteFileStore`](automately-cluster-ignite/src/main/java/automately/cluster/ignite/store/IgniteFileStore.java) | [`docs/design/vfs.md`](docs/design/vfs.md), [`docs/guides/storage.md`](docs/guides/storage.md) |
-| **Egress & Network Gates** | [`EgressGate`](automately-core/src/main/java/automately/core/host/egress/EgressGate.java), [`AllowlistEgressGate`](automately-core/src/main/java/automately/core/host/egress/AllowlistEgressGate.java) | [`docs/design/network-reach.md`](docs/design/network-reach.md), [`SECURITY.md`](SECURITY.md) |
-| **Runner Protocol & Channels** | [`FrameCodec`](automately-runner-protocol/src/main/java/automately/runner/protocol/frame/FrameCodec.java), [`NodeWorkerChannel`](automately-runner-protocol/src/main/java/automately/runner/protocol/server/NodeWorkerChannel.java), [`StreamMultiplexer`](automately-runner-protocol/src/main/java/automately/runner/protocol/stream/StreamMultiplexer.java) | [`docs/design/worker-node-protocol.md`](docs/design/worker-node-protocol.md), `D-128`, `D-131`, `D-132` |
-| **Worker Pools & Isolation** | [`TenantWorkerPool`](automately-runner-protocol/src/main/java/automately/runner/protocol/pool/TenantWorkerPool.java), [`WorkerProcessRuntime`](automately-runner-protocol/src/main/java/automately/runner/protocol/runtime/WorkerProcessRuntime.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4, `D-128`, `D-131` |
-| **Job Scheduling & Supervisors** | [`NodeVerticle`](automately-core/src/main/java/automately/core/scheduler/NodeVerticle.java), [`ServiceSupervisor`](automately-core/src/main/java/automately/core/service/ServiceSupervisor.java) | [`docs/scripting/job-context.md`](docs/scripting/job-context.md), [`docs/scripting/services.md`](docs/scripting/services.md) |
+| **Host APIs (Guest Facing)** | [`HostApis`](cluster93-core/src/main/java/cluster93/core/runtime/api/HostApis.java), [`HostFunction`](cluster93-runtime-js/src/main/java/cluster93/runtime/js/HostFunction.java), [`StateSink`](cluster93-core/src/main/java/cluster93/core/runtime/StateSink.java) | [`docs/scripting/host-apis.md`](docs/scripting/host-apis.md), `D-025` |
+| **Node Authority APIs** | [`NodeHostApis`](cluster93-core/src/main/java/cluster93/core/host/NodeHostApis.java), [`SharedDataKvStore`](cluster93-core/src/main/java/cluster93/core/host/SharedDataKvStore.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4, `D-030` |
+| **Script Runner & Conformance** | [`ScriptRunner`](cluster93-runtime-js/src/main/java/cluster93/runtime/js/ScriptRunner.java), [`JsEngine`](cluster93-runtime-js/src/main/java/cluster93/runtime/js/JsEngine.java) | [`docs/design/engine-neutral-runtime.md`](docs/design/engine-neutral-runtime.md), `D-126`, `D-127` |
+| **Engine Adapters** | [`JavetEngine`](cluster93-runtime-javet/src/main/java/cluster93/runtime/javet/JavetEngine.java) (V8), [`GraalJsEngine`](cluster93-runtime-graaljs/src/main/java/cluster93/runtime/graaljs/GraalJsEngine.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3, `D-126` |
+| **Storage & Blob SPIs** | [`FileStore`](cluster93-core/src/main/java/cluster93/core/files/FileStore.java), [`BlobStore`](cluster93-core/src/main/java/cluster93/core/files/BlobStore.java), [`IgniteFileStore`](cluster93-cluster-ignite/src/main/java/cluster93/cluster/ignite/store/IgniteFileStore.java) | [`docs/design/vfs.md`](docs/design/vfs.md), [`docs/guides/storage.md`](docs/guides/storage.md) |
+| **Egress & Network Gates** | [`EgressGate`](cluster93-core/src/main/java/cluster93/core/host/egress/EgressGate.java), [`AllowlistEgressGate`](cluster93-core/src/main/java/cluster93/core/host/egress/AllowlistEgressGate.java) | [`docs/design/network-reach.md`](docs/design/network-reach.md), [`SECURITY.md`](SECURITY.md) |
+| **Runner Protocol & Channels** | [`FrameCodec`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/frame/FrameCodec.java), [`NodeWorkerChannel`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/server/NodeWorkerChannel.java), [`StreamMultiplexer`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/stream/StreamMultiplexer.java) | [`docs/design/worker-node-protocol.md`](docs/design/worker-node-protocol.md), `D-128`, `D-131`, `D-132` |
+| **Worker Pools & Isolation** | [`TenantWorkerPool`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/pool/TenantWorkerPool.java), [`WorkerProcessRuntime`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/runtime/WorkerProcessRuntime.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4, `D-128`, `D-131` |
+| **Job Scheduling & Supervisors** | [`NodeVerticle`](cluster93-core/src/main/java/cluster93/core/scheduler/NodeVerticle.java), [`ServiceSupervisor`](cluster93-core/src/main/java/cluster93/core/service/ServiceSupervisor.java) | [`docs/scripting/job-context.md`](docs/scripting/job-context.md), [`docs/scripting/services.md`](docs/scripting/services.md) |
 
 ---
 
@@ -142,7 +142,7 @@ Whenever modifying or adding an architectural feature:
 2. [ ] **Decision Record:** If a design choice or trade-off was made, record it in [`docs/DECISIONS.md`](docs/DECISIONS.md) (`D-xxx`).
 3. [ ] **Changelog:** Add an entry under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
 4. [ ] **User Documentation:** Update the corresponding guide in `docs/guides/` or `docs/scripting/`.
-5. [ ] **API Reference:** If routes changed, update [`openapi.yaml`](automately-server/src/main/resources/openapi.yaml) and [`docs/api/endpoints.md`](docs/api/endpoints.md).
+5. [ ] **API Reference:** If routes changed, update [`openapi.yaml`](cluster93-server/src/main/resources/openapi.yaml) and [`docs/api/endpoints.md`](docs/api/endpoints.md).
 6. [ ] **README / SECURITY:** If defaults, execution modes, or security boundaries changed, update [`README.md`](README.md) and [`SECURITY.md`](SECURITY.md).
 7. [ ] **Verification:** Verify that all referenced markdown links exist and resolve.
 

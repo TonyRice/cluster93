@@ -1,0 +1,148 @@
+package cluster93.runner.protocol.client;
+
+import cluster93.core.runtime.HostException;
+import cluster93.runner.protocol.flow.CreditManager;
+import cluster93.runner.protocol.frame.Frame;
+import cluster93.runner.protocol.frame.FrameCodec;
+import cluster93.runner.protocol.frame.FrameType;
+import cluster93.runner.protocol.message.CallMessage;
+import cluster93.runner.protocol.message.ErrorMessage;
+import cluster93.runner.protocol.message.ResultMessage;
+import cluster93.runner.protocol.stream.StreamMultiplexer;
+import io.vertx.core.Future;
+import io.vertx.core.Handler;
+import io.vertx.core.Promise;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.streams.ReadStream;
+import io.vertx.core.streams.WriteStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Worker-side protocol channel managing communication with the Cluster93 node (worker-node-protocol.md §4).
+ */
+public class WorkerClientConnection {
+
+    private static final Logger LOG = LoggerFactory.getLogger(WorkerClientConnection.class);
+
+    private final WriteStream<Buffer> output;
+    private final ReadStream<Buffer> input;
+    private final CreditManager creditManager;
+    private final StreamMultiplexer streamMultiplexer;
+    private final AtomicInteger callIdSequence = new AtomicInteger(1);
+    private final AtomicInteger streamIdSequence = new AtomicInteger(1);
+    private final Map<Integer, Promise<ResultMessage>> pendingCalls = new ConcurrentHashMap<>();
+
+    private Handler<Frame> frameHandler = frame -> {};
+    private Handler<Throwable> errorHandler = err -> LOG.error("Protocol error", err);
+
+    public WorkerClientConnection(WriteStream<Buffer> output, ReadStream<Buffer> input) {
+        this(output, input, new CreditManager());
+    }
+
+    public WorkerClientConnection(WriteStream<Buffer> output, ReadStream<Buffer> input, CreditManager creditManager) {
+        this.output = output;
+        this.input = input;
+        this.creditManager = creditManager;
+        this.streamMultiplexer = new StreamMultiplexer(this::send, creditManager);
+
+        FrameCodec.FrameParser parser = FrameCodec.parser(this::onFrame, this::onError);
+        // Register the error and end handlers before handler(): the read pump starts with handler(), and an EOF that
+        // arrives immediately (a closed pipe) must still reach them (D-132).
+        input.exceptionHandler(this::onError);
+        input.endHandler(v -> onError(new java.io.IOException("Node connection closed unexpectedly (EOF)")));
+        input.handler(parser);
+    }
+
+    public void setFrameHandler(Handler<Frame> frameHandler) {
+        this.frameHandler = frameHandler != null ? frameHandler : frame -> {};
+    }
+
+    public void setErrorHandler(Handler<Throwable> errorHandler) {
+        this.errorHandler = errorHandler != null ? errorHandler : err -> LOG.error("Protocol error", err);
+    }
+
+    public CreditManager creditManager() {
+        return creditManager;
+    }
+
+    public StreamMultiplexer streamMultiplexer() {
+        return streamMultiplexer;
+    }
+
+    public int nextCallId() {
+        return callIdSequence.getAndIncrement();
+    }
+
+    /** A stream id the worker opens (odd, so it never collides with the node's even response streams). */
+    public int nextStreamId() {
+        return streamIdSequence.getAndAdd(2);
+    }
+
+    /**
+     * Sends an encoded frame to the node.
+     */
+    public synchronized Future<Void> send(Frame frame) {
+        Buffer encoded = FrameCodec.encode(frame);
+        return output.write(encoded);
+    }
+
+    /**
+     * Executes a host API RPC call and awaits the response.
+     */
+    public Future<ResultMessage> call(CallMessage call) {
+        Promise<ResultMessage> promise = Promise.promise();
+        pendingCalls.put(call.callId(), promise);
+        send(call.toFrame()).onFailure(promise::fail);
+        return promise.future();
+    }
+
+    private void onFrame(Frame frame) {
+        if (streamMultiplexer.handleFrame(frame)) {
+            return;
+        }
+
+        if (frame.type() == FrameType.RESULT) {
+            ResultMessage result = ResultMessage.fromFrame(frame);
+            Promise<ResultMessage> promise = pendingCalls.remove(result.callId());
+            if (promise != null) {
+                promise.complete(result);
+            }
+            return;
+        }
+
+        if (frame.type() == FrameType.ERROR) {
+            ErrorMessage error = ErrorMessage.fromFrame(frame);
+            Promise<ResultMessage> promise = pendingCalls.remove(error.callId());
+            if (promise != null) {
+                promise.fail(new HostException("Error", error.code(), error.message()));
+            }
+            return;
+        }
+
+        if (frame.type() == FrameType.PING) {
+            send(Frame.pong());
+            return;
+        }
+
+        // Delegate application frames (WELCOME, BIND, RUN, STOP, CANCEL, EVENT, etc.)
+        try {
+            frameHandler.handle(frame);
+        } catch (Exception e) {
+            onError(e);
+        }
+    }
+
+    private void onError(Throwable err) {
+        errorHandler.handle(err);
+        // Fail any pending RPCs
+        for (Promise<ResultMessage> promise : pendingCalls.values()) {
+            promise.tryFail(err);
+        }
+        pendingCalls.clear();
+    }
+}

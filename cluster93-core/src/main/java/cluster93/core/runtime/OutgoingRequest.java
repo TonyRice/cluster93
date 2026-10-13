@@ -1,0 +1,31 @@
+package cluster93.core.runtime;
+
+import io.vertx.core.Future;
+import io.vertx.core.buffer.Buffer;
+
+/**
+ * An HTTP request whose body a script writes in chunks ({@code node:http}, D-109). It's already through the egress gate
+ * and connected; its headers go with the first chunk or the end.
+ */
+public interface OutgoingRequest {
+
+    /** Sends a chunk; completes once it's handed to the connection, which is the backpressure. */
+    Future<Void> write(Buffer chunk);
+
+    /** Ends the body. */
+    Future<Void> end();
+
+    /** The response's status and headers, with its body as a paused stream. It may arrive before the body ends. */
+    Future<FetchedResponse> response();
+
+    /** Abandons the request and its response. Safe to call more than once, and after it ended. */
+    void abort();
+
+    /**
+     * The connection it went out on, as {@link cluster93.core.host.ConnectionInfo} describes it for the script's socket
+     * (D-114): addresses, whether it was reused, and the TLS details. Empty if the host has none to give.
+     */
+    default io.vertx.core.json.JsonObject connection() {
+        return new io.vertx.core.json.JsonObject();
+    }
+}

@@ -23,13 +23,13 @@
 > - Testcontainers: added in phase 2 as `DockerClusterIT` (3 containers, real `SIGKILL`).
 > - Added: a remote-workers and browser idea parked in [NOTES.md](../../NOTES.md).
 
-# Automately Core: what it was, what it could become, and a Vert.x 5 revival plan
+# Cluster93 Core: what it was, what it could become, and a Vert.x 5 revival plan
 
 ## Context
-Tony is dropping jsync.io. Its source is already in `jsync.io-master.zip`, and it is a renamed fork of Vert.x 2, so there's no reason to revive it. Instead he wants to port **Automately Core** straight to Vert.x 5 and reposition it as a modern project that strengthens a job search. This document covers three things: what Automately was architecturally good at, what it could be good for today, and a scoped plan to get there.
+Tony is dropping jsync.io. Its source is already in `jsync.io-master.zip`, and it is a renamed fork of Vert.x 2, so there's no reason to revive it. Instead he wants to port **Cluster93 Core** straight to Vert.x 5 and reposition it as a modern project that strengthens a job search. This document covers three things: what Cluster93 was architecturally good at, what it could be good for today, and a scoped plan to get there.
 
-## What Automately Core was (2015–2017)
-It was a self-hosted, clustered platform that ran user code as functions and services, with built-in data, messaging, files and HTTP. You could describe it as AWS Lambda, Firebase and Heroku in one JVM cluster, built before that combination was common. Each feature below lives in `automately-core-master/src/main/java/automately/core/`:
+## What Cluster93 Core was (2015–2017)
+It was a self-hosted, clustered platform that ran user code as functions and services, with built-in data, messaging, files and HTTP. You could describe it as AWS Lambda, Firebase and Heroku in one JVM cluster, built before that combination was common. Each feature below lives in `cluster93-core-master/src/main/java/cluster93/core/`:
 
 | Capability | Where | Notes |
 |---|---|---|
@@ -39,7 +39,7 @@ It was a self-hosted, clustered platform that ran user code as functions and ser
 | **Hostname-routed HTTP hosting**: a script registers a host, and any node routes requests for it | `services/http/ClusteredHttpServer.java` | Works like Cloudflare Workers routes |
 | **Virtual per-user file system** with S3, Azure and local stores, exposed as a Java NIO `FileSystem` and over SFTP/SSH | `file/**`, `services/ssh/**` | |
 | **Realtime bridge**: SockJS links the cluster event bus to browsers and the SDK | `services/sdk/**` | |
-| **REST API** (users, jobs, files, live console/event streams) and **SDK CLI deploy** | `services/api/routers/**`, `automately-sdk-master` | |
+| **REST API** (users, jobs, files, live console/event streams) and **SDK CLI deploy** | `services/api/routers/**`, `cluster93-sdk-master` | |
 | **Role-based nodes** (`all`, `api`, `sdk`, `job`), so one binary can scale out per role | config in each service README | |
 
 **Weak spots, which also make good material for a career write-up:**
@@ -48,9 +48,9 @@ It was a self-hosted, clustered platform that ran user code as functions and ser
 - Callback-heavy code, routing done with regexes, Hazelcast types leaking across the codebase, and almost no tests.
 
 ## What it could be good for now
-The architecture fits a problem that's very active in 2026: **running untrusted or AI-generated code safely, close to data and events.** The isolate model matches what Cloudflare Workers, Deno Deploy and the agent-sandbox products (E2B, Modal and others) do, and Automately already had the surrounding platform: scheduler, storage, pub/sub, HTTP routing and live log streaming.
+The architecture fits a problem that's very active in 2026: **running untrusted or AI-generated code safely, close to data and events.** The isolate model matches what Cloudflare Workers, Deno Deploy and the agent-sandbox products (E2B, Modal and others) do, and Cluster93 already had the surrounding platform: scheduler, storage, pub/sub, HTTP routing and live log streaming.
 
-**Recommended positioning:** *"Automately: a self-hostable, clustered runtime for sandboxed JavaScript functions and long-running services on the JVM. It uses V8 isolates (Javet) on Vert.x 5 and exposes jobs, storage, messaging and HTTP routing through one API, plus an MCP server so AI agents can deploy and run code on it."*
+**Recommended positioning:** *"Cluster93: a self-hostable, clustered runtime for sandboxed JavaScript functions and long-running services on the JVM. It uses V8 isolates (Javet) on Vert.x 5 and exposes jobs, storage, messaging and HTTP routing through one API, plus an MCP server so AI agents can deploy and run code on it."*
 
 This is useful for a career because it demonstrates:
 - distributed systems: scheduling, cluster membership, failover
@@ -97,7 +97,7 @@ These fixes are built into the phases below rather than added at the end: #2, #3
 Port code where it's logic, such as scheduling, routing and the VFS. Rewrite code where it's API surface. Don't port the legacy runtimes, Nashorn, SSH/SFTP, Azure, or the `org.apache.sshd` fork.
 
 ## Decisions to confirm before phase 1
-- Repo, name and licence: keep "Automately" under your own GitHub account, with the original LICENSE.md carried over.
+- Repo, name and licence: keep "Cluster93" under your own GitHub account, with the original LICENSE.md carried over.
 - KV backend: cluster map vs Postgres.
 - Whether to put MCP/agent integration front and centre, which is what the positioning above assumes.
 

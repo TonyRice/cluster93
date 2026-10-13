@@ -2,18 +2,18 @@
 
 **Status:** Accepted (D-126, D-127), 2026-10-10.
 - **Completed:**
-  - **Step 1 (2026-10-09):** The engine-neutral layer (`automately-runtime-js`), with Javet alone (`5d35cd2`).
-  - **Step 2 (2026-10-10):** Embedded GraalJS adapter (`automately-runtime-graaljs`, `3b22e8a`). Conformance suite passes completely: **137 of 137 tests passing**.
+  - **Step 1 (2026-10-09):** The engine-neutral layer (`cluster93-runtime-js`), with Javet alone (`5d35cd2`).
+  - **Step 2 (2026-10-10):** Embedded GraalJS adapter (`cluster93-runtime-graaljs`, `3b22e8a`). Conformance suite passes completely: **137 of 137 tests passing**.
   - **Step 3 (2026-10-10):** Native-image workers built and benchmarked (`955e273`, §8). Engine trade-offs characterized.
-  - **Resolution (D-127):** Engine selection is a **deployment-level choice** (`AUTOMATELY_WORKER_ENGINE=graaljs|javet`). Deployers choose GraalJS for strict tenant sandboxing / memory safety, or Javet for maximum JIT object/JSON throughput.
+  - **Resolution (D-127):** Engine selection is a **deployment-level choice** (`C93_WORKER_ENGINE=graaljs|javet`). Deployers choose GraalJS for strict tenant sandboxing / memory safety, or Javet for maximum JIT object/JSON throughput.
 - **Next up (Step 4):**
   - **Worker ↔ Node IPC Protocol:** Formalized in dedicated normative spec [worker-node-protocol.md](worker-node-protocol.md).
-  - Protocol implementation in `automately-runner-protocol`.
+  - Protocol implementation in `cluster93-runner-protocol`.
 
 ## 1. Why
 
 ### Memory outside the isolate's limit
-A security review after phase B found that `AUTOMATELY_MAX_HEAP_MB` caps only V8's heap. A script can hold or churn memory outside it, and get the node OOM-killed. These were measured in a 64 MB isolate on Javet 6.0.2 (V8 15.5.35.14); the probes are in `ideas/native-memory-investigation.md`.
+A security review after phase B found that `C93_MAX_HEAP_MB` caps only V8's heap. A script can hold or churn memory outside it, and get the node OOM-killed. These were measured in a 64 MB isolate on Javet 6.0.2 (V8 15.5.35.14); the probes are in `ideas/native-memory-investigation.md`.
 
 | Route | Measured | Does V8 count it? |
 |---|---|---|
@@ -48,7 +48,7 @@ Tony's concern is the engine itself. The answer is in two parts:
 
 ## 2. Two seams
 1. **The engine seam (built now):** the bindings and the run's orchestration are written once against a small SPI (§3). Javet and GraalJS each implement it.
-2. **The placement seam (exists, used later):** the bindings call the `HostApis` interfaces (`automately-core`).
+2. **The placement seam (exists, used later):** the bindings call the `HostApis` interfaces (`cluster93-core`).
    - **Today:** `NodeHostApis` serves them in-process.
    - **In a worker:** a `RemoteHostApis` speaks the protocol (§7).
 
@@ -62,15 +62,15 @@ The two are independent, so any engine can run in any placement:
 ### What's engine-specific today
 | Part | Size | Tied to Javet? |
 |---|---|---|
-| Host APIs in `automately-core` | 11,400 lines | no; zero Javet imports |
+| Host APIs in `cluster93-core` | 11,400 lines | no; zero Javet imports |
 | JavaScript polyfills (prelude, `node/*`, `web/*`) | 20,600 lines | almost not: they reach Java only through `host.*` (92 call sites), and the one V8-only feature they use is `Error.captureStackTrace` (5 uses) |
 | Bindings, `HostBridge`, `JsValues`, `ScriptEntryPoints`, `ModuleResolver`, `JavetScriptRuntime` | about 3,300 lines | yes, throughout |
 
-Only `Automately.java` constructs the runtime, through the engine-neutral `ScriptRuntime` interface.
+Only `Cluster93.java` constructs the runtime, through the engine-neutral `ScriptRuntime` interface.
 
 ## 3. Modules and the SPI
 
-### `automately-runtime-js` (new, engine-neutral)
+### `cluster93-runtime-js` (new, engine-neutral)
 **The SPI:**
 - **`JsEngine`:** one per process. It holds the shared caches and creates contexts.
 - **`JsContext`:** one per run.
@@ -103,10 +103,10 @@ Simple parameters (`int`, `double`, `boolean`, `String`) stay as they are.
 - **the run's orchestration** from `JavetScriptRuntime` (stop, cancel, timeout, the loop's phases, rejection checks, the result), as `ScriptRunner implements ScriptRuntime`
 
 **Also here:**
-- **The JavaScript resources,** under `automately/runtime/js/…`.
+- **The JavaScript resources,** under `cluster93/runtime/js/…`.
 - **The conformance suite:** today's runtime tests, made engine-neutral. Each engine module runs it (surefire `dependenciesToScan`), choosing its engine through a ServiceLoader `EngineUnderTest`. The same scripts must give the same answers on every engine, as node-runtime.md already requires between the isolate and the Node runner.
 
-### `automately-runtime-javet` (the Javet adapter)
+### `cluster93-runtime-javet` (the Javet adapter)
 **Kept here:**
 - the V8 flags and heap limit, and the near-heap-limit callback
 - the ICU data file
@@ -116,7 +116,7 @@ Simple parameters (`int`, `double`, `boolean`, `String`) stay as they are.
 
 **`JavetScriptRuntime`** keeps its name, now a `ScriptRunner` over the Javet engine, so the server is untouched.
 
-### `automately-runtime-graaljs` (the GraalJS adapter; built 2026-10-10)
+### `cluster93-runtime-graaljs` (the GraalJS adapter; built 2026-10-10)
 It embeds GraalJS through GraalVM's polyglot API in our own process, not GraalVM's Node. The dependencies are `org.graalvm.polyglot:polyglot` with `js-community` (in-process) and `js-isolate-linux-amd64-community` (isolated), at 25.4.4.1.1. The jars are Java 17 bytecode, so they run on the server's JDK 21.
 
 **Where the guest runs:**
@@ -171,7 +171,7 @@ It embeds GraalJS through GraalVM's polyglot API in our own process, not GraalVM
 
 None of these failed a conformance test.
 
-### `automately-worker` (the tenant worker's seed)
+### `cluster93-worker` (the tenant worker's seed)
 - **What it is:** a `main` hosting one engine, built as a GraalVM native image: `worker-javet` and `worker-graaljs` (`-Pnative`, GraalVM CE 25.4).
 - **For the comparison:** it serves host APIs **in-process**, with local stores; the protocol comes after the engine is picked.
 - **Commands:** `bench`, `idle`, `hostile`, `run`.
@@ -192,9 +192,9 @@ The native image's RSS includes 136 MB of shared memory (the V8 library and ICU 
 **Building the workers (GraalVM CE 25.4, `benchmarks/engines/build.sh`):**
 - **The cost:** `worker-javet` takes 2.5–5 minutes and peaks at 2.9 GB. `worker-graaljs` takes about 8 minutes and peaks at 5.9 GB; it carries the whole JS language and the isolate's library, and runs out of a 5 or 6 GB builder heap.
 - **The safeguards:** each build runs one at a time under a kernel memory cap (9 GB). The builder gets 7 GB of heap and 2 threads, since fewer threads hold fewer compilation graphs at once. An uncapped GraalJS build once took down the developer's terminal, with `/tmp` (tmpfs) already full.
-- **What the image may see:** a native image only reaches the classes, methods and resources it's told about. The tracing agent's record listed only the host functions its run happened to call (for zlib, just `process`), so streaming zlib would have failed in a worker. A hand-written file in `automately-worker` now registers every binding's public methods, plus all the runtime's JavaScript by glob. `NativeImageMetadataTest` fails if a class with `@HostFunction` methods is missing from it.
+- **What the image may see:** a native image only reaches the classes, methods and resources it's told about. The tracing agent's record listed only the host functions its run happened to call (for zlib, just `process`), so streaming zlib would have failed in a worker. A hand-written file in `cluster93-worker` now registers every binding's public methods, plus all the runtime's JavaScript by glob. `NativeImageMetadataTest` fails if a class with `@HostFunction` methods is missing from it.
 
-**A leak to fix before workers run in production:** a worker that's killed (at its memory cap, say) leaves its unpacked V8 library in `/tmp/javet/<pid>/` and its ICU data copy (`/tmp/automately-icudt*.dat`). On a tmpfs `/tmp` that's memory: about 80 MB per dead worker (a 46–51 MB library and 33 MB of ICU data). The fix is the one above: one shared copy at a fixed path, unpacked once per node. `run.sh` cleans up after itself meanwhile.
+**A leak to fix before workers run in production:** a worker that's killed (at its memory cap, say) leaves its unpacked V8 library in `/tmp/javet/<pid>/` and its ICU data copy (`/tmp/cluster93-icudt*.dat`). On a tmpfs `/tmp` that's memory: about 80 MB per dead worker (a 46–51 MB library and 33 MB of ICU data). The fix is the one above: one shared copy at a fixed path, unpacked once per node. `run.sh` cleans up after itself meanwhile.
 
 ## 4. Kernel memory caps on workers
 - **Cgroups work, without root.** cgroup v2 has the memory controller delegated to the user session here. `systemd-run --user --scope -p MemoryMax=256M` around a V8 process filling 1 GB: the kernel killed it at the cap (exit 137), and everything outside carried on.
@@ -231,7 +231,7 @@ There's no `ShadowRealm` to escape into.
 ## 7. The worker↔node protocol (proposed; built after the engine is picked)
 > **Dedicated Specification:** The complete normative specification for the in-cluster worker IPC protocol is located at [worker-node-protocol.md](worker-node-protocol.md).
 >
-> **Important Distinction:** This protocol is exclusively for **in-cluster workers** (local child processes, gVisor containers, Firecracker microVMs) managed directly by cluster nodes. Remote user-owned devices connecting from outside use `automately-link` over outbound TLS WebSockets (governed separately by `ideas/links.md`).
+> **Important Distinction:** This protocol is exclusively for **in-cluster workers** (local child processes, gVisor containers, Firecracker microVMs) managed directly by cluster nodes. Remote user-owned devices connecting from outside use `cluster93-link` over outbound TLS WebSockets (governed separately by `ideas/links.md`).
 
 This builds on node-runtime.md §5 (D-084–D-086): one binary frame protocol for in-cluster isolate workers, Node containers, and microVMs. The runner is untrusted, and the tenant always comes from the node's records.
 
@@ -320,7 +320,7 @@ Every flow of bytes is a channel with credits, as HTTP/2's flow-control windows:
 - **HTTP/2 over a Unix socket:** it does give flow control, but costs a header block per call. This design keeps HTTP/2's flow-control model without the weight.
 
 ### Code, when it's built
-- **The shared protocol:** a frame codec and message types (an `automately-runner-protocol` module).
+- **The shared protocol:** a frame codec and message types (a `cluster93-runner-protocol` module).
 - **On the node:** a server answering calls with `NodeHostApis`.
 - **In the worker:** `RemoteHostApis`, implementing the `HostApis` interfaces.
 
@@ -452,15 +452,15 @@ We measured `worker-graaljs` built with Oracle GraalVM 25.4.4.1.1 under GFTC aga
 
 **What this points to (the choice is Tony's, resolved in D-127):**
 - **GraalJS CE as the multi-tenant default:** where scripts are untrusted and the engine is the attack surface.
-- **V8 kept for trusted or speed-critical work:** available via `AUTOMATELY_WORKER_ENGINE=javet` when raw JSON throughput and immediate cold starts are prioritized.
+- **V8 kept for trusted or speed-critical work:** available via `C93_WORKER_ENGINE=javet` when raw JSON throughput and immediate cold starts are prioritized.
 
 ## 9. Order of work
 1. **The engine-neutral layer, with Javet only (Step 1, complete):** no change in behaviour, the same test counts (`5d35cd2`).
-2. **The GraalJS adapter (Step 2, complete):** `automately-runtime-graaljs` passing 137/137 conformance tests (`3b22e8a`).
-3. **The native-image workers and comparison (Step 3, complete):** `automately-worker` benchmarked and results characterized (§8, `955e273`).
-4. **Engine selection and protocol specification (D-127, complete):** Engine choice is deployment-configurable (`AUTOMATELY_WORKER_ENGINE`). Standalone protocol specified in [worker-node-protocol.md](worker-node-protocol.md).
+2. **The GraalJS adapter (Step 2, complete):** `cluster93-runtime-graaljs` passing 137/137 conformance tests (`3b22e8a`).
+3. **The native-image workers and comparison (Step 3, complete):** `cluster93-worker` benchmarked and results characterized (§8, `955e273`).
+4. **Engine selection and protocol specification (D-127, complete):** Engine choice is deployment-configurable (`C93_WORKER_ENGINE`). Standalone protocol specified in [worker-node-protocol.md](worker-node-protocol.md).
 5. **Next: Step 4 implementation:**
-   - Protocol codec and models (`automately-runner-protocol`).
+   - Protocol codec and models (`cluster93-runner-protocol`).
    - Remote `HostApis` proxy for the worker and node-side dispatcher.
    - Worker pool supervisor with Linux cgroup memory caps.
    - gVisor / Firecracker runner integrations.

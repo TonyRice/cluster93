@@ -1,12 +1,12 @@
 # Engine Benchmark Suite (`benchmarks/engines`)
 
-Automated benchmark comparison framework evaluating JavaScript runtime engines (**Javet / V8** vs. **GraalJS**) compiled inside standalone GraalVM `native-image` worker processes (`automately-worker`).
+Automated benchmark comparison framework evaluating JavaScript runtime engines (**Javet / V8** vs. **GraalJS**) compiled inside standalone GraalVM `native-image` worker processes (`cluster93-worker`).
 
 ---
 
 ## 1. Why This Exists & Functional Purpose
 
-Automately provides sandboxed JavaScript execution for multi-tenant serverless workloads and AI agent tooling. Under **D-126** (Engine-Neutral Runtime), we decoupled the host bindings from the underlying JS engine to evaluate alternative engines.
+Cluster93 provides sandboxed JavaScript execution for multi-tenant serverless workloads and AI agent tooling. Under **D-126** (Engine-Neutral Runtime), we decoupled the host bindings from the underlying JS engine to evaluate alternative engines.
 
 The purpose of this benchmark suite is to empirically measure:
 1. **Security & Sandboxing Bounds:** What happens when malicious/untrusted guest code executes resource exhaustion attacks? Does the engine stop them internally at the isolate heap limit, or does it leak uncounted native memory until the OS kernel / cgroup kills the entire worker process?

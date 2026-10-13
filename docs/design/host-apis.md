@@ -19,13 +19,13 @@
 2. **Host calls are asynchronous.** The script gets a promise. The Java side runs the operation on Vert.x and posts the result back to the isolate's event loop (D-019), so `Promise.all([fetch(a), fetch(b)])` really runs in parallel. Phase 2's `ctx.step`/`saveCheckpoint` stay synchronous because they must be durable before the script continues.
 3. **Pending host calls keep a job alive.** A job waiting on a fetch, a bus request or a subscription isn't "never settles".
 4. **Limits are explicit and tested.** Sizes, counts, timeouts and egress rules each have a hostile-script test.
-5. **Engine-neutral core.** The operations live in `automately-core`, one Java object per API since D-060 (`KvApi`, `BusApi`, …). The Javet runtime only binds them into JavaScript.
+5. **Engine-neutral core.** The operations live in `cluster93-core`, one Java object per API since D-060 (`KvApi`, `BusApi`, …). The Javet runtime only binds them into JavaScript.
 
 ## Mechanism (as of D-060)
 The first version had one generic `HostServices.call(op, argsJson)` and a 475-line JavaScript string that turned it into the APIs. D-060 replaced both:
-- **Core: one Java object per API** (`automately.core.runtime.api`: `KvApi`, `BusApi`, `FilesApi`, `FetchApi`, `HttpApi`, gathered in `HostApis`). The node implements them (`NodeKvApi`, … in `automately.core.host`), all sharing one `HostScope` (the tenant, the job, the listeners to undo). They take and return plain Java values (JSON, `Buffer`, `Future`) and know nothing about V8, so another language's runtime can bind the same objects.
+- **Core: one Java object per API** (`cluster93.core.runtime.api`: `KvApi`, `BusApi`, `FilesApi`, `FetchApi`, `HttpApi`, gathered in `HostApis`). The node implements them (`NodeKvApi`, … in `cluster93.core.host`), all sharing one `HostScope` (the tenant, the job, the listeners to undo). They take and return plain Java values (JSON, `Buffer`, `Future`) and know nothing about V8, so another language's runtime can bind the same objects.
 - **Javet: one binding per API** (`KvBinding`, `BusBinding`, …), bound under the host object with `bind()`, which exposes only `@V8Function` methods. A binding converts its arguments (`JsValues`, through V8's own `JSON`, captured before the script runs), calls the API, and returns a promise it created in Java. `HostBridge` settles that promise on the isolate's event loop when the future completes, as a real `Error` with `name` and `code` on failure. The loop counts in-flight calls; while any are pending, it waits instead of failing.
-- **JavaScript: small files, only where JavaScript has to be idiomatic** (`automately-runtime-js/src/main/resources/automately/runtime/js/`; engine-neutral since D-126): freezing the globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, and `ctx`. `Builtins.PRELUDE_FILES` lists them in order; they run in one closure before the job's module.
+- **JavaScript: small files, only where JavaScript has to be idiomatic** (`cluster93-runtime-js/src/main/resources/cluster93/runtime/js/`; engine-neutral since D-126): freezing the globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, and `ctx`. `Builtins.PRELUDE_FILES` lists them in order; they run in one closure before the job's module.
 - **Subscriptions** (bus, HTTP handlers) are delivered the same way, as posted tasks that call back into JavaScript. Replies go back through a reply id.
 - **Cleanup.** When the run ends, all subscriptions are unregistered and in-flight calls are abandoned. Their results go nowhere, because the isolate is closed.
 - **Fencing.** The node's heartbeat already cancels superseded attempts (D-020). Host writes from a zombie are therefore possible for at most about one heartbeat; that's documented, the same as for outside side effects.
@@ -37,7 +37,7 @@ The first version had one generic `HostServices.call(op, argsJson)` and a 475-li
 - `list` scans the whole map, which is fine at current scale and listed as a gap until the durable store arrives.
 
 ## `bus`
-- Topics are tenant-scoped event-bus addresses (`automately.t.<tenant>.bus.<topic>`). Topic names match `[a-zA-Z0-9._-]{1,128}`.
+- Topics are tenant-scoped event-bus addresses (`cluster93.t.<tenant>.bus.<topic>`). Topic names match `[a-zA-Z0-9._-]{1,128}`.
 - `publish(topic, message)`, `subscribe(topic, handler)` (returns an unsubscribe function), `request(topic, message, {timeoutMs})` (the first `handle`r answers), and `handle(topic, handler)` (the handler's return value is the reply).
 - Messages are JSON, ≤ 256 KB.
 - From outside: `POST /v1/bus/{topic}` publishes, and `POST /v1/bus/{topic}/request` waits for one reply (≤ 30 s). Services can be called over HTTP this way.
@@ -48,19 +48,19 @@ The first version had one generic `HostServices.call(op, argsJson)` and a 475-li
   - Only `http` and `https`.
   - The host is resolved first, and private, loopback, link-local, multicast and metadata addresses (for example `169.254.169.254`) are refused.
   - The connection goes **to the resolved address** (with the original `Host` header and TLS SNI), so DNS rebinding can't swap in an internal address after the check.
-  - `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true` turns this off for local development.
+  - `C93_EGRESS_ALLOW_PRIVATE=true` turns this off for local development.
 - Limits: 30 s timeout, response ≤ 5 MB, ≤ 16 concurrent fetches per isolate, no redirects followed. A 3xx is returned as is, so a redirect can't be used to bounce into an internal address.
 
 ## HTTP hosting
 - A service calls `ctx.serve(async (request) => response)` once. Requests then reach that run's isolate.
-- **Ingress.** Every node also listens on `AUTOMATELY_INGRESS_PORT` (default 8000).
+- **Ingress.** Every node also listens on `C93_INGRESS_PORT` (default 8000).
   1. A request's `Host` is looked up in the route table, which gives the tenant and service.
   2. The service's current run gives the node instance.
   3. The request is forwarded over the event bus to that node, which posts it to the isolate.
   4. The handler's response travels back the same way.
 - **Hosts.**
-  - Every service gets an automatic host, `<service>--<tenant>.<AUTOMATELY_INGRESS_DOMAIN>` (default domain `localhost`).
-  - Custom domains are added with `POST /v1/services/{name}/domains`. They're served only after **verification**: a DNS TXT record `_automately.<domain>` containing the token the API returned (the 2017 anti-hijack check).
+  - Every service gets an automatic host, `<service>--<tenant>.<C93_INGRESS_DOMAIN>` (default domain `localhost`).
+  - Custom domains are added with `POST /v1/services/{name}/domains`. They're served only after **verification**: a DNS TXT record `_cluster93.<domain>` containing the token the API returned (the 2017 anti-hijack check).
   - A domain belongs to one tenant at a time.
 - **Request and response.**
   - The request has `method`, `url`, `path`, `query`, `headers`, `text()` and `json()`.

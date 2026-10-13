@@ -1,21 +1,21 @@
 # A three-node cluster. Each node serves the API (808x) and services' HTTP (800x); jobs run on whichever
 # node is least loaded.
-#   export AUTOMATELY_ADMIN_TOKEN=$(openssl rand -hex 32)   # or leave it unset: node1 then logs a generated one
+#   export C93_ADMIN_TOKEN=$(openssl rand -hex 32)   # or leave it unset: node1 then logs a generated one
 #   docker compose up --build
-#   curl -s -H "Authorization: Bearer $AUTOMATELY_ADMIN_TOKEN" localhost:8081/v1/nodes
+#   curl -s -H "Authorization: Bearer $C93_ADMIN_TOKEN" localhost:8081/v1/nodes
 #   curl -s -H 'Host: <service>--<tenant>.localhost' localhost:8001/
 x-node: &node
   build: .
   depends_on:
     tls-init: { condition: service_completed_successfully }
   environment: &env
-    AUTOMATELY_CLUSTERED: "true"
-    AUTOMATELY_CLUSTER_MEMBERS: node1,node2,node3
-    AUTOMATELY_CAPACITY: "4"
-    AUTOMATELY_MAX_HEAP_MB: "128"
-    AUTOMATELY_DATA_BACKUPS: "1"
-    AUTOMATELY_CLUSTER_SIZE: "3"
-    AUTOMATELY_ADMIN_TOKEN: ${AUTOMATELY_ADMIN_TOKEN:-}
+    C93_CLUSTERED: "true"
+    C93_CLUSTER_MEMBERS: node1,node2,node3
+    C93_CAPACITY: "4"
+    C93_MAX_HEAP_MB: "128"
+    C93_DATA_BACKUPS: "1"
+    C93_CLUSTER_SIZE: "3"
+    C93_ADMIN_TOKEN: ${C93_ADMIN_TOKEN:-}
   healthcheck:
     test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
     interval: 5s
@@ -24,34 +24,34 @@ x-node: &node
 services:
   # Node certificates (D-066): on the first `up`, a one-shot container creates the cluster CA and a certificate for each
   # node in the cluster-tls volume; later `up`s leave them alone. Development convenience: ca.key is in that volume too.
-  # In production, run `automately cluster init` on your own machine and keep ca.key there (docs/guides/cluster.md).
+  # In production, run `c93 cluster init` on your own machine and keep ca.key there (docs/guides/cluster.md).
   tls-init:
     build: .
     user: root
-    entrypoint: ["sh", "-c", "java -cp /opt/automately/automately.jar automately.tls.ClusterInit /tls node1 node2 node3 && chown -R automately /tls"]
+    entrypoint: ["sh", "-c", "java -cp /opt/cluster93/c93.jar cluster93.tls.ClusterInit /tls node1 node2 node3 && chown -R c93 /tls"]
     volumes: ["cluster-tls:/tls"]
     restart: "no"
 
   node1:
     <<: *node
     hostname: node1
-    environment: { <<: *env, AUTOMATELY_NODE_ID: node1, AUTOMATELY_CLUSTER_BIND: node1, AUTOMATELY_TLS_DIR: /tls/node1 }
+    environment: { <<: *env, C93_NODE_ID: node1, C93_CLUSTER_BIND: node1, C93_TLS_DIR: /tls/node1 }
     ports: ["8081:8080", "8001:8000"]
-    volumes: ["node1-data:/var/lib/automately", "cluster-tls:/tls:ro"]
+    volumes: ["node1-data:/var/lib/cluster93", "cluster-tls:/tls:ro"]
   node2:
     <<: *node
     hostname: node2
-    environment: { <<: *env, AUTOMATELY_NODE_ID: node2, AUTOMATELY_CLUSTER_BIND: node2, AUTOMATELY_TLS_DIR: /tls/node2 }
+    environment: { <<: *env, C93_NODE_ID: node2, C93_CLUSTER_BIND: node2, C93_TLS_DIR: /tls/node2 }
     ports: ["8082:8080", "8002:8000"]
-    volumes: ["node2-data:/var/lib/automately", "cluster-tls:/tls:ro"]
+    volumes: ["node2-data:/var/lib/cluster93", "cluster-tls:/tls:ro"]
   node3:
     <<: *node
     hostname: node3
-    environment: { <<: *env, AUTOMATELY_NODE_ID: node3, AUTOMATELY_CLUSTER_BIND: node3, AUTOMATELY_TLS_DIR: /tls/node3 }
+    environment: { <<: *env, C93_NODE_ID: node3, C93_CLUSTER_BIND: node3, C93_TLS_DIR: /tls/node3 }
     ports: ["8083:8080", "8003:8000"]
-    volumes: ["node3-data:/var/lib/automately", "cluster-tls:/tls:ro"]
+    volumes: ["node3-data:/var/lib/cluster93", "cluster-tls:/tls:ro"]
 
-  # docker compose --profile observability up: Prometheus scrapes the nodes, Grafana shows the Automately dashboard
+  # docker compose --profile observability up: Prometheus scrapes the nodes, Grafana shows the Cluster93 dashboard
   # at http://localhost:3000 (anonymous viewers; admin/admin to edit). Phase 5.
   prometheus:
     profiles: [observability]
@@ -64,7 +64,7 @@ services:
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/automately.json
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/cluster93.json
     volumes:
       - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro

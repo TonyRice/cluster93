@@ -1,4 +1,4 @@
-# Builds the native `automately` CLI for every platform and leaves it as a draft GitHub release (D-049, D-069).
+# Builds the native `c93` CLI for every platform and leaves it as a draft GitHub release (D-049, D-069).
 # The maintainer then signs SHA256SUMS on their own machine and publishes it: scripts/sign-release.sh TAG. The signing
 # key never comes near GitHub, so this workflow can't publish anything the installers will accept.
 #
@@ -21,12 +21,12 @@ jobs:
       matrix:
         include:
           # Static against musl: runs on any Linux distro, Alpine included.
-          - { os: ubuntu-latest, asset: automately-linux-x64, musl: 'true', extra: '--static --libc=musl' }
+          - { os: ubuntu-latest, asset: cluster93-linux-x64, musl: 'true', extra: '--static --libc=musl' }
           # GraalVM's musl support is x64 only; arm64 links glibc, built for broad CPU compatibility.
-          - { os: ubuntu-24.04-arm, asset: automately-linux-arm64, musl: 'false', extra: '-march=compatibility' }
-          - { os: macos-14, asset: automately-macos-arm64, musl: 'false', extra: '-march=compatibility' }
-          - { os: macos-15-intel, asset: automately-macos-x64, musl: 'false', extra: '-march=compatibility' }
-          - { os: windows-latest, asset: automately-windows-x64.exe, musl: 'false', extra: '-march=compatibility' }
+          - { os: ubuntu-24.04-arm, asset: cluster93-linux-arm64, musl: 'false', extra: '-march=compatibility' }
+          - { os: macos-14, asset: cluster93-macos-arm64, musl: 'false', extra: '-march=compatibility' }
+          - { os: macos-15-intel, asset: cluster93-macos-x64, musl: 'false', extra: '-march=compatibility' }
+          - { os: windows-latest, asset: cluster93-windows-x64.exe, musl: 'false', extra: '-march=compatibility' }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -40,25 +40,25 @@ jobs:
           native-image-musl: ${{ matrix.musl }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build the native binary
-        run: ./mvnw -B -ntp -Pnative -pl automately-cli -am package -Dmaven.test.skip=true "-Dnative.extra.args=${{ matrix.extra }}"
+        run: ./mvnw -B -ntp -Pnative -pl cluster93-cli -am package -Dmaven.test.skip=true "-Dnative.extra.args=${{ matrix.extra }}"
       - name: Name it for the release
         run: |
-          if [ -f automately-cli/target/automately.exe ]; then src=automately-cli/target/automately.exe; else src=automately-cli/target/automately; fi
+          if [ -f cluster93-cli/target/c93.exe ]; then src=cluster93-cli/target/c93.exe; else src=cluster93-cli/target/c93; fi
           mkdir -p dist && cp "$src" "dist/${{ matrix.asset }}"
       - name: Smoke test
         run: ./dist/${{ matrix.asset }} --version
       - name: Smoke test against a real node (Linux x64)
-        if: matrix.asset == 'automately-linux-x64'
+        if: matrix.asset == 'cluster93-linux-x64'
         run: |
-          ./mvnw -B -ntp -pl automately-server -am package -DskipTests -DskipITs
-          export AUTOMATELY_ADMIN_TOKEN=release-smoke-admin-token-0123456789abcdef
-          java $(./mvnw -q help:evaluate -Dexpression=ignite.jvm.args -DforceStdout) -jar automately-server/target/automately.jar &
+          ./mvnw -B -ntp -pl cluster93-server -am package -DskipTests -DskipITs
+          export C93_ADMIN_TOKEN=release-smoke-admin-token-0123456789abcdef
+          java $(./mvnw -q help:evaluate -Dexpression=ignite.jvm.args -DforceStdout) -jar cluster93-server/target/c93.jar &
           for i in $(seq 60); do curl -sf localhost:8080/health && break; sleep 1; done
-          cli=./dist/automately-linux-x64
-          $cli --url http://localhost:8080 --token "$AUTOMATELY_ADMIN_TOKEN" tenants create smoke
-          token=$($cli --url http://localhost:8080 --token "$AUTOMATELY_ADMIN_TOKEN" tenants token smoke ci --scope '*')
+          cli=./dist/cluster93-linux-x64
+          $cli --url http://localhost:8080 --token "$C93_ADMIN_TOKEN" tenants create smoke
+          token=$($cli --url http://localhost:8080 --token "$C93_ADMIN_TOKEN" tenants token smoke ci --scope '*')
           echo "export default (input) => ({ hello: input.name })" > hello.js
-          AUTOMATELY_URL=http://localhost:8080 AUTOMATELY_TOKEN="$token" $cli run hello.js --input '{"name":"release"}' | grep release
+          C93_URL=http://localhost:8080 C93_TOKEN="$token" $cli run hello.js --input '{"name":"release"}' | grep release
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
@@ -77,7 +77,7 @@ jobs:
       - name: Checksums and installers
         run: |
           cp install/install.sh install/install.ps1 dist/
-          cd dist && sha256sum automately-* install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS
+          cd dist && sha256sum cluster93-* install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS
       - name: Draft the release, for scripts/sign-release.sh to sign and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

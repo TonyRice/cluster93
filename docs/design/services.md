@@ -4,7 +4,7 @@
 **Script API:** [../scripting/services.md](../scripting/services.md)
 
 ## What a 2017 service was
-In the old `JobServer` (`automately-core-master/.../services/job/JobServer.java`), a service was a job with `service = true`:
+In the old `JobServer` (`cluster93-core-master/.../services/job/JobServer.java`), a service was a job with `service = true`:
 - a `serviceName`, unique per user ("You can only have a single service running with the same name")
 - a `serviceConfig` the script could read
 - **no timeout** ("can pretty much be ran until it is stopped")
@@ -75,7 +75,7 @@ A service run starts with `ctx.checkpoint` set to the last checkpoint of the pre
 
 Live logs: `GET /v1/jobs/{currentJobId}/events`.
 
-Limit: `AUTOMATELY_MAX_SERVICES_PER_TENANT` (default 10) enabled services per tenant. Each running service takes a node slot.
+Limit: `C93_MAX_SERVICES_PER_TENANT` (default 10) enabled services per tenant. Each running service takes a node slot.
 
 ## Known gaps (deliberate)
 - **A full-cluster restart loses service definitions**, like everything else in the in-memory cluster maps. The old platform autostarted services from a persistent map; that comes back with the durable store (`ServiceStore` is an interface so a Postgres implementation can plug in).

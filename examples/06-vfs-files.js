@@ -1,7 +1,7 @@
 // 06 — The virtual file system.
 //
 // Run it:
-//   automately run examples/06-vfs-files.js
+//   c93 run examples/06-vfs-files.js
 //
 // files stores bytes in the cluster (or the tenant's own backend); the same files are visible through the
 // REST API, the CLI and the console. Paths are relative, like hello.txt (no leading slash). See

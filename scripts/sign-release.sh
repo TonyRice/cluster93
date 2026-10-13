@@ -3,17 +3,17 @@
 # it, checks every asset against its SHA256SUMS, signs SHA256SUMS with the release key here on this machine, uploads
 # SHA256SUMS.sig, and only then publishes the release. Until then `releases/latest` doesn't serve it.
 #
-#   scripts/sign-release.sh v2.1.0 [KEY_FILE]     default: ~/.config/automately/release-signing.key
+#   scripts/sign-release.sh v2.1.0 [KEY_FILE]     default: ~/.config/cluster93/release-signing.key
 #
-# Needs gh (logged in, with write access) and openssl. AUTOMATELY_RELEASES picks another repository.
+# Needs gh (logged in, with write access) and openssl. C93_RELEASES picks another repository.
 
 set -eu
 
 tag="${1:?usage: scripts/sign-release.sh TAG [KEY_FILE]}"
-key="${2:-${XDG_CONFIG_HOME:-$HOME/.config}/automately/release-signing.key}"
-repo="${AUTOMATELY_RELEASES:-adamnlynn/automately-v2}"
+key="${2:-${XDG_CONFIG_HOME:-$HOME/.config}/cluster93/release-signing.key}"
+repo="${C93_RELEASES:-adamnlynn/cluster93}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
-pem="${root}/install/automately-release.pem"
+pem="${root}/install/cluster93-release.pem"
 
 fail() {
     printf 'sign-release: %s\n' "$*" >&2
@@ -25,7 +25,7 @@ for tool in gh openssl; do
 done
 [ -r "$key" ] || fail "no release key at ${key} (scripts/release-key.sh makes one)"
 [ "$(openssl pkey -in "$key" -pubout)" = "$(cat "$pem")" ] \
-    || fail "${key} doesn't match install/automately-release.pem, the key the installers check"
+    || fail "${key} doesn't match install/cluster93-release.pem, the key the installers check"
 
 [ "$(gh release view "$tag" -R "$repo" --json isDraft -q .isDraft)" = "true" ] \
     || fail "${tag} is already published; signatures go on drafts, before anyone can download them"

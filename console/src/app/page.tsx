@@ -188,7 +188,7 @@ export default function ConsolePage() {
           <TriangleAlert className="mx-auto h-8 w-8 text-danger" aria-hidden />
           <h1 className="mt-3 text-lg font-semibold tracking-tight">Cannot reach the cluster</h1>
           <p className="mt-2 text-sm text-muted">
-            {error ?? 'The Automately API did not respond.'}
+            {error ?? 'The Cluster93 API did not respond.'}
           </p>
           <div className="mt-5 flex justify-center gap-2">
             <button type="button" onClick={() => void connect()} className="btn btn-primary">

@@ -74,7 +74,7 @@ export function Header({
           <Zap className="h-5 w-5" aria-hidden />
         </div>
         <div className="leading-tight">
-          <div className="text-sm font-semibold tracking-tight">Automately</div>
+          <div className="text-sm font-semibold tracking-tight">Cluster93</div>
           <div className="text-xs text-subtle">Management Console</div>
         </div>
       </div>

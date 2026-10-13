@@ -20,6 +20,7 @@ path	DEDICATION.md
 path	CHANGELOG.md
 path	ideas/cluster93.md
 section	README.md	^## Heritage$	^## Author
+section	README.md	^> \*\*Heritage:\*\*	^$
 
 # --- The refactor tooling itself (contains the search token by definition) ----
 path	tools/refactor-rename.sh

@@ -1,0 +1,88 @@
+{
+ "reflection": [
+  {
+   "type": "cluster93.runtime.js.BusBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.CryptoBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.DnsBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.FetchBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.FilesBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.FsBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.HostBridge",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.HostConsole",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.HostState",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.HostTimers",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.Http2Binding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.HttpBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.JobsBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.KvBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.QueueBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.SecretsBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.SocketBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.WebBinding",
+   "allPublicMethods": true
+  },
+  {
+   "type": "cluster93.runtime.js.ZlibBinding",
+   "allPublicMethods": true
+  }
+ ],
+ "resources": [
+  {
+   "glob": "cluster93/runtime/js/**"
+  },
+  {
+   "glob": "cluster93/worker/**"
+  }
+ ]
+}

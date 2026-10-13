@@ -1,10 +1,10 @@
 #!/bin/sh
 # Creates the release signing key (D-069): an ECDSA P-256 key pair. The private key stays on this machine, encrypted
 # with a passphrase you type; the public
-# key goes into install/automately-release.pem and the copies inside install.sh and install.ps1, which the
-# installers and `automately upgrade` check every release against.
+# key goes into install/cluster93-release.pem and the copies inside install.sh and install.ps1, which the
+# installers and `c93 upgrade` check every release against.
 #
-#   scripts/release-key.sh [KEY_FILE]     default: ~/.config/automately/release-signing.key
+#   scripts/release-key.sh [KEY_FILE]     default: ~/.config/cluster93/release-signing.key
 #
 # It refuses to overwrite an existing key. To rotate, move the old one away, run this, and commit the new public key
 # before the next release; releases signed with the old key then stop verifying with new installers.
@@ -12,8 +12,8 @@
 set -eu
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
-key="${1:-${XDG_CONFIG_HOME:-$HOME/.config}/automately/release-signing.key}"
-pem="${repo}/install/automately-release.pem"
+key="${1:-${XDG_CONFIG_HOME:-$HOME/.config}/cluster93/release-signing.key}"
+pem="${repo}/install/cluster93-release.pem"
 
 command -v openssl >/dev/null 2>&1 || { echo "release-key: need openssl" >&2; exit 1; }
 [ ! -e "$key" ] || { echo "release-key: ${key} already exists; move it away first to rotate" >&2; exit 1; }

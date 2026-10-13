@@ -1,18 +1,18 @@
 # In-Cluster Worker ↔ Node Protocol Specification
 
 **Status:** Proposed (D-127), 2026-10-10.  
-**Module target:** `automately-runner-protocol` (shared frame codec and message model)  
+**Module target:** `cluster93-runner-protocol` (shared frame codec and message model)  
 **Implementation target:** `RemoteHostApis` on the worker side, `WorkerServer` / `NodeHostApis` on the node side.  
 
 ---
 
 ## 1. Scope & Architectural Boundaries
 
-This document specifies the high-throughput inter-process communication (IPC) protocol between an **Automately Cluster Node** and an **In-Cluster Worker Runner**.
+This document specifies the high-throughput inter-process communication (IPC) protocol between a **Cluster93 Cluster Node** and an **In-Cluster Worker Runner**.
 
 ```
                            ┌──────────────────────────────────────────────┐
-                           │           AUTOMATELY CLUSTER NODE            │
+                           │           CLUSTER93 CLUSTER NODE            │
                            │   (Vert.x 5 + Apache Ignite 2.18 Core)       │
                            └──────────────────────┬───────────────────────┘
                                                   │
@@ -39,7 +39,7 @@ This document specifies the high-throughput inter-process communication (IPC) pr
 - **Resource Containment:** Enforced externally via Linux cgroups v2 (`MemoryMax`, `CPUWeight`), seccomp filters, and namespaces.
 - **Zero Trust:** The worker process is treated as potentially compromised. The Node holds all state, identity, and authority.
 
-### Out of Scope: Automately Link (`automately-link`)
+### Out of Scope: Cluster93 Link (`cluster93-link`)
 - **Remote Devices:** User-owned hardware (laptops, phones via Termux, external VMs) connecting into the cluster from outside are governed by `ideas/links.md`.
 - **Transport Difference:** Links connect via **outbound TLS WebSockets** using join codes and asymmetric cryptographic handshakes, and negotiate capabilities dynamically. They do not share this local runner IPC lifecycle.
 
@@ -156,7 +156,7 @@ Streaming data (`DATA` frames) is governed by an **HTTP/2-style credit-based flo
 
 ## 6. Host API RPC Mapping (`HostApis`)
 
-All host operations map directly to the existing `automately.core` service interfaces:
+All host operations map directly to the existing `cluster93.core` service interfaces:
 
 ### Authority Partitioning
 

@@ -1,18 +1,18 @@
 # The three-node cluster for scripts/demo.sh: the locally built image instead of a build per node.
 services:
   tls-init:
-    image: "automately-demo:local"
+    image: "cluster93-demo:local"
     build: !reset null
     pull_policy: never
   node1:
-    image: "automately-demo:local"
+    image: "cluster93-demo:local"
     build: !reset null
     pull_policy: never
   node2:
-    image: "automately-demo:local"
+    image: "cluster93-demo:local"
     build: !reset null
     pull_policy: never
   node3:
-    image: "automately-demo:local"
+    image: "cluster93-demo:local"
     build: !reset null
     pull_policy: never

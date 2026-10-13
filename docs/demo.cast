@@ -1,4 +1,4 @@
-{"version": 2, "width": 120, "height": 40, "timestamp": 1791402970, "idle_time_limit": 2, "title": "Automately: an agent deploys a queue consumer, a node is killed, nothing is lost", "env": {"TERM": "xterm-256color", "SHELL": "/bin/bash"}}
+{"version": 2, "width": 120, "height": 40, "timestamp": 1791402970, "idle_time_limit": 2, "title": "Cluster93: an agent deploys a queue consumer, a node is killed, nothing is lost", "env": {"TERM": "xterm-256color", "SHELL": "/bin/bash"}}
 [0.0, "o", "$ scripts/demo.sh\r\n"]
 [0.022, "o", "\r\n"]
 [0.022, "o", "\u001b[1m\u001b[36m== Building the server and the CLI\u001b[0m\r\n"]
@@ -12,7 +12,7 @@
 [33.446, "o", "\r\n"]
 [33.446, "o", "\u001b[1m\u001b[36m== The agent connects over MCP and looks around\u001b[0m\r\n"]
 [33.446, "o", "   \u001b[1m\ud83e\udd16 agent \u2192\u001b[0m initialize\r\n"]
-[33.478, "o", "   server: Automately 2.0.0\r\n"]
+[33.478, "o", "   server: Cluster93 2.0.0\r\n"]
 [33.478, "o", "   \u001b[1m\ud83e\udd16 agent \u2192\u001b[0m tools/list\r\n"]
 [33.52, "o", "   23 tools: run_job, get_job, job_logs, list_jobs, cancel_job, deploy_service, list_services, service_status, \u2026\r\n"]
 [33.52, "o", "\r\n"]
@@ -67,6 +67,6 @@
 [87.961, "o", "   \u001b[32m\u2714 three nodes again: node1, node2, node3\u001b[0m\r\n"]
 [87.967, "o", "\r\n"]
 [87.967, "o", "\u001b[1m\u001b[36m== Done in 88s\u001b[0m\r\n"]
-[87.967, "o", "   Grafana:  http://localhost:3000   (the Automately dashboard: the kill, the restart, the queue draining)\r\n"]
-[87.967, "o", "   API:      http://localhost:8082   token: AUTOMATELY_TOKEN=atly_…\r\n"]
+[87.967, "o", "   Grafana:  http://localhost:3000   (the Cluster93 dashboard: the kill, the restart, the queue draining)\r\n"]
+[87.967, "o", "   API:      http://localhost:8082   token: C93_TOKEN=atly_…\r\n"]
 [87.967, "o", "   Stop it:  scripts/demo.sh down\r\n"]

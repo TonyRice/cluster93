@@ -156,7 +156,7 @@ export function AppsTab({ refreshKey }: AppsTabProps) {
           <Rocket className="h-6 w-6" aria-hidden />
           No apps deployed yet. Use{' '}
           <code className="rounded bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground">
-            automately apps deploy
+            c93 apps deploy
           </code>{' '}
           to publish one.
         </div>

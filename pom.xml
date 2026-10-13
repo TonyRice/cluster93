@@ -4,12 +4,12 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>automately</groupId>
-    <artifactId>automately-parent</artifactId>
+    <groupId>cluster93</groupId>
+    <artifactId>cluster93-parent</artifactId>
     <version>2.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
-    <name>Automately</name>
+    <name>Cluster93</name>
     <description>A self-hostable, clustered runtime for sandboxed JavaScript functions on Vert.x 5 and V8 isolates.</description>
 
     <organization>
@@ -32,16 +32,16 @@
     </licenses>
 
     <modules>
-        <module>automately-tls</module>
-        <module>automately-core</module>
-        <module>automately-runtime-js</module>
-        <module>automately-runtime-javet</module>
-        <module>automately-runtime-graaljs</module>
-        <module>automately-runner-protocol</module>
-        <module>automately-worker</module>
-        <module>automately-cluster-ignite</module>
-        <module>automately-server</module>
-        <module>automately-cli</module>
+        <module>cluster93-tls</module>
+        <module>cluster93-core</module>
+        <module>cluster93-runtime-js</module>
+        <module>cluster93-runtime-javet</module>
+        <module>cluster93-runtime-graaljs</module>
+        <module>cluster93-runner-protocol</module>
+        <module>cluster93-worker</module>
+        <module>cluster93-cluster-ignite</module>
+        <module>cluster93-server</module>
+        <module>cluster93-cli</module>
     </modules>
 
     <properties>
@@ -121,33 +121,33 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>automately</groupId>
-                <artifactId>automately-core</artifactId>
+                <groupId>cluster93</groupId>
+                <artifactId>cluster93-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>automately</groupId>
-                <artifactId>automately-cluster-ignite</artifactId>
+                <groupId>cluster93</groupId>
+                <artifactId>cluster93-cluster-ignite</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>automately</groupId>
-                <artifactId>automately-runtime-js</artifactId>
+                <groupId>cluster93</groupId>
+                <artifactId>cluster93-runtime-js</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>automately</groupId>
-                <artifactId>automately-runtime-javet</artifactId>
+                <groupId>cluster93</groupId>
+                <artifactId>cluster93-runtime-javet</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>automately</groupId>
-                <artifactId>automately-runtime-graaljs</artifactId>
+                <groupId>cluster93</groupId>
+                <artifactId>cluster93-runtime-graaljs</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>automately</groupId>
-                <artifactId>automately-runner-protocol</artifactId>
+                <groupId>cluster93</groupId>
+                <artifactId>cluster93-runner-protocol</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -178,8 +178,8 @@
                 <version>${javet.version}</version>
             </dependency>
             <dependency>
-                <groupId>automately</groupId>
-                <artifactId>automately-tls</artifactId>
+                <groupId>cluster93</groupId>
+                <artifactId>cluster93-tls</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

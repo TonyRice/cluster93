@@ -1,6 +1,6 @@
-# Automately Architecture & Codebase Navigation Map
+# Cluster93 Architecture & Codebase Navigation Map
 
-**Repository:** `automately-v2`  
+**Repository:** `cluster93`  
 **License:** MPL-2.0  
 **Stack:** Java 21, Vert.x 5.2.0, Apache Ignite 2.18.0, Javet (V8 6.0.2) / GraalJS (25.4.4.1.1)
 
@@ -8,65 +8,65 @@
 
 ## 1. System Overview & Module Map
 
-Automately is organized into decoupled Maven modules with strict architectural boundaries:
+Cluster93 is organized into decoupled Maven modules with strict architectural boundaries:
 
 ```
                               ┌─────────────────────────┐
-                              │     automately-cli      │
+                              │     cluster93-cli      │
                               │ (Terminal CLI & Client) │
                               └────────────┬────────────┘
                                            │ HTTP/WS & IPC
                                            ▼
 ┌─────────────────────────┐   ┌─────────────────────────┐
-│     automately-tls      │   │    automately-server    │
+│     cluster93-tls      │   │    cluster93-server    │
 │  (Certs & TLS profiles) │──▶│ (HTTP API, Ingress, WS) │
 └─────────────────────────┘   └────────────┬────────────┘
                                            │
                       ┌────────────────────┼────────────────────┐
                       ▼                                         ▼
          ┌─────────────────────────┐               ┌─────────────────────────┐
-         │ automately-cluster-ignite│              │     automately-core     │
+         │ cluster93-cluster-ignite│              │     cluster93-core     │
          │ (Ignite 2.18 SQL & WAL) │               │(Scheduler, Stores, APIs)│
          └─────────────────────────┘               └────────────┬────────────┘
                                                                 │
                                    ┌────────────────────────────┴────────────────────────────┐
                                    ▼                                                         ▼
                       ┌─────────────────────────┐                               ┌─────────────────────────┐
-                      │automately-runner-protocol│                              │  automately-runtime-js  │
+                      │cluster93-runner-protocol│                              │  cluster93-runtime-js  │
                       │  (Wire Codec, Messages, │                               │ (SPI, Bindings, Prelude,│
                       │   RemoteHostApis Proxy) │                               │      ScriptRunner)      │
                       └────────────┬────────────┘                               └────────────┬────────────┘
                                    │ Stdio / UDS Framing                                     │
                                    ▼                                                         ▼
                       ┌─────────────────────────┐                       ┌────────────────────┴────────────────────┐
-                      │    automately-worker    │                       ▼                                         ▼
+                      │    cluster93-worker    │                       ▼                                         ▼
                       │(In-Cluster Native Runner│          ┌─────────────────────────┐               ┌─────────────────────────┐
-                      │   Javet & GraalJS)      │          │automately-runtime-javet │               │automately-runtime-graaljs
+                      │   Javet & GraalJS)      │          │cluster93-runtime-javet │               │cluster93-runtime-graaljs
                       └─────────────────────────┘          │ (V8 Engine Adapter SPI) │               │ (GraalJS Engine Adapter)│
                                                            └─────────────────────────┘               └─────────────────────────┘
 ```
 
 | Module | Purpose | Key Package / Entry Points |
 |---|---|---|
-| [`automately-core`](../automately-core) | Core domain models, scheduling, storage abstractions, host APIs | `automately.core.runtime.api.HostApis`, `automately.core.host.NodeHostApis`, `automately.core.scheduler.NodeVerticle` |
-| [`automately-runtime-js`](../automately-runtime-js) | Engine-neutral JS SPI, bindings, prelude scripts | `automately.runtime.js.JsEngine`, `ScriptRunner`, `HostFunction` |
-| [`automately-runtime-javet`](../automately-runtime-javet) | V8 engine adapter using Javet | `automately.runtime.javet.JavetEngine` |
-| [`automately-runtime-graaljs`](../automately-runtime-graaljs) | GraalJS polyglot engine adapter | `automately.runtime.graaljs.GraalJsEngine` |
-| [`automately-runner-protocol`](../automately-runner-protocol) | IPC binary frame codec & `RemoteHostApis` | `automately.runner.protocol.frame.FrameCodec`, `RemoteHostApis` |
-| [`automately-worker`](../automately-worker) | Subprocess & native-image isolate runner | `automately.worker.WorkerMain` |
-| [`automately-cluster-ignite`](../automately-cluster-ignite) | Apache Ignite 2.18 persistence & clustering | `automately.cluster.ignite.IgniteClusterManager` |
-| [`automately-server`](../automately-server) | Ingress reverse proxy, REST APIs, WebSocket routing | `automately.server.Automately`, `IngressVerticle` |
-| [`automately-cli`](../automately-cli) | Command-line client | `automately.cli.CliMain` |
-| [`automately-tls`](../automately-tls) | TLS helper utilities and certificates | `automately.tls.TlsConfig` |
+| [`cluster93-core`](../cluster93-core) | Core domain models, scheduling, storage abstractions, host APIs | `cluster93.core.runtime.api.HostApis`, `cluster93.core.host.NodeHostApis`, `cluster93.core.scheduler.NodeVerticle` |
+| [`cluster93-runtime-js`](../cluster93-runtime-js) | Engine-neutral JS SPI, bindings, prelude scripts | `cluster93.runtime.js.JsEngine`, `ScriptRunner`, `HostFunction` |
+| [`cluster93-runtime-javet`](../cluster93-runtime-javet) | V8 engine adapter using Javet | `cluster93.runtime.javet.JavetEngine` |
+| [`cluster93-runtime-graaljs`](../cluster93-runtime-graaljs) | GraalJS polyglot engine adapter | `cluster93.runtime.graaljs.GraalJsEngine` |
+| [`cluster93-runner-protocol`](../cluster93-runner-protocol) | IPC binary frame codec & `RemoteHostApis` | `cluster93.runner.protocol.frame.FrameCodec`, `RemoteHostApis` |
+| [`cluster93-worker`](../cluster93-worker) | Subprocess & native-image isolate runner | `cluster93.worker.WorkerMain` |
+| [`cluster93-cluster-ignite`](../cluster93-cluster-ignite) | Apache Ignite 2.18 persistence & clustering | `cluster93.cluster.ignite.IgniteClusterManager` |
+| [`cluster93-server`](../cluster93-server) | Ingress reverse proxy, REST APIs, WebSocket routing | `cluster93.server.Cluster93`, `IngressVerticle` |
+| [`cluster93-cli`](../cluster93-cli) | Command-line client | `cluster93.cli.CliMain` |
+| [`cluster93-tls`](../cluster93-tls) | TLS helper utilities and certificates | `cluster93.tls.TlsConfig` |
 
 ---
 
 ## 2. Host APIs (`HostApis`) Location & Mechanics
 
-The primary interface defining what sandboxed JavaScript code can invoke is [`automately.core.runtime.api.HostApis`](../automately-core/src/main/java/automately/core/runtime/api/HostApis.java).
+The primary interface defining what sandboxed JavaScript code can invoke is [`cluster93.core.runtime.api.HostApis`](../cluster93-core/src/main/java/cluster93/core/runtime/api/HostApis.java).
 
 ```
-HostApis (Interface in automately-core)
+HostApis (Interface in cluster93-core)
  ├── kv()       ──▶ KvApi         (Namespaced key-value storage with TTL)
  ├── bus()      ──▶ BusApi        (Pub/sub & request-reply messaging)
  ├── queue()    ──▶ QueueApi      (Durable background job queues)
@@ -84,33 +84,33 @@ HostApis (Interface in automately-core)
 
 ### Implementations:
 1. **Node Authority Implementation:**
-   - [`automately.core.host.NodeHostApis`](../automately-core/src/main/java/automately/core/host/NodeHostApis.java)
+   - [`cluster93.core.host.NodeHostApis`](../cluster93-core/src/main/java/cluster93/core/host/NodeHostApis.java)
    - Backed by the cluster stores (`KvStore`, `FileStore`, `ServeRegistry`, `FetchClient`, `FileTree`).
    - Tenant-scoped: the Node resolves the tenant from internal records.
 2. **Worker Remote Proxy:**
-   - [`automately.runner.protocol.client.RemoteHostApis`](../automately-runner-protocol)
+   - [`cluster93.runner.protocol.client.RemoteHostApis`](../cluster93-runner-protocol)
    - Dispatches RPC `CALL` frames over binary IPC pipes for authority-requiring operations.
    - Executes `crypto()` and `zlib()` locally in-process without network overhead.
 3. **No-op / Test Fallback:**
-   - [`automately.core.runtime.api.Unavailable`](../automately-core/src/main/java/automately/core/runtime/api/Unavailable.java) (`HostApis.NONE`).
+   - [`cluster93.core.runtime.api.Unavailable`](../cluster93-core/src/main/java/cluster93/core/runtime/api/Unavailable.java) (`HostApis.NONE`).
 
 ---
 
 ## 3. JavaScript Runtime & Binding Layer
 
-Guest code executed inside Javet or GraalJS interacts with the host via [`automately-runtime-js`](../automately-runtime-js):
+Guest code executed inside Javet or GraalJS interacts with the host via [`cluster93-runtime-js`](../cluster93-runtime-js):
 
 1. **Engine SPI:**
-   - [`JsEngine`](../automately-runtime-js/src/main/java/automately/runtime/js/JsEngine.java): Lifecycle factory for creating contexts.
-   - [`JsContext`](../automately-runtime-js/src/main/java/automately/runtime/js/JsContext.java): Represents one sandboxed isolate.
-   - [`ScriptRunner`](../automately-runtime-js/src/main/java/automately/runtime/js/ScriptRunner.java): Coordinates the event loop, execution timeouts, cancellation tokens, and log/state sinks.
+   - [`JsEngine`](../cluster93-runtime-js/src/main/java/cluster93/runtime/js/JsEngine.java): Lifecycle factory for creating contexts.
+   - [`JsContext`](../cluster93-runtime-js/src/main/java/cluster93/runtime/js/JsContext.java): Represents one sandboxed isolate.
+   - [`ScriptRunner`](../cluster93-runtime-js/src/main/java/cluster93/runtime/js/ScriptRunner.java): Coordinates the event loop, execution timeouts, cancellation tokens, and log/state sinks.
 2. **Host Bindings:**
    - Methods annotated with `@HostFunction` exposed directly to the isolate:
      - `KvBinding`, `BusBinding`, `QueueBinding`, `JobsBinding`, `FilesBinding`, `FsBinding`
      - `FetchBinding`, `SocketBinding`, `HttpBinding`, `Http2Binding`, `DnsBinding`, `SecretsBinding`
      - `CryptoBinding`, `ZlibBinding`
 3. **Prelude & Built-in Modules:**
-   - Standard JS prelude scripts in `src/main/resources/automately/runtime/js/`:
+   - Standard JS prelude scripts in `src/main/resources/cluster93/runtime/js/`:
      - `globals.js`, `console.js`, `context.js`, `timers.js`, `entry.js`
      - `node/*`: Node.js compatibility layer (`node:crypto`, `node:buffer`, `node:events`, `node:stream`, `node:fs`, `node:net`, `node:http`, etc.)
      - `web/*`: Web standards (`fetch`, `ReadableStream`, `Blob`, `WebSocket`)
@@ -146,13 +146,13 @@ Frame Header (12 Bytes)
 
 ### Multiplexing & Flow Control (`StreamMultiplexer`)
 - Streaming channels (file downloads/uploads, HTTP streaming request/response bodies, TCP/TLS sockets) multiplex over the shared framed connection via `0x30 OPEN`, `0x31 DATA`, `0x32 END`, `0x33 RESET`, and `0x34 CREDIT`.
-- Governed by HTTP/2-style flow control windows via [`CreditManager`](../automately-runner-protocol/src/main/java/automately/runner/protocol/flow/CreditManager.java): 256 KiB initial stream window, 4 MiB global connection limit.
+- Governed by HTTP/2-style flow control windows via [`CreditManager`](../cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/flow/CreditManager.java): 256 KiB initial stream window, 4 MiB global connection limit.
 - Senders slice writes into 64 KiB chunks and pause on window depletion. Receivers automatically emit `CREDIT` replenishment frames once 16 KiB or more of data has been consumed.
 
 ### Warm Worker Pool & Memory Isolation (`TenantWorkerPool`)
-- [`TenantWorkerPool`](../automately-runner-protocol/src/main/java/automately/runner/protocol/pool/TenantWorkerPool.java) maintains a pool of pre-spawned worker processes in `UNBOUND` state, eliminating the 40–800 ms process startup latency for incoming jobs.
+- [`TenantWorkerPool`](../cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/pool/TenantWorkerPool.java) maintains a pool of pre-spawned worker processes in `UNBOUND` state, eliminating the 40–800 ms process startup latency for incoming jobs.
 - Binds workers to tenants on demand via `BIND` (`UNBOUND` -> `BOUND` -> `BUSY` -> `BOUND` -> `TERMINATED`).
-- Enforces Linux cgroups v2 memory bounds ([`CgroupMemoryLimiter`](../automately-runner-protocol/src/main/java/automately/runner/protocol/pool/CgroupMemoryLimiter.java)) by assigning worker PIDs to `/sys/fs/cgroup/automately/worker-<pid>` with `memory.max` and `memory.high` caps, and detecting kernel OOM kills via `memory.events`. Gracefully falls back to heap options in unprivileged environments.
+- Enforces Linux cgroups v2 memory bounds ([`CgroupMemoryLimiter`](../cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/pool/CgroupMemoryLimiter.java)) by assigning worker PIDs to `/sys/fs/cgroup/cluster93/worker-<pid>` with `memory.max` and `memory.high` caps, and detecting kernel OOM kills via `memory.events`. Gracefully falls back to heap options in unprivileged environments.
 
 ### Non-Blocking Domain Socket Transport (`UdsServerTransport`, `UdsClientTransport`)
 - Supports high-throughput Unix Domain Sockets over filesystem `.sock` nodes via Netty domain socket transport (`SocketAddress.domainSocketAddress`).
@@ -162,10 +162,10 @@ Frame Header (12 Bytes)
 
 ## 5. Storage & Cluster Architecture
 
-- **Database Engine:** Embedded Apache Ignite 2.18 (`automately-cluster-ignite`).
-- **Data Region:** Off-heap pages with WAL (write-ahead log) persisted under `AUTOMATELY_DATA_DIR`.
+- **Database Engine:** Embedded Apache Ignite 2.18 (`cluster93-cluster-ignite`).
+- **Data Region:** Off-heap pages with WAL (write-ahead log) persisted under `C93_DATA_DIR`.
 - **Tables:** Replicated across cluster nodes with Calcite SQL querying.
-- **Blob Storage:** [`BlobStore`](../automately-core/src/main/java/automately/core/files/BlobStore.java) implementations for chunked disk storage, S3 object storage, or in-memory testing.
+- **Blob Storage:** [`BlobStore`](../cluster93-core/src/main/java/cluster93/core/files/BlobStore.java) implementations for chunked disk storage, S3 object storage, or in-memory testing.
 
 ---
 
@@ -177,7 +177,7 @@ Frame Header (12 Bytes)
   ```
 - **Run targeted tests:**
   ```bash
-  ./mvnw test -pl automately-runtime-javet -Dtest=ScriptRuntimeTest -Dsurefire.failIfNoSpecifiedTests=false
+  ./mvnw test -pl cluster93-runtime-javet -Dtest=ScriptRuntimeTest -Dsurefire.failIfNoSpecifiedTests=false
   ```
 - **Generate full aggregate Javadocs:**
   ```bash
@@ -189,7 +189,7 @@ Frame Header (12 Bytes)
 
 ## 7. Agent Context Optimization & Javadoc Rules
 
-When reading or modifying Automately code, follow the guidelines detailed in [Agent Context Optimization & Javadoc Engineering Guide](guides/agent-context-and-javadocs.md):
+When reading or modifying Cluster93 code, follow the guidelines detailed in [Agent Context Optimization & Javadoc Engineering Guide](guides/agent-context-and-javadocs.md):
 
 1. **High Information Density at a Fraction of the Token Cost:**
    - Reading full `.java` implementation files costs 4,000–10,000 tokens for boilerplate, stream pipelines, and logging.

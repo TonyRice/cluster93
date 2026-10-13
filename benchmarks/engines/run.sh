@@ -42,7 +42,7 @@ tidy() {
   for d in /tmp/javet/*; do
     [[ -d "$d" ]] && ! kill -0 "$(basename "$d")" 2>/dev/null && rm -rf "$d"
   done
-  for f in /tmp/automately-icudt*.dat; do
+  for f in /tmp/cluster93-icudt*.dat; do
     [[ -f "$f" ]] && ! fuser -s "$f" 2>/dev/null && rm -f "$f"
   done
   return 0
@@ -57,7 +57,7 @@ worker() {  # engine name -> the binary and its options
   case "$1" in
     javet) echo "$BIN/worker-javet" ;;
     graaljs) echo "$BIN/worker-graaljs" ;;
-    graaljs-in-process) echo "$BIN/worker-graaljs -Dautomately.graaljs=in-process" ;;
+    graaljs-in-process) echo "$BIN/worker-graaljs -Dcluster93.graaljs=in-process" ;;
   esac
 }
 

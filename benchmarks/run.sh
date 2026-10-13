@@ -4,18 +4,18 @@
 set -eu
 cd "$(dirname "$0")/.."
 OUT=docs/benchmarks.md
-PROJECT=automately-bench
-export AUTOMATELY_ADMIN_TOKEN="bench-admin-token-$(date +%s)-0123456789abcdef"
+PROJECT=cluster93-bench
+export C93_ADMIN_TOKEN="bench-admin-token-$(date +%s)-0123456789abcdef"
 API=http://localhost:8081
 compose() { docker compose -p "$PROJECT" -f docker-compose.yml -f benchmarks/compose-bench.yml "$@"; }
 json() { python3 -I -c "import json,sys; print(json.load(sys.stdin)$1)"; }
 
 echo "== building"
-./mvnw -q -B -pl automately-server -am package -DskipTests -DskipITs
+./mvnw -q -B -pl cluster93-server -am package -DskipTests -DskipITs
 ctx=$(mktemp -d)
-mkdir -p "$ctx/automately-server/target"
-cp Dockerfile "$ctx/" && cp automately-server/target/automately.jar "$ctx/automately-server/target/"
-docker build -q --target local-jar -t automately-bench:local "$ctx" >/dev/null
+mkdir -p "$ctx/cluster93-server/target"
+cp Dockerfile "$ctx/" && cp cluster93-server/target/c93.jar "$ctx/cluster93-server/target/"
+docker build -q --target local-jar -t cluster93-bench:local "$ctx" >/dev/null
 rm -rf "$ctx"
 
 echo "== starting the cluster"
@@ -24,7 +24,7 @@ trap 'compose down -v >/dev/null 2>&1 || true' EXIT
 for port in 8081 8082 8083; do
     for i in $(seq 120); do curl -sf "localhost:$port/ready" >/dev/null && break; sleep 1; done
 done
-admin="Authorization: Bearer $AUTOMATELY_ADMIN_TOKEN"
+admin="Authorization: Bearer $C93_ADMIN_TOKEN"
 curl -sf -X POST "$API/v1/tenants" -H "$admin" -d '{"name":"bench"}' >/dev/null
 TOKEN=$(curl -sf -X POST "$API/v1/tenants/bench/tokens" -H "$admin" -d '{"name":"bench","scopes":["*"]}' | json "['token']")
 auth="Authorization: Bearer $TOKEN"
@@ -81,7 +81,7 @@ cpu=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ /
     echo "driven from the same machine through Docker's port mapping. Rerun it on your hardware: numbers depend on it."
     echo
     echo "- **Machine:** $cpu, $(nproc 2>/dev/null || sysctl -n hw.ncpu) CPUs, $(free -g 2>/dev/null | awk '/Mem:/ {print $2 " GB RAM"}')"
-    echo "- **Software:** $(docker --version | sed 's/,.*//'), Automately $(grep -m1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/'), JDK 21 (Temurin) in each container"
+    echo "- **Software:** $(docker --version | sed 's/,.*//'), Cluster93 $(grep -m1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/'), JDK 21 (Temurin) in each container"
     echo "- **Cluster:** 3 nodes, capacity 32 isolates each, one backup copy of all data"
     echo
     echo "| Scenario | How | Result |"
@@ -102,7 +102,7 @@ cpu=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ /
   before the next is read. Storing four chunks at once was tried and measured no faster (48 vs 45 MB/s), so it
   wasn't kept (D-059).
 - **Density is the resident memory of the Java processes**, with a fixed, pre-touched Java heap so that growth is
-  native memory. An idle isolate costs that much; a busy one can grow to `AUTOMATELY_MAX_HEAP_MB` (64 MB here).
+  native memory. An idle isolate costs that much; a busy one can grow to `C93_MAX_HEAP_MB` (64 MB here).
   The node's capacity setting, not memory, limits how many isolates run.
 EOF
 } > "$OUT"

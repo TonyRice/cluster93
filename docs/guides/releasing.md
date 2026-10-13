@@ -11,8 +11,8 @@ scripts/release-key.sh
 ```
 
 This asks for a passphrase and writes:
-- the private key, to `~/.config/automately/release-signing.key`. It's owner-only and encrypted with that passphrase. **Back up the key file and the passphrase offline.** If you lose either, you'll need a new key and new installers.
-- the public key, to `install/automately-release.pem`, and copied into `install/install.sh` and `install/install.ps1`. Commit these. The CLI bundles the `.pem` when it's built.
+- the private key, to `~/.config/cluster93/release-signing.key`. It's owner-only and encrypted with that passphrase. **Back up the key file and the passphrase offline.** If you lose either, you'll need a new key and new installers.
+- the public key, to `install/cluster93-release.pem`, and copied into `install/install.sh` and `install/install.ps1`. Commit these. The CLI bundles the `.pem` when it's built.
 
 ## Each release
 
@@ -30,7 +30,7 @@ Then it signs `SHA256SUMS`, uploads `SHA256SUMS.sig` and publishes the release. 
 ## Checking a release by hand
 
 ```bash
-openssl dgst -sha256 -verify install/automately-release.pem -signature SHA256SUMS.sig SHA256SUMS
+openssl dgst -sha256 -verify install/cluster93-release.pem -signature SHA256SUMS.sig SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 

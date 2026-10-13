@@ -1,4 +1,4 @@
-# Automately for AI agents (MCP)
+# Cluster93 for AI agents (MCP)
 
 **Status:** Phase 4, milestone 4 (2026-10-06). Decisions: D-047, D-054.
 
@@ -9,16 +9,16 @@ Every node serves an MCP server at `/mcp` (Streamable HTTP). An agent connected 
 Create a token for the agent, with only the scopes it needs:
 
 ```bash
-automately tokens create claude --scope jobs:read --scope jobs:write --scope services:read --scope services:write
+c93 tokens create claude --scope jobs:read --scope jobs:write --scope services:read --scope services:write
 ```
 Leave out `secrets:use` unless the agent's scripts need your [secrets](secrets.md): without it they can run, but `secrets.get` fails with `forbidden`.
 
-There are no MCP tools for users, members or roles: agents don't manage people. Give an agent a service token (`automately tokens create`) with only the scopes it needs, rather than a person's own token. Leave `members:write` out of it, so the agent can't invite anyone.
+There are no MCP tools for users, members or roles: agents don't manage people. Give an agent a service token (`c93 tokens create`) with only the scopes it needs, rather than a person's own token. Leave `members:write` out of it, so the agent can't invite anyone.
 
 **Clients that support remote MCP servers**, for example Claude Code:
 
 ```bash
-claude mcp add --transport http automately https://automately.example.com/mcp \
+claude mcp add --transport http c93 https://cluster93.example.com/mcp \
   --header "Authorization: Bearer atly_…"
 ```
 
@@ -27,10 +27,10 @@ claude mcp add --transport http automately https://automately.example.com/mcp \
 ```json
 {
   "mcpServers": {
-    "automately": {
-      "command": "automately",
+    "c93": {
+      "command": "c93",
       "args": ["mcp"],
-      "env": { "AUTOMATELY_URL": "https://automately.example.com", "AUTOMATELY_TOKEN": "atly_…" }
+      "env": { "C93_URL": "https://cluster93.example.com", "C93_TOKEN": "atly_…" }
     }
   }
 }
@@ -65,9 +65,9 @@ Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`), so clients can 
 ## Resources
 
 The scripting guides, so an agent can learn the script API before writing one:
-- `automately://docs/host-apis`
-- `automately://docs/job-context`
-- `automately://docs/services`
+- `c93://docs/host-apis`
+- `c93://docs/job-context`
+- `c93://docs/services`
 
 ## Protocol notes
 - **Versions:** `2025-11-25`, `2025-06-18` and `2025-03-26`. A client asking for another version gets the newest.

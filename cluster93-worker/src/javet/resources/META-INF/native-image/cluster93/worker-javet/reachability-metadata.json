@@ -1,0 +1,1435 @@
+{
+ "reflection": [
+  {
+   "type": "cluster93.core.host.dns.SystemResolverProvider"
+  },
+  {
+   "type": "cluster93.worker.javet.JavetWorkerEngine"
+  },
+  {
+   "type": "com.caoccao.javet.enums.V8AllocationSpace",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getIndex",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetCompilationException",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.exceptions.JavetScriptingError",
+      "java.lang.Throwable"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetConverterException",
+   "jniAccessible": true
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetExecutionException",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.exceptions.JavetScriptingError",
+      "java.lang.Throwable"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetOutOfMemoryException",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "java.lang.String",
+      "com.caoccao.javet.interop.monitoring.V8HeapStatistics"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetScriptingError",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.values.V8Value",
+      "java.lang.String",
+      "java.lang.String",
+      "int",
+      "int",
+      "int",
+      "int",
+      "int"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.exceptions.JavetTerminatedException",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "boolean"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Host",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getNextV8StatisticsRequestId",
+     "parameterTypes": []
+    },
+    {
+     "name": "isLibraryReloadable",
+     "parameterTypes": []
+    },
+    {
+     "name": "registerV8StatisticsFuture",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.monitoring.V8StatisticsFuture"
+     ]
+    },
+    {
+     "name": "requestV8StatisticsFuture",
+     "parameterTypes": [
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Inspector",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "consoleAPIMessage",
+     "parameterTypes": [
+      "int",
+      "int",
+      "java.lang.String",
+      "java.lang.String",
+      "int",
+      "int"
+     ]
+    },
+    {
+     "name": "flushProtocolNotifications",
+     "parameterTypes": []
+    },
+    {
+     "name": "installAdditionalCommandLineAPI",
+     "parameterTypes": [
+      "com.caoccao.javet.values.reference.IV8ValueObject"
+     ]
+    },
+    {
+     "name": "receiveNotification",
+     "parameterTypes": [
+      "java.lang.String"
+     ]
+    },
+    {
+     "name": "receiveResponse",
+     "parameterTypes": [
+      "java.lang.String"
+     ]
+    },
+    {
+     "name": "runIfWaitingForDebugger",
+     "parameterTypes": [
+      "int"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Native",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.V8Runtime",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "createV8ValueBoolean",
+     "parameterTypes": [
+      "boolean"
+     ]
+    },
+    {
+     "name": "createV8ValueDouble",
+     "parameterTypes": [
+      "double"
+     ]
+    },
+    {
+     "name": "createV8ValueInteger",
+     "parameterTypes": [
+      "int"
+     ]
+    },
+    {
+     "name": "createV8ValueLong",
+     "parameterTypes": [
+      "long"
+     ]
+    },
+    {
+     "name": "createV8ValueNull",
+     "parameterTypes": []
+    },
+    {
+     "name": "createV8ValueUndefined",
+     "parameterTypes": []
+    },
+    {
+     "name": "createV8ValueZonedDateTime",
+     "parameterTypes": [
+      "long"
+     ]
+    },
+    {
+     "name": "getCallbackContext",
+     "parameterTypes": [
+      "long"
+     ]
+    },
+    {
+     "name": "getV8Module",
+     "parameterTypes": [
+      "java.lang.String",
+      "com.caoccao.javet.values.reference.IV8Module"
+     ]
+    },
+    {
+     "name": "receiveGCEpilogueCallback",
+     "parameterTypes": [
+      "int",
+      "int"
+     ]
+    },
+    {
+     "name": "receiveGCPrologueCallback",
+     "parameterTypes": [
+      "int",
+      "int"
+     ]
+    },
+    {
+     "name": "receiveMicrotasksCompletedCallback",
+     "parameterTypes": []
+    },
+    {
+     "name": "receiveNearHeapLimitCallback",
+     "parameterTypes": [
+      "long",
+      "long"
+     ]
+    },
+    {
+     "name": "receivePromiseRejectCallback",
+     "parameterTypes": [
+      "int",
+      "com.caoccao.javet.values.reference.V8ValuePromise",
+      "com.caoccao.javet.values.V8Value"
+     ]
+    },
+    {
+     "name": "removeCallbackContext",
+     "parameterTypes": [
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.JavetCallbackContext",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "isReturnResult",
+     "parameterTypes": []
+    },
+    {
+     "name": "isThisObjectRequired",
+     "parameterTypes": []
+    },
+    {
+     "name": "setHandle",
+     "parameterTypes": [
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.callback.V8FunctionCallback",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "receiveCallback",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "com.caoccao.javet.interop.callback.JavetCallbackContext",
+      "com.caoccao.javet.values.V8Value",
+      "com.caoccao.javet.values.V8Value[]",
+      "int[]"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.loader.JavetLibLoader",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.enums.JSRuntimeType"
+     ]
+    },
+    {
+     "name": "load",
+     "parameterTypes": []
+    },
+    {
+     "name": "setLibLoadingListener",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.loader.IJavetLibLoadingListener"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.monitoring.V8HeapSpaceStatistics",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "java.lang.String",
+      "long",
+      "long",
+      "long",
+      "long"
+     ]
+    },
+    {
+     "name": "setAllocationSpace",
+     "parameterTypes": [
+      "com.caoccao.javet.enums.V8AllocationSpace"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.monitoring.V8HeapStatistics",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "long",
+      "long",
+      "long",
+      "long",
+      "long",
+      "long",
+      "long",
+      "long",
+      "long",
+      "long",
+      "long",
+      "long",
+      "long",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.monitoring.V8SharedMemoryStatistics",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "long",
+      "long",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.monitoring.V8StatisticsFuture",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "int"
+     ]
+    },
+    {
+     "name": "setHandle",
+     "parameterTypes": [
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.options.RuntimeOptions",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getSnapshotBlob",
+     "parameterTypes": []
+    },
+    {
+     "name": "isCreateSnapshotEnabled",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.options.V8Flags",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getIcuDataFile",
+     "parameterTypes": []
+    },
+    {
+     "name": "seal",
+     "parameterTypes": []
+    },
+    {
+     "name": "toString",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.interop.options.V8RuntimeOptions",
+   "jniAccessible": true,
+   "fields": [
+    {
+     "name": "V8_FLAGS"
+    }
+   ],
+   "methods": [
+    {
+     "name": "getGlobalName",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.utils.JavetResourceUtils",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "safeClose",
+     "parameterTypes": [
+      "java.lang.Object"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.V8Value",
+   "jniAccessible": true
+  },
+  {
+   "type": "com.caoccao.javet.values.V8Value[]"
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueBigInteger",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "int",
+      "long[]"
+     ]
+    },
+    {
+     "name": "getLongArray",
+     "parameterTypes": []
+    },
+    {
+     "name": "getSignum",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueBoolean",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "toPrimitive",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueDouble",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "toPrimitive",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueInteger",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "toPrimitive",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueLong",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "toPrimitive",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueNull",
+   "jniAccessible": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueString",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "java.lang.String"
+     ]
+    },
+    {
+     "name": "toPrimitive",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueUndefined",
+   "jniAccessible": true
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueUnknown",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "java.lang.String"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.primitive.V8ValueZonedDateTime",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "toPrimitive",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8Module",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getHandle",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueFunction$ScriptSource",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "java.lang.String",
+      "int",
+      "int"
+     ]
+    },
+    {
+     "name": "getCode",
+     "parameterTypes": []
+    },
+    {
+     "name": "getEndPosition",
+     "parameterTypes": []
+    },
+    {
+     "name": "getStartPosition",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.IV8ValueReference",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "close",
+     "parameterTypes": [
+      "boolean"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8Context",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8Module",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8Script",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueArguments",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueArray",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueArrayBuffer",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long",
+      "java.nio.ByteBuffer"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueBooleanObject",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueDataView",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueDoubleObject",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueError",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueFunction",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueGlobalObject",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueIntegerObject",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueIterator",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueLongObject",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueMap",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueObject",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValuePromise",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueProxy",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueReference",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getHandle",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueRegExp",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueSet",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueSharedArrayBuffer",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long",
+      "java.nio.ByteBuffer"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueStringObject",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueSymbol",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueSymbolObject",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueTypedArray",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long",
+      "int"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueWeakMap",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "com.caoccao.javet.values.reference.V8ValueWeakSet",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "com.caoccao.javet.interop.V8Runtime",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "io.netty.resolver.dns.Cache$Entries"
+  },
+  {
+   "type": "io.netty.util.concurrent.DefaultPromise"
+  },
+  {
+   "type": "io.netty.util.concurrent.SingleThreadEventExecutor"
+  },
+  {
+   "type": "io.netty.util.internal.CleanerJava25$CleanableDirectBufferImpl",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "java.lang.AutoCloseable",
+      "java.nio.ByteBuffer",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "io.netty.util.internal.shaded.org.jctools.queues.varhandle.BaseMpscLinkedVarHandleArrayQueueColdProducerFields",
+   "fields": [
+    {
+     "name": "producerLimit"
+    }
+   ]
+  },
+  {
+   "type": "io.netty.util.internal.shaded.org.jctools.queues.varhandle.BaseMpscLinkedVarHandleArrayQueueConsumerFields",
+   "fields": [
+    {
+     "name": "consumerIndex"
+    }
+   ]
+  },
+  {
+   "type": "io.netty.util.internal.shaded.org.jctools.queues.varhandle.BaseMpscLinkedVarHandleArrayQueueProducerFields",
+   "fields": [
+    {
+     "name": "producerIndex"
+    }
+   ]
+  },
+  {
+   "type": "io.vertx.core.eventbus.impl.EventBusImpl"
+  },
+  {
+   "type": "io.vertx.core.impl.VertxImpl$InternalTimerHandler",
+   "fields": [
+    {
+     "name": "disposed"
+    }
+   ]
+  },
+  {
+   "type": "io.vertx.core.logging.Log4j2LogDelegateFactory",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "io.vertx.core.logging.SLF4JLogDelegateFactory",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.Boolean",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getBoolean",
+     "parameterTypes": [
+      "java.lang.String"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.Class",
+   "methods": [
+    {
+     "name": "getModule",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.Module",
+   "methods": [
+    {
+     "name": "isNativeAccessEnabled",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.String",
+   "jniAccessible": true
+  },
+  {
+   "type": "java.lang.Thread",
+   "methods": [
+    {
+     "name": "isVirtual",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.Throwable",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getMessage",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.foreign.Arena",
+   "methods": [
+    {
+     "name": "ofShared",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.foreign.MemorySegment",
+   "methods": [
+    {
+     "name": "address",
+     "parameterTypes": []
+    },
+    {
+     "name": "asByteBuffer",
+     "parameterTypes": []
+    },
+    {
+     "name": "ofBuffer",
+     "parameterTypes": [
+      "java.nio.Buffer"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.foreign.SegmentAllocator",
+   "methods": [
+    {
+     "name": "allocate",
+     "parameterTypes": [
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.invoke.MethodHandles",
+   "methods": [
+    {
+     "name": "byteArrayViewVarHandle",
+     "parameterTypes": [
+      "java.lang.Class",
+      "java.nio.ByteOrder"
+     ]
+    },
+    {
+     "name": "byteBufferViewVarHandle",
+     "parameterTypes": [
+      "java.lang.Class",
+      "java.nio.ByteOrder"
+     ]
+    },
+    {
+     "name": "privateLookupIn",
+     "parameterTypes": [
+      "java.lang.Class",
+      "java.lang.invoke.MethodHandles$Lookup"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.invoke.MethodHandles$Lookup",
+   "methods": [
+    {
+     "name": "findVarHandle",
+     "parameterTypes": [
+      "java.lang.Class",
+      "java.lang.String",
+      "java.lang.Class"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.management.ManagementFactory",
+   "methods": [
+    {
+     "name": "getRuntimeMXBean",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.management.RuntimeMXBean",
+   "methods": [
+    {
+     "name": "getInputArguments",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.net.UnixDomainSocketAddress",
+   "methods": [
+    {
+     "name": "getPath",
+     "parameterTypes": []
+    },
+    {
+     "name": "of",
+     "parameterTypes": [
+      "java.nio.file.Path"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.nio.ByteBuffer",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "alignedSlice",
+     "parameterTypes": [
+      "int"
+     ]
+    },
+    {
+     "name": "put",
+     "parameterTypes": [
+      "int",
+      "java.nio.ByteBuffer",
+      "int",
+      "int"
+     ]
+    },
+    {
+     "name": "put",
+     "parameterTypes": [
+      "int",
+      "byte[]",
+      "int",
+      "int"
+     ]
+    },
+    {
+     "name": "slice",
+     "parameterTypes": [
+      "int",
+      "int"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.util.SplittableRandom",
+   "methods": [
+    {
+     "name": "nextBytes",
+     "parameterTypes": [
+      "byte[]"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.util.concurrent.CompletableFuture",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "complete",
+     "parameterTypes": [
+      "java.lang.Object"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "javax.net.ssl.SSLEngine"
+  },
+  {
+   "type": "sun.management.VMManagementImpl",
+   "jniAccessible": true,
+   "fields": [
+    {
+     "name": "compTimeMonitoringSupport"
+    },
+    {
+     "name": "currentThreadCpuTimeSupport"
+    },
+    {
+     "name": "objectMonitorUsageSupport"
+    },
+    {
+     "name": "otherThreadCpuTimeSupport"
+    },
+    {
+     "name": "remoteDiagnosticCommandsSupport"
+    },
+    {
+     "name": "synchronizerUsageSupport"
+    },
+    {
+     "name": "threadAllocatedMemorySupport"
+    },
+    {
+     "name": "threadContentionMonitoringSupport"
+    }
+   ]
+  },
+  {
+   "type": "sun.nio.ch.SelectorImpl"
+  },
+  {
+   "type": "sun.security.provider.NativePRNG",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "java.security.SecureRandomParameters"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "sun.security.provider.SHA",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "sun.security.provider.SHA2$SHA256",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "sun.text.resources.cldr.FormatData"
+  },
+  {
+   "type": "sun.text.resources.cldr.FormatData_en"
+  },
+  {
+   "type": "sun.text.resources.cldr.FormatData_en_US"
+  }
+ ],
+ "resources": [
+  {
+   "glob": "META-INF/services/cluster93.worker.WorkerEngine"
+  },
+  {
+   "glob": "META-INF/services/io.vertx.core.spi.JsonFactory"
+  },
+  {
+   "glob": "META-INF/services/io.vertx.core.spi.VerticleFactory"
+  },
+  {
+   "glob": "META-INF/services/io.vertx.core.spi.VertxServiceProvider"
+  },
+  {
+   "glob": "META-INF/services/java.net.spi.InetAddressResolverProvider"
+  },
+  {
+   "glob": "META-INF/services/java.nio.channels.spi.SelectorProvider"
+  },
+  {
+   "glob": "META-INF/services/java.time.zone.ZoneRulesProvider"
+  },
+  {
+   "glob": "META-INF/services/org.slf4j.spi.SLF4JServiceProvider"
+  },
+  {
+   "glob": "cluster93/runtime/javet/icu/icudt78l.dat"
+  },
+  {
+   "glob": "com/caoccao/javet/interop/V8Native.class"
+  },
+  {
+   "glob": "com/caoccao/javet/interop/loader/JavetLibLoader.class"
+  },
+  {
+   "glob": "libjavet-v8-linux-x86_64-i18n.v.6.0.2.so"
+  },
+  {
+   "glob": "org/slf4j/impl/StaticLoggerBinder.class"
+  },
+  {
+   "glob": "vertx-default-jul-logging.properties"
+  },
+  {
+   "module": "java.logging",
+   "glob": "sun/util/logging/resources/logging_en.properties"
+  },
+  {
+   "module": "java.logging",
+   "glob": "sun/util/logging/resources/logging_en_US.properties"
+  },
+  {
+   "bundle": "sun.util.logging.resources.logging"
+  }
+ ]
+}

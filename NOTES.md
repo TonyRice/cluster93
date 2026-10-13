@@ -9,7 +9,7 @@ Ideas to keep but **not act on yet**. Nothing here is scheduled. When an idea is
 *Captured 2026-10-06.*
 
 ### Background
-The original Automately had a **browser module**. It wasn't part of Automately Core. It was the separate `webdriver` module (`webdriver-module-master.zip` in the old archive): `automately.modules.pub.network.webdriver.WebDriverObject`, built on **Selenium WebDriver** with pluggable drivers. It made browser automation at scale easy, and scripts used it through the JavaScript API:
+The original Cluster93 had a **browser module**. It wasn't part of Cluster93 Core. It was the separate `webdriver` module (`webdriver-module-master.zip` in the old archive): `cluster93.modules.pub.network.webdriver.WebDriverObject`, built on **Selenium WebDriver** with pluggable drivers. It made browser automation at scale easy, and scripts used it through the JavaScript API:
 
 ```js
 var wd = require("webdriver").create({"driver": "phantomjs"});
@@ -21,7 +21,7 @@ print(wd.getElement('.header-20-sub h3').text());
 PhantomJS was only one of the drivers it could use, not the module itself.
 
 ### The idea
-Deploy Automately remotely, on a server or in the cloud, and **attach workers from anywhere, for example a laptop**. A worker offers capabilities the cluster doesn't have, such as a real browser, and scripts can use those capabilities through a sandboxed host API.
+Deploy Cluster93 remotely, on a server or in the cloud, and **attach workers from anywhere, for example a laptop**. A worker offers capabilities the cluster doesn't have, such as a real browser, and scripts can use those capabilities through a sandboxed host API.
 
 - **Remote workers.** A worker dials *out* to the cluster over a WebSocket or gRPC stream. It doesn't join the Hazelcast cluster, so it works behind NAT and home networks without opening ports. It advertises its capabilities (`browser`, `gpu`, `local-files:/some/dir` and so on).
 - **Capability-based scheduling.** A job declares what it needs (`requires: ["browser"]`), and the scheduler only places it on a worker that offers that capability. This extends the existing least-loaded placement.
@@ -47,7 +47,7 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
 - **Outside clients subscribing** to bus topics or queues, over SSE or WebSocket. 2017 had this through the SDK's SockJS bridge. Today outsiders can only publish and request (`POST /v1/bus/...`).
 - **Reply to a reply.** In 2017, an answer to a `send` could itself be answered, so two scripts could hold a conversation. Tony: nice, not needed.
 - **Modules and `require`.** In 2017, admins registered "native modules" that scripts loaded with `require`. Sharing code between scripts, and per-tenant packages, needs its own review.
-- **Python through GraalPy, as a later phase that starts with a spike.** The runtime would be a `GraalPyScriptRuntime` behind `ScriptRuntime`, binding the same `*Api` objects (D-060) with `@HostAccess.Export` plus a thin `automately.py`. Tony: sandboxing is critical, so the spike has to pass each gate:
+- **Python through GraalPy, as a later phase that starts with a spike.** The runtime would be a `GraalPyScriptRuntime` behind `ScriptRuntime`, binding the same `*Api` objects (D-060) with `@HostAccess.Export` plus a thin `cluster93.py`. Tony: sandboxing is critical, so the spike has to pass each gate:
   - **Sandbox (must pass):**
     - GraalVM 25.1 brought polyglot isolates, `SandboxPolicy.ISOLATED`/`UNTRUSTED` and sandbox resource limits to Community Edition. ISOLATED runs guest code on a separate heap with a CPU-time limit. UNTRUSTED adds limits on guest memory, AST depth, stack frames and output, plus Spectre mitigations.
     - **Unconfirmed:** whether GraalPy is supported under UNTRUSTED. The sandboxing guide speaks of ECMAScript, and Oracle documents running GraalPy out of process (`engine.IsolateMode=external`) to isolate its native code.
@@ -69,7 +69,7 @@ This builds on phase 3 (host API bindings, `ScriptRuntime` SPI) and phase 4 (tok
 - **Web and Node globals in the isolate:** `URL`, `URLSearchParams`, `atob`/`btoa`, `structuredClone`, and Web Crypto. (`Buffer` and `process` are settled by D-093: the bundler imports them where bundled code uses them.)
   - **Why it matters:** bundled npm code often uses these without importing them, and fails at run time today.
   - **What's ready:** the stand-ins (D-090) already implement most of them, so the open question is only whether every isolate should pay to load them, or whether a bundler-inserted import is better.
-- **A disk tier for the package cache:** design §5 says "then from the data directory". It's memory-only for now (`AUTOMATELY_PACKAGE_CACHE_MB`). Worth it once packages are big or nodes restart often.
+- **A disk tier for the package cache:** design §5 says "then from the data directory". It's memory-only for now (`C93_PACKAGE_CACHE_MB`). Worth it once packages are big or nodes restart often.
 - **Backtracking version resolution:** D-089 picks the newest version that meets every range, re-picking until nothing changes. Revisit only if real conflicts show up.
 
 ## Parked from the request-hang fix (D-099)

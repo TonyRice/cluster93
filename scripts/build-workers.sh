@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Canonical native worker build script.
 #
-# Builds the GraalVM native-image tenant workers from automately-worker:
+# Builds the GraalVM native-image tenant workers from cluster93-worker:
 #   worker-javet    V8 through Javet   (-Pjavet,native)
 #   worker-graaljs  embedded GraalJS   (-Pgraaljs,native)
 #
@@ -31,7 +31,7 @@ cd "$REPO_ROOT"
 
 usage() {
   cat <<'USAGE'
-Builds the GraalVM native-image tenant workers from automately-worker.
+Builds the GraalVM native-image tenant workers from cluster93-worker.
 
 Usage:
   scripts/build-workers.sh [javet|graaljs|all] [--javet-metadata]
@@ -178,7 +178,7 @@ entries = [{"type": n, "jniAccessible": True, "allDeclaredConstructors": True, "
             "allDeclaredMethods": True, "allPublicMethods": True, "allDeclaredFields": True, "allPublicFields": True}
            for n in names]
 json.dump({"reflection": entries}, open(sys.argv[1], "w"), indent=1)' \
-    automately-worker/src/javet/resources/META-INF/native-image/automately/javet/reachability-metadata.json
+    cluster93-worker/src/javet/resources/META-INF/native-image/cluster93/javet/reachability-metadata.json
 }
 
 # --------------------------------------------------------------------------
@@ -187,11 +187,11 @@ json.dump({"reflection": entries}, open(sys.argv[1], "w"), indent=1)' \
 build_engine() {
   local engine=$1
   echo "== building worker-$engine (memory cap $CAP, heap $HEAP, threads $THREADS)" >&2
-  sandboxed ./mvnw -q -DskipTests -DskipITs -pl automately-worker -am install "-P$engine"
-  sandboxed ./mvnw -q -DskipTests -DskipITs -pl automately-worker clean package "-P$engine,native" \
+  sandboxed ./mvnw -q -DskipTests -DskipITs -pl cluster93-worker -am install "-P$engine"
+  sandboxed ./mvnw -q -DskipTests -DskipITs -pl cluster93-worker clean package "-P$engine,native" \
     -Dnative.builder.heap="$HEAP" -Dnative.builder.threads="$THREADS"
 
-  local src="automately-worker/target/worker-$engine"
+  local src="cluster93-worker/target/worker-$engine"
   if [[ ! -f "$src" ]]; then
     echo "Error: native image $src was not produced" >&2
     exit 1

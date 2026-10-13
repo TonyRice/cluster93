@@ -1,0 +1,479 @@
+{
+ "reflection": [
+  {
+   "type": "cluster93.worker.graaljs.GraalJsWorkerEngine"
+  },
+  {
+   "type": "io.netty.resolver.dns.Cache$Entries"
+  },
+  {
+   "type": "io.netty.util.concurrent.DefaultPromise"
+  },
+  {
+   "type": "io.netty.util.concurrent.SingleThreadEventExecutor"
+  },
+  {
+   "type": "io.netty.util.internal.CleanerJava25$CleanableDirectBufferImpl",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "java.lang.AutoCloseable",
+      "java.nio.ByteBuffer",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "io.netty.util.internal.shaded.org.jctools.queues.varhandle.BaseMpscLinkedVarHandleArrayQueueColdProducerFields",
+   "fields": [
+    {
+     "name": "producerLimit"
+    }
+   ]
+  },
+  {
+   "type": "io.netty.util.internal.shaded.org.jctools.queues.varhandle.BaseMpscLinkedVarHandleArrayQueueConsumerFields",
+   "fields": [
+    {
+     "name": "consumerIndex"
+    }
+   ]
+  },
+  {
+   "type": "io.netty.util.internal.shaded.org.jctools.queues.varhandle.BaseMpscLinkedVarHandleArrayQueueProducerFields",
+   "fields": [
+    {
+     "name": "producerIndex"
+    }
+   ]
+  },
+  {
+   "type": "io.vertx.core.eventbus.impl.EventBusImpl"
+  },
+  {
+   "type": "io.vertx.core.impl.VertxImpl$InternalTimerHandler",
+   "fields": [
+    {
+     "name": "disposed"
+    }
+   ]
+  },
+  {
+   "type": "io.vertx.core.logging.Log4j2LogDelegateFactory",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "io.vertx.core.logging.SLF4JLogDelegateFactory",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.Boolean",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getBoolean",
+     "parameterTypes": [
+      "java.lang.String"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.Class",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "getClassLoader",
+     "parameterTypes": []
+    },
+    {
+     "name": "getModule",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.ClassLoader",
+   "jniAccessible": true,
+   "fields": [
+    {
+     "name": "classLoaderValueMap"
+    }
+   ],
+   "methods": [
+    {
+     "name": "loadClass",
+     "parameterTypes": [
+      "java.lang.String"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.Module",
+   "methods": [
+    {
+     "name": "isNativeAccessEnabled",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.Thread",
+   "methods": [
+    {
+     "name": "isVirtual",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.foreign.Arena",
+   "methods": [
+    {
+     "name": "ofShared",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.foreign.MemorySegment",
+   "methods": [
+    {
+     "name": "address",
+     "parameterTypes": []
+    },
+    {
+     "name": "asByteBuffer",
+     "parameterTypes": []
+    },
+    {
+     "name": "ofBuffer",
+     "parameterTypes": [
+      "java.nio.Buffer"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.foreign.SegmentAllocator",
+   "methods": [
+    {
+     "name": "allocate",
+     "parameterTypes": [
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.invoke.MethodHandles",
+   "methods": [
+    {
+     "name": "byteArrayViewVarHandle",
+     "parameterTypes": [
+      "java.lang.Class",
+      "java.nio.ByteOrder"
+     ]
+    },
+    {
+     "name": "byteBufferViewVarHandle",
+     "parameterTypes": [
+      "java.lang.Class",
+      "java.nio.ByteOrder"
+     ]
+    },
+    {
+     "name": "privateLookupIn",
+     "parameterTypes": [
+      "java.lang.Class",
+      "java.lang.invoke.MethodHandles$Lookup"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.invoke.MethodHandles$Lookup",
+   "methods": [
+    {
+     "name": "findVarHandle",
+     "parameterTypes": [
+      "java.lang.Class",
+      "java.lang.String",
+      "java.lang.Class"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.lang.management.ManagementFactory",
+   "methods": [
+    {
+     "name": "getRuntimeMXBean",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.lang.management.RuntimeMXBean",
+   "methods": [
+    {
+     "name": "getInputArguments",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "java.net.UnixDomainSocketAddress",
+   "methods": [
+    {
+     "name": "getPath",
+     "parameterTypes": []
+    },
+    {
+     "name": "of",
+     "parameterTypes": [
+      "java.nio.file.Path"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.nio.ByteBuffer",
+   "methods": [
+    {
+     "name": "alignedSlice",
+     "parameterTypes": [
+      "int"
+     ]
+    },
+    {
+     "name": "put",
+     "parameterTypes": [
+      "int",
+      "java.nio.ByteBuffer",
+      "int",
+      "int"
+     ]
+    },
+    {
+     "name": "put",
+     "parameterTypes": [
+      "int",
+      "byte[]",
+      "int",
+      "int"
+     ]
+    },
+    {
+     "name": "slice",
+     "parameterTypes": [
+      "int",
+      "int"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.util.SplittableRandom",
+   "methods": [
+    {
+     "name": "nextBytes",
+     "parameterTypes": [
+      "byte[]"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "java.util.function.Supplier",
+   "jniAccessible": true,
+   "methods": [
+    {
+     "name": "get",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "javax.net.ssl.SSLEngine"
+  },
+  {
+   "type": "jdk.internal.loader.ClassLoaders$AppClassLoader"
+  },
+  {
+   "type": "jdk.internal.misc.Unsafe"
+  },
+  {
+   "type": "org.graalvm.home.impl.DefaultHomeFinder"
+  },
+  {
+   "type": "org.graalvm.polyglot.io.IOHelper",
+   "fields": [
+    {
+     "name": "ACCESS"
+    }
+   ]
+  },
+  {
+   "type": "org.graalvm.polyglot.management.Management",
+   "fields": [
+    {
+     "name": "ACCESS"
+    }
+   ]
+  },
+  {
+   "type": "sun.management.VMManagementImpl",
+   "jniAccessible": true,
+   "fields": [
+    {
+     "name": "compTimeMonitoringSupport"
+    },
+    {
+     "name": "currentThreadCpuTimeSupport"
+    },
+    {
+     "name": "objectMonitorUsageSupport"
+    },
+    {
+     "name": "otherThreadCpuTimeSupport"
+    },
+    {
+     "name": "remoteDiagnosticCommandsSupport"
+    },
+    {
+     "name": "synchronizerUsageSupport"
+    },
+    {
+     "name": "threadAllocatedMemorySupport"
+    },
+    {
+     "name": "threadContentionMonitoringSupport"
+    }
+   ]
+  },
+  {
+   "type": "sun.nio.ch.SelectorImpl"
+  },
+  {
+   "type": "sun.security.provider.NativePRNG",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": [
+      "java.security.SecureRandomParameters"
+     ]
+    }
+   ]
+  },
+  {
+   "type": "sun.security.provider.SHA",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": []
+    }
+   ]
+  },
+  {
+   "type": "sun.security.provider.SHA2$SHA256",
+   "methods": [
+    {
+     "name": "<init>",
+     "parameterTypes": []
+    }
+   ]
+  }
+ ],
+ "resources": [
+  {
+   "glob": "META-INF/graalvm/org.graalvm.polyglot/version"
+  },
+  {
+   "glob": "META-INF/graalvm/org.graalvm.truffle/version"
+  },
+  {
+   "glob": "META-INF/resources/engine/js-isolate-linux-amd64/libvm/sha256"
+  },
+  {
+   "glob": "META-INF/resources/engine/libtruffleattach/linux/amd64/sha256"
+  },
+  {
+   "glob": "META-INF/services/cluster93.worker.WorkerEngine"
+  },
+  {
+   "glob": "META-INF/services/com.oracle.truffle.api.TruffleRuntimeAccess"
+  },
+  {
+   "glob": "META-INF/services/com.oracle.truffle.api.instrumentation.provider.TruffleInstrumentProvider"
+  },
+  {
+   "glob": "META-INF/services/com.oracle.truffle.api.library.provider.DefaultExportProvider"
+  },
+  {
+   "glob": "META-INF/services/com.oracle.truffle.api.provider.InternalResourceProvider"
+  },
+  {
+   "glob": "META-INF/services/com.oracle.truffle.api.provider.TruffleLanguageProvider"
+  },
+  {
+   "glob": "META-INF/services/com.oracle.truffle.runtime.FloodControlHandler"
+  },
+  {
+   "glob": "META-INF/services/com.oracle.truffle.runtime.TruffleTypes"
+  },
+  {
+   "glob": "META-INF/services/com.oracle.truffle.runtime.jfr.EventFactory$Provider"
+  },
+  {
+   "glob": "META-INF/services/io.vertx.core.spi.JsonFactory"
+  },
+  {
+   "glob": "META-INF/services/io.vertx.core.spi.VerticleFactory"
+  },
+  {
+   "glob": "META-INF/services/io.vertx.core.spi.VertxServiceProvider"
+  },
+  {
+   "glob": "META-INF/services/java.nio.channels.spi.SelectorProvider"
+  },
+  {
+   "glob": "META-INF/services/java.time.zone.ZoneRulesProvider"
+  },
+  {
+   "glob": "META-INF/services/org.graalvm.home.HomeFinder"
+  },
+  {
+   "glob": "META-INF/services/org.graalvm.polyglot.impl.AbstractPolyglotImpl"
+  },
+  {
+   "glob": "META-INF/services/org.slf4j.spi.SLF4JServiceProvider"
+  },
+  {
+   "glob": "cluster93/runtime/graaljs/helpers.js"
+  },
+  {
+   "glob": "org/slf4j/impl/StaticLoggerBinder.class"
+  },
+  {
+   "glob": "vertx-default-jul-logging.properties"
+  },
+  {
+   "module": "jdk.jfr",
+   "glob": "jdk/jfr/internal/types/metadata.bin"
+  }
+ ]
+}

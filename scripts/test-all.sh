@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Automately Test Suite Runner
+# Cluster93 Test Suite Runner
 #
 # Usage:
 #   ./scripts/test-all.sh                  # Run all tests in process mode (default)
-#   ./scripts/test-all.sh server           # Run automately-server tests
-#   ./scripts/test-all.sh protocol         # Run automately-runner-protocol tests
+#   ./scripts/test-all.sh server           # Run cluster93-server tests
+#   ./scripts/test-all.sh protocol         # Run cluster93-runner-protocol tests
 #   ./scripts/test-all.sh runtime          # Run runtime tests (Javet & GraalJS)
 #   ./scripts/test-all.sh ClusterTest      # Run a specific test class
 #   ./scripts/test-all.sh docker           # Run DockerClusterIT (requires Docker)
@@ -42,11 +42,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-export AUTOMATELY_WORKER_MODE="$MODE"
+export C93_WORKER_MODE="$MODE"
 
 echo "=============================================================================="
-echo " Automately Test Runner"
-echo " Mode:   AUTOMATELY_WORKER_MODE=${AUTOMATELY_WORKER_MODE}"
+echo " Cluster93 Test Runner"
+echo " Mode:   C93_WORKER_MODE=${C93_WORKER_MODE}"
 echo " Target: ${TARGET}"
 LOG_FILE="${REPO_ROOT}/lasttest.txt"
 
@@ -54,7 +54,7 @@ echo " Output: ${LOG_FILE}"
 echo "=============================================================================="
 
 # Pre-run housekeeping: clean up stale temp files in /tmp except the cached ICU binary
-rm -f /tmp/automately-icudt78l-*.dat 2>/dev/null || true
+rm -f /tmp/cluster93-icudt78l-*.dat 2>/dev/null || true
 rm -f "${LOG_FILE}" 2>/dev/null || true
 
 MAVEN_FLAGS="-am -fae -Dsurefire.failIfNoSpecifiedTests=false -DreuseForks=false"
@@ -73,24 +73,24 @@ case "$TARGET" in
     run_mvn test $MAVEN_FLAGS -Dtest='!DockerClusterIT' || TEST_STATUS=$?
     ;;
   server)
-    echo "Running automately-server tests (excluding DockerClusterIT)..."
-    run_mvn test -pl automately-server $MAVEN_FLAGS -Dtest='automately.server.**,!DockerClusterIT' || TEST_STATUS=$?
+    echo "Running cluster93-server tests (excluding DockerClusterIT)..."
+    run_mvn test -pl cluster93-server $MAVEN_FLAGS -Dtest='cluster93.server.**,!DockerClusterIT' || TEST_STATUS=$?
     ;;
   protocol)
-    echo "Running automately-runner-protocol tests..."
-    run_mvn test -pl automately-runner-protocol $MAVEN_FLAGS || TEST_STATUS=$?
+    echo "Running cluster93-runner-protocol tests..."
+    run_mvn test -pl cluster93-runner-protocol $MAVEN_FLAGS || TEST_STATUS=$?
     ;;
   runtime)
-    echo "Running automately-runtime tests (Javet & GraalJS)..."
-    run_mvn test -pl automately-runtime-javet,automately-runtime-graaljs $MAVEN_FLAGS || TEST_STATUS=$?
+    echo "Running cluster93-runtime tests (Javet & GraalJS)..."
+    run_mvn test -pl cluster93-runtime-javet,cluster93-runtime-graaljs $MAVEN_FLAGS || TEST_STATUS=$?
     ;;
   docker)
     echo "Running DockerClusterIT (Docker e2e multi-node cluster)..."
-    run_mvn test -pl automately-server $MAVEN_FLAGS -Dtest='DockerClusterIT' || TEST_STATUS=$?
+    run_mvn test -pl cluster93-server $MAVEN_FLAGS -Dtest='DockerClusterIT' || TEST_STATUS=$?
     ;;
   *)
     echo "Running targeted test: ${TARGET}..."
-    run_mvn test -pl automately-server $MAVEN_FLAGS -Dtest="${TARGET}" || TEST_STATUS=$?
+    run_mvn test -pl cluster93-server $MAVEN_FLAGS -Dtest="${TARGET}" || TEST_STATUS=$?
     ;;
 esac
 

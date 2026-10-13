@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cluster93</groupId>
+        <artifactId>cluster93-parent</artifactId>
+        <version>2.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>cluster93-runtime-graaljs</artifactId>
+    <name>Cluster93 Runtime (GraalJS)</name>
+    <description>
+        Runs jobs on embedded GraalJS (D-126): the engine-neutral runtime's GraalJS adapter, for comparison with V8. By
+        default each engine runs its guests in their own polyglot isolate, with a heap limit per run.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>cluster93</groupId>
+            <artifactId>cluster93-runtime-js</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>polyglot</artifactId>
+        </dependency>
+        <!-- GraalJS in the host's own heap (in-process mode). Open source (MIT/UPL) since 25.x; js-community is now a
+             deprecated alias for it. -->
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>js</artifactId>
+            <type>pom</type>
+        </dependency>
+        <!-- GraalJS in a polyglot isolate with its own heap (the default mode), for linux-x86_64. -->
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>js-isolate-linux-amd64-community</artifactId>
+            <type>pom</type>
+        </dependency>
+        <!-- The conformance suite (D-126), run here against GraalJS. -->
+        <dependency>
+            <groupId>cluster93</groupId>
+            <artifactId>cluster93-runtime-js</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>cluster93</groupId>
+            <artifactId>cluster93-core</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Runs the engine-neutral conformance suite (cluster93-runtime-js's tests) on this engine. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <dependenciesToScan>
+                        <dependency>c93:cluster93-runtime-js</dependency>
+                    </dependenciesToScan>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

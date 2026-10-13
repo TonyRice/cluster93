@@ -1,12 +1,12 @@
 # Plan: API, auth, CLI and MCP (phase 4)
 
 **Status:** ✅ Done: milestones 1 to 4 (2026-10-06). CLI releases are built by GitHub Actions on tags and downloaded from GitHub Releases once the repo is public (D-055) · **Date:** 2026-10-06
-**Why:** Weak spots #4 (routing by hand, no contract) and #7 (Basic auth with a long-lived key) from the [revival plan](revival-plan.md), plus the part of the positioning that makes Automately current: AI agents can deploy and run code on it through MCP. The `X-Automately-Tenant` header was always a stand-in. Anyone who can reach the API can act as any tenant, so it has to go before anything else is exposed.
+**Why:** Weak spots #4 (routing by hand, no contract) and #7 (Basic auth with a long-lived key) from the [revival plan](revival-plan.md), plus the part of the positioning that makes Cluster93 current: AI agents can deploy and run code on it through MCP. The `X-Cluster93-Tenant` header was always a stand-in. Anyone who can reach the API can act as any tenant, so it has to go before anything else is exposed.
 
 ## Decisions taken with Tony
-- **Bootstrap:** an admin token from `AUTOMATELY_ADMIN_TOKEN`, or generated once by the first node and printed in its log. It manages tenants and tokens only (D-044).
+- **Bootstrap:** an admin token from `C93_ADMIN_TOKEN`, or generated once by the first node and printed in its log. It manages tenants and tokens only (D-044).
 - **Contract-first OpenAPI:** a hand-written spec is the source of truth. It's served by the API, requests are validated against it, and tests fail when a route and the spec disagree (D-046).
-- **MCP:** built into every node over Streamable HTTP at `/mcp`, using the same tokens, plus `automately mcp`, a stdio bridge in the CLI for clients that only launch local processes (D-047).
+- **MCP:** built into every node over Streamable HTTP at `/mcp`, using the same tokens, plus `c93 mcp`, a stdio bridge in the CLI for clients that only launch local processes (D-047).
 - **CLI:** Java and picocli, compiled with GraalVM native-image into one binary per platform (Windows, Linux, macOS; no JDK needed), installed with a one-line `curl … | sh` or `irm … | iex` (D-048, D-049).
 
 ## Milestone 1: tenants and scoped tokens
@@ -17,18 +17,18 @@
   - Record: `id` (`tok_…`, public), tenant, name, scopes, `createdAt`, optional `expiresAt`, `lastUsedAt` (written at most once a minute per token, not per request).
   - API: `POST /v1/tokens {name, scopes, expiresInDays?}` returns the token **once**. `GET /v1/tokens` lists without secrets. `DELETE /v1/tokens/{id}` revokes. A tenant token with `tokens:write` can mint tokens for its own tenant with a subset of its own scopes. The admin token can mint for any tenant.
 - **Scopes:** `jobs:read`, `jobs:write`, `services:read`, `services:write` (includes domains), `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`, `nodes:read`, and `*` for every tenant scope. A missing scope gets **403** with the scope named. A missing or bad token gets **401** with `WWW-Authenticate: Bearer`.
-- **`Authorization: Bearer atly_…`** replaces `X-Automately-Tenant` everywhere. The header is no longer read. `/health` stays open. The ingress (services' public traffic) is unaffected, since services do their own auth.
-- **Admin token.** If `AUTOMATELY_ADMIN_TOKEN` is set, every node compares against it in constant time. Otherwise the first node of a new cluster generates one, stores only its hash in the cluster, and logs it once ("save this; it won't be shown again"). `POST /v1/admin/rotate` replaces it.
+- **`Authorization: Bearer atly_…`** replaces `X-Cluster93-Tenant` everywhere. The header is no longer read. `/health` stays open. The ingress (services' public traffic) is unaffected, since services do their own auth.
+- **Admin token.** If `C93_ADMIN_TOKEN` is set, every node compares against it in constant time. Otherwise the first node of a new cluster generates one, stores only its hash in the cluster, and logs it once ("save this; it won't be shown again"). `POST /v1/admin/rotate` replaces it.
 - **Stores:** `TenantStore` and `TokenStore`, each with SharedData and Ignite implementations and shared contract tests, as for the other stores.
 - **Tests:** scope enforcement on every route (a test that walks the route table, so a new route without a scope fails), revocation taking effect immediately, expiry, a tenant unable to see another's tokens or data, the admin token unable to read tenant data, and the checksum format. Every existing test moves to tokens.
 
 ## Milestone 2: the OpenAPI contract, validation and rate limits
-- **Spec:** `automately-server/src/main/resources/openapi.yaml` (OpenAPI 3.1), served at `GET /v1/openapi.json`. It covers every route, the error envelope (`{"error": {"code", "message"}}`), the scopes as a security scheme, and pagination (`limit` and `cursor` everywhere).
+- **Spec:** `cluster93-server/src/main/resources/openapi.yaml` (OpenAPI 3.1), served at `GET /v1/openapi.json`. It covers every route, the error envelope (`{"error": {"code", "message"}}`), the scopes as a security scheme, and pagination (`limit` and `cursor` everywhere).
 - **Validation:** requests are validated against the spec with `vertx-openapi`, before handlers run, and bad input gets 400 with the schema path. Streamed bodies (file uploads, SSE) are validated on headers and parameters only, never buffered.
 - **Contract tests:** a test fails if the router has a route the spec lacks, or the other way round. Integration tests validate real **responses** against the spec, so the docs can't drift.
-- **Rate limits per tenant:** a token bucket (`AUTOMATELY_RATE_LIMIT_PER_MINUTE`, default 600, burst 2× that), applied on each node with its share of the tenant's budget (budget ÷ live nodes), so no cluster round-trip per request. Over it, **429** with `Retry-After` and the IETF `RateLimit-Policy`/`RateLimit` headers. Admin calls aren't limited.
+- **Rate limits per tenant:** a token bucket (`C93_RATE_LIMIT_PER_MINUTE`, default 600, burst 2× that), applied on each node with its share of the tenant's budget (budget ÷ live nodes), so no cluster round-trip per request. Over it, **429** with `Retry-After` and the IETF `RateLimit-Policy`/`RateLimit` headers. Admin calls aren't limited.
 
-## Milestone 3: the CLI (`automately`), installable with one line
+## Milestone 3: the CLI (`c93`), installable with one line
 **Tony's requirements:** "super easy to install the cli via curl", with builds for **Windows, Linux and macOS**, and a one-line install.
 
 ### Installing
@@ -43,36 +43,36 @@ irm https://<release host>/install.ps1 | iex
 - **`install.sh`** (POSIX `sh`, so it runs anywhere):
   - detects the OS (`uname -s`) and architecture (`uname -m`)
   - downloads the matching binary and `SHA256SUMS` from the latest release, and **verifies the checksum** (stopping if it doesn't match)
-  - installs to `~/.local/bin`, or `/usr/local/bin` when run as root or with `AUTOMATELY_INSTALL_DIR`, and says how to add that to `PATH` if it isn't already
-  - `AUTOMATELY_VERSION=v2.1.0` pins a version
+  - installs to `~/.local/bin`, or `/usr/local/bin` when run as root or with `C93_INSTALL_DIR`, and says how to add that to `PATH` if it isn't already
+  - `C93_VERSION=v2.1.0` pins a version
   - is written so a cut-off download can't run half a script: everything is inside a function called on the last line
-- **`install.ps1`**: the same steps for Windows. It installs to `%LOCALAPPDATA%\Programs\automately` and adds that directory to the user's `PATH`.
-- **Afterwards:** `automately version` shows the CLI's version and, once logged in, the cluster's. `automately upgrade` reruns the installer for the latest version.
+- **`install.ps1`**: the same steps for Windows. It installs to `%LOCALAPPDATA%\Programs\cluster93` and adds that directory to the user's `PATH`.
+- **Afterwards:** `c93 version` shows the CLI's version and, once logged in, the cluster's. `c93 upgrade` reruns the installer for the latest version.
 - **Not in the first cut:** Homebrew, Scoop and winget packages, and npm wrappers. All of them can point at the same release assets later.
 
 ### Builds: one native binary per platform (D-048)
 | Target | Built on | Asset |
 |---|---|---|
-| Linux x64 | `ubuntu-latest` (static against musl, so it runs on any distro, Alpine included) | `automately-linux-x64` |
-| Linux arm64 | `ubuntu-24.04-arm` | `automately-linux-arm64` |
-| macOS Apple silicon | `macos-14` | `automately-macos-arm64` |
-| macOS Intel | `macos-13` | `automately-macos-x64` |
-| Windows x64 | `windows-latest` | `automately-windows-x64.exe` |
+| Linux x64 | `ubuntu-latest` (static against musl, so it runs on any distro, Alpine included) | `cluster93-linux-x64` |
+| Linux arm64 | `ubuntu-24.04-arm` | `cluster93-linux-arm64` |
+| macOS Apple silicon | `macos-14` | `cluster93-macos-arm64` |
+| macOS Intel | `macos-13` | `cluster93-macos-x64` |
+| Windows x64 | `windows-latest` | `cluster93-windows-x64.exe` |
 
 - **Why native.** Each binary is GraalVM native-image output, about 20–40 MB, starts in milliseconds, and needs no JDK.
 - **Why build on each platform.** native-image can't cross-compile, so each platform needs a machine of its own. Linux x64 can also be built here, in a GraalVM container, for local testing.
-- **The release workflow** runs on a version tag (`v*`) only: it builds the five binaries in parallel, smoke-tests each (`automately version`, then `automately run` against a real node on Linux), and publishes a GitHub release with the binaries, `SHA256SUMS`, `install.sh` and `install.ps1`.
+- **The release workflow** runs on a version tag (`v*`) only: it builds the five binaries in parallel, smoke-tests each (`c93 version`, then `c93 run` against a real node on Linux), and publishes a GitHub release with the binaries, `SHA256SUMS`, `install.sh` and `install.ps1`.
 - **macOS and Windows warnings.** Binaries installed with `curl` or `irm` aren't marked as downloaded, so Gatekeeper and SmartScreen don't block them. Signing and notarization can come later, for downloads through a browser.
 
 ### Open questions for Tony
 1. **The release workflow needs GitHub Actions** for the macOS and Windows runners. It would run only on version tags, not on every push, so it isn't CI and D-017 stands. Is that OK?
 2. **Where the one-liner downloads from.** Assets in a **private** repo need a GitHub token to download, so `curl … | sh` can't fetch them anonymously. The options:
-   - (a) make `automately-v2` public when releasing
-   - (b) publish releases to a separate public repo (for example `adamnlynn/automately-releases`), keeping the source private
+   - (a) make `cluster93` public when releasing
+   - (b) publish releases to a separate public repo (for example `adamnlynn/cluster93-releases`), keeping the source private
    - (c) serve `install.sh` from a short domain you own, pointing at (a) or (b)
 
 ### Commands
-- `automately login <url>` stores the endpoint and token in `~/.config/automately/config.json` (`%APPDATA%\automately` on Windows), readable only by the user. `AUTOMATELY_URL` and `AUTOMATELY_TOKEN` override it, for scripts and CI.
+- `c93 login <url>` stores the endpoint and token in `~/.config/cluster93/config.json` (`%APPDATA%\cluster93` on Windows), readable only by the user. `C93_URL` and `C93_TOKEN` override it, for scripts and CI.
 - `run script.js [--input json] [--follow]` submits a job and streams its logs until it ends; the exit code reflects the outcome.
 - `jobs ls|get|logs|steps|cancel`, `services deploy <name> <file>|ls|get|logs|start|stop|restart|rm`, `domains add|verify|ls|rm`, `files put|get|ls|rm|sync <dir> <prefix>` (deploys a static site: only changed files go up, compared by ETag), `tokens create|ls|revoke`, `tenants …` (admin), `version`, `upgrade`.
 - `mcp` is the stdio bridge (milestone 4).
@@ -87,7 +87,7 @@ irm https://<release host>/install.ps1 | iex
   - `write_file`, `read_file` (text, size-capped), `list_files`, `delete_file`
   - `publish`, `request` (bus)
 - **Resources:** the scripting docs (`job-context.md`, `services.md`, `host-apis.md`) as MCP resources, so an agent can learn the script API before writing code.
-- **Bridge:** `automately mcp` speaks stdio to the client and forwards to `/mcp` with the stored token.
+- **Bridge:** `c93 mcp` speaks stdio to the client and forwards to `/mcp` with the stored token.
 - **Tests:** a protocol test (initialize, tools/list, tools/call, errors, a missing scope), and an end-to-end test where an MCP client deploys a service and calls it through the ingress.
 
 ## Order and size

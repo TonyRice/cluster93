@@ -75,7 +75,7 @@ Every attempt gets an **epoch**, which is its attempt number. All writes an atte
 If node1 was only partitioned and comes back still running attempt 1 while attempt 2 is running on node3, all of attempt 1's writes are rejected. The node sees the rejection, stops the isolate, and records the attempt as `SUPERSEDED`.
 
 ### 5. Idempotency keys for outside side effects
-Each step gets a stable key, `jobId:stepName`, available as `ctx.stepKey(name)` and as `key` inside the step function. Scripts pass it to outside APIs that support idempotency keys (Stripe, many email APIs, Automately's own future `kv`/`http` host APIs). Then even a step that re-runs after a crash in the middle doesn't take effect twice.
+Each step gets a stable key, `jobId:stepName`, available as `ctx.stepKey(name)` and as `key` inside the step function. Scripts pass it to outside APIs that support idempotency keys (Stripe, many email APIs, Cluster93's own future `kv`/`http` host APIs). Then even a step that re-runs after a crash in the middle doesn't take effect twice.
 
 ### 6. Detecting orphans
 - Nodes announce themselves every heartbeat in `NodeRegistry`. A node is live while its own `lastSeen` timestamp is within 3 heartbeats (D-013). Map TTLs only clean up old entries, because Hazelcast expires entries up to about a second early.

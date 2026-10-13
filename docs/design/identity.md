@@ -63,11 +63,11 @@ A caller can only grant what they hold themselves.
 
 ## Getting in: invites
 1. **Inviting:** an owner or admin (`members:write`) creates an invite with roles and groups, optionally naming a user. The response shows the code once, as `atly_…`; only its hash is stored. Invites expire after 7 days by default (at most 30) and work once.
-2. **Redeeming:** the user runs `automately login --invite CODE https://cluster` (`POST /v1/invites/redeem`, a public route).
+2. **Redeeming:** the user runs `c93 login --invite CODE https://cluster` (`POST /v1/invites/redeem`, a public route).
    - **New user:** they choose a name, or take the one the invite names. The user is created, and they get a personal token for that tenant.
    - **Existing user:** they redeem while logged in (sending their own token). The invite adds a membership, and they get a token for the new tenant.
    - **An invite naming an existing user** can only be redeemed by that user.
-3. **More tenants:** a member gets a token for another of their tenants with `POST /v1/me/tokens {tenant}`, or `automately login --tenant other`.
+3. **More tenants:** a member gets a token for another of their tenants with `POST /v1/me/tokens {tenant}`, or `c93 login --tenant other`.
 4. **Bootstrapping:**
    - The admin token creates operator invites (`POST /v1/admin/invites`).
    - It also creates a tenant's first owner invite (`POST /v1/tenants/{t}/invites`). Operators can do both too.
@@ -79,7 +79,7 @@ A caller can only grant what they hold themselves.
 - **Who sees what:**
   - A tenant reads its own log with `audit:read` (`GET /v1/audit`).
   - Operators read cluster-level entries plus everything operators did (`GET /v1/admin/audit`).
-- **Retention:** 90 days (`AUTOMATELY_AUDIT_RETENTION_DAYS`). Deleting a tenant deletes its log.
+- **Retention:** 90 days (`C93_AUDIT_RETENTION_DAYS`). Deleting a tenant deletes its log.
 - **Never in the way:** an entry is written after the response, and a failed write is logged, never turned into a failed request.
 
 ## API

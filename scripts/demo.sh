@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Automately demo (phase 5): an AI agent's tool calls deploy a queue-consuming service on a three-node cluster,
+# The Cluster93 demo (phase 5): an AI agent's tool calls deploy a queue-consuming service on a three-node cluster,
 # orders flow in, the node running the service is killed, and the cluster recovers without losing an order.
 #
 #   scripts/demo.sh          build, start the cluster (with Prometheus and Grafana), run the demo, leave it running
@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PROJECT=automately-demo
+PROJECT=cluster93-demo
 ORDERS=${ORDERS:-120}
 compose() { docker compose -p "$PROJECT" -f docker-compose.yml -f scripts/compose-demo.yml --profile observability "$@"; }
 
@@ -29,29 +29,29 @@ started=$(date +%s)
 elapsed() { echo "$(( $(date +%s) - started ))s"; }
 
 step "Building the server and the CLI"
-./mvnw -q -B -pl automately-server,automately-cli -am package -DskipTests -DskipITs
+./mvnw -q -B -pl cluster93-server,cluster93-cli -am package -DskipTests -DskipITs
 context=$(mktemp -d)
-mkdir -p "$context/automately-server/target"
-cp Dockerfile "$context/" && cp automately-server/target/automately.jar "$context/automately-server/target/"
-docker build -q --target local-jar -t automately-demo:local "$context" >/dev/null
+mkdir -p "$context/cluster93-server/target"
+cp Dockerfile "$context/" && cp cluster93-server/target/c93.jar "$context/cluster93-server/target/"
+docker build -q --target local-jar -t cluster93-demo:local "$context" >/dev/null
 rm -rf "$context"
 ok "built ($(elapsed))"
 
 step "Starting three nodes, Prometheus and Grafana"
-export AUTOMATELY_ADMIN_TOKEN="demo-admin-$(date +%s)-0123456789abcdef0123456789"
+export C93_ADMIN_TOKEN="demo-admin-$(date +%s)-0123456789abcdef0123456789"
 compose up -d >/dev/null 2>&1
 for port in 8081 8082 8083; do
     for _ in $(seq 120); do curl -sf "localhost:$port/ready" >/dev/null && break; sleep 1; done
 done
-ok "cluster ready ($(elapsed)): $(curl -sf -H "Authorization: Bearer $AUTOMATELY_ADMIN_TOKEN" localhost:8081/v1/nodes | json "', '.join(n['id'] for n in d['nodes'])")"
+ok "cluster ready ($(elapsed)): $(curl -sf -H "Authorization: Bearer $C93_ADMIN_TOKEN" localhost:8081/v1/nodes | json "', '.join(n['id'] for n in d['nodes'])")"
 
 step "An operator creates a tenant and gives the agent a token"
 API=http://localhost:8081
-admin="Authorization: Bearer $AUTOMATELY_ADMIN_TOKEN"
+admin="Authorization: Bearer $C93_ADMIN_TOKEN"
 curl -sf -X POST "$API/v1/tenants" -H "$admin" -d '{"name":"demo"}' >/dev/null
 TOKEN=$(curl -sf -X POST "$API/v1/tenants/demo/tokens" -H "$admin" -d '{"name":"agent","scopes":["*"]}' | json "d['token']")
-export AUTOMATELY_TOKEN=$TOKEN
-cli() { AUTOMATELY_URL=$API java -jar automately-cli/target/automately-cli.jar "$@"; }
+export C93_TOKEN=$TOKEN
+cli() { C93_URL=$API java -jar cluster93-cli/target/cluster93-cli.jar "$@"; }
 say "$(cli whoami)"
 
 # --- the agent: JSON-RPC over MCP (Streamable HTTP), exactly what an MCP client sends ---
@@ -162,6 +162,6 @@ done
 ok "three nodes again: $(curl -sf "$API/v1/nodes" -H "Authorization: Bearer $TOKEN" | json "', '.join(n['id'] for n in d['nodes'])")"
 
 step "Done in $(elapsed)"
-say "Grafana:  http://localhost:3000   (the Automately dashboard: the kill, the restart, the queue draining)"
-say "API:      $API   token: AUTOMATELY_TOKEN=$TOKEN"
+say "Grafana:  http://localhost:3000   (the Cluster93 dashboard: the kill, the restart, the queue draining)"
+say "API:      $API   token: C93_TOKEN=$TOKEN"
 say "Stop it:  scripts/demo.sh down"

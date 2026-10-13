@@ -17,7 +17,7 @@ function handle(raw) {
 const requests = [
   { url: '/users/42?fields=name,email,created', headers: { accept: 'application/json' } },
   { url: '/orders/abc123/items', headers: {}, body: JSON.stringify({ items: Array.from({ length: 10 }, (_, k) => ({ sku: 's' + k, qty: k + 1, price: 9.99 })) }) },
-  { url: '/search?q=automately&page=2', headers: {} },
+  { url: '/search?q=c93&page=2', headers: {} },
   { url: '/missing', headers: {} },
 ];
 function iteration() {

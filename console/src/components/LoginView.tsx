@@ -108,7 +108,7 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
       ? 'Sign in with your username and password.'
       : mode === 'redeem'
         ? 'Redeem an invite code to create your account.'
-        : 'Sign in with an Automately bearer token.';
+        : 'Sign in with a Cluster93 bearer token.';
 
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
@@ -118,7 +118,7 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
             <ShieldCheck className="h-6 w-6" aria-hidden />
           </div>
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Automately Console</h1>
+            <h1 className="text-xl font-semibold tracking-tight">Cluster93 Console</h1>
             <p className="mt-1 text-sm text-muted">{subtitle}</p>
           </div>
         </div>
@@ -333,7 +333,7 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
                 ? 'Your session token is stored only in this browser’s localStorage and sent exclusively to this cluster.'
                 : mode === 'redeem'
                   ? 'Redeeming creates your account (or joins you to a tenant) and signs you straight in.'
-                  : 'Mint a tenant token with automately tokens create, or sign in with the admin token for operator access.'}
+                  : 'Mint a tenant token with c93 tokens create, or sign in with the admin token for operator access.'}
             </p>
           </div>
         </form>

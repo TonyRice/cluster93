@@ -34,7 +34,7 @@ interface OperatorViewProps {
 /**
  * The system/cluster dashboard. Operators see infrastructure — node membership,
  * capacity, and load — plus the cluster's tenant workspaces, which they may
- * inspect by switching context (scoping requests via `X-Automately-Tenant`).
+ * inspect by switching context (scoping requests via `X-Cluster93-Tenant`).
  */
 export function OperatorView({
   whoami,
@@ -278,7 +278,7 @@ export function OperatorView({
             <span>
               Durable state (Apache Ignite WAL, caches, and the VFS) is confined to{' '}
               <code className="rounded bg-background/60 px-1.5 py-0.5 font-mono text-xs text-foreground">
-                automately-cluster-ignite
+                cluster93-cluster-ignite
               </code>
               . The API exposes execution capacity and load here; per-cache memory statistics are
               not part of the public contract.
@@ -504,7 +504,7 @@ function NodeCard({ node }: { node: Node }) {
 function RoleChips({ node }: { node: Node }) {
   // A node advertises roles only in newer contracts. When absent, infer from
   // capacity: the server gives execution slots to workers and zero to every
-  // other persona (see Automately.java), so capacity > 0 means "worker" and a
+  // other persona (see Cluster93.java), so capacity > 0 means "worker" and a
   // zero-capacity node serves the api/ingress edge.
   const roles = node.roles?.length
     ? node.roles

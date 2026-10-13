@@ -1,0 +1,12 @@
+<!-- Human-readable logs (the default). C93_LOG_FORMAT=json selects logback-json.xml instead (phase 5). -->
+<configuration>
+    <appender name="out" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ} [%thread] %level %logger - %msg%n</pattern>
+        </encoder>
+    </appender>
+    <logger name="org.apache.ignite" level="INFO"/>
+    <root level="INFO">
+        <appender-ref ref="out"/>
+    </root>
+</configuration>

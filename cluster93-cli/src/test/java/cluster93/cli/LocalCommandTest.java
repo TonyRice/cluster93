@@ -1,0 +1,240 @@
+package cluster93.cli;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assumptions.assumeThat;
+
+/**
+ * The {@code c93 local ...} commands against a temp {@code $C93_HOME}: no daemon, no
+ * server, and no built jar, so every check is the CLI reading the on-disk state the shell script writes.
+ */
+class LocalCommandTest {
+
+    @TempDir
+    Path home;
+
+    private Path configDir;
+    private Map<String, String> env;
+
+    record Result(int code, String out, String err) {
+    }
+
+    @BeforeEach
+    void setUp() {
+        configDir = home.resolve("config");
+        env = new HashMap<>();
+        env.put("C93_HOME", home.toString());
+    }
+
+    private Result run(String... args) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        Io io = new Io(env, configDir, new ByteArrayInputStream(new byte[0]),
+                new PrintStream(out, true, StandardCharsets.UTF_8),
+                new PrintStream(err, true, StandardCharsets.UTF_8), false);
+        int code = Main.run(io, args);
+        return new Result(code, out.toString(StandardCharsets.UTF_8), err.toString(StandardCharsets.UTF_8));
+    }
+
+    private Io io() {
+        return new Io(env, configDir, new ByteArrayInputStream(new byte[0]), System.out, System.err, false);
+    }
+
+    private void writeLocalEnv() throws Exception {
+        Files.writeString(home.resolve("local.env"), """
+                # Cluster93 local master node configuration.
+                NODE_ID="local-master"
+                ROLES="api,ingress,worker,data,console"
+                DATA_DIR="%s"
+                LOG_DIR="%s"
+                HTTP_PORT="8080"
+                INGRESS_PORT="8000"
+                METRICS_PORT="9090"
+                WORKER_MODE="process"
+                ADMIN_TOKEN="local-admin-token-0123456789abcdef"
+                TENANT="local"
+                """.formatted(home.resolve("data"), home.resolve("logs")));
+    }
+
+    @Test
+    void repoRootResolvesFromTheEnvFileWhenTheWorkingDirectoryIsElsewhere() throws Exception {
+        Path checkout = home.resolve("checkout");
+        Files.createDirectories(checkout.resolve("scripts"));
+        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        Files.writeString(home.resolve("local.env"), "REPO_ROOT=\"" + checkout + "\"\n");
+
+        assertThat(LocalCommand.repoRoot(io())).isEqualTo(checkout);
+    }
+
+    @Test
+    void repoRootResolvesFromNodeMetaWhenTheEnvFileIsMissing() throws Exception {
+        Path checkout = home.resolve("checkout");
+        Files.createDirectories(checkout.resolve("scripts"));
+        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        Files.writeString(home.resolve("node.meta"), "repo_root=" + checkout + "\n");
+
+        assertThat(LocalCommand.repoRoot(io())).isEqualTo(checkout);
+    }
+
+    @Test
+    void repoRootPrefersTheEnvironmentOverride() throws Exception {
+        Path checkout = home.resolve("checkout");
+        Files.createDirectories(checkout.resolve("scripts"));
+        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        env.put("C93_REPO", checkout.toString());
+
+        assertThat(LocalCommand.repoRoot(io())).isEqualTo(checkout);
+    }
+
+    @Test
+    void statusSaysSoWhenNothingIsSetUp() {
+        Result result = run("local", "status");
+
+        assertThat(result.code()).isZero();
+        assertThat(result.out()).contains("No local master node is set up").contains("scripts/local.sh setup");
+    }
+
+    @Test
+    void statusReportsTheConfiguredNode() throws Exception {
+        writeLocalEnv();
+
+        Result result = run("local", "status");
+
+        assertThat(result.code()).as(result.err()).isZero();
+        assertThat(result.out())
+                .contains("Local master node")
+                .contains("local-master")
+                .contains("api,ingress,worker,data,console")
+                .contains(home.resolve("data").toString())
+                .contains("http://localhost:8080")
+                .contains("http://localhost:8000")
+                .contains("process")
+                .contains("PID:            (not running)");
+    }
+
+    @Test
+    void theServerEnvironmentFallsBackToTheMastersOwnDataDirectory() {
+        Map<String, String> env = LocalCommand.serverEnvironment(Map.of(), io());
+
+        // scripts/local.sh installs the master under ${C93_HOME}/master-data; the fallback must match,
+        // so it never points the node at the shared directory scripts/dev.sh uses.
+        assertThat(env.get("C93_DATA_DIR")).isEqualTo(home.resolve("master-data").toString());
+    }
+
+    @Test
+    void statusJsonHasTheState() throws Exception {
+        writeLocalEnv();
+
+        Result result = run("--json", "local", "status");
+
+        assertThat(result.code()).as(result.err()).isZero();
+        com.fasterxml.jackson.databind.JsonNode json = Json.parse(result.out());
+        assertThat(json.get("nodeId").asText()).isEqualTo("local-master");
+        assertThat(json.get("apiUrl").asText()).isEqualTo("http://localhost:8080");
+        assertThat(json.get("running").asBoolean()).isFalse();
+    }
+
+    @Test
+    void statusFlagsAnUpdateWhenTheCheckoutMovedOn() throws Exception {
+        writeLocalEnv();
+        String head = LocalCommand.gitHead(io());
+        assumeThat(head).as("run in a git checkout").isNotNull();
+        Files.writeString(home.resolve("node.meta"), "git_commit=" + "0".repeat(40) + "\n");
+
+        Result result = run("local", "status");
+
+        assertThat(result.code()).isZero();
+        assertThat(result.out()).contains("Update Available").contains(head)
+                .contains("scripts/local.sh update").contains("c93 local update");
+    }
+
+    @Test
+    void statusIsQuietWhenTheBuildMatchesHead() throws Exception {
+        writeLocalEnv();
+        String head = LocalCommand.gitHead(io());
+        assumeThat(head).as("run in a git checkout").isNotNull();
+        Files.writeString(home.resolve("node.meta"), "git_commit=" + head + "\n");
+
+        Result result = run("local", "status");
+
+        assertThat(result.code()).isZero();
+        assertThat(result.out()).doesNotContain("Update Available");
+    }
+
+    @Test
+    void mcpPrintsTheSavedConfiguration() throws Exception {
+        Files.writeString(home.resolve("mcp.json"), """
+                {"mcpServers": {"c93": {"type": "http", "url": "http://localhost:8080/mcp"}}}
+                """);
+
+        Result result = run("local", "mcp");
+
+        assertThat(result.code()).as(result.err()).isZero();
+        assertThat(result.out()).contains("http://localhost:8080/mcp").contains("mcpServers");
+    }
+
+    @Test
+    void mcpGeneratesTheConfigurationFromTheSavedLogin() throws Exception {
+        writeLocalEnv();
+        Files.createDirectories(configDir);
+        Files.writeString(configDir.resolve("config.json"), """
+                {"url": "http://localhost:9999", "token": "atly_local_test_token"}
+                """);
+
+        Result result = run("local", "mcp");
+
+        assertThat(result.code()).as(result.err()).isZero();
+        assertThat(result.out())
+                .contains("http://localhost:9999/mcp")
+                .contains("atly_local_test_token")
+                .contains("claude mcp add --transport http c93")
+                .contains("stdio bridge");
+    }
+
+    @Test
+    void mcpJsonIsMachineReadable() throws Exception {
+        writeLocalEnv();
+        Files.createDirectories(configDir);
+        Files.writeString(configDir.resolve("config.json"), """
+                {"url": "http://localhost:9999", "token": "atly_local_test_token"}
+                """);
+
+        Result result = run("--json", "local", "mcp");
+
+        assertThat(result.code()).as(result.err()).isZero();
+        com.fasterxml.jackson.databind.JsonNode json = Json.parse(result.out());
+        assertThat(json.at("/mcpServers/cluster93/url").asText()).isEqualTo("http://localhost:9999/mcp");
+    }
+
+    @Test
+    void localWithoutASubcommandShowsWhatItCanDo() {
+        Result result = run("local");
+
+        assertThat(result.code()).isZero();
+        assertThat(result.out()).contains("status").contains("start").contains("stop").contains("logs").contains("mcp");
+    }
+
+    @Test
+    void helpAndBadArgumentsBehave() {
+        assertThat(run("--help").out()).contains("local").contains("Manage the local Cluster93 master node");
+        assertThat(run("local").out()).contains("status").contains("start").contains("setup");
+
+        Result badLines = run("local", "logs", "--lines", "not-a-number");
+        assertThat(badLines.code()).isEqualTo(2);
+
+        Result unknown = run("local", "not-a-command");
+        assertThat(unknown.code()).isEqualTo(2);
+    }
+}

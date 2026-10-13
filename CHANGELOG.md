@@ -1,7 +1,14 @@
 # Changelog
 
-All notable changes to Automately are recorded here, with **what** changed and **why**.
+All notable changes to Cluster93 are recorded here, with **what** changed and **why**.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Larger choices are explained in [docs/DECISIONS.md](docs/DECISIONS.md).
+
+- **Rebrand: Automately → Cluster93 (`c93`)**:
+  - The platform is renamed from **Automately** to **Cluster93**, with the `c93` CLI. This repository continues the pre-2018 open-source **Automately** codebase — a clustered, distributed backend platform first published in 2014 and acquired before 2018. See [DEDICATION.md](DEDICATION.md) and the [archived original](https://web.archive.org/web/20160204012506/https://github.com/Automately).
+  - Mechanical rename applied repo-wide: modules `automately-*` → `cluster93-*`; Java packages `automately.*` → `cluster93.*`; Maven groupId/artifactId `automately` → `cluster93`; env prefix `AUTOMATELY_*` → `C93_*`; home/config dirs `~/.automately` → `~/.cluster93` and `~/.config/automately` → `~/.config/cluster93`; app manifest `automately.json` → `cluster93.json`; built-in imports `automately:*` → `c93:*` (`Symbol.for('automately.*')` → `Symbol.for('cluster93.*')`); CLI/binary and server jar `automately` → `c93` (`c93.jar`, `c93.pid`); wire identifiers `X-Automately-*` / `Automately-Signature` / `Server: automately` → `X-Cluster93-*` / `Cluster93-Signature` / `Server: c93`; Ignite SQL schema `AUTOMATELY` → `CLUSTER93` and data region `automately` → `cluster93`.
+  - Driven by a reviewable, dry-run-first toolset: `tools/refactor-rename.sh`, `tools/rename-map.tsv`, and `tools/rename-keep.txt` (historical/lineage text preserved via allowlist).
+  - ⚠️ **Breaking, data compatibility:** the Ignite SQL schema and data region names changed, so durable data written by a pre-rename build is not read by the new build — existing clusters should start fresh or migrate.
+  - ⚠️ **Breaking, scripting API:** built-in module imports now use the `c93:` scheme (`import { kv } from 'c93:kv'`).
 
 - **Full Process-Mode Parity (`AUTOMATELY_WORKER_MODE=process`, D-132)**:
   - Streaming host APIs now work identically out-of-process: `ctx.serve`/`listen` (inbound ingress), `fetch` and `net`/`tls` egress, large-file reads (`files.open`) and `files.respond` are bridged over the worker multiplexer; bus/queue/job listeners arrive as `EVENT` frames and answer with `REPLY`.

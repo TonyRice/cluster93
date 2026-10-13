@@ -8,8 +8,8 @@ Packages cover pure JavaScript in the isolate. The Node runtime covers what an i
 - **Node's APIs:** `child_process`, `net`/`tls` servers, `worker_threads`, `http.createServer`, `vm`.
 - **Whole frameworks that need a real Node process:** Express or Fastify servers as they are, Next.js server rendering, Prisma.
 
-The same contract as everywhere else: a default export `(input, ctx)`, the same globals (`kv`, `bus`, `files`, `secrets`, `jobs`, `ctx`), and `automately deploy` with `"runtime": "node"` in `automately.json`.
-- **Moving code between runtimes is one line** as long as it uses the globals, `files` or `automately:fs`.
+The same contract as everywhere else: a default export `(input, ctx)`, the same globals (`kv`, `bus`, `files`, `secrets`, `jobs`, `ctx`), and `c93 deploy` with `"runtime": "node"` in `cluster93.json`.
+- **Moving code between runtimes is one line** as long as it uses the globals, `files` or `c93:fs`.
 - **`fs` itself means different things:** the tenant's files in the isolate, and the container's own disk in Node (§7). Deploy warns when code switching runtimes uses `fs` directly.
 
 ## 2. Three places code can run
@@ -51,8 +51,8 @@ Native addons are compiled for one Node ABI, CPU and C library, so the build mus
 
 **Recommended to start: build on the developer's machine, in our builder image, and upload the result.**
 ```
-automately deploy            # automately.json: { "runtime": "node", "node": "22" }
-  └─ docker run automately/node-builder:22  npm ci --omit=dev   (matching Linux, CPU and libc)
+c93 deploy            # cluster93.json: { "runtime": "node", "node": "22" }
+  └─ docker run cluster93/node-builder:22  npm ci --omit=dev   (matching Linux, CPU and libc)
   └─ pack the app into layers: node_modules, then source (D-086)
   └─ upload only the layers the cluster lacks (the package store, D-083), then commit a "node artifact" manifest
 ```
@@ -85,7 +85,7 @@ This is the step the review put before containers and links. Everything below ne
 - **Stopping:** a stop request sets `ctx.stopRequested`, then sends SIGTERM. After the grace period (D-020) the container is killed. A job's timeout ends it the same way.
 - **Logs:** the runner forwards `console` output, and the container's stdout and stderr go to the job's log too, with the same line limits as scripts.
 - **Capacity:** nodes offering containers advertise container capacity separately from isolate slots, as a number of containers plus a memory budget. Placement checks each job's or service's memory request against it.
-  - **The budget is set explicitly** (D-086), `AUTOMATELY_CONTAINER_MEMORY_MB`, because containers share the machine with the node's own Java process. A node refuses to start if the budget plus its Java heap exceeds the machine's memory.
+  - **The budget is set explicitly** (D-086), `C93_CONTAINER_MEMORY_MB`, because containers share the machine with the node's own Java process. A node refuses to start if the budget plus its Java heap exceeds the machine's memory.
 - **Serving HTTP:** the ingress already proxies to "the node holding the job" (D-036). That node forwards each request over the runner protocol, either to a `ctx.serve` handler or to the app's own server on its `PORT`.
   - **Readiness:** the runner reports ready once the port accepts connections. Until then the ingress holds requests briefly, then answers 503. A server that stops answering its health check is restarted.
   - **One running copy per service** (Tony, D-086): no replicas or load balancing at first. If its node dies, it restarts on another node, with a cold start.
@@ -94,7 +94,7 @@ This is the step the review put before containers and links. Everything below ne
   - **WebSockets** (Tony, D-085): the ingress learns to proxy `Upgrade` requests, which it strips today. The runner protocol carries the connection as a two-way stream, so Socket.IO and `ws` servers work as they are. The isolate's `ctx.serve` gets a WebSocket handler too, so both runtimes have them.
 
 ## 6. Running containers on a core node
-- **The engine** (Tony): rootless Podman, driven through its API socket from the node, with no extra agent process. Rootless, because a rootful engine's socket is root on the host. Only nodes with `AUTOMATELY_CONTAINERS=podman` offer `node`; everyone else is unaffected.
+- **The engine** (Tony): rootless Podman, driven through its API socket from the node, with no extra agent process. Rootless, because a rootful engine's socket is root on the host. Only nodes with `C93_CONTAINERS=podman` offer `node`; everyone else is unaffected.
 - **Isolation tiers:**
   - **runc** (namespaces, seccomp, cgroups): for the operator's own tenants, or trusted ones.
   - **gVisor (`runsc`):** a user-space kernel for untrusted tenants, and the default for tenant code when the node has it.
@@ -111,8 +111,8 @@ This is the step the review put before containers and links. Everything below ne
     - **What doesn't work:** networking done inside native code, and UDP.
     - **Why not filter a real network:** it's the only approach that needs no privileged networking on the node, which rootless Podman can't give anyway. It behaves the same under runc, under gVisor and on links.
   - **`/tmp`** is a tmpfs, and its size counts against the container's memory limit, so it's set explicitly.
-- **The app's files:** the node materializes the artifact once per version into its data directory (`<data>/node-apps/<artifact hash>`), from the package store and verified by hash, and mounts it read-only into the container. A restart reuses it. Versions nobody has used for a while are removed first when space runs low, within `AUTOMATELY_MIN_FREE_DISK_MB`.
-- **Images** (D-085): `automately/node-runtime` and `automately/node-builder` are pinned by digest in each signed release (D-069). The CLI and nodes pull by digest, from a registry or mirror the operator configures, or use images the operator preloaded, so clusters without internet access work. An image whose digest doesn't match is refused.
+- **The app's files:** the node materializes the artifact once per version into its data directory (`<data>/node-apps/<artifact hash>`), from the package store and verified by hash, and mounts it read-only into the container. A restart reuses it. Versions nobody has used for a while are removed first when space runs low, within `C93_MIN_FREE_DISK_MB`.
+- **Images** (D-085): `cluster93/node-runtime` and `cluster93/node-builder` are pinned by digest in each signed release (D-069). The CLI and nodes pull by digest, from a registry or mirror the operator configures, or use images the operator preloaded, so clusters without internet access work. An image whose digest doesn't match is refused.
 - **gVisor and the mounted socket:** gVisor reaches host Unix sockets only with its `--host-uds` setting. That's checked in the gVisor spike, with a fallback connection method if needed.
 - **Rootless Podman, gVisor and limits together** (D-086) aren't a given: gVisor's rootless mode has limits, and memory and CPU limits under rootless Podman need cgroup delegation set up on the host. Both are in the gVisor spike, the operator guide lists the host setup, and a node only advertises `node:gvisor` once its own start-up check passes (a container started with limits, under `runsc`, reaching its socket).
 - **Cold and warm starts:**
@@ -121,10 +121,10 @@ This is the step the review put before containers and links. Everything below ne
 
 ## 7. What scripts see in the Node runtime
 - **The same globals as the isolate,** from the runner: `kv`, `bus`, `bus.queue`, `files`, `secrets`, `jobs`, `log`, `ctx` (with `ctx.step`, `ctx.serve` and `ctx.stopRequested`).
-- **`fs`** (Tony): Node's real `fs` works on the container's own filesystem, its `/tmp` and the read-only app. The tenant's files are reached through `files`, and through `automately:fs`, which behaves as in the isolate.
+- **`fs`** (Tony): Node's real `fs` works on the container's own filesystem, its `/tmp` and the read-only app. The tenant's files are reached through `files`, and through `c93:fs`, which behaves as in the isolate.
   - **Later:** the cluster tree mounted at `/files` through FUSE, so `fs.readFileSync('/files/…')` works too. It was already noted as later in the [file system](vfs.md) design.
 - **A real HTTP server:** `app.listen(process.env.PORT)` works, and the runner forwards the service's traffic to it. `ctx.serve` works too.
-- **Secrets in the environment:** secret references in `automately.json` (`env: {DB_URL: {secret: "db-url"}}`) are resolved when the container starts. That's D-068's "not yet" item.
+- **Secrets in the environment:** secret references in `cluster93.json` (`env: {DB_URL: {secret: "db-url"}}`) are resolved when the container starts. That's D-068's "not yet" item.
   - **Who may:** only deployers with `secrets:use` (the D-068 rule).
   - **Audited:** each use is audited, since the value leaves the secrets store.
   - **Visible to every dependency:** the guide says so plainly. Environment variables can be read by any npm package in the container.
@@ -142,9 +142,9 @@ The same runner and artifact, on a link the tenant owns, with no container. It's
 
 ## 9. Building it (after packages)
 1. **Execution layer:** capabilities and placement, the runner protocol, and remote host APIs. **The shared conformance suite is built here:** the same scripts must give the same answers in the isolate and through the runner. It's tested first with a "local process runner", so the protocol is proven before containers exist.
-2. **The runner and images:** the `@automately/runner` package, plus `automately/node-builder` and `automately/node-runtime` images per LTS version. Release-signed (D-069).
+2. **The runner and images:** the `@cluster93/runner` package, plus `cluster93/node-builder` and `cluster93/node-runtime` images per LTS version. Release-signed (D-069).
 3. **Containers on core nodes:** rootless Podman, the lockdown, network tunnelled through the runner, materializing artifacts, the runtime policy, gVisor, and WebSockets through the ingress.
-4. **Deploy:** `automately deploy` with `"runtime": "node"`, the builder run and artifact upload, and services and jobs running there.
+4. **Deploy:** `c93 deploy` with `"runtime": "node"`, the builder run and artifact upload, and services and jobs running there.
 5. **Links:** the same runner on a tenant's device, unsandboxed, after the link join protocol.
 
 **Spikes first:**
@@ -157,7 +157,7 @@ The same runner and artifact, on a link the tenant owns, with no container. It's
 ## 10. Tony's answers (2026-10-08)
 1. **The engine:** plain Node with our runner package.
 2. **Builds:** on the developer's machine first, using our builder image only when native addons need it, with a cluster build worker later for people without Docker.
-3. **`fs`:** the container's own filesystem. The tenant's files are reached through `files` and `automately:fs`, and a FUSE mount at `/files` can come later.
+3. **`fs`:** the container's own filesystem. The tenant's files are reached through `files` and `c93:fs`, and a FUSE mount at `/files` can come later.
 4. **The container engine:** rootless Podman.
 5. **Isolation:** gVisor by default for tenant code, with runc only for tenants the operator marks trusted.
 6. **Jobs and services** both run in Node, with the cold start documented and a warm pool later if needed.

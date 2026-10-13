@@ -13,28 +13,28 @@ There are no passwords. You get in by redeeming an invite, and the console will 
 As an operator, or with the admin token:
 
 ```bash
-automately tenants create acme
-automately invites create --tenant acme --role owner --user alice    # prints the code once
+c93 tenants create acme
+c93 invites create --tenant acme --role owner --user alice    # prints the code once
 ```
 
 Alice then redeems the code:
 
 ```bash
-automately login https://automately.example.com --invite atly_…
-automately whoami        # alice in tenant acme, an owner (*)
+c93 login https://cluster93.example.com --invite atly_…
+c93 whoami        # alice in tenant acme, an owner (*)
 ```
 
 ## Inviting people
 
 ```bash
-automately invites create --role developer                 # anyone with the code; they pick a name
-automately invites create --role viewer --user bob         # only bob, or a new user named bob
-automately invites ls · invites rm inv_…
+c93 invites create --role developer                 # anyone with the code; they pick a name
+c93 invites create --role viewer --user bob         # only bob, or a new user named bob
+c93 invites ls · invites rm inv_…
 ```
 
 What the invitee runs depends on who they are:
-- **Someone new:** `automately login URL --invite CODE --name bob`
-- **Someone who already has a user on this cluster:** while logged in there, `automately login URL --invite CODE`. The invite adds the new tenant to their existing user.
+- **Someone new:** `c93 login URL --invite CODE --name bob`
+- **Someone who already has a user on this cluster:** while logged in there, `c93 login URL --invite CODE`. The invite adds the new tenant to their existing user.
 
 **Invites expire** after 7 days by default, at most 30, and **work once**.
 
@@ -50,10 +50,10 @@ What the invitee runs depends on who they are:
 Make your own from scopes, and put people in groups:
 
 ```bash
-automately roles set release-manager --scope services:read --scope services:write --scope jobs:read
-automately groups set backend --role developer
-automately members set bob --role viewer --group backend     # replaces bob's roles and groups
-automately members                                           # who may do what
+c93 roles set release-manager --scope services:read --scope services:write --scope jobs:read
+c93 groups set backend --role developer
+c93 members set bob --role viewer --group backend     # replaces bob's roles and groups
+c93 members                                           # who may do what
 ```
 
 **Nobody grants more than they hold.**
@@ -66,33 +66,33 @@ automately members                                           # who may do what
 A personal token's scopes are worked out on **every request** from its user's current roles:
 - **Demoting someone,** or taking them out of a group, applies to every token they made, on their next request.
 - **Removing someone** from a tenant deletes their personal tokens for it.
-- **Disabling a user** (`automately users disable bob`, for operators) stops all of their tokens.
+- **Disabling a user** (`c93 users disable bob`, for operators) stops all of their tokens.
 
-**Service tokens** (`automately tokens create`) belong to the tenant, not a person, and keep their fixed scopes.
+**Service tokens** (`c93 tokens create`) belong to the tenant, not a person, and keep their fixed scopes.
 - **Who made it:** each one records its maker.
-- **When the maker leaves:** removing them (or deleting their user) lists the service tokens they made, which keep working. `automately tokens ls` marks them "maker left". Keep them, or revoke them.
+- **When the maker leaves:** removing them (or deleting their user) lists the service tokens they made, which keep working. `c93 tokens ls` marks them "maker left". Keep them, or revoke them.
 
 ## Your profile, and renaming
 
 ```bash
-automately profile                                  # you, your tenants, and what you may do in each
-automately profile --name bobby --display-name "Bob" --email bob@example.com
-automately users rename bobby bob                   # operators
+c93 profile                                  # you, your tenants, and what you may do in each
+c93 profile --name bobby --display-name "Bob" --email bob@example.com
+c93 users rename bobby bob                   # operators
 ```
 
 Memberships, tokens and the audit history hold your user's id, so they follow a rename.
 
 ## Several tenants
 
-One user can belong to several tenants. `automately login --tenant other-co` switches to another of yours, minting a personal token for it. `GET /v1/me` lists your tenants and what you may do in each.
+One user can belong to several tenants. `c93 login --tenant other-co` switches to another of yours, minting a personal token for it. `GET /v1/me` lists your tenants and what you may do in each.
 
 ## Operators
 
 Operators run the cluster as named people, instead of sharing the admin token:
 
 ```bash
-automately invites create --operator --user carol      # with the admin token, or as an operator
-automately users · users operator carol --remove · users disable carol
+c93 invites create --operator --user carol      # with the admin token, or as an operator
+c93 users · users operator carol --remove · users disable carol
 ```
 
 An operator's own token works like the admin token: it manages tenants, users and tokens, but can't read tenant data. Taking away operator stops it at once. Keep the admin token for emergencies.
@@ -102,20 +102,20 @@ An operator's own token works like the admin token: it manages tenants, users an
 Every change, and every refused attempt at one, is recorded with who made it, when and from where.
 
 ```bash
-automately audit                 # your tenant's (needs audit:read)
-automately audit --operators     # the cluster's, and everything operators did
+c93 audit                 # your tenant's (needs audit:read)
+c93 audit --operators     # the cluster's, and everything operators did
 ```
 
 **What it records:**
 - **Each entry:** the user and token, the API operation, the path, the status, the client address, and any `X-Forwarded-For` header.
 - **Not recorded:** reads, bus messages and queue pushes.
 
-**How long it lasts:** entries are kept for `AUTOMATELY_AUDIT_RETENTION_DAYS` (90 by default). A deleted tenant's entries stay until then too, and a new tenant with the same name sees only its own.
+**How long it lasts:** entries are kept for `C93_AUDIT_RETENTION_DAYS` (90 by default). A deleted tenant's entries stay until then too, and a new tenant with the same name sees only its own.
 
-**Tamper evidence:** each node chains its entries, with an HMAC keyed by `AUTOMATELY_SECRETS_KEY`. Operators check every chain with:
+**Tamper evidence:** each node chains its entries, with an HMAC keyed by `C93_SECRETS_KEY`. Operators check every chain with:
 
 ```bash
-automately audit verify      # OK, or which entries were changed or removed
+c93 audit verify      # OK, or which entries were changed or removed
 ```
 
-**Export:** set `AUTOMATELY_AUDIT_S3_BUCKET`, plus the usual S3 settings (see the README). The log is then copied out every 5 minutes as NDJSON files, to `audit/YYYY/MM/DD/` in the bucket. That copy is the record nobody inside the cluster can rewrite. Entries are only pruned after they've been exported.
+**Export:** set `C93_AUDIT_S3_BUCKET`, plus the usual S3 settings (see the README). The log is then copied out every 5 minutes as NDJSON files, to `audit/YYYY/MM/DD/` in the bucket. That copy is the record nobody inside the cluster can rewrite. Entries are only pruned after they've been exported.

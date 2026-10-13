@@ -1,4 +1,4 @@
-# The `automately` CLI
+# The `c93` CLI
 
 **Status:** Phase 4, milestone 3 (2026-10-06). Decisions: D-048, D-049, D-053.
 
@@ -6,17 +6,17 @@
 
 ```bash
 # Linux and macOS
-curl -fsSL https://github.com/adamnlynn/automately-v2/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/adamnlynn/cluster93/releases/latest/download/install.sh | sh
 ```
 ```powershell
 # Windows (PowerShell)
-irm https://github.com/adamnlynn/automately-v2/releases/latest/download/install.ps1 | iex
+irm https://github.com/adamnlynn/cluster93/releases/latest/download/install.ps1 | iex
 ```
 
 The installer:
 - picks the binary for your platform (Linux x64, a static build that runs on any distro including Alpine; Linux arm64; macOS Apple silicon and Intel; Windows x64)
 - **checks the release's signature** (`SHA256SUMS.sig`, made with the project's release key, which is built into the installers), then the binary's SHA-256 against the signed `SHA256SUMS`. It installs nothing unless both hold (D-069). On Linux and macOS this uses `openssl`.
-- installs to `~/.local/bin`, or `/usr/local/bin` as root, or `%LOCALAPPDATA%\Programs\automately` on Windows
+- installs to `~/.local/bin`, or `/usr/local/bin` as root, or `%LOCALAPPDATA%\Programs\cluster93` on Windows
 - tells you if that directory isn't on your `PATH`
 
 The binaries are GraalVM native images: about 50 MB, they start in about 10 ms, and they need no Java.
@@ -25,30 +25,30 @@ Options, as environment variables:
 
 | Variable | |
 |---|---|
-| `AUTOMATELY_VERSION=v2.1.0` | Pin a release |
-| `AUTOMATELY_INSTALL_DIR` | Install somewhere else |
-| `AUTOMATELY_RELEASES=owner/repo` | Releases from another GitHub repository |
-| `AUTOMATELY_INSTALL_URL` | Download from your own mirror. It's still checked against the release key |
-| `AUTOMATELY_RELEASE_PUBLIC_KEY=FILE` | Check signatures with another key, for a mirror that re-signs |
-| `AUTOMATELY_INSECURE_SKIP_SIGNATURE=1` | Don't check the signature, trusting HTTPS alone (for a machine without `openssl`) |
+| `C93_VERSION=v2.1.0` | Pin a release |
+| `C93_INSTALL_DIR` | Install somewhere else |
+| `C93_RELEASES=owner/repo` | Releases from another GitHub repository |
+| `C93_INSTALL_URL` | Download from your own mirror. It's still checked against the release key |
+| `C93_RELEASE_PUBLIC_KEY=FILE` | Check signatures with another key, for a mirror that re-signs |
+| `C93_INSECURE_SKIP_SIGNATURE=1` | Don't check the signature, trusting HTTPS alone (for a machine without `openssl`) |
 
-`automately upgrade [--version TAG]` does the same checks itself, with the key built into the CLI, and then replaces its own binary. It doesn't run a downloaded script.
+`c93 upgrade [--version TAG]` does the same checks itself, with the key built into the CLI, and then replaces its own binary. It doesn't run a downloaded script.
 
-To check a download by hand: `openssl dgst -sha256 -verify automately-release.pem -signature SHA256SUMS.sig SHA256SUMS`. The key is [`install/automately-release.pem`](../../install/automately-release.pem). Maintainers: see [releasing](releasing.md).
+To check a download by hand: `openssl dgst -sha256 -verify cluster93-release.pem -signature SHA256SUMS.sig SHA256SUMS`. The key is [`install/cluster93-release.pem`](../../install/cluster93-release.pem). Maintainers: see [releasing](releasing.md).
 
 > Releases are built by GitHub Actions when a version tag is pushed, and served from this repository's GitHub Releases (D-055). Until the repository is public, its assets need a GitHub login (`gh release download`).
 
-From source: `./mvnw -pl automately-cli -am package -DskipTests`, then `java -jar automately-cli/target/automately-cli.jar`. Add `-Pnative` (with GraalVM) for a native binary.
+From source: `./mvnw -pl cluster93-cli -am package -DskipTests`, then `java -jar cluster93-cli/target/cluster93-cli.jar`. Add `-Pnative` (with GraalVM) for a native binary.
 
 ## Log in
 
 ```bash
-automately login https://automately.example.com     # asks for the token
-echo "$TOKEN" | automately login https://automately.example.com
-automately whoami                                    # tenant acme (jobs:read, jobs:write, …)
+c93 login https://cluster93.example.com     # asks for the token
+echo "$TOKEN" | c93 login https://cluster93.example.com
+c93 whoami                                    # tenant acme (jobs:read, jobs:write, …)
 ```
 
-The URL and token are saved in `~/.config/automately/config.json` (`%APPDATA%\automately` on Windows), readable only by you. `AUTOMATELY_URL` and `AUTOMATELY_TOKEN`, or `--url` and `--token`, override them, for CI.
+The URL and token are saved in `~/.config/cluster93/config.json` (`%APPDATA%\cluster93` on Windows), readable only by you. `C93_URL` and `C93_TOKEN`, or `--url` and `--token`, override them, for CI.
 
 ## Commands
 

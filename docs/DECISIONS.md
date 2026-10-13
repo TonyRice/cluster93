@@ -9,7 +9,7 @@ Each entry records a choice, the reasons for it, and what it costs. Entries are 
 
 jsync.io was a renamed fork of Vert.x 2 core. The only original part was the `io.jsync.app` cluster layer. Its source still exists, so it doesn't need restoring or decompiling. Upstream Vert.x 5 replaces everything else in it.
 
-**Decision:** Start a new repo and port Automately Core's *ideas* (scheduling, runtimes, hosting) onto Vert.x 5. Don't copy 2017 code.
+**Decision:** Start a new repo and port Cluster93 Core's *ideas* (scheduling, runtimes, hosting) onto Vert.x 5. Don't copy 2017 code.
 **Cost:** Every feature has to be rebuilt. Legacy runtimes (PHP, Dart, Docker), SFTP and Azure are dropped deliberately.
 
 ### D-002 — Javet V8, one isolate per job
@@ -25,7 +25,7 @@ Nashorn was removed in JDK 15, and J2V8 is unmaintained. Javet is maintained, em
 
 When an isolate runs out of memory, V8 aborts the **whole process**. Javet doesn't offer a per-isolate heap setting, but it does offer a process-wide `--max-heap-size` and a per-runtime near-heap-limit callback.
 
-**Decision:** Set the max heap once at startup from `AUTOMATELY_MAX_HEAP_MB`. In the callback, terminate the script and grant 32 MB of headroom so V8 can unwind. Report the job as `FAILED: memory limit exceeded`.
+**Decision:** Set the max heap once at startup from `C93_MAX_HEAP_MB`. In the callback, terminate the script and grant 32 MB of headroom so V8 can unwind. Report the job as `FAILED: memory limit exceeded`.
 **Cost:** The limit is the same for every isolate in a JVM, and the first runtime constructed sets it. Per-tenant limits would need separate runner processes.
 
 ### D-004 — Vert.x SharedData in front of Hazelcast
@@ -33,13 +33,13 @@ When an isolate runs out of memory, V8 aborts the **whole process**. Javet doesn
 
 In 2017, 39 files used Hazelcast types directly. Newer Hazelcast versions also moved locks and latches (the CP subsystem) to the Enterprise edition.
 
-**Decision:** Business code uses `JobStore`/`NodeRegistry` on `AsyncMap`. Hazelcast appears only in `automately.server.cluster`, and an ArchUnit rule enforces that.
+**Decision:** Business code uses `JobStore`/`NodeRegistry` on `AsyncMap`. Hazelcast appears only in `cluster93.server.cluster`, and an ArchUnit rule enforces that.
 **Cost:** No Hazelcast queries or predicates. Listing jobs scans the whole map, which is fine for the spike; tenant-indexed queries will need a real store such as Postgres.
 
 ### D-005 — Tenant header as a temporary stand-in for auth
 **Date:** 2026-10-06 · **Status:** Temporary, to be replaced in phase 4
 
-**Decision:** The `X-Automately-Tenant` header scopes every job request, so tenant isolation can be tested now.
+**Decision:** The `X-Cluster93-Tenant` header scopes every job request, so tenant isolation can be tested now.
 **Cost:** It's not authentication. Nodes must not be exposed publicly until scoped tokens arrive.
 
 ### D-006 — Architecture rules as plain JUnit tests
@@ -59,7 +59,7 @@ The `archunit-junit5` engine discovered 0 tests alongside JUnit 5.14, which Vert
 ### D-008 — Authorship
 **Date:** 2026-10-06 · **Status:** Accepted
 
-**Decision:** The author and organisation for Automately is **Adam & Lynn Incorporated** (tony@adamnlynn.com). It's recorded in the POM, the README and the repository's git config.
+**Decision:** The author and organisation for Cluster93 is **Adam & Lynn Incorporated** (tony@adamnlynn.com). It's recorded in the POM, the README and the repository's git config.
 
 ### D-009 — Node incarnations (instance ids)
 **Date:** 2026-10-06 · **Status:** Accepted (phase 2)
@@ -115,7 +115,7 @@ A crashed container restarts with the same node name. Its old jobs would then lo
 
 **Decision:** The phase 2 plan had an internal `SUPERSEDED` outcome; it was left out. A cancelled zombie attempt reports `FAILED: Cancelled: …`, and its "finished" write is rejected by the attempt check, so the job never sees it. The attempt is already recorded as `ORPHANED` in the job's history, and the node logs a warning.
 **Why:** A status that clients never see adds states without adding information.
-**Follow-up:** Phase 5 should count discarded late results as a metric (`automately_attempt_results_discarded_total`), which is where this information is actually useful.
+**Follow-up:** Phase 5 should count discarded late results as a metric (`c93_attempt_results_discarded_total`), which is where this information is actually useful.
 
 ### D-017 — No CI for now
 **Date:** 2026-10-06 · **Status:** Accepted (Tony)
@@ -126,19 +126,19 @@ A crashed container restarts with the same node name. Its old jobs would then lo
 ### D-018 — Name and rights
 **Date:** 2026-10-06 · **Status:** Recorded, as stated by Tony
 
-The acquired product was renamed **Executory** after the acquisition. Tony was given the rights to the pre-acquisition open-source Automately code, so using the Automately name and building on that code here is fine and doesn't overlap with what the product became. This closes the question raised in the revival plan.
+The acquired product was renamed **Executory** after the acquisition. Tony was given the rights to the pre-acquisition open-source Cluster93 code, so using the Cluster93 name and building on that code here is fine and doesn't overlap with what the product became. This closes the question raised in the revival plan.
 
 ### D-019 — An event loop per isolate, on a dedicated executor
 **Date:** 2026-10-06 · **Status:** Accepted
 
-**Decision:** Each execution runs an event loop on its isolate's thread. It pumps microtasks, fires timers (`setTimeout`/`setInterval`, at most 10 000 pending), and runs tasks posted from other threads (stop requests now, incoming requests and messages in phase 3). Kills and timeouts wake an idle loop. Isolates run on a Vert.x shared worker executor (`automately-isolates`) sized to the node's capacity, with execute-time warnings disabled.
+**Decision:** Each execution runs an event loop on its isolate's thread. It pumps microtasks, fires timers (`setTimeout`/`setInterval`, at most 10 000 pending), and runs tasks posted from other threads (stop requests now, incoming requests and messages in phase 3). Kills and timeouts wake an idle loop. Isolates run on a Vert.x shared worker executor (`cluster93-isolates`) sized to the node's capacity, with execute-time warnings disabled.
 **Why:** Services need to stay alive and react over time, and phase 3's handlers need the same loop. A long-running isolate on the default worker pool would trigger blocked-thread warnings and take threads from other blocking work.
 **Cost:** One thread per running isolate. Isolates are thread-affine, so virtual threads aren't an obvious substitute.
 
 ### D-020 — Durable cancellation and a `CANCELLED` status
 **Date:** 2026-10-06 · **Status:** Accepted. Updates D-016
 
-**Decision:** A cancel is stored on the job (`cancelRequested`) with compare-and-set, then sent to the node as an optimisation. The node also checks the flag on every heartbeat, and the reaper ends an orphaned job with a pending cancel as `CANCELLED` instead of retrying it. Running jobs get a graceful stop: `ctx.stopRequested` resolves, then after `AUTOMATELY_STOP_GRACE_MS` (default 5 s) the isolate is terminated. Cancelled attempts, including zombies cancelled by their own node, report `CANCELLED` rather than `FAILED` (that part of D-016 is superseded; their results are still discarded).
+**Decision:** A cancel is stored on the job (`cancelRequested`) with compare-and-set, then sent to the node as an optimisation. The node also checks the flag on every heartbeat, and the reaper ends an orphaned job with a pending cancel as `CANCELLED` instead of retrying it. Running jobs get a graceful stop: `ctx.stopRequested` resolves, then after `C93_STOP_GRACE_MS` (default 5 s) the isolate is terminated. Cancelled attempts, including zombies cancelled by their own node, report `CANCELLED` rather than `FAILED` (that part of D-016 is superseded; their results are still discarded).
 **Why:** A cancel must never be lost and must never turn into a retry.
 
 ### D-021 — Services are supervised jobs, claimed before they're submitted
@@ -178,7 +178,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **Decision:** `fetch` resolves the host, refuses private and reserved addresses (loopback, RFC 1918, link-local including cloud metadata, CGNAT, unique-local IPv6, IPv4-mapped forms), and connects **to that resolved address** with the original Host header and SNI (Vert.x `RequestOptions.setServer`). Redirects are never followed.
 **Why:** Checking a name and then letting the client resolve it again allows DNS rebinding, and following a redirect allows bouncing into an internal address. Both are classic SSRF routes in a multi-tenant sandbox.
-**Cost:** Scripts must follow redirects themselves (and each hop is checked). `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true` exists for local development only.
+**Cost:** Scripts must follow redirects themselves (and each hop is checked). `C93_EGRESS_ALLOW_PRIVATE=true` exists for local development only.
 
 ### D-027 — `kv` expiry is decided by the entry, not the map
 **Date:** 2026-10-06 · **Status:** Accepted
@@ -190,22 +190,22 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 ### D-028 — Automatic hosts and verified custom domains
 **Date:** 2026-10-06 · **Status:** Accepted
 
-**Decision:** Every service is reachable at `<service>--<tenant>.<AUTOMATELY_INGRESS_DOMAIN>`, so tenant and service names may no longer contain `--`. Custom domains are claimed per service and route only after a DNS TXT record `_automately.<domain>` = `automately-verify=<token>` is found (2017's anti-hijacking check). Unverified claims can be taken over after 24 h, and deleting a service releases its domains.
+**Decision:** Every service is reachable at `<service>--<tenant>.<C93_INGRESS_DOMAIN>`, so tenant and service names may no longer contain `--`. Custom domains are claimed per service and route only after a DNS TXT record `_cluster93.<domain>` = `cluster93-verify=<token>` is found (2017's anti-hijacking check). Unverified claims can be taken over after 24 h, and deleting a service releases its domains.
 **Why:** A single DNS label per service works with one wildcard certificate later. Verification stops one tenant capturing another's traffic.
 
 ### D-029 — Ingress forwards over the event bus, routing by authority
 **Date:** 2026-10-06 · **Status:** Accepted
 
-**Decision:** Every node runs an ingress (`AUTOMATELY_INGRESS_PORT`). It routes by the request authority (the Host header on HTTP/1.1, `:authority` on HTTP/2), finds the service's current run, and forwards the request to that node over the event bus. The node hands it to the isolate's `ctx.serve` handler.
+**Decision:** Every node runs an ingress (`C93_INGRESS_PORT`). It routes by the request authority (the Host header on HTTP/1.1, `:authority` on HTTP/2), finds the service's current run, and forwards the request to that node over the event bus. The node hands it to the isolate's `ctx.serve` handler.
 **Cost:** Bodies are limited to 1 MB each way (they travel as event-bus messages) and there's no streaming. That's acceptable for APIs and webhooks; large uploads and downloads would need a direct proxy later.
 
 ### D-030 — The cluster is the database: Apache Ignite replaces Hazelcast
 **Date:** 2026-10-06 · **Status:** Accepted (Tony chose a built-in distributed database over an external one, and Ignite over Infinispan or a home-grown Raft store). Supersedes the Hazelcast parts of D-004 and D-013
 
-**Decision:** Each node runs one embedded Apache Ignite 2.18, used both as the Vert.x cluster manager (`vertx-ignite`) and as Automately's durable, replicated store.
-- Jobs, job state, services, domains and `kv` live in tables in a durable data region, on disk under `AUTOMATELY_DATA_DIR` with a write-ahead log.
-- Each table keeps `AUTOMATELY_DATA_BACKUPS` copies on other nodes, uses compare-and-set transitions, and has SQL indexes (Calcite engine) for listings.
-- Ignite types stay in `automately-cluster-ignite`, enforced by ArchUnit; core still sees only its store interfaces, which now have shared contract tests run against both implementations.
+**Decision:** Each node runs one embedded Apache Ignite 2.18, used both as the Vert.x cluster manager (`vertx-ignite`) and as Cluster93's durable, replicated store.
+- Jobs, job state, services, domains and `kv` live in tables in a durable data region, on disk under `C93_DATA_DIR` with a write-ahead log.
+- Each table keeps `C93_DATA_BACKUPS` copies on other nodes, uses compare-and-set transitions, and has SQL indexes (Calcite engine) for listings.
+- Ignite types stay in `cluster93-cluster-ignite`, enforced by ArchUnit; core still sees only its store interfaces, which now have shared contract tests run against both implementations.
 - With no data directory, Ignite keeps everything in memory (development); a single non-clustered node still uses the in-memory SharedData stores.
 
 **Evidence:** a spike and tests showed compare-and-set across nodes; a two-node and a three-node **full-cluster restart from disk** with everything intact (`DurabilityTest`, `FullRestartTest`, and `DockerClusterIT` stopping and starting every container); and losing a node with no data lost (1 backup).
@@ -218,9 +218,9 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Evidence:** the first version forced the cluster active as soon as the first node restarted. Ignite then treated partitions held by not-yet-returned nodes as lost ("all partition owners have left").
 **Decision:**
 - Whether a node is starting for the **first time** is decided **before** Ignite starts, from whether its data directory already holds a database.
-- Only a first start may activate the cluster, and a brand-new durable cluster waits for `AUTOMATELY_CLUSTER_SIZE` nodes first (D-035).
+- Only a first start may activate the cluster, and a brand-new durable cluster waits for `C93_CLUSTER_SIZE` nodes first (D-035).
 - A restarting node never activates the cluster itself. It waits until every baseline (data-holding) node is back, and Ignite activates by itself.
-- If some never return, the cluster activates without them after `AUTOMATELY_BASELINE_ADJUST_MS`, but **only if no more are missing than there are backups**; otherwise it keeps waiting and logs why. Baseline auto-adjust (on since the first start) then drops the missing nodes.
+- If some never return, the cluster activates without them after `C93_BASELINE_ADJUST_MS`, but **only if no more are missing than there are backups**; otherwise it keeps waiting and logs why. Baseline auto-adjust (on since the first start) then drops the missing nodes.
 
 **Also found:**
 - A restarting node that saw no baseline yet called "activate" while Ignite was already auto-activating. The interrupted write-ahead-log restore made Ignite **halt the JVM** (its protective failure handler).
@@ -230,7 +230,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Date:** 2026-10-06 · **Status:** Accepted
 
 **Evidence:** after a `SIGKILL` in Docker, every read of the node registry failed with "partition has been lost" and scheduling stopped. Caches Vert.x creates by name had Ignite's default of **zero backups**.
-**Decision:** Automately supplies the cache templates `vertx-ignite` normally ships, but stricter. `__vertx.*` and every other name-created cache are REPLICATED, in memory, FULL_SYNC, with partition loss IGNORE.
+**Decision:** Cluster93 supplies the cache templates `vertx-ignite` normally ships, but stricter. `__vertx.*` and every other name-created cache are REPLICATED, in memory, FULL_SYNC, with partition loss IGNORE.
 **Why:** that data (event-bus subscriptions, node info, the node registry) is small and re-announced every heartbeat; staying available matters more than any single entry. Durable tables configure themselves explicitly.
 
 ### D-033 — Retry operations that fail only because the topology changed
@@ -242,19 +242,19 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 ### D-034 — Retention of finished jobs
 **Date:** 2026-10-06 · **Status:** Accepted
 
-**Decision:** The leader deletes finished jobs older than `AUTOMATELY_JOB_RETENTION_DAYS` (default 7), together with their checkpoints and steps, in batches every 10 minutes. `GET /v1/jobs` gained `?limit` (default 100, at most 1 000).
+**Decision:** The leader deletes finished jobs older than `C93_JOB_RETENTION_DAYS` (default 7), together with their checkpoints and steps, in batches every 10 minutes. `GET /v1/jobs` gained `?limit` (default 100, at most 1 000).
 **Why:** with durable storage, history would otherwise grow until the disk fills.
 
 ### D-035 — A new durable cluster waits for its initial size before activating
 **Date:** 2026-10-06 · **Status:** Accepted
 
 **Evidence:** on a fresh three-node durable cluster, the first node to start activated alone, so the baseline was one node. Writes in the first seconds had no replicas, and stopping a node in that window lost data ("all partition owners have left").
-**Decision:** `AUTOMATELY_CLUSTER_SIZE` (default 1), similar to Consul's `bootstrap_expect`. A **brand-new durable** cluster activates only once that many server nodes are present, so its baseline, and therefore replication, includes them from the first write. It has no effect on restarts (D-031) or on in-memory clusters. The compose file and the Docker test set it to 3.
+**Decision:** `C93_CLUSTER_SIZE` (default 1), similar to Consul's `bootstrap_expect`. A **brand-new durable** cluster activates only once that many server nodes are present, so its baseline, and therefore replication, includes them from the first write. It has no effect on restarts (D-031) or on in-memory clusters. The compose file and the Docker test set it to 3.
 
 ### D-036 — The ingress proxies to the serving node over HTTP; the event bus is out of the data path
 **Date:** 2026-10-06 · **Status:** Accepted. Supersedes D-029's forwarding (and its 1 MB cap)
 
-**Decision:** Every node runs an internal HTTP endpoint (`AUTOMATELY_INTERNAL_PORT`, default 8090) and advertises it (`AUTOMATELY_ADVERTISE_HOST:port`) in the node registry. The ingress proxies each request as a stream to the node running the service: the request body is forwarded with backpressure and the response body is streamed back, with no size cap on responses. Internal requests must carry a cluster secret, generated once and agreed through shared data, so the port is useless to anyone outside the cluster.
+**Decision:** Every node runs an internal HTTP endpoint (`C93_INTERNAL_PORT`, default 8090) and advertises it (`C93_ADVERTISE_HOST:port`) in the node registry. The ingress proxies each request as a stream to the node running the service: the request body is forwarded with backpressure and the response body is streamed back, with no size cap on responses. Internal requests must carry a cluster secret, generated once and agreed through shared data, so the port is useless to anyone outside the cluster.
 **Why:** Large files, uploads and server-sent events can't go through single event-bus messages.
 **Cost:** One more port per node, which must be reachable between nodes. HTTP/2 between ingress and node isn't used yet.
 
@@ -269,10 +269,10 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **Decision:**
 - Chunks are counted **when they arrive**, and the source pauses at 8 unconsumed chunks and resumes at 2.
-- The ingress has its own idle watchdog (`AUTOMATELY_INGRESS_IDLE_TIMEOUT_MS`, default 60 s) that counts bytes moving in **either** direction.
+- The ingress has its own idle watchdog (`C93_INGRESS_IDLE_TIMEOUT_MS`, default 60 s) that counts bytes moving in **either** direction.
 - An early answer sends `Connection: close` and closes the connection.
 - Errors are answered before the upstream is reset.
-- Request bodies are capped by `AUTOMATELY_MAX_REQUEST_BYTES` (default 1 GiB), checked from `Content-Length` and while streaming.
+- Request bodies are capped by `C93_MAX_REQUEST_BYTES` (default 1 GiB), checked from `Content-Length` and while streaming.
 - In scripts, response writes wait for the client to drain, and a client disconnecting ends the generator.
 
 ### D-038 — Storage admission control: refuse writes before memory or disk runs out
@@ -281,12 +281,12 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Evidence:** an in-memory node with a small data region took a large upload, hit `IgniteOutOfMemoryException`, and Ignite's failure handler **halted the JVM**. A 64 MB region ran out while just creating the tables, because each partition carries fixed metadata. Tony: "i don't want to be able to crash the jvm with a fucking file upload".
 **Decision:**
 - **Admission control.** A `StorageCapacity` check runs before every write that grows storage: each file creation, each 1 MB file chunk, and `kv.set`/`kv.increment`. When it fails, the write is refused with `insufficient_storage` (HTTP 507, or a script error), the partial upload is discarded, and the node keeps running.
-  - Durable nodes: refused when the data directory's disk has less than `AUTOMATELY_MIN_FREE_DISK_MB` (default 1024) free. Ignite keeps a bounded hot set in memory and pages to disk, so disk is the real limit.
+  - Durable nodes: refused when the data directory's disk has less than `C93_MIN_FREE_DISK_MB` (default 1024) free. Ignite keeps a bounded hot set in memory and pages to disk, so disk is the real limit.
   - In-memory Ignite nodes: refused when the data region is more than 80 % full.
   - Non-clustered nodes (SharedData stores, on the heap): refused when the heap is more than 80 % full.
 - **A safety net behind it.** In-memory Ignite regions use page eviction (`RANDOM_2_LRU` at 90 %), so a burst that gets past the check costs evicted entries rather than the process. This is a last resort, and it can drop data, so the node warns about it at start. Durable regions don't need it.
 - **Partitions: 256** instead of Ignite's 1 024, and a **minimum data region of 128 MB**, checked at start-up with a clear error. Small regions fit the fixed per-partition overhead, and 256 is plenty below about 100 nodes.
-- **Per-tenant quota.** `AUTOMATELY_TENANT_STORAGE_MB` (default 1024) caps a tenant's files. It is checked up front from `Content-Length` when the size is known, and while streaming otherwise.
+- **Per-tenant quota.** `C93_TENANT_STORAGE_MB` (default 1024) caps a tenant's files. It is checked up front from `Content-Length` when the size is known, and while streaming otherwise.
 **Why not stage uploads in a temp file?** Uploads already stream in 1 MB chunks with backpressure, so memory per upload is bounded. Durable storage is already disk-backed, so a temp file would only add a second copy and a second disk to fill. What actually crashed the node was running out of storage, and refusing before that point fixes it in every mode.
 **Cost:** the check is a point-in-time estimate, so concurrent uploads can overshoot by about 1 MB each. That headroom is what the 80 % and 90 % thresholds leave. `kv` doesn't count against the tenant quota yet, only against cluster capacity.
 
@@ -300,7 +300,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Date:** 2026-10-06 · **Status:** Accepted
 
 **Decision:**
-- **Chunks.** A file is split into 1 MB chunks stored in a replicated cache (`FILE_CHUNKS`, key `fileId:index`), with its metadata row in `FILES` (size, content type, SHA-256 ETag, chunk count). Files are replicated like everything else (`AUTOMATELY_DATA_BACKUPS`), survive full restarts on durable nodes, and any node can stream any file.
+- **Chunks.** A file is split into 1 MB chunks stored in a replicated cache (`FILE_CHUNKS`, key `fileId:index`), with its metadata row in `FILES` (size, content type, SHA-256 ETag, chunk count). Files are replicated like everything else (`C93_DATA_BACKUPS`), survive full restarts on durable nodes, and any node can stream any file.
 - **Replacing is atomic.** Each write gets a new file id. Chunks are written first, then the metadata row is swapped in one put, so readers see the old file or the new one, never a mix.
 - **Garbage collection.** A file id that is no longer current is recorded in `FILE_GARBAGE` with a deletion time: 10 minutes after it was replaced or deleted (so reads already in progress finish), or 6 hours after an upload that never finished started. The leader deletes due chunks every minute.
 - **Serving.** `files.stream(path)` returned from a handler is served by Java (`FileResponder`): chunks go from the store to the socket and never enter the isolate. It supports `Range` (single ranges → 206, 416), `ETag`/`If-None-Match` → 304, `HEAD`, and an exact `Content-Length`, so video seeking works.
@@ -312,7 +312,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Date:** 2026-10-06 · **Status:** Accepted
 
 **Evidence:** in one full-verify run, node A wrote a file and node B got "file data is missing" reading it straight away. Ignite's default `PRIMARY_SYNC` completes a write once the primary copy has it, and reads may be served from a backup, so a read on another node can come before the backup is updated.
-**Decision:** Every Automately table and the `FILE_CHUNKS` cache use `FULL_SYNC`: a write completes only when every copy has it. Vert.x's own caches already did (D-032).
+**Decision:** Every Cluster93 table and the `FILE_CHUNKS` cache use `FULL_SYNC`: a write completes only when every copy has it. Vert.x's own caches already did (D-032).
 **Cost:** a write waits for the slowest copy. That is the right trade for a database people expect to read their writes from on any node.
 **Note:** Ignite stores a cache's configuration with its data, so data directories created before this keep the old mode. The project hasn't been released, so no migration is provided.
 
@@ -330,7 +330,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Date:** 2026-10-06 · **Status:** Accepted. Supersedes D-038's "kv doesn't count against the tenant quota yet"
 
 **Decision:**
-- `AUTOMATELY_TENANT_STORAGE_MB` covers everything a tenant stores. A kv entry counts as the UTF-8 bytes of its namespace, key and JSON value (`KvStore.entrySize`); stores record it with the entry and sum it by tenant (an SQL `SUM` on Ignite).
+- `C93_TENANT_STORAGE_MB` covers everything a tenant stores. A kv entry counts as the UTF-8 bytes of its namespace, key and JSON value (`KvStore.entrySize`); stores record it with the entry and sum it by tenant (an SQL `SUM` on Ignite).
 - One `TenantQuota` applies it, and the stores no longer know about quotas: `FileStore.create` takes the most the upload may store.
 - **Uploads** ask for a fresh count once, are refused up front if `Content-Length` doesn't fit, and are cut off when they pass what was left.
 - **kv writes** are checked against a count at most 2 s old, plus what this node admitted since, so a write doesn't sum the tenant's storage each time. When that quick check says no, it's redone from a fresh count against what the write really adds over the entry it replaces. A full tenant can still update, shrink or delete what it has.
@@ -339,11 +339,11 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 ### D-044 — The first credential is an admin token from the environment, or generated once
 **Date:** 2026-10-06 · **Status:** Accepted (Tony)
 
-**Decision:** `AUTOMATELY_ADMIN_TOKEN`, if set, is the admin token on every node. Otherwise the first node of a new cluster generates one, stores only its hash in the cluster, and logs it once. The admin token manages tenants and tokens, and nothing else: it can't read tenant data. To act as a tenant, mint that tenant a token.
+**Decision:** `C93_ADMIN_TOKEN`, if set, is the admin token on every node. Otherwise the first node of a new cluster generates one, stores only its hash in the cluster, and logs it once. The admin token manages tenants and tokens, and nothing else: it can't read tenant data. To act as a tenant, mint that tenant a token.
 **Why:** something has to exist before any token does. An environment variable suits deployments, and a generated, logged-once token suits a first `docker run`. Keeping admin out of tenant data means a leaked admin token can't silently read everything; it can only mint tokens, which is visible.
 
 ### D-045 — Scoped, revocable bearer tokens replace the tenant header
-**Date:** 2026-10-06 · **Status:** Accepted. Replaces the `X-Automately-Tenant` stand-in
+**Date:** 2026-10-06 · **Status:** Accepted. Replaces the `X-Cluster93-Tenant` stand-in
 
 **Decision:**
 - Tokens look like `atly_` + 32 random bytes (base62) + a checksum, and are sent as `Authorization: Bearer`.
@@ -361,13 +361,13 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 ### D-047 — MCP is built into every node, with a stdio bridge in the CLI
 **Date:** 2026-10-06 · **Status:** Accepted (Tony)
 
-**Decision:** Every node serves MCP over Streamable HTTP at `/mcp`, with the same tokens and scopes as the REST API. `automately mcp` bridges stdio for clients that only launch local processes. The protocol is implemented directly on Vert.x.
+**Decision:** Every node serves MCP over Streamable HTTP at `/mcp`, with the same tokens and scopes as the REST API. `c93 mcp` bridges stdio for clients that only launch local processes. The protocol is implemented directly on Vert.x.
 **Why:** agents that support remote MCP servers need nothing installed, and the rest still work through the CLI. One auth model covers both. The Java SDK's transports assume Servlet or Reactor, which this project doesn't use.
 
 ### D-048 — The CLI: Java and picocli, compiled to native binaries
 **Date:** 2026-10-06 · **Status:** Accepted, with D-049 (Tony asked for native Windows, Linux and macOS builds)
 
-**Proposal:** a new `automately-cli` module using picocli, the JDK HTTP client and a small JSON library. It is compiled with GraalVM native-image into one binary per platform, so no JDK is needed on machines that talk to the cluster, and published as GitHub release assets. npm packages wrapping the binaries, as esbuild does, could follow.
+**Proposal:** a new `cluster93-cli` module using picocli, the JDK HTTP client and a small JSON library. It is compiled with GraalVM native-image into one binary per platform, so no JDK is needed on machines that talk to the cluster, and published as GitHub release assets. npm packages wrapping the binaries, as esbuild does, could follow.
 **Constraint:** native-image can't cross-compile. Linux x64 can be built here in a GraalVM container. macOS, Windows and arm64 need those machines, or GitHub Actions runners in a release-only workflow (not CI, so D-017 stands).
 
 ### D-049 — The CLI installs with one line, on Windows, Linux and macOS
@@ -376,7 +376,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Decision:**
 - One native binary per platform: Linux x64 (static, musl) and arm64, macOS arm64 and x64, Windows x64.
 - They're published with `SHA256SUMS` as release assets, and installed with `curl -fsSL …/install.sh | sh` or, on Windows, `irm …/install.ps1 | iex`. The scripts detect the platform, verify the checksum, install to a user directory and set up `PATH`.
-- `automately upgrade` reruns the installer.
+- `c93 upgrade` reruns the installer.
 **Why:** Tony: "super easy to install the cli via curl", with Windows, Linux and macOS builds, and no JDK on the machines that talk to the cluster.
 **Open:** native-image can't cross-compile, so building for macOS and Windows needs GitHub Actions runners in a tag-only release workflow (not CI). Separately, a private repo's release assets can't be downloaded anonymously, so the one-liner needs either a public repo or a separate public releases repo. Both are Tony's call before milestone 3.
 
@@ -395,7 +395,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Date:** 2026-10-06 · **Status:** Accepted
 
 **Decision:**
-- A token bucket per tenant, holding a minute's worth (`AUTOMATELY_RATE_LIMIT_PER_MINUTE`, default 1200; 0 turns limiting off). It refills continuously.
+- A token bucket per tenant, holding a minute's worth (`C93_RATE_LIMIT_PER_MINUTE`, default 1200; 0 turns limiting off). It refills continuously.
 - Each node enforces its share: the budget divided by the live nodes, refreshed every 5 s. No request needs a cluster round-trip.
 - Responses carry the IETF `RateLimit-Policy` and `RateLimit` fields. Over the limit is 429 `rate_limited` with `Retry-After`.
 - The admin token and public routes aren't limited.
@@ -417,7 +417,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
   - Token secrets go to stdout and notes to stderr.
   - `--json` on any command prints the API's JSON.
   - Usage errors exit 2, other failures exit 1.
-- **Credentials.** The login is saved with owner-only permissions. `AUTOMATELY_URL` and `AUTOMATELY_TOKEN` override it, for CI.
+- **Credentials.** The login is saved with owner-only permissions. `C93_URL` and `C93_TOKEN` override it, for CI.
 - **`files sync`** compares local SHA-256 hashes with the server's ETags (D-040), so only changed files go up.
 - **Testing.** Every command runs in-process against a real node in the build (`CliTest`). The installer is tested for real against a local release host, including a tampered checksum (`InstallScriptTest`), and `install.ps1` is checked to parse.
 - **Release workflow.** `.github/workflows/release.yml` builds the five binaries on a version tag only, smoke-tests them (Linux x64 against a real node), and publishes them with `SHA256SUMS` and both installers. Nothing runs until a tag is pushed.
@@ -438,17 +438,17 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **Decision:**
 - The tag-only release workflow (`.github/workflows/release.yml`) may use GitHub Actions runners for the macOS, Windows and arm64 builds. It runs on version tags only, never on pushes, so D-017 (no CI) stands.
-- Public downloads come from `adamnlynn/automately-v2`'s own GitHub Releases, once Tony makes the repository public. The installers and `automately upgrade` already default to `https://github.com/adamnlynn/automately-v2/releases/latest/download`, so nothing changes at that point.
-**Until then:** a tag still builds and publishes a release, but its assets need a GitHub login to download. Use `gh release download`, or point `AUTOMATELY_INSTALL_URL` at a mirror.
+- Public downloads come from `adamnlynn/cluster93`'s own GitHub Releases, once Tony makes the repository public. The installers and `c93 upgrade` already default to `https://github.com/adamnlynn/cluster93/releases/latest/download`, so nothing changes at that point.
+**Until then:** a tag still builds and publishes a release, but its assets need a GitHub login to download. Use `gh release download`, or point `C93_INSTALL_URL` at a mirror.
 
 ### D-056 — File storage backends: metadata in the cluster, bytes in a pluggable BlobStore
 **Date:** 2026-10-07 · **Status:** Accepted (Tony). Extends D-040
 
 **Decision:**
 - **What stays in the cluster database:** paths, versions, the atomic swap to a new version, garbage collection and quotas, whatever holds the bytes.
-- **The bytes go to a `BlobStore`**, chosen with `AUTOMATELY_FILES_BACKEND`:
+- **The bytes go to a `BlobStore`**, chosen with `C93_FILES_BACKEND`:
   - `cluster` (default): 1 MB chunks in the replicated store, as before
-  - `disk`: one file per blob under `AUTOMATELY_FILES_DIR`, written to `.part`, flushed to disk and renamed, with free space checked as it writes. In a cluster, every node must mount the same folder.
+  - `disk`: one file per blob under `C93_FILES_DIR`, written to `.part`, flushed to disk and renamed, with free space checked as it writes. In a cluster, every node must mount the same folder.
   - `s3`: one object per blob in an S3-compatible bucket: 8 MiB multipart parts (one PUT if smaller), ranged GETs for reads, and deleting aborts unfinished uploads
 - **Each file records its backend**, so it's always read from where it was written. Reading a file after switching backends gives a clear error rather than "missing".
 - **A node checks its backend at start** (the bucket answers with these credentials, or the folder is writable) and refuses to start otherwise.
@@ -472,7 +472,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **How:**
 - **Providers are named resources of a tenant** (`/v1/storage/providers`, scopes `storage:read` and `storage:write`). Files record `provider:<id>` as their backend, so keys can rotate, and routes can change, without breaking reads.
-- **Secrets are write-only.** They're sealed with AES-256-GCM using a key derived from `AUTOMATELY_SECRETS_KEY`, with the tenant and provider id as associated data, so a sealed secret can't be moved to another provider. The API reports only `hasSecret`.
+- **Secrets are write-only.** They're sealed with AES-256-GCM using a key derived from `C93_SECRETS_KEY`, with the tenant and provider id as associated data, so a sealed secret can't be moved to another provider. The API reports only `hasSecret`.
 - **A provider is checked against its backend before it's saved.** A wrong key, a missing bucket or a private address is refused with the reason.
 - **Routes** (`/v1/storage/routes`): the longest matching prefix wins, then the tenant's default; `default` means the cluster's own storage.
 - **The admin's policy** (`/v1/tenants/{name}/storage-policy`): which types are allowed, the disk allotment, and whether endpoints may be private. Nothing is allowed by default. Turning a type off refuses new writes there (403 `storage_disabled`) and keeps reads working.
@@ -481,7 +481,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
   - in the tenant's bucket, unlimited
   - on a disk provider, the allotment, counted across all the tenant's disk providers
   - a declared size that won't fit is refused up front, naming the limit
-- **Disk providers live at `<AUTOMATELY_DISK_ROOT>/<tenant>/<name>/`**, a path chosen by the server, never by the tenant. Every node writes a marker into the root and checks the other live nodes' markers. Disk providers only work while all of them are visible. Redundancy across nodes is the shared storage's job (NFS, Ceph); local disks on several nodes can't provide it, and the check turns disk providers off rather than serving files only one node can see.
+- **Disk providers live at `<C93_DISK_ROOT>/<tenant>/<name>/`**, a path chosen by the server, never by the tenant. Every node writes a marker into the root and checks the other live nodes' markers. Disk providers only work while all of them are visible. Redundancy across nodes is the shared storage's job (NFS, Ceph); local disks on several nodes can't provide it, and the check turns disk providers off rather than serving files only one node can see.
 - **Endpoint checks:** tenant S3 endpoints are resolved and checked like `fetch` (D-026), and the connection is pinned to the checked address.
 - **Cleanup:** a provider holding files, or one that routes point to, can't be deleted. Deleting a tenant forgets its policy, providers and routes.
 - **Not for agents:** storage isn't exposed as MCP tools, so credentials don't pass through an agent.
@@ -496,7 +496,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **Decision:**
 - **Each node has its own Prometheus registry**, tagged `node`, and Vert.x is built with it (`MicrometerMetricsFactory`). That gives Vert.x's HTTP server and client, event bus and pool metrics, plus the JVM's.
-- **Automately's own meters:**
+- **Cluster93's own meters:**
   - jobs submitted, queue wait, run time by status, running and capacity
   - isolate cold start
   - service runs and restarts
@@ -505,10 +505,10 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
   - live nodes, leader, and the Ignite data region's use
 - **Recorded without plumbing.** The registry sits in each node's Vert.x local map, so any component with the `Vertx` records. Several nodes in one JVM (the tests) stay apart.
 - **Low-cardinality labels:** no job ids, no client addresses (`remote`), no event-bus addresses. Tenants appear only on the rate-limit counter, where the tenant is the point.
-- **The `/metrics` port is separate** (`AUTOMATELY_METRICS_PORT`, default 9090, `off` to disable), meant for a private network like the internal port. It's kept off the API so it doesn't need a token.
+- **The `/metrics` port is separate** (`C93_METRICS_PORT`, default 9090, `off` to disable), meant for a private network like the internal port. It's kept off the API so it doesn't need a token.
 - **`/ready`**, next to `/health`, answers 503 with reasons until the node is among the live nodes and the cluster is active. It's for load balancers and orchestrators.
-- **Logs:** Logback replaces slf4j-simple. `AUTOMATELY_LOG_FORMAT=json` uses Logback's own JSON encoder: one object per line, with SLF4J key-value pairs (`jobId`, `tenant`, `status`, `durationMs` on "job ended") as fields. In JSON mode Ignite logs through the logger (`IGNITE_QUIET=false`), so its console lines don't break the format.
-**Deferred:** OpenTelemetry tracing. The plan made it optional, and metrics, readiness and structured logs cover operating the cluster. It can be added with `vertx-opentelemetry` behind `AUTOMATELY_OTLP_ENDPOINT` later.
+- **Logs:** Logback replaces slf4j-simple. `C93_LOG_FORMAT=json` uses Logback's own JSON encoder: one object per line, with SLF4J key-value pairs (`jobId`, `tenant`, `status`, `durationMs` on "job ended") as fields. In JSON mode Ignite logs through the logger (`IGNITE_QUIET=false`), so its console lines don't break the format.
+**Deferred:** OpenTelemetry tracing. The plan made it optional, and metrics, readiness and structured logs cover operating the cluster. It can be added with `vertx-opentelemetry` behind `C93_OTLP_ENDPOINT` later.
 
 ### D-059 — Benchmarks: a rerunnable script, honest methodology, and no change without a measured gain
 **Date:** 2026-10-07 · **Status:** Accepted
@@ -530,12 +530,12 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Context:** Scripts saw their APIs through one generic `HostServices.call(op, argsJson)` and a 475-line JavaScript string (`JavetScriptRuntime.PRELUDE`) that built `kv`, `bus`, `fetch`, `files` and `ctx` on top of it. The real work was already in Java, but the API's shape lived in the string, every operation went through one `switch`, and nothing in the core described the API as types. In 2017 the APIs were Java objects exposed to Nashorn. Tony asked for objects again, and for a design another language (Python, later) could reuse.
 
 **Decision:**
-- **Core:** one Java interface per API in `automately.core.runtime.api` (`KvApi`, `BusApi`, `FilesApi`, `FetchApi`, `HttpApi`, gathered in `HostApis`), with JSON, `Buffer` and `Future` in their signatures and no script-engine types. The node implements each (`NodeKvApi`, …), and they share one `HostScope` that holds the tenant (from the job, never the script) and the listeners to undo. `HostArgs` converts loosely typed arguments with the same errors in every language.
+- **Core:** one Java interface per API in `cluster93.core.runtime.api` (`KvApi`, `BusApi`, `FilesApi`, `FetchApi`, `HttpApi`, gathered in `HostApis`), with JSON, `Buffer` and `Future` in their signatures and no script-engine types. The node implements each (`NodeKvApi`, …), and they share one `HostScope` that holds the tenant (from the job, never the script) and the listeners to undo. `HostArgs` converts loosely typed arguments with the same errors in every language.
 - **Javet:** one binding per API (`KvBinding`, `BusBinding`, `FilesBinding`, `FetchBinding`, `HttpBinding`), each bound with `V8ValueObject.bind()` under the hidden host object.
   - **What `bind()` exposes:** only `@V8Function` methods, never `getClass` or reflection. Javet's proxy converter, which would expose Java objects, is not used.
   - **Promises:** a binding returns a promise created in Java (`createV8ValuePromise`). `HostBridge` settles it on the isolate's event loop when the future completes; a failure becomes a real `Error` with `name` and `code`.
   - **Value conversion:** `JsValues`, through V8's own `JSON`, whose functions are captured before the script runs, so a script replacing `JSON.parse` only affects itself.
-- **JavaScript:** 13 small files in `automately-runtime-javet/src/main/resources/automately/runtime/javet/js/`, only for what has to be idiomatic JavaScript: freezing globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, `ctx`. `JavetScriptRuntime.PRELUDE_FILES` lists them in order, and they run in one closure.
+- **JavaScript:** 13 small files in `cluster93-runtime-javet/src/main/resources/cluster93/runtime/javet/js/`, only for what has to be idiomatic JavaScript: freezing globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, `ctx`. `JavetScriptRuntime.PRELUDE_FILES` lists them in order, and they run in one closure.
 
 **Why not bind Java objects with no JavaScript at all:** some things can only be built in the isolate, such as async iterators, frozen objects and a `Response` with methods. The remaining JavaScript is glue, without logic or limits.
 
@@ -563,7 +563,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - **Surfaces:**
   - **Scripts:** `bus.queue(name)` with `push`, `consume`, `stats`, `dead`, `retry` and `discard`, through `QueueApi` and `QueueBinding` (D-060).
   - **REST:** `POST/GET /v1/queues/{queue}`, `GET /v1/queues/{queue}/dead`, `POST …/dead/{id}/retry`, `DELETE …/dead/{id}`, with new scopes `queues:read` and `queues:write`.
-  - **CLI and MCP:** `automately queues …`, and the tools `queue_push`, `queue_stats`, `queue_dead` and `queue_retry`.
+  - **CLI and MCP:** `c93 queues …`, and the tools `queue_push`, `queue_stats`, `queue_dead` and `queue_retry`.
 - **System queues:** the tenant `@system`, which no real tenant can be named (tenant names are `[a-z0-9][a-z0-9_-]*`), holds the system's own queues, starting with completion callbacks. These skip the tenant quota but not admission control.
 
 **Not done:** ordering guarantees (messages come out roughly in push order, with no FIFO promise), outside subscribers (parked in NOTES.md), and per-queue configuration.
@@ -585,8 +585,8 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 - **One hook for every ending.** `CallbackJobStore` wraps the job store and queues a delivery whenever an update moves a job with a callback into a terminal status. Finishing, orphaning, cancelling and rejecting are all such updates, and compare-and-set lets only one of them end a job. The queue key is the job id, so a repeat is a no-op anyway.
 - **Delivery through a durable system queue** (D-061, tenant `@system`, queue `callbacks`), consumed by every node. Deliveries therefore survive the node that queued them and share the queue's retries: 8 attempts, at 1 s, 4 s, 16 s, 64 s, 256 s and then every 10 min, about half an hour in all.
 - **Each delivery reads the job as it is then,** and POSTs `{jobId, status, output, error, attempt, finishedAt, service, data}` through the `fetch` client. So the egress policy applies (D-026): private and metadata addresses are refused unless the operator allows them, and redirects aren't followed. A refused address fails at once rather than being retried.
-- **Signature:** `Automately-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, t + "." + body)>`, the scheme receivers already know from other webhook senders. Each delivery also carries its id (`Automately-Delivery`) and attempt number (`Automately-Attempt`).
-- **Secrets:** one per tenant, created on first use. They're stored in the replicated kv store under the system tenant, which no token can reach. Creation uses a new atomic `KvStore.putIfAbsent`, so racing nodes agree on one secret. They're sealed with `AUTOMATELY_SECRETS_KEY` when it's set (D-057); if that key changes, the secret is replaced as a rotation would. Read or rotate it with `GET /v1/callbacks/secret` and `POST …/rotate` (scope `tokens:write`), or `automately callbacks secret [--rotate]`.
+- **Signature:** `Cluster93-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, t + "." + body)>`, the scheme receivers already know from other webhook senders. Each delivery also carries its id (`Cluster93-Delivery`) and attempt number (`Cluster93-Attempt`).
+- **Secrets:** one per tenant, created on first use. They're stored in the replicated kv store under the system tenant, which no token can reach. Creation uses a new atomic `KvStore.putIfAbsent`, so racing nodes agree on one secret. They're sealed with `C93_SECRETS_KEY` when it's set (D-057); if that key changes, the secret is replaced as a rotation would. Read or rotate it with `GET /v1/callbacks/secret` and `POST …/rotate` (scope `tokens:write`), or `c93 callbacks secret [--rotate]`.
 - **Progress is recorded on the job:** `callback: {url, data, status: PENDING | DELIVERED | FAILED, attempts, deliveredAt, lastError}`.
 
 **Why the cluster secret isn't used to derive tenant secrets:** it lives in the cluster manager's shared map, which isn't kept across a full restart, so the derived secrets would change under receivers.
@@ -599,7 +599,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 ### D-063 — Scripts start and follow jobs: `jobs.run`, `result()`, `events()`, `stop()`
 **Date:** 2026-10-07 · **Status:** Accepted
 
-**Context:** In 2017 a script could start a job with `Automately.startJob(script, config, callback, waitForJob)`, read one (`getJob`) and stop one (`stopJob`). `waitForJob` blocked the script's thread on a latch until the child finished. The rewrite had no way for a job to start another.
+**Context:** In 2017 a script could start a job with `Cluster93.startJob(script, config, callback, waitForJob)`, read one (`getJob`) and stop one (`stopJob`). `waitForJob` blocked the script's thread on a latch until the child finished. The rewrite had no way for a job to start another.
 
 **Decision:**
 - **The calls:**
@@ -637,12 +637,12 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **The recording** is `docs/demo.cast` (asciicast v2), made by `scripts/record.py`, which captures a real run without asciinema installed. Long pauses are shortened on playback.
 
-**To make the dashboard tell the same story,** queues and callbacks got counters: `automately_queue_messages_total{outcome}` and `automately_callbacks_deliveries_total{outcome}`. They have a dashboard row of their own, and `DashboardTest` produces both.
+**To make the dashboard tell the same story,** queues and callbacks got counters: `c93_queue_messages_total{outcome}` and `c93_callbacks_deliveries_total{outcome}`. They have a dashboard row of their own, and `DashboardTest` produces both.
 
 ### D-065 — Ignite's client and REST connectors are off, and Ignite binds to one address
 **Date:** 2026-10-07 · **Status:** Accepted
 
-**Context:** While designing mutual TLS for the cluster (docs/design/cluster-security.md), a probe of a running node found two listeners nothing in Automately uses, both Ignite defaults, unauthenticated, on every interface:
+**Context:** While designing mutual TLS for the cluster (docs/design/cluster-security.md), a probe of a running node found two listeners nothing in Cluster93 uses, both Ignite defaults, unauthenticated, on every interface:
 - **10800:** the thin-client/JDBC/ODBC connector. Anything that could reach it could run SQL against every table, every tenant's data and the tokens table included.
 - **11211:** the binary REST command protocol.
 
@@ -650,7 +650,7 @@ Docker didn't publish them to the host, but every container on the network could
 
 **Decision:**
 - **Both off:** `IgniteConfiguration.setClientConnectorConfiguration(null)` and `setConnectorConfiguration(null)`.
-- **One address:** Ignite listens on `AUTOMATELY_CLUSTER_BIND`, defaulting to an explicitly set `AUTOMATELY_ADVERTISE_HOST`. Without either, it still listens on every interface, as single-machine development does, and the node logs a warning. The compose file and DockerClusterIT bind each node to its own hostname.
+- **One address:** Ignite listens on `C93_CLUSTER_BIND`, defaulting to an explicitly set `C93_ADVERTISE_HOST`. Without either, it still listens on every interface, as single-machine development does, and the node logs a warning. The compose file and DockerClusterIT bind each node to its own hostname.
 - **`ListeningPortsTest`:** it reads the JVM's own listening sockets from `/proc` and asserts a clustered node opens only the API, ingress, internal, metrics, discovery and communication ports plus the event bus. Any new listener fails the build until it's added on purpose. It was checked to fail, naming 10800 and 11211, with the connectors turned back on.
 
 **Not yet:** authentication and encryption between nodes. That's the rest of the design (D-066, D-067): a cluster CA whose key stays on the operator's machine, and node bundles for one-line joins.
@@ -661,20 +661,20 @@ Docker didn't publish them to the host, but every container on the network could
 **Context:** Ignite discovery and communication, the clustered event bus and the internal endpoint were unauthenticated and unencrypted. Anything that could reach the discovery port could join the cluster and receive replicated data. D-065 closed Ignite's unused ports; this closes the rest.
 
 **Decision:**
-- **The CA:** each cluster has its own CA. EC P-256 throughout; the CA lasts 10 years and node certificates 3. **Its private key stays on the operator's machine** (Tony): `automately cluster init` writes `ca.key`, and the cluster never stores it.
+- **The CA:** each cluster has its own CA. EC P-256 throughout; the CA lasts 10 years and node certificates 3. **Its private key stays on the operator's machine** (Tony): `c93 cluster init` writes `ca.key`, and the cluster never stores it.
 - **A node certificate** names the node (common name and DNS name) and its addresses, and is good for TLS server and client use.
 - **TLS 1.3 with a node certificate required on both sides** for:
   - **Ignite discovery and communication:** `IgniteConfiguration.setSslContextFactory`. The context is wrapped so every server-side socket and engine requires the peer's certificate, whatever Ignite asks for.
   - **The clustered event bus:** `EventBusOptions` with PEM key and trust and `ClientAuth.REQUIRED`.
   - **The internal endpoint:** HTTPS with required client certificates; the ingress presents its node certificate.
 - **D-036's shared secret is retired** when certificates are on (Tony).
-- **On by default for clustered nodes** (`AUTOMATELY_CLUSTER_TLS=required`). A node without certificates refuses to start and says how to get them. `off` is for development and logs a warning at every start.
+- **On by default for clustered nodes** (`C93_CLUSTER_TLS=required`). A node without certificates refuses to start and says how to get them. `off` is for development and logs a warning at every start.
 - **Revocation by node id:**
   - **How it works:** a certificate issued before a node's revocation is refused, and one issued after (the node was invited again) is accepted.
   - **Storage:** revocations are kept in the cluster (the system tenant's kv), broadcast to every node, and saved by each node in its TLS directory, so a node refuses revoked peers even before it has rejoined.
   - **A node in the cluster is forced out** through Ignite discovery's `failNode`, which isn't up to the node, unlike `stopNodes`; a well-behaved node also stops itself on the broadcast.
   - **The event bus** trusts the CA but doesn't check revocations: Vert.x copies event-bus options in a way that loses custom trust managers. Ignite discovery does check, so a revoked node can't rejoin, and forcing it out takes its connections with it.
-- **A join timeout** (`AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS`, 60 s): a node whose certificate the members refuse fails its start instead of retrying forever, which is Ignite's default.
+- **A join timeout** (`C93_CLUSTER_JOIN_TIMEOUT_MS`, 60 s): a node whose certificate the members refuse fails its start instead of retrying forever, which is Ignite's default.
 - **Exact issue times:** certificate dates have one-second precision, which made a node invited again within the second of its revocation look revoked. Found by the full test run. Our serial numbers carry the issue time in milliseconds in their high bits, and revocation compares that. Certificates from another CA fall back to their start date.
 - **What a refused node does:**
   - **When Ignite reports the TLS refusal:** the node's start fails.
@@ -684,7 +684,7 @@ Docker didn't publish them to the host, but every container on the network could
 - **Following revocations never holds up a start.** Found by the Docker test: reading the list with SQL as part of startup failed on a freshly forming cluster, because Ignite cancels queries while partitions move. The list now loads in the background, retrying, and every minute after (in case a broadcast was missed), with each node's saved copy covering the meantime. Queries cancelled that way (`QueryCancelledException`) are now retried everywhere, like the other topology errors (D-033).
 
 **Tests:**
-- **`automately-tls`:** real handshakes. A member gets in; no certificate, a foreign CA and a revoked node are refused; a node invited again gets in.
+- **`cluster93-tls`:** real handshakes. A member gets in; no certificate, a foreign CA and a revoked node are refused; a node invited again gets in.
 - **`ClusterSecurityTest`:**
   - no certificates → refused, with the fix in the message
   - a join line for another node → refused
@@ -693,33 +693,33 @@ Docker didn't publish them to the host, but every container on the network could
   - a revoked node's certificate is refused
   - invited again, it rejoins
 - **Every in-JVM cluster test** now runs with TLS required (`TestTls`).
-- **`DockerClusterIT`:** its nodes join with `AUTOMATELY_JOIN` bundles, and **a live node is revoked and forced out**, its process stopping.
+- **`DockerClusterIT`:** its nodes join with `C93_JOIN` bundles, and **a live node is revoked and forced out**, its process stopping.
 
 ### D-067 — Joining a node is one line: a per-node bundle signed on the operator's machine, never the CA key
 **Date:** 2026-10-07 · **Status:** Accepted
 
 **Decision:**
-- **Creating a cluster:** `automately cluster init --nodes …` writes `ca.key`, `ca.crt`, and one `<node>.join` line per node.
-- **Adding a node:** `automately node invite node4 --host … --ca ./ca.key` signs node4's certificate **locally** and prints `AUTOMATELY_JOIN=atly_nodebundle_…`: node4's key, its certificate and the CA certificate, gzipped PEM in base64url. The new node installs it in its TLS directory and starts. Tony asked for a one-liner with the key base64-encoded; it carries **the node's** key, never the CA's, because putting `ca.key` in a one-liner would hand the master key to every node and every shell history.
+- **Creating a cluster:** `c93 cluster init --nodes …` writes `ca.key`, `ca.crt`, and one `<node>.join` line per node.
+- **Adding a node:** `c93 node invite node4 --host … --ca ./ca.key` signs node4's certificate **locally** and prints `C93_JOIN=atly_nodebundle_…`: node4's key, its certificate and the CA certificate, gzipped PEM in base64url. The new node installs it in its TLS directory and starts. Tony asked for a one-liner with the key base64-encoded; it carries **the node's** key, never the CA's, because putting `ca.key` in a one-liner would hand the master key to every node and every shell history.
 - **The bundle is a secret for one node:**
   - it can't create other nodes
   - it's bound to the node's name and addresses
   - a line for one node can't start another
-- **The strict variant:** `automately-server --prepare node4` keeps the key on the new machine and prints its public key, and `node invite --key …` returns a certificate-only line (`atly_nodecert_…`).
+- **The strict variant:** `cluster93-server --prepare node4` keeps the key on the new machine and prints its public key, and `node invite --key …` returns a certificate-only line (`atly_nodecert_…`).
 - **Renewing is inviting again.** Nodes warn from 90 days before expiry.
-- **Compose:** a one-shot `tls-init` service makes the CA and certificates in a volume on the first start (`automately.tls.ClusterInit`), so `docker compose up`, the demo and the benchmarks stay one command. That's development only, since `ca.key` sits in the volume.
+- **Compose:** a one-shot `tls-init` service makes the CA and certificates in a volume on the first start (`cluster93.tls.ClusterInit`), so `docker compose up`, the demo and the benchmarks stay one command. That's development only, since `ca.key` sits in the volume.
 
 **Tests:** CLI tests for `cluster init`, `node invite` (bundle and `--key`) and `node revoke`. DockerClusterIT joins every node with a bundle.
 
 ### D-068 — Tenants' secrets: write-only through the API, readable by scripts only with `secrets:use`
 **Date:** 2026-10-07 · **Status:** Accepted
 
-**Context:** Security groundwork, step 0, part 2. A service's config was plain JSON on its record, readable by anyone with `services:read`, and links, containers and apps will need credentials too. The pieces already existed: D-057 seals tenants' storage keys with `AUTOMATELY_SECRETS_KEY`, and D-062 keeps per-tenant callback secrets under the system tenant.
+**Context:** Security groundwork, step 0, part 2. A service's config was plain JSON on its record, readable by anyone with `services:read`, and links, containers and apps will need credentials too. The pieces already existed: D-057 seals tenants' storage keys with `C93_SECRETS_KEY`, and D-062 keeps per-tenant callback secrets under the system tenant.
 
 **Decision:**
 - **Named secrets per tenant:** `PUT /v1/secrets/{name}` with `{value}` (at most 64 KiB), `GET /v1/secrets`, `GET` and `DELETE /v1/secrets/{name}`. At most 500 per tenant.
   - **Values go in and never come out:** the API and the CLI show a secret's name, version, timestamps and the token that last set it.
-  - **CLI:** `automately secrets set NAME` reads the value from standard input, or hidden at a terminal, to keep it out of shell history; `secrets list`; `secrets rm`.
+  - **CLI:** `c93 secrets set NAME` reads the value from standard input, or hidden at a terminal, to keep it out of shell history; `secrets list`; `secrets rm`.
 - **Scripts read them with `secrets.get(name)`**, which resolves to the value, or null if there's none.
 - **Three scopes:** `secrets:read` (names), `secrets:write` (set and delete) and **`secrets:use`** (scripts may read values).
   - **Why `secrets:use`:** without it, any token that can submit a job (`jobs:write`) could run `secrets.get` and print every secret. That's the token an MCP agent typically has.
@@ -729,13 +729,13 @@ Docker didn't publish them to the host, but every container on the network could
   - **Other scripts** get a `forbidden` error.
   - **Checked at the node:** it reads the flag from the job's durable record on the first `secrets.get`, rather than trusting anything the script passes.
 - **Storage:** the replicated kv store under the system tenant, one namespace per tenant, like D-062. Each value is sealed with AES-256-GCM (D-057's `SecretBox`), with the tenant and name as associated data, so a sealed value copied to another name or tenant doesn't open.
-- **The secrets key is required.** Without `AUTOMATELY_SECRETS_KEY` the API answers 409 `secrets_unavailable` and scripts get `unavailable`. A store called "secrets" that kept values in the clear would mislead. D-062 stores callback secrets in the clear without a key; this doesn't.
+- **The secrets key is required.** Without `C93_SECRETS_KEY` the API answers 409 `secrets_unavailable` and scripts get `unavailable`. A store called "secrets" that kept values in the clear would mislead. D-062 stores callback secrets in the clear without a key; this doesn't.
 - **Deleting a tenant** deletes its secrets.
 - **Not for agents:** there are no MCP tools for secrets, so values never pass through an agent; a script that may read them still can.
 
 **Not yet (recorded for later):**
 - **References** like `env: {DB_URL: {secret: "db-url"}}`, resolved when a link or container starts, with an audit of which secrets leave the cluster and to which device. They come with links and containers.
-- **Rotating `AUTOMATELY_SECRETS_KEY`:** changing it makes stored secrets unreadable, as with D-057. Re-sealing under a new key, with the old one still accepted for a while, is a separate change.
+- **Rotating `C93_SECRETS_KEY`:** changing it makes stored secrets unreadable, as with D-057. Re-sealing under a new key, with the old one still accepted for a while, is a separate change.
 - **Masking secrets in job logs:** a script can print a value it read, and logs are visible with `jobs:read`.
 
 **Tests:**
@@ -752,22 +752,22 @@ Docker didn't publish them to the host, but every container on the network could
 ### D-069 — Releases are signed on the maintainer's machine, and every installer checks the signature
 **Date:** 2026-10-07 · **Status:** Accepted
 
-**Context:** Security groundwork, step 0, part 3. The installers checked each binary against `SHA256SUMS`, but the sums came from the same place as the binary: whoever could change one could change the other (a compromised release workflow, a GitHub token with write access, a mirror). And `automately upgrade` piped the installer from the network straight into a shell.
+**Context:** Security groundwork, step 0, part 3. The installers checked each binary against `SHA256SUMS`, but the sums came from the same place as the binary: whoever could change one could change the other (a compromised release workflow, a GitHub token with write access, a mirror). And `c93 upgrade` piped the installer from the network straight into a shell.
 
 **Decision:**
 - **One signature per release, over `SHA256SUMS`,** which now lists the installers as well as the binaries. It's ECDSA P-256 with SHA-256, in the DER form `openssl dgst -sha256 -sign` writes, and published as `SHA256SUMS.sig`.
 - **The key stays with the maintainer, like the cluster CA (D-066).**
-  - **Creating it:** `scripts/release-key.sh` writes the private key to `~/.config/automately/release-signing.key`, owner-only and encrypted with a passphrase. It also writes the public key to `install/automately-release.pem` and copies it into `install.sh` and `install.ps1`.
+  - **Creating it:** `scripts/release-key.sh` writes the private key to `~/.config/cluster93/release-signing.key`, owner-only and encrypted with a passphrase. It also writes the public key to `install/cluster93-release.pem` and copies it into `install.sh` and `install.ps1`.
   - **Signing:** the release workflow now only builds a **draft**. `scripts/sign-release.sh TAG` then downloads the draft and checks every asset against `SHA256SUMS`. It also checks that the installers carry this key. It then signs, uploads `SHA256SUMS.sig` and publishes the release.
   - **What that protects:** the key never reaches GitHub, so neither the workflow nor anyone with a GitHub token can publish a release the installers accept, and `releases/latest` never serves an unsigned build.
 - **Everything that installs checks the signature first,** and refuses an unsigned or wrongly signed release:
   - **`install.sh` uses `openssl`.** That works with OpenSSL and with macOS's LibreSSL.
   - **`install.ps1` uses .NET's own ECDSA.** This works on Windows PowerShell 5.1 and on PowerShell 7.
-  - **`automately upgrade` does it in-process** with the key built into the binary (the same `.pem`, bundled at build time), then swaps the file. It no longer runs a downloaded script.
-- **Why ECDSA P-256 and not minisign or cosign:** the stock tools on all three systems can check a P-256 signature (`openssl`, .NET, Java), so a one-line install needs nothing extra. Ed25519 would need OpenSSL 3, which macOS doesn't ship, and Windows PowerShell can't check it. Minisign and cosign need their own tool on the user's machine. Anyone can check by hand with `openssl dgst -sha256 -verify automately-release.pem -signature SHA256SUMS.sig SHA256SUMS`.
+  - **`c93 upgrade` does it in-process** with the key built into the binary (the same `.pem`, bundled at build time), then swaps the file. It no longer runs a downloaded script.
+- **Why ECDSA P-256 and not minisign or cosign:** the stock tools on all three systems can check a P-256 signature (`openssl`, .NET, Java), so a one-line install needs nothing extra. Ed25519 would need OpenSSL 3, which macOS doesn't ship, and Windows PowerShell can't check it. Minisign and cosign need their own tool on the user's machine. Anyone can check by hand with `openssl dgst -sha256 -verify cluster93-release.pem -signature SHA256SUMS.sig SHA256SUMS`.
 - **Escape hatches, both explicit:**
-  - `AUTOMATELY_RELEASE_PUBLIC_KEY=FILE`: for a mirror that re-signs with its own key, and for the tests.
-  - `AUTOMATELY_INSECURE_SKIP_SIGNATURE=1`: trusts HTTPS alone, with a warning. It's for a machine without `openssl`, which the installer otherwise refuses with that advice.
+  - `C93_RELEASE_PUBLIC_KEY=FILE`: for a mirror that re-signs with its own key, and for the tests.
+  - `C93_INSECURE_SKIP_SIGNATURE=1`: trusts HTTPS alone, with a warning. It's for a machine without `openssl`, which the installer otherwise refuses with that advice.
 
 **Not covered:**
 - **Freeze and rollback:** an attacker who can serve files could offer an older, validly signed release in place of the latest. TUF-style signed metadata with expiry would cover that; it can come when there's an update channel worth it.
@@ -781,7 +781,7 @@ Docker didn't publish them to the host, but every container on the network could
   - `install.sh` installs a release signed with a test key
   - it refuses one signed by another key, an unsigned one (unless skipping is asked for), and a checksum mismatch
   - `install.ps1`'s check, run under `pwsh`, accepts 20 signatures of every length and refuses another key's
-  - the key in `install.sh`, `install.ps1` and the CLI matches `install/automately-release.pem`
+  - the key in `install.sh`, `install.ps1` and the CLI matches `install/cluster93-release.pem`
 - **`UpgradeTest`:**
   - `upgrade` replaces the binary only when the signature and checksum hold
   - it accepts what `openssl` itself signs, as the maintainer's script does
@@ -849,7 +849,7 @@ Also `RecordsContract` (in memory and on Ignite, including a field named `user`)
 - **Who reads it:**
   - **Tenants** read their own entries with `audit:read` (`GET /v1/audit`).
   - **Operators** read entries with no tenant, plus everything done by an operator or with the admin token, including inside tenants (`GET /v1/admin/audit`).
-- **Retention:** 90 days (`AUTOMATELY_AUDIT_RETENTION_DAYS`). Every node prunes hourly, and the deletes are idempotent. Deleting a tenant deletes its entries.
+- **Retention:** 90 days (`C93_AUDIT_RETENTION_DAYS`). Every node prunes hourly, and the deletes are idempotent. Deleting a tenant deletes its entries.
 - **Never in the way:** a failed write is logged, never turned into a failed request.
 
 **Not yet:** export to S3 or a SIEM, and tamper evidence (hash-chaining entries).
@@ -861,9 +861,9 @@ Also `RecordsContract` (in memory and on Ignite, including a field named `user`)
 
 **Decision:**
 - **Each node chains its own entries.** An entry carries the node's chain id (`<node>/<process instance>`), the next number in that chain, the previous entry's hash, and its own hash over all of that.
-  - **Keying:** with `AUTOMATELY_SECRETS_KEY` the hash is an HMAC-SHA256 under a key derived from it. Someone who can write to the database but doesn't hold the key can't forge a consistent chain. Without a key it's plain SHA-256, which still shows careless edits.
+  - **Keying:** with `C93_SECRETS_KEY` the hash is an HMAC-SHA256 under a key derived from it. Someone who can write to the database but doesn't hold the key can't forge a consistent chain. Without a key it's plain SHA-256, which still shows careless edits.
   - **Why per node:** one chain for the whole cluster would make every write wait on every other.
-- **Checking:** `GET /v1/admin/audit/verify` (`automately audit verify`) reads every entry and reports any:
+- **Checking:** `GET /v1/admin/audit/verify` (`c93 audit verify`) reads every entry and reports any:
   - whose contents don't match its hash
   - that doesn't link to the one before
   - number missing from the middle of a chain
@@ -883,7 +883,7 @@ Also `RecordsContract` (in memory and on Ignite, including a field named `user`)
 **Date:** 2026-10-07 · **Status:** Accepted (Tony chose S3)
 
 **Decision:**
-- **Turning it on:** set `AUTOMATELY_AUDIT_S3_BUCKET`, and the cluster copies new entries there every `AUTOMATELY_AUDIT_EXPORT_INTERVAL_S` (300). The other settings are `AUTOMATELY_AUDIT_S3_ENDPOINT`, `_REGION`, `_PREFIX`, `_PATH_STYLE`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` and `_SESSION_TOKEN`. Each falls back to `AUTOMATELY_S3_*`, then the AWS variables.
+- **Turning it on:** set `C93_AUDIT_S3_BUCKET`, and the cluster copies new entries there every `C93_AUDIT_EXPORT_INTERVAL_S` (300). The other settings are `C93_AUDIT_S3_ENDPOINT`, `_REGION`, `_PREFIX`, `_PATH_STYLE`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` and `_SESSION_TOKEN`. Each falls back to `C93_S3_*`, then the AWS variables.
 - **The files:** NDJSON, oldest first, at `<prefix>audit/YYYY/MM/DD/<first id>_<last id>.ndjson`. SIEMs ingest from S3.
 - **One node at a time:** a node holds a lease, a compare-and-set record that also keeps the cursor (the last entry exported). If that node dies, the lease runs out and another node continues.
 - **The settle window:** entries younger than a minute wait for the next round, so one recorded a moment late on another node isn't skipped. Node clocks must be kept in sync (NTP).
@@ -903,7 +903,7 @@ Also `RecordsContract` (in memory and on Ignite, including a field named `user`)
 - **`developer` gets `secrets:write`.** Withholding it protected nothing, since developers' scripts can already read every secret with `secrets:use`. It only got in the way.
 - **Users have a stable id** (`usr_…`) as well as a name.
   - **What holds the id:** memberships, tokens and audit entries. The audit entry also keeps the name at the time.
-  - **Renaming:** `PATCH /v1/me {name}` (`automately profile --name`) or, for operators, `PATCH /v1/users/{name} {name}` (`automately users rename`). Everything follows.
+  - **Renaming:** `PATCH /v1/me {name}` (`c93 profile --name`) or, for operators, `PATCH /v1/users/{name} {name}` (`c93 users rename`). Everything follows.
   - **Reserving names:** a name is held in its own record with put-if-absent, so two users can't take it at once.
 - **The last owner is guarded atomically.**
   - The tenant's access document keeps the set of owners. Every grant or removal of `owner` goes through that document's compare-and-set, which refuses to empty it.
@@ -924,7 +924,7 @@ Also the CLI flow.
 ### D-075 — A file system on top of the file store
 **Date:** 2026-10-07 · **Status:** Accepted (Tony). Design: `docs/design/vfs.md`
 
-**Context:** The file store (D-040, D-056, D-057) holds tenants' files well, but as a flat set of paths: no folders, rename, append, scratch space or Node-style `fs`. Modules, Node compatibility, apps and the console's file manager all need those. 2017's Automately had a per-user file system; this brings it back on today's store.
+**Context:** The file store (D-040, D-056, D-057) holds tenants' files well, but as a flat set of paths: no folders, rename, append, scratch space or Node-style `fs`. Modules, Node compatibility, apps and the console's file manager all need those. 2017's Cluster93 had a per-user file system; this brings it back on today's store.
 
 **Decision:** a layer on the existing store, not a new store.
 - **The key fact:** blobs are named by an internal id, never by path. So rename, move and copy only rewrite metadata, on every backend, S3 included.
@@ -1059,13 +1059,13 @@ Also the CLI flow.
   - **Calls:** `readFile`, `writeFile`, `appendFile`, `mkdir`, `readdir`, `stat`/`lstat`, `access`, `rename`, `copyFile`, `rm`, `rmdir`, `unlink`, `existsSync`.
   - **Styles:** promises (`fs.promises`), callbacks and `…Sync` forms.
   - **Errors** carry Node's codes, with the cluster's code in `reason`.
-  - **Where it lives:** it's a global, and importable as `automately:fs`, `fs`, `node:fs`, `fs/promises` and `node:fs/promises`. A small module resolver serves just these until packages exist (modules step).
+  - **Where it lives:** it's a global, and importable as `c93:fs`, `fs`, `node:fs`, `fs/promises` and `node:fs/promises`. A small module resolver serves just these until packages exist (modules step).
 - **Synchronous calls block the isolate's own thread,** with a 30 s limit. Isolates run on dedicated worker threads, so only that script waits. A failure is returned as an Error value and thrown in JavaScript, so Javet's exception path isn't involved.
   - **The cost, documented:** timers and other requests in the same isolate wait.
   - **Not interruptible:** a stop request takes effect when the blocked call returns, at most 30 s later.
 - **`/tmp` (Tony: memory, spilling to disk):**
-  - **Memory first:** up to `AUTOMATELY_TMP_MEMORY_MB` (8 MB) per job, refused when the heap passes 85%.
-  - **Then disk:** `<data dir>/tmp/<job>/`, up to `AUTOMATELY_TMP_MB` (1 GB), within `AUTOMATELY_MIN_FREE_DISK_MB`.
+  - **Memory first:** up to `C93_TMP_MEMORY_MB` (8 MB) per job, refused when the heap passes 85%.
+  - **Then disk:** `<data dir>/tmp/<job>/`, up to `C93_TMP_MB` (1 GB), within `C93_MIN_FREE_DISK_MB`.
   - **Nodes without a data directory:** memory only, 64 MB.
   - **Cleanup:** it's deleted when the job ends, and the whole folder is cleared at node start. It's never replicated or counted against the quota.
 - **Append and limits:**
@@ -1098,9 +1098,9 @@ Also the CLI flow.
   - **Cleanup:** a job's locks are released when it ends.
   - **Advisory:** writes don't check locks, since each write is atomic already. Locks coordinate multi-step work.
 - **Public links** (2017's public file tokens):
-  - **Making one:** `POST /v1/fs/share` with `{path, expiresInSeconds}` (default an hour, at most 30 days) returns `{url, token, expiresAt}`. The CLI is `automately files share PATH --expires 1h`.
+  - **Making one:** `POST /v1/fs/share` with `{path, expiresInSeconds}` (default an hour, at most 30 days) returns `{url, token, expiresAt}`. The CLI is `c93 files share PATH --expires 1h`.
   - **Fetching:** anyone can `GET` or `HEAD /v1/shared/{token}`, with no token, getting Range, ETag and `Cache-Control: private, no-store`.
-  - **The token carries everything:** tenant, path, file version and expiry, signed with an HMAC under a key derived from `AUTOMATELY_SECRETS_KEY` and a per-tenant secret. Nothing is stored per link, and any node checks it. Without a secrets key, links are unavailable (409).
+  - **The token carries everything:** tenant, path, file version and expiry, signed with an HMAC under a key derived from `C93_SECRETS_KEY` and a per-tenant secret. Nothing is stored per link, and any node checks it. Without a secrets key, links are unavailable (409).
   - **Pinned to the version it was made for** (Tony): replacing the file stops the link.
   - **Revoking:** `POST /v1/fs/share/rotate` (`files share --revoke-all`) changes the tenant's secret, which revokes every link at once (Tony).
   - **Who can make one:** it needs `files:write`, since publishing a file is a change, and it's audited.
@@ -1173,7 +1173,7 @@ The existing file tests all pass through the wrapper.
 **Decision:**
 - **The unit:** a **package** is an immutable version of ES-module files with a manifest of SHA-256 hashes. Users call them "packages" (Tony).
 - **Pushed, never pulled:**
-  - **Publishing:** developers publish with `automately packages publish`, which bundles npm dependencies with the project's own esbuild on their machine (Tony) and uploads only the files the cluster lacks.
+  - **Publishing:** developers publish with `c93 packages publish`, which bundles npm dependencies with the project's own esbuild on their machine (Tony) and uploads only the files the cluster lacks.
   - **No registry access:** the cluster never runs `npm install` or reaches a registry.
 - **Storage:**
   - **Manifests** go in a replicated `PACKAGES` table, recording who published.
@@ -1183,7 +1183,7 @@ The existing file tests all pass through the wrapper.
 - **Visibility:** private to the tenant, or cluster-wide from operators (Tony).
 - **Resolved once, at submission:** into a lock saved on the job (at most 500 packages), so retries run identical code. Services run from a package version, which is their revision.
 - **Loading:** files are fetched, verified and cached per node by hash before the script starts. The isolate's resolver only maps names, and refuses URLs, absolute paths and anything not in the lock.
-- **Native code:** it's detected when publishing and pointed at the Node runtime, which is designed separately. `automately.json` has a `runtime` field from day one.
+- **Native code:** it's detected when publishing and pointed at the Node runtime, which is designed separately. `cluster93.json` has a `runtime` field from day one.
 
 **Open:** whether inline scripts may import packages, and how. Tony is undecided, and it can be added later.
 
@@ -1217,7 +1217,7 @@ The existing file tests all pass through the wrapper.
 - **Isolation** (Tony): gVisor by default for tenant code; runc only for tenants the operator marks trusted.
 - **In scripts:**
   - **Globals:** the same as the isolate.
-  - **`fs`** is the container's own filesystem (Tony). The tenant's files are reached through `files` and `automately:fs`, and FUSE at `/files` comes later.
+  - **`fs`** is the container's own filesystem (Tony). The tenant's files are reached through `files` and `c93:fs`, and FUSE at `/files` comes later.
   - **HTTP:** `app.listen(PORT)` works.
   - **Secrets in the environment:** resolved at start and audited.
 - **Jobs and services both run in Node** (Tony). The container start time is documented, and a warm pool comes later if needed.
@@ -1283,7 +1283,7 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 - **Artifacts are layers** (dependencies, then source), not individual files. **Why:** a `node_modules` of 20 000 to 40 000 files means tens of thousands of uploads and a slow first fetch on each node.
 - **Spawned programs** get a local proxy endpoint (`HTTP(S)_PROXY`) through the same tunnel and egress rules; **`dns.resolve*`** is rerouted as well as `dns.lookup`.
 - **The runner isn't trusted:** security never depends on it, because the container has no network and the cluster checks every call against the job's tenant and attempt.
-- **Host setup:** rootless Podman with gVisor and cgroup limits is checked in the gVisor spike, and a node offers `node:gvisor` only after its own start-up check passes. `AUTOMATELY_CONTAINER_MEMORY_MB` sets the container budget, and a node refuses to start if it plus the Java heap exceeds the machine's memory.
+- **Host setup:** rootless Podman with gVisor and cgroup limits is checked in the gVisor spike, and a node offers `node:gvisor` only after its own start-up check passes. `C93_CONTAINER_MEMORY_MB` sets the container budget, and a node refuses to start if it plus the Java heap exceeds the machine's memory.
 - **One running copy per service** (Tony): no replicas or load balancing at first, a short gap on redeploy, and only HTTP and WebSockets inbound. Replicas and zero-downtime deploys come as their own step.
 
 **Still open:** inline scripts importing packages (D-083).
@@ -1307,7 +1307,7 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 - **Scopes:** `packages:read` (every built-in role) and `packages:write` (owner, admin, developer). Operators read and publish cluster packages only.
 - **Audit:** publishing is audited; file uploads and the missing-files query aren't, since the publish names every file and they'd flood the log.
 - **Quota and deletion:** a tenant's package files count against its quota, once per unique file. Packages don't stop a tenant from being deleted; deleting it deletes them and their bytes.
-- **Bundling:** the CLI runs a small script with the project's own Node and esbuild (`--platform=node`, ESM, splitting, linked source maps, `.wasm` as files). It refuses required native code (a `.node` import, or a package with a native build), naming what pulled it in; stubs `bufferutil`, `utf-8-validate` and `fsevents` with a warning; and keeps `fs`, `automately:*` and declared Automately packages as imports.
+- **Bundling:** the CLI runs a small script with the project's own Node and esbuild (`--platform=node`, ESM, splitting, linked source maps, `.wasm` as files). It refuses required native code (a `.node` import, or a package with a native build), naming what pulled it in; stubs `bufferutil`, `utf-8-validate` and `fsevents` with a warning; and keeps `fs`, `c93:*` and declared Cluster93 packages as imports.
 - **Not yet:** Node built-ins other than `fs` stop a publish until step 2 brings stand-ins for `path`, `events`, `buffer`, `url` and `util`. An upload cut off by a node crash can leave unreferenced bytes behind; collecting them is step 4's garbage collection. `--no-bundle` publishes a folder as it is, for code that's already ES modules.
 
 ### D-089 — Packages step 2: jobs import packages, locked at submission and loaded before they run
@@ -1336,8 +1336,8 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - unmet or conflicting ranges
 - **Loading:** before an isolate is made, the node fetches every file in the lock, at most 1,000 files and 10 MB per job.
   - **Integrity:** each file is checked against its SHA-256; one that doesn't match is fetched again once, then fails the attempt ("doesn't match its SHA-256 … so the job didn't run").
-  - **The cache:** checked files are cached per node by owner and hash, `AUTOMATELY_PACKAGE_CACHE_MB` (64 by default), least recently used out first. It's keyed by owner too, so whether a file is cached never tells one tenant about another's files.
-  - **A failed load** fails the attempt before any script runs. The `automately.packages.load` timer records how long loading took and whether it worked.
+  - **The cache:** checked files are cached per node by owner and hash, `C93_PACKAGE_CACHE_MB` (64 by default), least recently used out first. It's keyed by owner too, so whether a file is cached never tells one tenant about another's files.
+  - **A failed load** fails the attempt before any script runs. The `cluster93.packages.load` timer records how long loading took and whether it worked.
 - **Resolving in the isolate:**
   - **Bare names** come from the lock through the package's `exports`. A package may import only its declared dependencies (and itself).
   - **`./` and `../`** stay inside the package. The job's script has no files beside it.
@@ -1362,7 +1362,7 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 - **Everything else** of Node's (`crypto`, `stream`, `http`, `child_process`, …) is still refused at publish and at submission, pointing at `"runtime": "node"`.
 - **Why stand-ins and not a Node layer:** these five are pure JavaScript, cover most of what bundled npm libraries reach for, and stay inside the sandbox. Anything needing I/O or native code belongs in the Node runtime (D-084).
 
-### D-091 — Packages step 3: a version is a revision, /packages in fs, automately:* modules
+### D-091 — Packages step 3: a version is a revision, /packages in fs, c93:* modules
 **Date:** 2026-10-08 · **Status:** Accepted. Builds step 3 of D-083; details in `docs/guides/packages.md`
 
 - **Running a version:** a job or service names `"package": {name, version?, export?}` instead of a `"script"`.
@@ -1370,15 +1370,15 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - **What the API shows:** the service's `script` shows the one line it runs, and its `packages` the versions.
   - **Rolling:** a new version is a new revision, so the service rolls.
   - **Why no separate "package" field on services:** the lock already records exactly what runs.
-- **`automately deploy`:** publish, or reuse an identical published version, then `PUT` the service.
+- **`c93 deploy`:** publish, or reuse an identical published version, then `PUT` the service.
   - **Refused:** a changed file under an unchanged version, rather than silently running old code.
-  - **The service's name** is `service.name` in `automately.json`, else the package's name with `.` turned into `-`; `config` and `restart` come from there too.
+  - **The service's name** is `service.name` in `cluster93.json`, else the package's name with `.` turned into `-`; `config` and `restart` come from there too.
   - **`"runtime": "node"`** is refused until the Node runtime exists.
 - **`/packages` in `fs`:** answered from the files fetched before the job started, with no I/O.
   - **Read-only:** writes fail with `read_only` (`EROFS`). A move or copy out of `/packages` copies the bytes.
   - **Listing:** the root listing shows `packages` when the job has any.
   - **`file:///` URLs** are accepted as paths everywhere in `fs`, so `import.meta.url`-relative reads work.
-- **`automately:*` modules:** each re-exports its global, as the default export and by name. **Why not only globals:** a package that imports what it uses says so, and the bundler keeps `automately:*` as imports.
+- **`c93:*` modules:** each re-exports its global, as the default export and by name. **Why not only globals:** a package that imports what it uses says so, and the bundler keeps `c93:*` as imports.
 - **MCP:** `publish_package` takes files as text and runs the same three steps as the CLI, over loopback with the caller's token, so scopes and limits apply.
 
 ### D-092 — Packages step 4: yank, block and purge, as built
@@ -1405,8 +1405,8 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - **Audit:** every change is audited, like any API write.
 - **Garbage:** on the leader every 10 minutes, package files that no unpurged version names are deleted once they're over an hour old. That covers uploads whose publish never came (D-088's "Not yet"). The hour leaves a slow publish time to commit.
 - **Metrics:**
-  - `automately.packages.files`, tagged `source=cache|fetched`, counts cache hits against fetches.
-  - `automately.packages.load` (D-089) times loading.
+  - `cluster93.packages.files`, tagged `source=cache|fetched`, counts cache hits against fetches.
+  - `cluster93.packages.load` (D-089) times loading.
 - **Not done:**
   - **Deleting a version outright** (§7: "only for versions no lock references") would need lock reference counting across jobs and services. Purge covers the urgent case.
   - **Cached copies of a purged file** stay in nodes' memory until they're evicted. They can't be loaded through the refused version, but a node restart is the way to be sure.
@@ -1414,9 +1414,9 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 ### D-093 — Real npm libraries are the measure of the isolate's Node compatibility; ICU, `process`, globals and `require` fixed
 **Date:** 2026-10-08 · **Status:** Accepted (Tony asked for tests with real modules)
 
-- **The test:** `automately-cli/src/test/resources/realnpm` pins 24 npm packages (and esbuild) in a lockfile. `RealNpmPackagesTest` installs them with `npm ci --ignore-scripts` (so nothing native is built), publishes a package exporting one small module per library, runs each as a job, and requires the output to equal what the same module prints under real Node.
+- **The test:** `cluster93-cli/src/test/resources/realnpm` pins 24 npm packages (and esbuild) in a lockfile. `RealNpmPackagesTest` installs them with `npm ci --ignore-scripts` (so nothing native is built), publishes a package exporting one small module per library, runs each as a job, and requires the output to equal what the same module prints under real Node.
   - **It also checks refusals:** libraries needing Node's `crypto` or `stream` are refused at publish with that reason, native ones with the Node runtime named, and one needing Web Crypto fails clearly at run time.
-  - **Gated on `AUTOMATELY_TEST_REAL_NPM`** (a work folder that keeps `node_modules`), since it needs node, npm and the network once.
+  - **Gated on `C93_TEST_REAL_NPM`** (a work folder that keeps `node_modules`), since it needs node, npm and the network once.
 - **What it found and what changed:**
   - **ICU:** Javet's default V8 build has no ICU, so `\p{…}` in regular expressions failed to compile and `Intl` was missing. That broke marked, ajv and validator, and would break most text-handling code. **Now:** Javet's `-i18n` build, with ICU's data file. **How the data ships:** Maven downloads the official ICU 78.3 release zip, checks it against a pinned SHA-256, and unpacks it with its licence into the runtime jar. At start-up it's written to a temporary file for V8, before the first isolate. **Costs:** the native library grows from about 30 to 51 MB, and the jar carries 33 MB of data (about 12 compressed). The ICU major version must follow Javet's V8 when Javet is upgraded.
   - **`process`:** a stand-in for `process` / `node:process`, with only `NODE_ENV` in `env`, `nextTick`, `hrtime`, `emitWarning` and a no-op event surface. `exit`, `chdir` and `binding` throw. It deliberately doesn't claim to be Node (`versions.node` is undefined), so libraries take their non-Node paths rather than reaching for APIs that aren't there.
@@ -1460,7 +1460,7 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 - **Network access never reaches private things unless explicitly allowed** (Tony):
   - **Phase B's checks:** `http`, `net` and `dns` go through D-026's egress check.
   - **The cluster's own nodes are always refused,** by advertised address and internal port, even on public addresses.
-  - **Per-tenant, operator-granted, audited allow-lists** of hosts or CIDRs and ports replace the all-or-nothing `AUTOMATELY_EGRESS_ALLOW_PRIVATE`, which stays for local development only.
+  - **Per-tenant, operator-granted, audited allow-lists** of hosts or CIDRs and ports replace the all-or-nothing `C93_EGRESS_ALLOW_PRIVATE`, which stays for local development only.
 - **Each step comes with:** real libraries added to `RealNpmPackagesTest`, matched against Node; hostile scripts that try to exhaust every cap; and a check that no host object leaks (D-060).
 
 ### D-096 — `process.env` declared per job; `process` is a global
@@ -1553,7 +1553,7 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
   - Its `require()`s of `buffer`, `events`, `process` and `string_decoder` become imports of the isolate's own modules, so there's one `Buffer` and one `EventEmitter`.
   - It installs from a lockfile with `npm ci`, which checks every package's hash, and records each package and its hash in the generated file's header.
   - Licences go to `js/node/THIRD-PARTY-LICENSES.txt`.
-- **The output is committed** rather than built during the Maven build, unlike ICU's data (D-093). Building Automately then never needs Node or the network. The generated code is also reviewed as a diff like any other, which is the point of vendoring. D-095's rule 5 is otherwise unchanged.
+- **The output is committed** rather than built during the Maven build, unlike ICU's data (D-093). Building Cluster93 then never needs Node or the network. The generated code is also reviewed as a diff like any other, which is the point of vendoring. D-095's rule 5 is otherwise unchanged.
 - **Security:** pure JavaScript, with no `eval`, no `Function` constructor and no dynamic imports. It reads only standard globals (`AbortController`, `Blob`, `AggregateError`), so it adds no reach. Anything a stream does still goes through the isolate's own limits.
 - **What it unblocks,** checked against real Node's output by `RealNpmPackagesTest`:
   - **papaparse** and **csv-parse** (its streaming parser, fed rows split across chunks, and its sync API)
@@ -1583,7 +1583,7 @@ Everything is on the JVM's providers.
   - The JVM cipher is made at the first `update`, so `setAutoPadding` works as in Node.
   - **Authenticated decryption** collects its input (at most 32 MB) and decrypts at `final`, once the tag is known. Nothing unauthenticated is handed out before.
   - **String output** (base64, utf8) carries partial groups and characters across `update` calls, as Node's StringDecoder does.
-- **Costly work runs on the node's crypto pool:** a Vert.x shared worker pool named `automately-crypto`, sized at half the cores (at least 2), made once per node. It runs PBKDF2, scrypt and key generation. The pool completes its answers from its own thread, not through the caller's context: a waiting `…Sync` call blocks the isolate's thread, so an answer queued to that context would never arrive.
+- **Costly work runs on the node's crypto pool:** a Vert.x shared worker pool named `cluster93-crypto`, sized at half the cores (at least 2), made once per node. It runs PBKDF2, scrypt and key generation. The pool completes its answers from its own thread, not through the caller's context: a waiting `…Sync` call blocks the isolate's thread, so an answer queued to that context would never arrive.
   - The `…Sync` forms wait for the pool rather than computing on the isolate's thread. That bounds the node's CPU and scrypt memory (pool size × 64 MB) however many jobs ask at once.
   - A sync call that waits more than 60 s fails.
 - **Caps** (D-095's, plus what they implied):
@@ -1706,7 +1706,7 @@ Everything is on the JVM's providers.
 - **Web Crypto's errors are now real `DOMException`s,** as in Node.
 - **Not added:** `Blob`, `File`, `FormData`, `Headers`/`Request`/`Response`, the Web Streams globals, `MessageChannel` and `WebSocket`. They need their own designs: `fetch` returns the host's response today, and WebSocket is network reach.
 
-**The benchmark, and what paid for it:** a new `IsolateStartupBenchmark` (run with `AUTOMATELY_BENCH=1`) times a fresh isolate, its prelude and a script, on one thread after a warm-up.
+**The benchmark, and what paid for it:** a new `IsolateStartupBenchmark` (run with `C93_BENCH=1`) times a fresh isolate, its prelude and a script, on one thread after a warm-up.
 - **The cost of the globals:** they alone added 0.8 ms at p50 to every job (4.9 → 5.7 ms, in three alternating runs each): parsing about 25 KB more prelude.
 - **The fix: compile once.** The prelude is the same source every time, so the first isolate compiles and runs it, and its compiled code goes to every later one through V8's code cache.
   - **Built-in modules** whose source doesn't vary per job are cached the same way. `process` and `os` carry the job's values, so they aren't.
@@ -1751,7 +1751,7 @@ So every job starts about 30% faster than before, with the globals included.
 **Date:** 2026-10-08 · **Status:** Accepted. Phase B's first step ([network-reach.md](design/network-reach.md) §3); the shape is Tony's (D-095 §4.5)
 
 **Context:** phase B gives scripts Node's `http`, `net`, `tls` and `dns`. Before adding any reach, every connection needs one place that decides it. Tony's rule: "anything trying to open network access should not be able to access private things on our cluster unless explicitly allowed to". `fetch`'s check (D-026) refused private addresses, but it had two gaps:
-- **No way to open one:** the only way to reach a private address was `AUTOMATELY_EGRESS_ALLOW_PRIVATE`, which opens every private address for every tenant.
+- **No way to open one:** the only way to reach a private address was `C93_EGRESS_ALLOW_PRIVATE`, which opens every private address for every tenant.
 - **No idea of the cluster:** a node on a public address was reachable like any website.
 
 **Decision:** one `Egress` gate in core. It gets the tenant, the requested name, its resolved addresses and the port, and answers the one address to connect to. For each resolved address, in order:
@@ -1778,7 +1778,7 @@ The first allowed address is the one connected to, as D-026 requires.
 - **It's read only when it could change the answer:** when some address is private and not a node's.
 - **A deleted tenant's policy goes with it.**
 
-**The tenant's view** (Tony asked for it while this was being built): `GET /v1/egress-policy` (`jobs:read`) and `automately egress` show the whole policy that applies:
+**The tenant's view** (Tony asked for it while this was being built): `GET /v1/egress-policy` (`jobs:read`) and `c93 egress` show the whole policy that applies:
 - the defaults, each with a sentence saying why
 - the tenant's rules
 - whether the development switch is on
@@ -1788,7 +1788,7 @@ It's written for people, because the console will show the same response as a "N
 
 **Also:**
 - **Through the gate:** `fetch`, and completion callbacks as the job's tenant.
-- **Counted:** refusals, in `automately_egress_denied_total{tenant,reason}`.
+- **Counted:** refusals, in `c93_egress_denied_total{tenant,reason}`.
 - **A warning:** a node warns at every start while the development switch is on.
 - **Binary bodies:** `fetch` sends a typed array or `ArrayBuffer` body as bytes. Before, it decoded the bytes as UTF-8, which corrupted binary uploads. `URLSearchParams` bodies are sent as forms.
 
@@ -1842,7 +1842,7 @@ It's written for people, because the console will show the same response as a "N
    - **Checked for fallout:** this could change other libraries' paths too, so all 24 earlier real-npm fixtures were rerun. All still match Node.
 5. **A throw in a `queueMicrotask` or `process.nextTick` callback, or an `http` listener, fails the job,** as an uncaught exception ends Node.
    - **The bug:** both ran the callback inside a promise, so the error became a rejection nobody saw, and the job sat until "never settles" or its timeout. `fetch`, timers and listeners already reported their errors.
-   - **The fix:** a hidden reporter under `Symbol.for('automately.uncaught')`. A script that calls it only fails its own job.
+   - **The fix:** a hidden reporter under `Symbol.for('cluster93.uncaught')`. A script that calls it only fails its own job.
    - **Not changed:** unhandled promise rejections still don't fail a job, unlike Node 15+. That needs its own decision (NOTES).
 
 **Testing it required:**
@@ -1872,7 +1872,7 @@ It's written for people, because the console will show the same response as a "N
    - If `process` has `unhandledRejection` listeners, they get `(reason, promise)` and the job goes on. A later handler then emits `rejectionHandled`.
    - Without listeners, the job fails with `Unhandled promise rejection: <reason>`, the reason's stack when it has one.
    - A throw in either listener fails the job as an uncaught error.
-   - The prelude finds `process` under `Symbol.for('automately.process')`, so a script that replaces the global doesn't turn the check off.
+   - The prelude finds `process` under `Symbol.for('cluster93.process')`, so a script that replaces the global doesn't turn the check off.
 4. **The script's own failure wins.** If the default export throws, that's the error, not a rejection it left behind. A module that fails to load is reported as itself: the check doesn't run once the promise being waited on has settled, and the module's own evaluation promise is the one that rejected.
 5. **Promises returned by timer callbacks are ignored,** as Node's `setTimeout` ignores them, so their rejections take the path above. That replaces D-109's special case, which reported them as uncaught timer errors no listener could hear.
 6. **Services too:** a floating rejection ends a service's run, as it would end a Node server. Handlers' own promises are awaited by `ctx.serve`, so they aren't floating.
@@ -1913,7 +1913,7 @@ It's written for people, because the console will show the same response as a "N
 - **The development switch** acts as allow rules for `@private` and `@loopback`.
 - **Where it's kept:**
   - **Storage:** `Records`. Changed through `PUT /v1/egress/cluster-policy` (operators, audited) and the CLI.
-  - **Seeding:** `AUTOMATELY_EGRESS_POLICY_FILE` seeds it at the cluster's first start only.
+  - **Seeding:** `C93_EGRESS_POLICY_FILE` seeds it at the cluster's first start only.
   - **Compatibility:** tenant policies gain deny rules and a posture, and today's rules read as allows.
 - **The tenant's view** (`GET /v1/egress-policy`) shows the effective policy in the order it's applied, with why, for the console's "Network access" page.
 
@@ -1924,13 +1924,13 @@ It's written for people, because the console will show the same response as a "N
 ### D-112 — Servers are reached by hostname only; listening ports are intercepted
 **Date:** 2026-10-08 · **Status:** Accepted (design; built with B3).
 
-**Tony:** "intercept what port they are listening on… route through our cluster's http handling… an http server or websocket server should be able to strictly be handled via hostname". Also: "we have to make it so we can reserve what ports they can listen on and intercept and randomize it… each node will have to have a reserved port space", and "tcp and udp servers would be reserved for our automately link plan, that can run on their own hosted server… plain tcp and udp ports would only be possible if we are running untrusted nodes".
+**Tony:** "intercept what port they are listening on… route through our cluster's http handling… an http server or websocket server should be able to strictly be handled via hostname". Also: "we have to make it so we can reserve what ports they can listen on and intercept and randomize it… each node will have to have a reserved port space", and "tcp and udp servers would be reserved for our c93 link plan, that can run on their own hosted server… plain tcp and udp ports would only be possible if we are running untrusted nodes".
 
 **Decision** (network-reach.md §5):
 - **No script opens a port on a core node.** `listen(port)` is intercepted, and the ingress routes by hostname.
 - **The route table:** `(tenant, service, declared port) → (node, backend endpoint)`, shared by both runtimes.
   - **Isolates:** a random, opaque route id on the node's internal endpoint. There's no operating-system socket at all.
-  - **Node containers:** a random port from the node's reserved range (`AUTOMATELY_SERVICE_PORTS`, default `20000-29999`), mapped to the port inside the container. The gate refuses that range to every script.
+  - **Node containers:** a random port from the node's reserved range (`C93_SERVICE_PORTS`, default `20000-29999`), mapped to the port inside the container. The gate refuses that range to every script.
 - **Reaching each port:**
   - **The default:** the first port gets the service's host; others get `<service>--<tenant>--<port>.<domain>`, one label, so the wildcard certificate covers it.
   - **Per port, if asked:** a path prefix, custom domains, or not exposed.
@@ -1957,8 +1957,8 @@ It's written for people, because the console will show the same response as a "N
   - **The cluster's policy:** `GET`/`PUT /v1/egress/cluster-policy`, with the built-in sets explained.
   - **Tenant policies** gain `rules` and `posture`. The older `allow` list is still read.
   - **The tenant's view** lists each step in order with why, plus the cluster's rules and the tenant's.
-- **The CLI:** `automately egress cluster`, and `tenants egress --deny`/`--posture`.
-- **Seeding:** `AUTOMATELY_EGRESS_POLICY_FILE` seeds the cluster's policy at first start.
+- **The CLI:** `c93 egress cluster`, and `tenants egress --deny`/`--posture`.
+- **Seeding:** `C93_EGRESS_POLICY_FILE` seeds the cluster's policy at first start.
 - **Errors:** a refusal by a rule names the rule and its note.
 
 **Choices made while building:**
@@ -2053,7 +2053,7 @@ It's written for people, because the console will show the same response as a "N
   - **`end()`** half-closes plain TCP (`shutdownOutput`) once writes have gone. Over TLS, it closes.
   - **`upgradeTls`** runs `upgradeToSsl` on the live connection.
   - **TCP keepalive** is on for every socket.
-  - **Bytes are counted** per tenant (`automately_egress_bytes_total`).
+  - **Bytes are counted** per tenant (`c93_egress_bytes_total`).
 - **TLS verification as Node does it:**
   - **The chain:** the handshake always completes. The host then judges the chain against the JVM's trust store, or the script's `ca`, which replaces it as in Node. A refusal carries OpenSSL's code and message, Node 26's `--use-system-ca` hint included.
   - **The host name:** checked by `tls.checkServerIdentity`, Node's algorithm reimplemented, or the script's own check.
@@ -2076,7 +2076,7 @@ It's written for people, because the console will show the same response as a "N
 - **`NodeSocketsTest` (8):** event order, held writes, half-close, Node's errors, TLS cases and custom identity checks, the upgrade, the per-script limit with cleanup at the run's end, Node's `checkServerIdentity`, and backpressure on a 64 MB sender. It passes repeatedly and under CPU load.
 - **`RealNpmPackagesTest`, against real Node 26.8.1:**
   - **A `sockets` fixture,** matching exactly against local echo, TLS, STARTTLS and half-close servers.
-  - **Five drivers against real servers in containers** (with `AUTOMATELY_TEST_REAL_SERVICES`): pg (Postgres 18, plain and TLS through SSLRequest), mysql2 (MySQL 8.4), ioredis (Redis 7, pub/sub), mongodb (MongoDB 8.2) and nodemailer (Mailpit, STARTTLS). All 37 fixtures match.
+  - **Five drivers against real servers in containers** (with `C93_TEST_REAL_SERVICES`): pg (Postgres 18, plain and TLS through SSLRequest), mysql2 (MySQL 8.4), ioredis (Redis 7, pub/sub), mongodb (MongoDB 8.2) and nodemailer (Mailpit, STARTTLS). All 37 fixtures match.
 - **`NodeStandInsTest`:** `once` through `on`, and `Buffer.copy` and enumerability, against Node's values.
 
 **Not done:**
@@ -2259,10 +2259,10 @@ It's written for people, because the console will show the same response as a "N
   - **Lookups** ask the operating system as getaddrinfo does. `dns.lookup` keeps the system's order: a JDK `InetAddressResolverProvider` hands the JVM its built-in resolver unchanged, and `dns.lookup` asks that resolver for both families with no preference. `InetAddress` itself puts IPv4 first, so it couldn't be used.
   - **Queries** use Netty's DNS client as c-ares behaves: explicit servers, each in turn on each try, a per-try timeout, TCP after truncation, no caches.
   - **Decoding:** records are decoded to Node 26's shapes, following compressed names by absolute offset. Character-strings are read as Latin-1, as Node reads them, and IPv6 is written compressed (RFC 5952).
-  - **With `AUTOMATELY_EGRESS_DNS` set,** lookups and the gate ask those servers too, for split-horizon resolvers.
+  - **With `C93_EGRESS_DNS` set,** lookups and the gate ask those servers too, for split-horizon resolvers.
 - **Filtering (§8.2), in `NodeDnsApi` with the gate's `DnsView`:**
   - **Addresses:** visible if the tenant could connect to them on some port by some protocol. A deny rule hides one only if it covers every port and every protocol or `dns`. Cluster nodes are hidden unless the development switch is on.
-  - **Internal names** (single labels, the special-use suffixes, `AUTOMATELY_EGRESS_INTERNAL_DOMAINS`) answer `ENOTFOUND` unless an allow rule names them or the development switch is on.
+  - **Internal names** (single labels, the special-use suffixes, `C93_EGRESS_INTERNAL_DOMAINS`) answer `ENOTFOUND` unless an allow rule names them or the development switch is on.
   - **Records** naming internal hosts are dropped.
   - **Reverse lookups** need a visible address.
 - **`setServers`:** each server is checked by the gate as a `dns` connection to its address and port. Refused ones are left out, and if none remain the query fails with `ECONNREFUSED` and the gate's reason. The cluster's own servers aren't checked.
@@ -2291,7 +2291,7 @@ It's written for people, because the console will show the same response as a "N
   - **On the node:** `ServeRegistry` holds a run's main server (`ctx.serve`) and its servers by port.
   - **The ingress** reads a port from the host (`<service>--<tenant>--<port>`), from a custom domain claimed with a `port`, or from a declared `path` prefix under the service's host (taken off, and sent as `X-Forwarded-Prefix`). It forwards the run and port to the run's node; the service's host goes to the main server, or else the first port that listened.
   - **A service's `ports`** (`[{port, path?, expose?}]`) change routing without a new revision. `expose: false` takes a port off the network.
-  - **The API** shows `routes`, and the CLI has `services routes`, `domains add --port`, and `ports` in `automately.json`.
+  - **The API** shows `routes`, and the CLI has `services routes`, `domains add --port`, and `ports` in `cluster93.json`.
   - **Not opaque route ids:** the run and port suffice, since the internal endpoint is authenticated and nothing listens on the node. This saves a cluster write per `listen`.
 - **The exchange** (`HttpExchange`, `ServerExchange`, the ingress):
   - **Requests:** the client's own headers, address and HTTP version are forwarded so a Node server sees exact `rawHeaders` and `req.socket`. The client's `X-Forwarded-*` are dropped and only the ingress's added.
@@ -2363,7 +2363,7 @@ It's written for people, because the console will show the same response as a "N
   - **Covered:** messages, header order and `getSetCookie`, the multipart boundary format, method normalisation, null-body statuses, default request headers, redirect rules (303 and POST, cross-origin header stripping, 20 at most), content decoding, and `TypeError: fetch failed` with a `cause`.
   - **The transport:** the same streamed host request as `node:http` (D-109), so the egress gate, the 16-request cap and streaming bodies are shared.
 - **The global `fetch` becomes Node's.**
-  - **The host's fetch** (JSON bodies, `timeoutMs`, no redirects) moves to `import { fetch } from 'automately:fetch'`.
+  - **The host's fetch** (JSON bodies, `timeoutMs`, no redirects) moves to `import { fetch } from 'c93:fetch'`.
   - **Why:** code written for Node, and libraries that call `fetch`, expect Node's. A global that differs breaks them quietly: redirects not followed, and no `Response` class to check against.
   - **The cost:** scripts that relied on the host's JSON bodies or `timeoutMs` on the global need the import.
   - **Replaceable:** the global is now writable, as under Node.
@@ -2376,7 +2376,7 @@ It's written for people, because the console will show the same response as a "N
 - **The `webglobals` fixture against real Node** (`RealNpmPackagesTest`): every group above, its errors (codes and messages), `fetch` against a real server, and `stream/web` with `fromWeb`/`toWeb`. The output is identical to Node's.
   - **Covered:** redirects followed, manual and refused; gzip; a 1 MB body buffered and streamed; 404; aborts; a refused connection; and a bad URL.
 - **Koa 3** with `@koa/router` and `@koa/bodyparser` joins Express 5 and Fastify 5 in the framework comparison, and matches Node on every request.
-- **`HostBridgeTest`'s host-fetch tests** now import `automately:fetch`.
+- **`HostBridgeTest`'s host-fetch tests** now import `c93:fetch`.
 - **Regressions:** the full local suite, with the real-npm suite and the drivers.
 
 **Found while testing, and fixed:**
@@ -2396,8 +2396,8 @@ It's written for people, because the console will show the same response as a "N
   - **Why GET only:** that's what WebSocket clients send, and the only method Vert.x's client switches for. Other upgrade requests are ordinary requests.
   - **No frame-size limit at the ingress:** it never sees frames, so that limit is the app's (ws's `maxPayload`).
 - **Limits:**
-  - **Per run:** `AUTOMATELY_SERVICE_MAX_WEBSOCKETS` (1,000) upgraded connections, counted on the run's node apart from the 64 requests in flight (an upgraded connection can last hours). Past it, a 503.
-  - **Idle:** `AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS` (10 minutes) with no byte either way.
+  - **Per run:** `C93_SERVICE_MAX_WEBSOCKETS` (1,000) upgraded connections, counted on the run's node apart from the 64 requests in flight (an upgraded connection can last hours). Past it, a 503.
+  - **Idle:** `C93_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS` (10 minutes) with no byte either way.
   - **End of run:** the run's upgraded sockets close when it ends.
 - **Clients write HTTP/1.1 over the job's own sockets.**
   - **When:** an `http.request` that asks to upgrade, or brings `createConnection` (no longer refused: a socket from `net`/`tls` is already gated), is written on a `net`/`tls` socket in the isolate and its response parsed there, as Node's client does.
@@ -2446,23 +2446,23 @@ It's written for people, because the console will show the same response as a "N
 **Date:** 2026-10-09 · **Status:** Proposed. The neutral layer, the GraalJS adapter and the comparison are approved to build (Tony); the engine and the worker↔node protocol are decided after the comparison. Design: [engine-neutral-runtime.md](design/engine-neutral-runtime.md).
 
 **Built so far:**
-- **Step 3, the comparison in native-image workers (2026-10-10):** `automately-worker` and `benchmarks/engines/`; results and trade-offs in the design doc's §8.
+- **Step 3, the comparison in native-image workers (2026-10-10):** `cluster93-worker` and `benchmarks/engines/`; results and trade-offs in the design doc's §8.
   - **Security:** GraalJS stopped 7 of 9 memory attacks at the run and kept 1 bounded. V8 needed the kernel to kill the worker for 7.
   - **Speed:** V8 is 2–9× faster on object-heavy and JSON code, the two are level on numeric code, and GraalJS's first runs are slower.
   - **Memory:** GraalJS uses more.
   - **Direction (Tony, 2026-10-10):** GraalJS is the better engine for security; the trade-offs are documented for the engine decision.
-- **Step 2, embedded GraalJS (2026-10-10):** `automately-runtime-graaljs` passes the conformance suite, 136 of 136.
+- **Step 2, embedded GraalJS (2026-10-10):** `cluster93-runtime-graaljs` passes the conformance suite, 136 of 136.
   - **Where it runs:** a spawned polyglot isolate with a heap limit per run, under the `TRUSTED` policy, locked down by hand, because the stricter policies refuse `Error.captureStackTrace` and rejection tracking.
   - **Modules:** served with their imports pre-resolved, since GraalJS's loader never says who imports.
   - **The one difference declared:** GraalJS doesn't report rejections handled in a later turn (`rejectionHandled`).
 - Step 1, the engine-neutral layer with Javet alone (2026-10-09). The conformance suite passes per class exactly as before, the real-npm comparisons still match Node, and start-up time is unchanged (4.26 ms against 4.53 ms for a trivial job, same machine and day).
 
 **Why:**
-- **Memory outside the isolate's limit.** A security review found that `AUTOMATELY_MAX_HEAP_MB` caps only V8's heap. ArrayBuffers (one 8 GB), resizable and growable buffers, WebAssembly memory, ICU objects (`toLocaleString` with options: +500 MB per 20,000 calls, never collected until a full GC) and copies into Java all escape it, and one line of script can get a node OOM-killed. Services and retried jobs then repeat that node after node. No data or host escape was found.
+- **Memory outside the isolate's limit.** A security review found that `C93_MAX_HEAP_MB` caps only V8's heap. ArrayBuffers (one 8 GB), resizable and growable buffers, WebAssembly memory, ICU objects (`toLocaleString` with options: +500 MB per 20,000 calls, never collected until a full GC) and copies into Java all escape it, and one line of script can get a node OOM-killed. Services and retried jobs then repeat that node after node. No data or host escape was found.
 - **Engine-level security.** V8 is C++, and its bugs are the usual route out of a JavaScript sandbox. GraalJS is a memory-safe engine with sandbox policies, available on Community Edition since GraalVM 25.1. Tony's concern is the engine itself.
 
 **Decision (proposed):**
-- **Two seams.** The bindings and the run's orchestration move to a new `automately-runtime-js`, written against a small SPI (`JsEngine`, `JsContext`, `JsArg`, `@HostFunction`). Javet and GraalJS each implement it. The placement seam is the existing `HostApis` interfaces: served in-process today, and by a `RemoteHostApis` in a worker later.
+- **Two seams.** The bindings and the run's orchestration move to a new `cluster93-runtime-js`, written against a small SPI (`JsEngine`, `JsContext`, `JsArg`, `@HostFunction`). Javet and GraalJS each implement it. The placement seam is the existing `HostApis` interfaces: served in-process today, and by a `RemoteHostApis` in a worker later.
 - **One conformance suite** (today's runtime tests) runs on every engine.
 - **Tenants run in worker processes,** one per tenant, each with a kernel memory cap (cgroups; measured to work without root, while per-process limits crash V8 at start-up). Workers are GraalVM native images; the node stays a full JVM.
   - **Javet runs in a native image:** a substitution for `JavetClassLoader.loadClass`, and JNI registration of its classes.
@@ -2481,7 +2481,7 @@ It's written for people, because the console will show the same response as a "N
 **Date:** 2026-10-10 · **Status:** Accepted. Supersedes D-126's "single engine winner" assumption. Specification: [worker-node-protocol.md](design/worker-node-protocol.md).
 
 **Decision:**
-1. **Engine selection is a deployment-level choice (`AUTOMATELY_WORKER_ENGINE`):**
+1. **Engine selection is a deployment-level choice (`C93_WORKER_ENGINE`):**
    - Both **GraalJS** and **Javet (V8)** are retained as supported first-class engines behind the `JsEngine` SPI.
    - GraalJS is validated with **137/137 tests passing** on the conformance suite and stops 7 of 9 memory exhaustion attacks inside the isolate without requiring kernel intervention. It is the recommended engine for untrusted multi-tenant workloads.
    - Javet (V8) is 2–9× faster on object/JSON-heavy code and cold starts, making it the recommended engine for trusted, performance-sensitive workloads.
@@ -2489,17 +2489,17 @@ It's written for people, because the console will show the same response as a "N
 2. **Dedicated In-Cluster Worker ↔ Node Protocol Specification:**
    - Section 7 of `engine-neutral-runtime.md` is extracted into a standalone normative specification: `docs/design/worker-node-protocol.md`.
    - Defines length-prefixed binary framing (1 MiB max frame, split JSON metadata and raw contiguous bytes), HTTP/2-style flow-control credit windows (256 KiB per stream, 4 MiB per connection), and RPC lifecycle (`HELLO`, `BIND`, `RUN`, `CALL`, `RESULT`, `CREDIT`, `STATE`, `STATS`).
-   - Clearly isolates the scope: applies exclusively to **in-cluster tenant workers** (local child processes, gVisor containers, Firecracker microVMs). External devices dialing out over TLS WebSockets remain scoped to `automately-link` (`ideas/links-and-capabilities.md`).
+   - Clearly isolates the scope: applies exclusively to **in-cluster tenant workers** (local child processes, gVisor containers, Firecracker microVMs). External devices dialing out over TLS WebSockets remain scoped to `cluster93-link` (`ideas/links-and-capabilities.md`).
 
 **Cost:**
 - Maintaining both engine adapters across future JavaScript feature polyfills (guarded by the shared 137-test conformance suite).
-- Implementing the binary frame codec and RPC dispatcher in Step 4 (`automately-runner-protocol`).
+- Implementing the binary frame codec and RPC dispatcher in Step 4 (`cluster93-runner-protocol`).
 
 ### D-128 — Implementation of in-cluster worker-node IPC framing, RemoteHostApis proxy, and codebase architecture guide
-**Date:** 2026-10-10 · **Status:** Accepted. Implements D-127 Step 4 in module `automately-runner-protocol`. Specification: [worker-node-protocol.md](design/worker-node-protocol.md).
+**Date:** 2026-10-10 · **Status:** Accepted. Implements D-127 Step 4 in module `cluster93-runner-protocol`. Specification: [worker-node-protocol.md](design/worker-node-protocol.md).
 
 **Decision:**
-1. **`automately-runner-protocol` Module Created:**
+1. **`cluster93-runner-protocol` Module Created:**
    - Houses the wire-format binary frame encoder and streaming chunk reassembler (`FrameCodec`, `Frame`, `FrameType`).
    - Implements HTTP/2-style flow control windows (`CreditManager`) with 256 KiB initial stream windows and 4 MiB connection-wide memory caps.
    - Houses domain message models (`HelloMessage`, `WelcomeMessage`, `BindMessage`, `RunMessage`, `CallMessage`, `ResultMessage`, `ErrorMessage`, `CreditMessage`, `LogMessage`, `StateMessage`).
@@ -2510,17 +2510,17 @@ It's written for people, because the console will show the same response as a "N
 3. **Subprocess Execution Abstraction:**
    - `StreamBridge` transparently wraps standard Java `InputStream` and `OutputStream` into non-blocking Vert.x `ReadStream<Buffer>` and `WriteStream<Buffer>` via virtual threads.
    - `WorkerProcessRuntime` allows node schedulers to execute jobs in subprocess workers (GraalVM native images or Java child processes).
-   - `WorkerMain ipc` adds the daemon runner mode to `automately-worker`.
+   - `WorkerMain ipc` adds the daemon runner mode to `cluster93-worker`.
 4. **Codebase Architecture Navigation & Javadoc Integration:**
    - Added [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) providing a high-level subsystem and file reference map.
    - Configured `maven-javadoc-plugin` aggregate documentation (`./mvnw javadoc:aggregate`) with clean doclint rules, resolving historical broken tags in `StateSink`, `IgniteFileStore`, and `Builtins`.
 
 **Evidence:**
-- `automately-runner-protocol` passes all 13 unit and integration tests covering frame chunking, boundary fragmentation, 1 MiB max frame enforcement, credit depletion backpressure, and bidirectional `RemoteHostApis` ↔ `NodeHostApis` RPC execution.
-- Multi-module pre-commit verification (`./mvnw verify -pl automately-runner-protocol,automately-worker -am -DskipITs`) builds and tests cleanly in 55 s with 0 JVM crashes.
+- `cluster93-runner-protocol` passes all 13 unit and integration tests covering frame chunking, boundary fragmentation, 1 MiB max frame enforcement, credit depletion backpressure, and bidirectional `RemoteHostApis` ↔ `NodeHostApis` RPC execution.
+- Multi-module pre-commit verification (`./mvnw verify -pl cluster93-runner-protocol,cluster93-worker -am -DskipITs`) builds and tests cleanly in 55 s with 0 JVM crashes.
 
 ### D-129 — Stream Multiplexing, Warm Tenant Worker Pool Supervisor, and Unix Domain Socket (UDS) Transport
-**Date:** 2026-10-10 · **Status:** Accepted. Implements Step 5 in `automately-runner-protocol`. Specification: [worker-node-protocol.md](design/worker-node-protocol.md).
+**Date:** 2026-10-10 · **Status:** Accepted. Implements Step 5 in `cluster93-runner-protocol`. Specification: [worker-node-protocol.md](design/worker-node-protocol.md).
 
 **Decision:**
 1. **Stream Multiplexing (`StreamMultiplexer`):**
@@ -2531,7 +2531,7 @@ It's written for people, because the console will show the same response as a "N
 2. **Warm Tenant Worker Pool Supervisor (`TenantWorkerPool`):**
    - Maintains a warm pool of pre-spawned worker processes in `UNBOUND` state, eliminating the 40–800 ms cold start overhead for tenant job submissions.
    - Binds workers to tenants on demand via `BIND`, transition states (`UNBOUND` -> `BOUND` -> `BUSY` -> `BOUND` -> `TERMINATED`), and supports `FRESH_PER_JOB` (100% memory isolation) and `REUSE_SAME_TENANT` policies.
-   - Integrates with Linux cgroups v2 (`CgroupMemoryLimiter`): automatically writes `memory.max` and `memory.high` to `/sys/fs/cgroup/automately/worker-<pid>` and verifies OOM kills via `memory.events`. Gracefully falls back to heap options in unprivileged/non-Linux environments.
+   - Integrates with Linux cgroups v2 (`CgroupMemoryLimiter`): automatically writes `memory.max` and `memory.high` to `/sys/fs/cgroup/cluster93/worker-<pid>` and verifies OOM kills via `memory.events`. Gracefully falls back to heap options in unprivileged/non-Linux environments.
 3. **Unix Domain Socket (UDS) Transport (`UdsServerTransport`, `UdsClientTransport`):**
    - Provides native non-blocking Netty domain socket transport over filesystem `.sock` nodes.
    - Unlike stdio pipes which require virtual-thread stream pumping, Vert.x `NetSocket` directly implements `ReadStream<Buffer>` and `WriteStream<Buffer>`, allowing zero-copy, event-loop native framed IPC.
@@ -2543,42 +2543,42 @@ It's written for people, because the console will show the same response as a "N
 **Decision:**
 1. **Per-Tenant Multi-Mode Worker Pools (`TenantWorkerPoolManager`):**
    - Workers are partitioned strictly by `(tenantId, mode)`. Unbound warm workers are spawned per tenant profile, guaranteeing memory isolation and zero cross-tenant contamination.
-   - Operators can define custom worker binary paths per mode via `AUTOMATELY_WORKER_BINARY_<MODE>` (e.g. `AUTOMATELY_WORKER_BINARY_DEFAULT`, `AUTOMATELY_WORKER_BINARY_HIGHMEM`), configured through `ServerConfig`.
+   - Operators can define custom worker binary paths per mode via `C93_WORKER_BINARY_<MODE>` (e.g. `C93_WORKER_BINARY_DEFAULT`, `C93_WORKER_BINARY_HIGHMEM`), configured through `ServerConfig`.
 2. **Zero-Trust Host RPC Authorization (`NodeRpcAuthorizer`):**
    - Introduces `NodeRpcAuthorizer` interface guarding every incoming `CALL` frame on `NodeWorkerChannel`.
    - Before executing any host API RPC method, the channel verifies authorization against tenant and job context, returning `FORBIDDEN` if unauthorized.
 3. **Server Bootstrap Integration:**
    - Updated `ServerConfig` with `workerMode` (`embedded` or `process`), `workerDefaultMode`, and `workerBinaries`.
-   - Wired `WorkerProcessRuntime` backed by `TenantWorkerPoolManager` into `Automately` server bootstrap when `workerMode == process`.
+   - Wired `WorkerProcessRuntime` backed by `TenantWorkerPoolManager` into `Cluster93` server bootstrap when `workerMode == process`.
 4. **End-to-End Capability Verification:**
    - Verified via `WorkerEngineIntegrationTest#testFullCapabilitiesOverWorkerProtocol`: guest JavaScript executes streaming file uploads (`files.write`), KV operations (`kv.set`/`kv.get`), and unauthorized call interception (`jobs.get` -> `FORBIDDEN`).
 
 **Evidence:**
-- All 24 unit and integration tests pass in `automately-runner-protocol`.
+- All 24 unit and integration tests pass in `cluster93-runner-protocol`.
 - All 148 server tests pass cleanly with 0 regressions.
 
-### D-131 — Defaulting AUTOMATELY_WORKER_MODE to Process Isolation for Zero-Trust Security
+### D-131 — Defaulting C93_WORKER_MODE to Process Isolation for Zero-Trust Security
 **Date:** 2026-10-10 · **Status:** Accepted. Extends D-126 and D-130.
 
 **Context:**
-Prior to this decision, `ServerConfig` defaulted `AUTOMATELY_WORKER_MODE` to `embedded`. While in-process isolates (via Javet) are lightweight and suitable for local development, they execute inside the host JVM process. A malicious native exploit or uncontrolled off-heap allocation (e.g. unconstrained ArrayBuffers or ICU allocations) could crash the server process or exhaust system memory.
+Prior to this decision, `ServerConfig` defaulted `C93_WORKER_MODE` to `embedded`. While in-process isolates (via Javet) are lightweight and suitable for local development, they execute inside the host JVM process. A malicious native exploit or uncontrolled off-heap allocation (e.g. unconstrained ArrayBuffers or ICU allocations) could crash the server process or exhaust system memory.
 
 **Decision:**
-1. **Default to Out-of-Process Worker Pools (`AUTOMATELY_WORKER_MODE=process`):**
+1. **Default to Out-of-Process Worker Pools (`C93_WORKER_MODE=process`):**
    - All tenant guest JavaScript executes inside dedicated worker child processes supervised by `TenantWorkerPoolManager`.
    - Each tenant isolate runs in a sandboxed process boundary enforced with cgroups v2 memory limits (`memory.max`, `memory.high`) and zero-trust protocol RPC authorization (`NodeRpcAuthorizer`).
-   - Any worker crash, segfault, or OOM kill is fully contained within the worker process; the Automately cluster node, HTTP ingress, and database remain resilient and unaffected.
+   - Any worker crash, segfault, or OOM kill is fully contained within the worker process; the Cluster93 cluster node, HTTP ingress, and database remain resilient and unaffected.
 2. **Embedded Mode Retained as Opt-In:**
-   - Operators can explicitly opt into `AUTOMATELY_WORKER_MODE=embedded` for lightweight, low-overhead development environments where process spawning is unneeded or restricted.
+   - Operators can explicitly opt into `C93_WORKER_MODE=embedded` for lightweight, low-overhead development environments where process spawning is unneeded or restricted.
 
 **Evidence:**
-- Verified with targeted server tests and `automately-runner-protocol` test suites.
+- Verified with targeted server tests and `cluster93-runner-protocol` test suites.
 
 ### D-132 — Full Process-Mode Parity: streaming host APIs, context restoration, and lifecycle hardening
 **Date:** 2026-10-11 · **Status:** Accepted. Extends D-126, D-128, D-129 and D-131.
 
 **Context:**
-D-131 made `AUTOMATELY_WORKER_MODE=process` the default, but out-of-process execution was only partially implemented: `RemoteHostApis` threw `UnsupportedOperationException` for `ctx.serve`, `fetch`, `net`/`tls` and `files.open`; bus/queue/job listeners had no delivery path; the worker rebuilt a stripped `ctx` (no packages, env, carried steps or service flag); and several failure modes hung instead of failing — a stream could exhaust the 4 MiB connection window (only stream credit was replenished), a worker EOF left the run promise unresolved, blocking state writes ran on the event loop, a full 64 KiB stderr pipe deadlocked workers, and a stopped node left worker processes running. With the default flipped, the whole host-API surface had to behave as it does embedded.
+D-131 made `C93_WORKER_MODE=process` the default, but out-of-process execution was only partially implemented: `RemoteHostApis` threw `UnsupportedOperationException` for `ctx.serve`, `fetch`, `net`/`tls` and `files.open`; bus/queue/job listeners had no delivery path; the worker rebuilt a stripped `ctx` (no packages, env, carried steps or service flag); and several failure modes hung instead of failing — a stream could exhaust the 4 MiB connection window (only stream credit was replenished), a worker EOF left the run promise unresolved, blocking state writes ran on the event loop, a full 64 KiB stderr pipe deadlocked workers, and a stopped node left worker processes running. With the default flipped, the whole host-API surface had to behave as it does embedded.
 
 **Decision:**
 1. **Bridge the streaming host APIs over the multiplexer.** The node side (`NodeWorkerChannel`) owns the request/response stream pairs: `http.request` → `http.response` (with `upgrade` for WebSockets), `fetch.request` → `fetch.response`, `socket.connect` → `socket.data`, and `files.open` → `files.data`; `files.create` and `files.respond` complete the file API. Response streams are opened before the peer can answer, and a fetch whose body already ended signals failure on the response stream rather than a reset that no longer has a stream to reach.
@@ -2597,7 +2597,7 @@ D-131 made `AUTOMATELY_WORKER_MODE=process` the default, but out-of-process exec
 - The child-JVM fallback (used when no native image is present) now logs to stderr and resolves worker resources first; a stale native image must be rebuilt to match the protocol.
 
 **Evidence:**
-- `ProcessModeParityTest` (two-node cluster, real child-JVM workers) exercises package imports, `ctx.serve` through the ingress, `fetch` and `net.connect` egress, bus request/reply, worker kill detection and resumed step memoization under `AUTOMATELY_WORKER_MODE=process`.
+- `ProcessModeParityTest` (two-node cluster, real child-JVM workers) exercises package imports, `ctx.serve` through the ingress, `fetch` and `net.connect` egress, bus request/reply, worker kill detection and resumed step memoization under `C93_WORKER_MODE=process`.
 - `StreamMultiplexerCreditTest` (10 MiB over the 4 MiB connection window), `NodeWorkerChannelEofCrashTest` (EOF fails the run), `NodeWorkerChannelStateNonBlockingTest` (commits off the event loop).
 
 

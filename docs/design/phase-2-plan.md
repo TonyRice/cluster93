@@ -20,7 +20,7 @@ These change or sharpen the design doc and are recorded as decisions D-009 to D-
 
 ## Work breakdown
 
-### 1. Model (`automately-core`, `job` package)
+### 1. Model (`cluster93-core`, `job` package)
 - `JobStatus`: add `ORPHANED`, a terminal status.
 - New `OrphanPolicy` enum (`FAIL`, `RETRY`, `RESUME`) and `Attempt` record (`attempt`, `node`, `nodeInstance`, `startedAt`, `endedAt`, `outcome`).
 - `Job`: add `onOrphan`, `maxAttempts`, `attempt`, `nodeInstance`, and `attempts` (history). Transitions become pure functions that check the attempt: `started(attempt, node, instance)`, `finished(attempt, …)`, `orphaned(now)`, `nextAttempt(now)`. A transition for the wrong attempt returns empty, which the caller treats as "superseded".
@@ -36,7 +36,7 @@ These change or sharpen the design doc and are recorded as decisions D-009 to D-
 - `Execution` gains a `JobContext` (`jobId`, `attempt`, `policy`, `previous`, `checkpoint`, `completedSteps`) and a `StateSink` (`saveCheckpoint` and `completeStep`, each a blocking call that returns or throws `Superseded`/`StateLimit`).
 - `ExecutionResult` gains `SUPERSEDED` as an internal outcome that is never shown as a job status.
 
-### 4. Javet runtime (`automately-runtime-javet`)
+### 4. Javet runtime (`cluster93-runtime-javet`)
 - The prelude builds `ctx` as specified in `job-context.md`: frozen, with `step`, `saveCheckpoint`, `stepKey`, `completedSteps`, and the `SupersededError`/`StateLimitError` classes.
 - `HostState`, a new `@V8Function` binding next to `HostConsole`: `completeStep(name, json)` and `saveCheckpoint(json)`. These call `StateSink` and turn failures into JS errors.
 - `cancel()` sets the kill reason and calls `terminateExecution()`, reusing the timeout path.
@@ -57,7 +57,7 @@ These change or sharpen the design doc and are recorded as decisions D-009 to D-
      - `RETRY`/`RESUME`: `nextAttempt`, publish an `attempt` event, then dispatch.
 - Event bus: the `attempt` event, and `end` published only when the job reaches a terminal status.
 
-### 6. API (`automately-server`)
+### 6. API (`cluster93-server`)
 - `POST /v1/jobs`: validate `onOrphan` and `maxAttempts`.
 - The job JSON includes the new fields.
 - `GET /v1/jobs/{id}/steps` returns the current attempt's state.

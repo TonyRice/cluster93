@@ -53,12 +53,12 @@ describe('token management', () => {
     setToken('tok-123');
 
     expect(getToken()).toBe('tok-123');
-    expect(window.localStorage.getItem('automately.console.token')).toBe('tok-123');
+    expect(window.localStorage.getItem('cluster93.console.token')).toBe('tok-123');
 
     clearToken();
 
     expect(getToken()).toBeNull();
-    expect(window.localStorage.getItem('automately.console.token')).toBeNull();
+    expect(window.localStorage.getItem('cluster93.console.token')).toBeNull();
   });
 
   it('sends the stored token as a bearer credential', async () => {
@@ -88,7 +88,7 @@ describe('target tenant scoping', () => {
     expect(getTargetTenant()).toBeNull();
   });
 
-  it("attaches X-Automately-Tenant for subsequent requests after setTargetTenant('alpha')", async () => {
+  it("attaches X-Cluster93-Tenant for subsequent requests after setTargetTenant('alpha')", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ nodes: [] }));
 
     setTargetTenant('alpha');
@@ -97,7 +97,7 @@ describe('target tenant scoping', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [path, init] = fetchMock.mock.calls[0];
     expect(path).toBe('/v1/nodes');
-    expect(init.headers['X-Automately-Tenant']).toBe('alpha');
+    expect(init.headers['X-Cluster93-Tenant']).toBe('alpha');
   });
 
   it('sends no tenant header when the target is cleared', async () => {
@@ -108,7 +108,7 @@ describe('target tenant scoping', () => {
     await api.getNodes();
 
     const [, init] = fetchMock.mock.calls[0];
-    expect(init.headers['X-Automately-Tenant']).toBeUndefined();
+    expect(init.headers['X-Cluster93-Tenant']).toBeUndefined();
   });
 });
 
@@ -126,7 +126,7 @@ describe('unauthorized handling', () => {
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(getToken()).toBeNull();
-    expect(window.localStorage.getItem('automately.console.token')).toBeNull();
+    expect(window.localStorage.getItem('cluster93.console.token')).toBeNull();
   });
 
   it('stops notifying once the listener unsubscribes', async () => {
@@ -165,7 +165,7 @@ describe('error mapping', () => {
 
     await expect(api.getNodes()).rejects.toMatchObject({
       status: 0,
-      message: 'Could not reach the Automately API.',
+      message: 'Could not reach the Cluster93 API.',
     });
   });
 });

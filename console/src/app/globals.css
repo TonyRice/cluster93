@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 /*
- * Automately Console design tokens.
+ * Cluster93 Console design tokens.
  *
  * Kept as raw RGB channels so Tailwind's `<alpha-value>` opacity modifiers work
  * (e.g. `bg-surface/60`). The palette is a dark, modern zinc/slate blend with a

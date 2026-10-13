@@ -69,12 +69,12 @@ Each is new reach, so each gets its threat model: SSRF, egress rules, connection
    - **Contents:** exactly what's declared, plus `NODE_ENV`. Never the node's environment.
    - **`{secret: name}`** follows `secrets.get`'s rule (D-068): only if the submitting token had `secrets:use`, read on the node when the run starts. The job record keeps the **name**, never the value, so it doesn't leak through the API, job lists or MCP.
    - **Masked in logs:** a secret's value appearing in a log line is replaced by `[secret:<name>]`, since libraries print their configuration.
-   - **Where it's set:** `POST /v1/jobs`; `jobs.run` (a child inherits it only if it asks); services (`env` beside `config`, and `service.env` in `automately.json`); the CLI (`run --env KEY=value --env-secret KEY=name`).
+   - **Where it's set:** `POST /v1/jobs`; `jobs.run` (a child inherits it only if it asks); services (`env` beside `config`, and `service.env` in `cluster93.json`); the CLI (`run --env KEY=value --env-secret KEY=name`).
 3. **Caps: as proposed.** PBKDF2 ≤ 10⁶ iterations, `scrypt` ≤ 64 MB, RSA ≤ 4096 bits, random ≤ 64 KiB per call, zlib output ≤ 32 MB.
 4. **`stream`: vendor `readable-stream` 4**, Node's own streams packaged for outside Node (about 9,000 lines). It's built from hash-checked npm packages by `scripts/vendor-stream` and the output is committed (D-100), needs `buffer`, `events`, `process.nextTick`, `string_decoder` and `AbortController`, and has no reach at all. Writing our own would take weeks to match its edge cases, which are where libraries break.
 5. **Network access never reaches private things unless explicitly allowed** (Tony). Phase B's `http`, `net` and `dns` go through `fetch`'s egress check (D-026: private and reserved ranges refused, connect to the checked address, no redirects followed), plus two additions:
    - **The cluster's own nodes are always refused,** by advertised address and internal port, even on public addresses.
-   - **Explicit allow-lists replace the all-or-nothing switch:** an operator grants a tenant specific hosts or CIDRs and ports (for example `10.0.5.20:5432`), audited. It never covers the cluster's own nodes. `AUTOMATELY_EGRESS_ALLOW_PRIVATE` stays for local development only. A tenant's own private network is reached through a link.
+   - **Explicit allow-lists replace the all-or-nothing switch:** an operator grants a tenant specific hosts or CIDRs and ports (for example `10.0.5.20:5432`), audited. It never covers the cluster's own nodes. `C93_EGRESS_ALLOW_PRIVATE` stays for local development only. A tenant's own private network is reached through a link.
 
 ## 5. Building it, in order
 0. ~~**`env` on jobs and services**~~ ✅ with secrets by name and masking in logs, and `process` as a global (D-096).

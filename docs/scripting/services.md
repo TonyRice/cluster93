@@ -44,8 +44,8 @@ process.on('SIGTERM', () => server.close());   // a stop: close, and the run end
   ```
   - **`path`:** the port is also served under the service's host at that prefix. The prefix is taken off before the server sees the request, and sent as `X-Forwarded-Prefix`.
   - **`expose: false`:** the port isn't reachable from outside at all.
-- **A custom domain** can point at a port: `POST /v1/services/shop/domains {"domain": "admin.example.com", "port": 4000}`, or `automately domains add shop admin.example.com --port 4000`.
-- **`GET /v1/services/{name}`** lists the `routes` (host, path, domain and port), as does `automately services routes shop`. `automately deploy` takes `service.ports` from `automately.json`.
+- **A custom domain** can point at a port: `POST /v1/services/shop/domains {"domain": "admin.example.com", "port": 4000}`, or `c93 domains add shop admin.example.com --port 4000`.
+- **`GET /v1/services/{name}`** lists the `routes` (host, path, domain and port), as does `c93 services routes shop`. `c93 deploy` takes `service.ports` from `cluster93.json`.
 - **Requests arrive as the client sent them:**
   - **Headers:** its own headers in its own order, then the ingress's `X-Forwarded-*`. A client's own `X-Forwarded-*` never reach your server.
   - **The client:** its real address and port on `req.socket`, and `encrypted` when it came over HTTPS.
@@ -61,7 +61,7 @@ process.on('SIGTERM', () => server.close());   // a stop: close, and the run end
   server.listen(3000);   // wss://<service>--<tenant>.<domain>
   ```
   - **The ingress tunnels** the connection once your app answers 101, with TLS on the ingress as for HTTP.
-  - **Limits:** 1,000 open per run (`AUTOMATELY_SERVICE_MAX_WEBSOCKETS`), closed after 10 minutes with nothing sent either way (`AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS`). Ping from either side to keep a quiet connection open.
+  - **Limits:** 1,000 open per run (`C93_SERVICE_MAX_WEBSOCKETS`), closed after 10 minutes with nothing sent either way (`C93_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS`). Ping from either side to keep a quiet connection open.
 - **Only services listen.** A job's `listen` fails with `ERR_NOT_SUPPORTED`. Raw TCP and UDP servers never run on the cluster's nodes.
 
 ## What a service script sees

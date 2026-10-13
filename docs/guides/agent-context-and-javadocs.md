@@ -1,7 +1,7 @@
 # Agent Context Optimization & Javadoc Engineering Guide
 
 **Status:** Active standard (2026-10-10)  
-**Applicability:** Automately Core, all submodules, AI pair programmers, and human contributors.
+**Applicability:** Cluster93 Core, all submodules, AI pair programmers, and human contributors.
 
 ---
 
@@ -54,8 +54,8 @@ These create explicit semantic trails. If an agent is using symbol search or an 
 /**
  * Validates outgoing RPC frames against tenant capability grants.
  *
- * @see automately.core.runtime.api.HostApis
- * @see automately.runner.protocol.server.NodeRpcDispatcher
+ * @see cluster93.core.runtime.api.HostApis
+ * @see cluster93.runner.protocol.server.NodeRpcDispatcher
  */
 ```
 
@@ -91,10 +91,10 @@ When the agent hovers a symbol, inspects a definition, or uses code completion, 
 
 ---
 
-## 4. Documentation Standards for Automately Contributors
+## 4. Documentation Standards for Cluster93 Contributors
 
-When writing or modifying Java code in Automately:
-1. **Public APIs and SPIs Require Javadocs:** Any public interface in `automately-core` (especially under `automately.core.runtime.api.*`), `automately-runtime-js`, and `automately-runner-protocol` must have complete Javadocs specifying:
+When writing or modifying Java code in Cluster93:
+1. **Public APIs and SPIs Require Javadocs:** Any public interface in `cluster93-core` (especially under `cluster93.core.runtime.api.*`), `cluster93-runtime-js`, and `cluster93-runner-protocol` must have complete Javadocs specifying:
    - Purpose and invariants
    - `@param` nullability and ranges
    - `@return` behavior and edge cases

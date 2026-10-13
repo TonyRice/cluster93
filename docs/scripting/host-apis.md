@@ -90,7 +90,7 @@ Scopes: `queues:write` to push and manage dead letters, `queues:read` to look.
 
 ## `jobs`: starting and following jobs
 
-A script can start other jobs and wait for them, as 2017's `Automately.startJob` did, but without blocking a thread:
+A script can start other jobs and wait for them, as 2017's `Cluster93.startJob` did, but without blocking a thread:
 
 ```js
 // A function is sent as its source: it can't use variables from around it, only its input.
@@ -120,9 +120,9 @@ await jobs.handle(id).result();  // follow a job you know the id of
 const key = await secrets.get('STRIPE_KEY');   // the value, or null if there's no such secret
 ```
 
-- **Read-only.** Set secrets with the API or `automately secrets set` ([guide](../guides/secrets.md)).
+- **Read-only.** Set secrets with the API or `c93 secrets set` ([guide](../guides/secrets.md)).
 - **Only scripts allowed to read them:** jobs submitted with a token that has `secrets:use`, services last defined with one, and jobs those start. Other scripts get `forbidden`.
-- **Needs `AUTOMATELY_SECRETS_KEY`** on the cluster; without it, calls fail with `unavailable`.
+- **Needs `C93_SECRETS_KEY`** on the cluster; without it, calls fail with `unavailable`.
 
 ## `process.env`: configuration you declare
 
@@ -137,8 +137,8 @@ export default async () => (await fetch(process.env.API_URL, { headers: { author
 - **Secrets by name.** `{"secret": "name"}` is read when the run starts, by the same rule as `secrets.get`: the submitting token needs `secrets:use`. The job record keeps the name, never the value, and **the value is masked in the job's log** as `[secret:name]`, since libraries print their configuration.
 - **Where to set it:**
   - `POST /v1/jobs` and `PUT /v1/services/{name}`, where it's part of the revision, so changing it rolls the service
-  - `service.env` in `automately.json` for `automately deploy`
-  - `automately run … --env NAME=value --env-secret NAME=secret`
+  - `service.env` in `cluster93.json` for `c93 deploy`
+  - `c93 run … --env NAME=value --env-secret NAME=secret`
   - `jobs.run(script, input, { env: {...}, inheritEnv: true })`: a started job gets its parent's env only with `inheritEnv`.
 - **`process`** is a global, as in Node, and `node:process` gives the same object. It reports the Node release its stand-ins are checked against, `v26.8.1` (D-115); `exit`, `chdir` and `binding` throw.
 
@@ -194,7 +194,7 @@ for await (const chunk of req.body) { ... }        // request bodies in ctx.serv
 for await (const chunk of res.body) { ... }        // fetch response bodies, either fetch
 ```
 
-A body can be read **once**: either as a stream, or with `text()`, `json()` or `bytes()`, which buffer it. Buffering is capped for host bodies (32 MB for request bodies, 5 MB for `automately:fetch` responses); anything larger must be read as a stream. The global `fetch`'s responses are Node's and buffer within the job's memory, as under Node.
+A body can be read **once**: either as a stream, or with `text()`, `json()` or `bytes()`, which buffer it. Buffering is capped for host bodies (32 MB for request bodies, 5 MB for `c93:fetch` responses); anything larger must be read as a stream. The global `fetch`'s responses are Node's and buffer within the job's memory, as under Node.
 
 `TextEncoder` and `TextDecoder` (UTF-8) are available for turning chunks into text and back.
 
@@ -202,10 +202,10 @@ A body can be read **once**: either as a stream, or with `text()`, `json()` or `
 
 There are two, and both go through the same egress gate:
 - **The global `fetch` is Node's** (D-124): WHATWG `Request`, `Response`, `Headers` and `FormData`, redirects followed (up to 20; `redirect: 'manual'` and `'error'` as in Node), gzip and deflate bodies decoded, `AbortSignal` for timeouts, and errors as `TypeError: fetch failed` with the reason in `cause`. Code written for Node works unchanged. Its bodies stream, so they aren't limited to 1 MB, and it shares the 16 requests per script with `http`. See [Node compatibility](node-compat.md#globals).
-- **The host's convenience fetch** is `import { fetch } from 'automately:fetch'`, described below. Before D-124 it was the global. It takes JSON bodies and a `timeoutMs`, and doesn't follow redirects.
+- **The host's convenience fetch** is `import { fetch } from 'c93:fetch'`, described below. Before D-124 it was the global. It takes JSON bodies and a `timeoutMs`, and doesn't follow redirects.
 
 ```js
-import { fetch } from 'automately:fetch';
+import { fetch } from 'c93:fetch';
 
 const res = await fetch('https://api.example.com/items?page=2', {
   method: 'POST',
@@ -223,14 +223,14 @@ const data = await res.json();      // or res.text(), res.bytes(), or stream res
   - **Private and reserved addresses are refused by default:** loopback, 10/8, 172.16/12, 192.168/16, link-local (including the 169.254.169.254 cloud metadata endpoint), CGNAT, unique-local IPv6, the documentation ranges, and IPv6 forms that carry one of these (NAT64, 6to4, IPv4-mapped and IPv4-compatible).
   - **Operators can change both** (D-111): allow and deny rules for the whole cluster and for your tenant, and an "allow-list" posture under which only what a rule allows is reachable.
   - **The cluster's own nodes are always refused,** on every port and whatever their address, and no rule can allow them.
-  - **See your tenant's policy** with `GET /v1/egress-policy` or `automately egress`: each step in the order it's applied, with why; the cluster's rules and yours; the posture; and the limits. A refusal by a rule names that rule and its note.
+  - **See your tenant's policy** with `GET /v1/egress-policy` or `c93 egress`: each step in the order it's applied, with why; the cluster's rules and yours; the posture; and the limits. A refusal by a rule names that rule and its note.
 - The connection goes to the exact address that was checked, so DNS tricks can't get around this.
 - Redirects are **not followed**: a 3xx comes back as is.
 - The response body streams (`res.body`), with no size limit when read as a stream. `text()`, `json()` and `bytes()` buffer it, up to 5 MB.
 - Request bodies are strings, bytes (a `Uint8Array` or any typed array, or an `ArrayBuffer`), `URLSearchParams` (sent as a form) or JSON, up to 1 MB.
 - At most 16 fetches run at once per script, counting a fetch until its body has been read, cancelled, or the script ends. An unread body is cancelled when the script ends.
 - The timeout applies to connecting and to any pause between chunks, so long downloads work.
-- For local development, `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true` lifts the private-address check for every tenant. Even then, a node's own ports (the API, the ingress, the internal endpoint, metrics and the cluster's ports) stay refused.
+- For local development, `C93_EGRESS_ALLOW_PRIVATE=true` lifts the private-address check for every tenant. Even then, a node's own ports (the API, the ingress, the internal endpoint, metrics and the cluster's ports) stay refused.
 - Job completion callbacks go through the same gate, as the job's tenant.
 - **Node's `http` and `https`** (and libraries built on them, such as axios) go through the same gate and share the 16 requests per script. Their request bodies stream, so they aren't limited to 1 MB ([Node compatibility](node-compat.md#http-and-https)).
 - **Node's `net` and `tls`** sockets (and the database drivers built on them: pg, mysql2, ioredis, mongodb, nodemailer) go through the same gate as `tcp` connections, within the cluster policy's socket limits ([Node compatibility](node-compat.md#net-and-tls)).
@@ -244,8 +244,8 @@ log.info('order placed', { orderId: 7, total: 19.5 });   // also debug, warn, er
 Each call is a log line (`order placed {"orderId":7,"total":19.5}`). The live event stream carries `message` and `fields` separately. `console.log` still works too.
 
 **Where a job's log goes** (`console.*` and `log.*` alike):
-- **Live:** each line is an event on the job's stream (`GET /v1/jobs/{id}/events`, `automately jobs logs`, `services logs`, MCP `job_logs`), with its level and a sequence number. A client that connects mid-run first gets the recent lines, then the live ones, with none repeated.
-- **Kept:** when the attempt ends, its log is stored on the job record (`GET /v1/jobs/{id}` → `logs`) until the job is deleted by retention (`AUTOMATELY_JOB_RETENTION_DAYS`, 7 by default).
+- **Live:** each line is an event on the job's stream (`GET /v1/jobs/{id}/events`, `c93 jobs logs`, `services logs`, MCP `job_logs`), with its level and a sequence number. A client that connects mid-run first gets the recent lines, then the live ones, with none repeated.
+- **Kept:** when the attempt ends, its log is stored on the job record (`GET /v1/jobs/{id}` → `logs`) until the job is deleted by retention (`C93_JOB_RETENTION_DAYS`, 7 by default).
 - **Limits (D-107):**
   - **Per line:** about 16 KiB. A longer line is cut, and ends with `… [N more characters]`. A `log.*` call whose fields are over 16 KiB keeps the message and replaces the fields with `{"fieldsOmitted": "N characters"}`.
   - **Per attempt:** the last 1,000 lines, and at most 1 MiB of them. Older lines are dropped as new ones arrive.
@@ -278,7 +278,7 @@ await files.delete('uploads/movie.mp4');                                    // t
 - **Writes are atomic.** A reader sees the old file or the new one, never a mix, and a read already in progress finishes even if the file is replaced or deleted meanwhile. A write that fails or is abandoned leaves nothing behind.
 - **Paths** are relative, at most 1 024 bytes, with no `.`, `..` or empty segments, backslashes or control characters.
 - **Limits.**
-  - Each tenant has `AUTOMATELY_TENANT_STORAGE_MB` (1 GiB by default) for files and `kv` together. Going over fails with `code: 'limit_exceeded'`.
+  - Each tenant has `C93_TENANT_STORAGE_MB` (1 GiB by default) for files and `kv` together. Going over fails with `code: 'limit_exceeded'`.
   - If the cluster itself is running out of disk (or memory, without a data directory), writes fail with `code: 'insufficient_storage'`.
   - Either way, the node keeps running.
 - **Where bytes are stored:** in the cluster by default, replicated and surviving node loss like the rest of its data. Your tenant can route paths to its own S3 bucket or disk folder ([storage guide](../guides/storage.md)); scripts don't change, since `files` follows the routes.
@@ -298,7 +298,7 @@ Uploads over the quota get **413** (straight away when `Content-Length` is sent)
 Your files as one tree from `/`, Node-shaped, with your job's own `/tmp` inside it (D-079). It's the same files as `files` and the REST API, so a script, the CLI and the console all see the same folders.
 
 ```js
-import { readFileSync, writeFileSync, existsSync } from 'fs';     // or 'node:fs', or 'automately:fs'; fs is also a global
+import { readFileSync, writeFileSync, existsSync } from 'fs';     // or 'node:fs', or 'c93:fs'; fs is also a global
 import { mkdir, readdir, rename } from 'fs/promises';
 
 await mkdir('/reports/2026', { recursive: true });
@@ -316,7 +316,7 @@ fs.writeFileSync('/tmp/scratch.bin', bytes);                        // this job 
 - **Errors:** they have Node's codes, so code written for Node handles them. The codes are `ENOENT`, `EEXIST`, `ENOTDIR`, `EISDIR`, `ENOTEMPTY`, `EROFS` (a read-only mount), `EACCES` (a reserved name), `ENOSPC` (quota) and `ETIMEDOUT`. The cluster's own code is in `e.reason`.
 - **Synchronous calls block your script** until the host answers, which takes at most 30 s. Other work in the same script waits meanwhile: its timers, and in a service the other requests it's handling. Use the promise forms in services, and the sync ones where Node code needs them.
 - **`/tmp`:** private to the job, and deleted when it ends.
-  - **Size:** 8 MB is held in memory. Beyond that it spills to the node's disk, up to 1 GB (`AUTOMATELY_TMP_MB`), on nodes with a data directory, or 64 MB in memory on nodes without one.
+  - **Size:** 8 MB is held in memory. Beyond that it spills to the node's disk, up to 1 GB (`C93_TMP_MB`), on nodes with a data directory, or 64 MB in memory on nodes without one.
   - **Elsewhere:** it isn't part of your stored files. The REST API never sees it, and it doesn't count against your quota.
 - **Limits:**
   - `readFile` reads at most 32 MB into memory; stream bigger files with `files.stream`.
@@ -351,7 +351,7 @@ export default async (input, ctx) => {
 - **Your own domain.**
   ```http
   POST /v1/services/shop/domains          {"domain": "shop.example.com"}
-  → 201 {"verified": false, "verification": {"type": "TXT", "name": "_automately.shop.example.com", "value": "automately-verify=…"}}
+  → 201 {"verified": false, "verification": {"type": "TXT", "name": "_cluster93.shop.example.com", "value": "cluster93-verify=…"}}
   ```
   Publish that TXT record, then call `POST /v1/services/shop/domains/shop.example.com/verify`. The domain routes only once it's verified. Unverified claims lapse after 24 h, and deleting the service releases its domains.
 - **Responses.** Return a string (200), `undefined` (204), a `Uint8Array`, an (async) iterable such as a generator, or `{status, headers, body}`, where `body` can be any of those or an object (sent as JSON). If the handler throws before responding, the response is a 500. If it throws while streaming, the connection is reset.
@@ -372,7 +372,7 @@ export default async (input, ctx) => {
   });
   ```
 - **Ingress errors.** An unknown host gets 404. A service that's stopped, restarting or not yet serving gets 503 with `Retry-After: 1`. A request with no bytes moving in either direction for the idle timeout (60 s) gets 504, or a closed connection if the response had already started. More than 64 requests in flight to one service gets 429.
-- **Limits.** Request bodies up to `AUTOMATELY_MAX_REQUEST_BYTES` (1 GiB by default). Responses have no size or total-time limit, only the idle timeout.
+- **Limits.** Request bodies up to `C93_MAX_REQUEST_BYTES` (1 GiB by default). Responses have no size or total-time limit, only the idle timeout.
 - Only services can serve. In a plain job, `ctx.serve` throws.
 
 ## Naming

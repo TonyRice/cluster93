@@ -1,19 +1,19 @@
 // Vendors Node's own streams into the isolate (D-095, D-100): readable-stream (Node's stream code, packaged for outside
 // Node) and string_decoder, bundled into ES modules on the isolate's stand-ins for buffer, events and process.
 // Run from this folder: npm ci --ignore-scripts && node build.mjs. npm ci checks every package against the lockfile's
-// integrity hash; the output is committed, so building Automately never needs Node.
+// integrity hash; the output is committed, so building Cluster93 never needs Node.
 import * as esbuild from 'esbuild';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const OUT = new URL('../../automately-runtime-js/src/main/resources/automately/runtime/js/node/', import.meta.url).pathname;
+const OUT = new URL('../../cluster93-runtime-js/src/main/resources/cluster93/runtime/js/node/', import.meta.url).pathname;
 const lock = JSON.parse(readFileSync(new URL('./package-lock.json', import.meta.url), 'utf8'));
 const pinned = Object.entries(lock.packages).filter(([path]) => path.startsWith('node_modules/') && !lock.packages[path].dev)
   .map(([path, info]) => `//   ${path.slice('node_modules/'.length)}@${info.version} ${info.integrity}`).join('\n');
 
 // A require() of one of Node's modules becomes a static import whose default export is module.exports (as in D-093).
-const ESM = 'automately-esm:';
+const ESM = 'cluster93-esm:';
 const builtins = { name: 'builtins', setup(b) {
-  b.onResolve({ filter: /^automately-esm:/ }, (a) => ({ path: a.path.slice(ESM.length), namespace: 'esm' }));
+  b.onResolve({ filter: /^cluster93-esm:/ }, (a) => ({ path: a.path.slice(ESM.length), namespace: 'esm' }));
   b.onResolve({ filter: /^(node:)?(buffer|events|process|string_decoder)\/?$/ }, (a) => {
     const name = 'node:' + a.path.replace(/\/$/, '').replace(/^node:/, '');
     return a.kind === 'require-call' ? { path: name, namespace: 'required' } : { path: name, external: true };
@@ -95,7 +95,7 @@ writeFileSync(OUT + 'stream_promises.js', "// Node's stream/promises, from the v
 // The WHATWG streams (D-124), from web-streams-polyfill (spec-compliant, tested against the web-platform tests). Not a
 // module: a script that evaluates to its classes, which the prelude loads on first use, so isolates that never touch
 // ReadableStream pay nothing for it. The package ships only its minified build.
-const WEB = new URL('../../automately-runtime-js/src/main/resources/automately/runtime/js/web/', import.meta.url).pathname;
+const WEB = new URL('../../cluster93-runtime-js/src/main/resources/cluster93/runtime/js/web/', import.meta.url).pathname;
 const webStreams = await esbuild.build({ stdin: { contents: "export * from 'web-streams-polyfill';", resolveDir: new URL('.', import.meta.url).pathname },
   bundle: true, write: false, format: 'iife', globalName: 'webStreams', platform: 'neutral', target: 'es2022', mainFields: ['module', 'main'],
   conditions: ['import'], logLevel: 'warning', legalComments: 'inline' });

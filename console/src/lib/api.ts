@@ -84,7 +84,7 @@ export interface RedeemInviteRequest {
 }
 
 /**
- * Browser-side client for the Automately public REST API.
+ * Browser-side client for the Cluster93 public REST API.
  *
  * The console is served by the ingress on the same origin as the API, and the
  * app manifest rewrites `/v1/*` to the local node's API (zero CORS). Every
@@ -95,7 +95,7 @@ export interface RedeemInviteRequest {
  * listener fires, which lets the dashboard fall back to the login prompt.
  */
 
-const TOKEN_KEY = 'automately.console.token';
+const TOKEN_KEY = 'cluster93.console.token';
 
 /** Thrown for any non-2xx response from the API. */
 export class ApiError extends Error {
@@ -163,7 +163,7 @@ export function clearToken(): void {
 
 let targetTenant: string | null = null;
 
-/** Scopes subsequent requests to a tenant (the `X-Automately-Tenant` header). */
+/** Scopes subsequent requests to a tenant (the `X-Cluster93-Tenant` header). */
 export function setTargetTenant(tenant: string | null): void {
   targetTenant = tenant;
 }
@@ -213,7 +213,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (targetTenant) headers['X-Automately-Tenant'] = targetTenant;
+  if (targetTenant) headers['X-Cluster93-Tenant'] = targetTenant;
 
   const token = getToken();
   if (auth && token) headers.Authorization = `Bearer ${token}`;
@@ -229,7 +229,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   } catch (cause) {
     // Network-level failure (offline, DNS, CORS, aborted).
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
-    throw new ApiError(0, 'Could not reach the Automately API.', undefined);
+    throw new ApiError(0, 'Could not reach the Cluster93 API.', undefined);
   }
 
   if (response.status === 401) {
@@ -288,7 +288,7 @@ function cleanPath(path: string): string {
  */
 async function fetchFileContent(path: string, signal?: AbortSignal): Promise<string> {
   const headers: Record<string, string> = { Accept: '*/*' };
-  if (targetTenant) headers['X-Automately-Tenant'] = targetTenant;
+  if (targetTenant) headers['X-Cluster93-Tenant'] = targetTenant;
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -297,7 +297,7 @@ async function fetchFileContent(path: string, signal?: AbortSignal): Promise<str
     response = await fetch(`/v1/files/${cleanPath(path)}`, { method: 'GET', headers, signal });
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
-    throw new ApiError(0, 'Could not reach the Automately API.', undefined);
+    throw new ApiError(0, 'Could not reach the Cluster93 API.', undefined);
   }
 
   if (response.status === 401) {

@@ -1,6 +1,6 @@
-# Automately API Reference
+# Cluster93 API Reference
 
-Automately provides a contract-first REST API and an MCP (Model Context Protocol) endpoint. Every incoming request is strictly validated against the OpenAPI 3.1 contract defined in [`openapi.yaml`](../../automately-server/src/main/resources/openapi.yaml).
+Cluster93 provides a contract-first REST API and an MCP (Model Context Protocol) endpoint. Every incoming request is strictly validated against the OpenAPI 3.1 contract defined in [`openapi.yaml`](../../cluster93-server/src/main/resources/openapi.yaml).
 
 ## Authentication & Authorization
 
@@ -10,7 +10,7 @@ Every request to `/v1/*` (except public endpoints like `/v1/openapi.json` and in
 Authorization: Bearer <token>
 ```
 
-- **Admin Token:** Configured via `AUTOMATELY_ADMIN_TOKEN` or generated at initial startup. Manages tenants, operator invites, and cluster storage policies. By design (D-044), the admin token cannot inspect or modify tenant data.
+- **Admin Token:** Configured via `C93_ADMIN_TOKEN` or generated at initial startup. Manages tenants, operator invites, and cluster storage policies. By design (D-044), the admin token cannot inspect or modify tenant data.
 - **Tenant Tokens (`atly_*`):** Scoped to an individual tenant. Scopes include:
   `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`, `nodes:read`, `storage:read`, `storage:write`, `secrets:read`, `secrets:write`, `secrets:use`, `members:read`, `members:write`, `audit:read`, or `*`.
 - **Personal Tokens:** Assigned to invited users with roles (`owner`, `admin`, `developer`, `viewer`) or custom role groups.
@@ -18,7 +18,7 @@ Authorization: Bearer <token>
 
 ## Rate Limits & Error Handling
 
-- **Rate Limiting:** Managed via an IETF-compliant token bucket per tenant (`AUTOMATELY_RATE_LIMIT_PER_MINUTE`). Responses include `RateLimit-Policy` and `RateLimit` headers; requests exceeding limits receive `429` with `Retry-After`.
+- **Rate Limiting:** Managed via an IETF-compliant token bucket per tenant (`C93_RATE_LIMIT_PER_MINUTE`). Responses include `RateLimit-Policy` and `RateLimit` headers; requests exceeding limits receive `429` with `Retry-After`.
 - **Validation Errors:** Requests with invalid JSON or failing schema constraints receive `400 invalid_request` with parameter-level error context.
 - **Standard Error Envelope:**
   ```json

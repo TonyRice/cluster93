@@ -1,6 +1,6 @@
 # Stages, in the order Docker sees them:
 #   runtime    - JRE, user and JVM flags shared by every image
-#   local-jar  - runtime + an already built automately-server/target/automately.jar
+#   local-jar  - runtime + an already built cluster93-server/target/c93.jar
 #                (used by the Testcontainers integration test, so it tests the exact jar `mvn package` made)
 #   build      - compiles the jar inside Docker
 #   release    - runtime + the jar from `build` (the default target)
@@ -8,14 +8,14 @@
 
 # Javet ships glibc native libraries, so the image must not be Alpine/musl.
 FROM eclipse-temurin:21-jre AS runtime
-RUN useradd --system --uid 10001 automately \
- && mkdir -p /var/lib/automately && chown automately /var/lib/automately
-WORKDIR /opt/automately
+RUN useradd --system --uid 10001 c93 \
+ && mkdir -p /var/lib/cluster93 && chown c93 /var/lib/cluster93
+WORKDIR /opt/cluster93
 # API, ingress, the internal endpoint (cluster-only), Ignite discovery and communication.
 EXPOSE 8080 8000 8090 9090 5701 5801
-# Durable data (Ignite persistence). Mount a volume here; without AUTOMATELY_DATA_DIR data is in memory only.
-VOLUME /var/lib/automately
-ENV AUTOMATELY_DATA_DIR=/var/lib/automately
+# Durable data (Ignite persistence). Mount a volume here; without C93_DATA_DIR data is in memory only.
+VOLUME /var/lib/cluster93
+ENV C93_DATA_DIR=/var/lib/cluster93
 # Heap is kept below half the container so Ignite's off-heap data region and V8 isolates fit beside it.
 ENV JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=40 \
   --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED \
@@ -40,27 +40,27 @@ ENV JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=40 \
   --add-opens=java.base/java.text=ALL-UNNAMED \
   --add-opens=java.management/sun.management=ALL-UNNAMED \
   --add-opens=java.desktop/java.awt.font=ALL-UNNAMED"
-ENTRYPOINT ["java", "-jar", "/opt/automately/automately.jar"]
+ENTRYPOINT ["java", "-jar", "/opt/cluster93/c93.jar"]
 
 FROM runtime AS local-jar
-COPY automately-server/target/automately.jar /opt/automately/automately.jar
-USER automately
+COPY cluster93-server/target/c93.jar /opt/cluster93/c93.jar
+USER c93
 
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY .mvn .mvn
 COPY mvnw pom.xml ./
-COPY automately-tls/pom.xml automately-tls/
-COPY automately-core/pom.xml automately-core/
-COPY automately-runtime-js/pom.xml automately-runtime-js/
-COPY automately-runtime-javet/pom.xml automately-runtime-javet/
-COPY automately-runtime-graaljs/pom.xml automately-runtime-graaljs/
-COPY automately-worker/pom.xml automately-worker/
-COPY automately-server/pom.xml automately-server/
+COPY cluster93-tls/pom.xml cluster93-tls/
+COPY cluster93-core/pom.xml cluster93-core/
+COPY cluster93-runtime-js/pom.xml cluster93-runtime-js/
+COPY cluster93-runtime-javet/pom.xml cluster93-runtime-javet/
+COPY cluster93-runtime-graaljs/pom.xml cluster93-runtime-graaljs/
+COPY cluster93-worker/pom.xml cluster93-worker/
+COPY cluster93-server/pom.xml cluster93-server/
 RUN --mount=type=cache,target=/root/.m2 ./mvnw -q -B dependency:go-offline -DexcludeReactor=true || true
 COPY . .
 RUN --mount=type=cache,target=/root/.m2 ./mvnw -q -B -DskipTests package
 
 FROM runtime AS release
-COPY --from=build /src/automately-server/target/automately.jar /opt/automately/automately.jar
-USER automately
+COPY --from=build /src/cluster93-server/target/c93.jar /opt/cluster93/c93.jar
+USER c93

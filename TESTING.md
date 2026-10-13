@@ -1,6 +1,6 @@
-# Testing Automately
+# Testing Cluster93
 
-This manual is the developer and operator guide to testing Automately end to end:
+This manual is the developer and operator guide to testing Cluster93 end to end:
 the unit and integration suites for the clustered runtime, the out-of-process
 worker protocol, and the GraalVM native-image workers.
 
@@ -32,10 +32,10 @@ accountant), but they do not demonstrate that the assembled system works.
 Tests are also the enforcement mechanism for the module layering. Keep these
 invariants in view:
 
-- `automately-core` depends **only** on `vertx-core`. It must not pull in Ignite,
+- `cluster93-core` depends **only** on `vertx-core`. It must not pull in Ignite,
   Netty internals beyond Vert.x, or any engine adapter. `ArchitectureTest` in
-  `automately-server` guards the dependency rules.
-- Apache Ignite is strictly isolated to `automately-cluster-ignite`. Nothing else
+  `cluster93-server` guards the dependency rules.
+- Apache Ignite is strictly isolated to `cluster93-cluster-ignite`. Nothing else
   may import Ignite types.
 - Worker isolates are a **zero-trust, out-of-process boundary**. The node never
   trusts a frame from a worker: tenant identity is server-injected, method calls
@@ -74,7 +74,7 @@ Before committing, run `verify` for every module you touched **and always pass
 installed snapshot:
 
 ```bash
-./mvnw verify -pl automately-runner-protocol,automately-server -am -DskipITs
+./mvnw verify -pl cluster93-runner-protocol,cluster93-server -am -DskipITs
 ```
 
 - `verify` runs the full lifecycle including integration-test hooks; `-DskipITs`
@@ -89,8 +89,8 @@ full docker cluster and is not part of the normal loop. When running a broad
 package pattern, always exclude it:
 
 ```bash
-./mvnw test -pl automately-server -am \
-  -Dtest='automately.server.**,!DockerClusterIT' \
+./mvnw test -pl cluster93-server -am \
+  -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
@@ -119,7 +119,7 @@ understood so the next audit is clean.
 
 ---
 
-## 3. Runner Protocol & Engine Test Suite (`automately-runner-protocol`)
+## 3. Runner Protocol & Engine Test Suite (`cluster93-runner-protocol`)
 
 This module is the out-of-process worker-node IPC contract: 12-byte binary
 framing, credit-based flow control, stream multiplexing, the warm worker pool
@@ -129,14 +129,14 @@ socket transport.
 Run the whole suite:
 
 ```bash
-./mvnw test -pl automately-runner-protocol -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl cluster93-runner-protocol -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 If module dependencies are not already installed in the local repository, add
 `-am`:
 
 ```bash
-./mvnw test -pl automately-runner-protocol -am -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl cluster93-runner-protocol -am -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 ### 3.1 Coverage breakdown
@@ -162,11 +162,11 @@ If module dependencies are not already installed in the local repository, add
 
 ---
 
-## 4. Server Runtime Testing (`automately-server`)
+## 4. Server Runtime Testing (`cluster93-server`)
 
 The server executes guest workloads in two worker modes, configured by
-`AUTOMATELY_WORKER_MODE` (`process` or `embedded`). Out-of-process execution
-is the production default (`AUTOMATELY_WORKER_MODE=process`), with embedded JVM
+`C93_WORKER_MODE` (`process` or `embedded`). Out-of-process execution
+is the production default (`C93_WORKER_MODE=process`), with embedded JVM
 isolates retained as a development and regression fallback. Both must be exercised
 for worker-facing changes.
 
@@ -180,8 +180,8 @@ with the node over a framed duplex IPC channel with 256 KiB stream flow control 
 Run the full server suite in process mode (excluding `DockerClusterIT`):
 
 ```bash
-AUTOMATELY_WORKER_MODE=process ./mvnw test -pl automately-server -am \
-  -Dtest='automately.server.**,!DockerClusterIT' \
+C93_WORKER_MODE=process ./mvnw test -pl cluster93-server -am \
+  -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
@@ -190,15 +190,15 @@ a worker JVM process with `WorkerMain` on the current classpath. To test against
 a pre-compiled GraalVM native-image worker (see §5):
 
 ```bash
-AUTOMATELY_WORKER_MODE=process \
-AUTOMATELY_WORKER_BINARY=bin/worker-javet \
-./mvnw test -pl automately-server -am \
-  -Dtest='automately.server.**,!DockerClusterIT' \
+C93_WORKER_MODE=process \
+C93_WORKER_BINARY=bin/worker-javet \
+./mvnw test -pl cluster93-server -am \
+  -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
-The guest engine is configured with `AUTOMATELY_WORKER_ENGINE` (`javet` or `graaljs`),
-or per-profile binaries with `AUTOMATELY_WORKER_BINARY_<MODE>`.
+The guest engine is configured with `C93_WORKER_ENGINE` (`javet` or `graaljs`),
+or per-profile binaries with `C93_WORKER_BINARY_<MODE>`.
 
 ### 4.2 Multi-node cluster end-to-end parity (`ProcessModeParityTest`)
 
@@ -206,7 +206,7 @@ To verify end-to-end cluster parity across separate machines where Node A proxie
 requests to a worker running on Node B:
 
 ```bash
-./mvnw test -pl automately-server -am \
+./mvnw test -pl cluster93-server -am \
   -Dtest='ProcessModeParityTest' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
@@ -229,8 +229,8 @@ In embedded mode, workers run as in-process Javet or GraalJS isolates inside the
 JVM. Run the embedded suite to ensure zero regressions:
 
 ```bash
-AUTOMATELY_WORKER_MODE=embedded ./mvnw test -pl automately-server -am \
-  -Dtest='automately.server.**,!DockerClusterIT' \
+C93_WORKER_MODE=embedded ./mvnw test -pl cluster93-server -am \
+  -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
@@ -269,13 +269,13 @@ scripts/build-workers.sh javet --javet-metadata
 For each engine the script runs (from the repo root):
 
 ```bash
-./mvnw -q -DskipTests -DskipITs -pl automately-worker -am install -P<engine>
-./mvnw -q -DskipTests -DskipITs -pl automately-worker clean package \
+./mvnw -q -DskipTests -DskipITs -pl cluster93-worker -am install -P<engine>
+./mvnw -q -DskipTests -DskipITs -pl cluster93-worker clean package \
   -P<engine>,native \
   -Dnative.builder.heap=<heap> -Dnative.builder.threads=<threads>
 ```
 
-producing `automately-worker/target/worker-<engine>`.
+producing `cluster93-worker/target/worker-<engine>`.
 
 ### 5.3 Outputs
 
@@ -312,30 +312,30 @@ ENGINES="graaljs" ./build.sh    # GraalJS only
 
 ```bash
 # Targeted class iteration
-./mvnw test -pl automately-runner-protocol -Dtest=FrameCodecTest -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl cluster93-runner-protocol -Dtest=FrameCodecTest -Dsurefire.failIfNoSpecifiedTests=false
 
 # Full protocol + engine suite
-./mvnw test -pl automately-runner-protocol -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl cluster93-runner-protocol -Dsurefire.failIfNoSpecifiedTests=false
 
 # Pre-commit verification of touched modules (always -am)
-./mvnw verify -pl automately-runner-protocol,automately-server -am -DskipITs
+./mvnw verify -pl cluster93-runner-protocol,cluster93-server -am -DskipITs
 
 # Server suite, process mode (production default, docker IT excluded)
-AUTOMATELY_WORKER_MODE=process ./mvnw test -pl automately-server -am \
-  -Dtest='automately.server.**,!DockerClusterIT' -Dsurefire.failIfNoSpecifiedTests=false
+C93_WORKER_MODE=process ./mvnw test -pl cluster93-server -am \
+  -Dtest='cluster93.server.**,!DockerClusterIT' -Dsurefire.failIfNoSpecifiedTests=false
 
 # Full process-mode parity & cluster ingress suite
-AUTOMATELY_WORKER_MODE=process ./mvnw test -pl automately-server -am \
+C93_WORKER_MODE=process ./mvnw test -pl cluster93-server -am \
   -Dtest='ProcessModeParityTest,McpTest,JobsFromScriptsTest,ServicesTest' \
   -Dsurefire.failIfNoSpecifiedTests=false
 
 # Server suite, embedded mode (regression check, docker IT excluded)
-AUTOMATELY_WORKER_MODE=embedded ./mvnw test -pl automately-server -am \
-  -Dtest='automately.server.**,!DockerClusterIT' -Dsurefire.failIfNoSpecifiedTests=false
+C93_WORKER_MODE=embedded ./mvnw test -pl cluster93-server -am \
+  -Dtest='cluster93.server.**,!DockerClusterIT' -Dsurefire.failIfNoSpecifiedTests=false
 
 # Server suite, process mode against a native worker binary
-AUTOMATELY_WORKER_MODE=process AUTOMATELY_WORKER_BINARY=bin/worker-javet \
-  ./mvnw test -pl automately-server -am -Dtest='automately.server.**,!DockerClusterIT' \
+C93_WORKER_MODE=process C93_WORKER_BINARY=bin/worker-javet \
+  ./mvnw test -pl cluster93-server -am -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 
 # Build native workers

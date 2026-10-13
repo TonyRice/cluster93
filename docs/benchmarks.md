@@ -4,7 +4,7 @@ Measured 2026-10-07 with `benchmarks/run.sh`: the three-node demo cluster in Doc
 driven from the same machine through Docker's port mapping. Rerun it on your hardware: numbers depend on it.
 
 - **Machine:** 11th Gen Intel(R) Core(TM) i7-1185G7 @ 3.00GHz, 8 CPUs, 30 GB RAM
-- **Software:** Docker version 29.8.2, Automately 2.0.0-SNAPSHOT, JDK 21 (Temurin) in each container
+- **Software:** Docker version 29.8.2, Cluster93 2.0.0-SNAPSHOT, JDK 21 (Temurin) in each container
 - **Cluster:** 3 nodes, capacity 32 isolates each, one backup copy of all data
 
 | Scenario | How | Result |
@@ -18,7 +18,7 @@ driven from the same machine through Docker's port mapping. Rerun it on your har
 
 ## Isolate start-up
 
-`IsolateStartupBenchmark` (in the conformance suite in `automately-runtime-js`, run on V8 with `AUTOMATELY_BENCH=1 ./mvnw -pl automately-runtime-javet -Dtest=IsolateStartupBenchmark test`) times one job's isolate in-process, with no HTTP or cluster: a fresh isolate, the prelude and the script, on one thread after 100 warm-up runs, 500 measured. Measured 2026-10-08 on the machine above (D-106):
+`IsolateStartupBenchmark` (in the conformance suite in `cluster93-runtime-js`, run on V8 with `C93_BENCH=1 ./mvnw -pl cluster93-runtime-javet -Dtest=IsolateStartupBenchmark test`) times one job's isolate in-process, with no HTTP or cluster: a fresh isolate, the prelude and the script, on one thread after 100 warm-up runs, 500 measured. Measured 2026-10-08 on the machine above (D-106):
 
 | Script | p50 | p90 | p99 |
 |---|---|---|---|
@@ -42,5 +42,5 @@ Before V8's code cache was used for the prelude and built-ins, these were 4.9, 7
   before the next is read. Storing four chunks at once was tried and measured no faster (48 vs 45 MB/s), so it
   wasn't kept (D-059).
 - **Density is the resident memory of the Java processes**, with a fixed, pre-touched Java heap so that growth is
-  native memory. An idle isolate costs that much; a busy one can grow to `AUTOMATELY_MAX_HEAP_MB` (64 MB here).
+  native memory. An idle isolate costs that much; a busy one can grow to `C93_MAX_HEAP_MB` (64 MB here).
   The node's capacity setting, not memory, limits how many isolates run.

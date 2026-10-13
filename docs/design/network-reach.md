@@ -20,12 +20,12 @@
 - **`fetch`** (D-026). It resolves the name, refuses private and reserved addresses, connects to the address it checked (so DNS rebinding can't swap one in), and follows no redirects. Request bodies are strings of at most 1 MB.
 - **`ctx.serve`,** only in services. It's inbound HTTP through the cluster's ingress (D-029).
 - **S3 storage providers and job callbacks.** Both use the same address check.
-- **The switch:** `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true` lifts the check for every tenant at once. It exists for local development.
+- **The switch:** `C93_EGRESS_ALLOW_PRIVATE=true` lifts the check for every tenant at once. It exists for local development.
 
 **What's missing:** an operator can't let one tenant reach one internal database, so a tenant with a private network has no way in short of the global switch. And nothing refuses the cluster's own nodes when they sit on public addresses.
 
 ## 2. Threats
-- **SSRF into the cluster:** the internal endpoint, the API, the metrics port, the event bus, and Ignite's discovery and communication ports. Mutual TLS protects most of them (D-066), but with `AUTOMATELY_CLUSTER_TLS=off` (development) they're plain.
+- **SSRF into the cluster:** the internal endpoint, the API, the metrics port, the event bus, and Ignite's discovery and communication ports. Mutual TLS protects most of them (D-066), but with `C93_CLUSTER_TLS=off` (development) they're plain.
 - **SSRF into the operator's network:** cloud metadata (169.254.169.254), databases, admin panels, and the Docker host.
 - **Address tricks:** DNS rebinding; IPv6 forms that embed an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`, Teredo `2001::/32`); decimal and octal forms of IPv4 (which the JVM's parser doesn't accept as names anyway); and redirects.
 - **Abuse of the cluster's addresses:** spam (SMTP), port scans, amplification, and attacks on third parties. These matter for raw sockets far more than for HTTP.
@@ -40,7 +40,7 @@ Every outbound connection a script causes (`fetch`, `http`, `net`, `tls`, and `d
    - an address any live node advertises (its internal endpoint's host, resolved);
    - any address of this node's own network interfaces, including loopback.
 
-   Every port, because the event bus listens on a random one, and nothing on a node is meant for scripts. **Development is the one exception:** with `AUTOMATELY_EGRESS_ALLOW_PRIVATE=true`, loopback and the node's interfaces are refused only on the node's own ports (API, ingress, internal, metrics, and the cluster's discovery and communication ranges), so a developer can still reach a mock server on `localhost:3000`.
+   Every port, because the event bus listens on a random one, and nothing on a node is meant for scripts. **Development is the one exception:** with `C93_EGRESS_ALLOW_PRIVATE=true`, loopback and the node's interfaces are refused only on the node's own ports (API, ingress, internal, metrics, and the cluster's discovery and communication ranges), so a developer can still reach a mock server on `localhost:3000`.
 2. **Public unicast: allowed.**
 3. **Private or reserved:** allowed only if
    - the tenant's egress policy has a matching rule, or
@@ -71,11 +71,11 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **`ports`:** required. Single ports or ranges. There's no "any port", so a rule is always narrow.
 - **At most 100 rules per tenant.** Writing the policy replaces it whole. Unless an operator sets one, a tenant's policy is empty.
 - **Cluster nodes are never matched,** by any rule.
-- **The CLI:** `automately tenants egress <tenant> --allow 10.0.5.20/32:5432 …`, alongside the storage policy.
+- **The CLI:** `c93 tenants egress <tenant> --allow 10.0.5.20/32:5432 …`, alongside the storage policy.
 
-**Seen and counted:** a refused connection fails with `egress_denied` and a reason (`private address`, `cluster node`, `not in the tenant's egress policy`). Refusals are counted per tenant, in `automately_egress_denied_total{tenant,reason}`.
+**Seen and counted:** a refused connection fails with `egress_denied` and a reason (`private address`, `cluster node`, `not in the tenant's egress policy`). Refusals are counted per tenant, in `c93_egress_denied_total{tenant,reason}`.
 
-**`AUTOMATELY_EGRESS_ALLOW_PRIVATE`:** stays for local development, and now logs a warning on every start.
+**`C93_EGRESS_ALLOW_PRIVATE`:** stays for local development, and now logs a warning on every start.
 
 **`fetch`'s request bodies become bytes.** Today a `Uint8Array` body is decoded as UTF-8, which corrupts binary uploads; this was found while designing B2. The 1 MB cap stays for `fetch` until B2's streaming.
 
@@ -139,7 +139,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
   - **Why no port:** nothing is open on the node to scan or reach directly, which is stronger than a random port.
   - **What the script sees:** `server.address()` gives the port it asked for. `listen(0)` gets a random virtual port from 1024 to 65535.
 - **Node containers (node-runtime.md) bind for real,** inside their own network namespace.
-  - **The reserved range:** each node keeps one, `AUTOMATELY_SERVICE_PORTS` (default `20000-29999`), and picks a random free port in it for each container port. The container sees 3001; the node uses, say, 24517.
+  - **The reserved range:** each node keeps one, `C93_SERVICE_PORTS` (default `20000-29999`), and picks a random free port in it for each container port. The container sees 3001; the node uses, say, 24517.
   - **Unreachable from scripts:** the range is added to the node's ports in `ClusterAddresses`, so the gate refuses it to every script, even with the development switch on.
 
 **How each port is reached:**
@@ -187,7 +187,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 
 **Raw TCP and UDP servers: never on core nodes** (Tony, 2026-10-08).
 - **What scripts get:** `net.createServer`, `tls.createServer` and `dgram` throw an error saying so.
-- **Where they belong:** plain TCP and UDP ports exist only on untrusted nodes, such as an Automately Link running on its own hosted server. They belong to the links design, not phase B.
+- **Where they belong:** plain TCP and UDP ports exist only on untrusted nodes, such as a Cluster93 Link running on its own hosted server. They belong to the links design, not phase B.
 - **Node containers on core nodes are the same:** they accept only HTTP and WebSockets (node-runtime.md §12).
 
 **Proven against:** Express 5, Koa (with @koa/router) and Fastify in `RealNpmPackagesTest`.
@@ -205,10 +205,10 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **One resolver in core, shared by the gate and `dns`,** so `dns` can never answer differently from what a connection gets (`DnsResolver`).
   - **Lookups** (`dns.lookup` and the gate's own) ask the operating system, as Node's getaddrinfo does, and `dns.lookup` keeps the system's order.
   - **Queries** (`resolve*`, `reverse`) ask DNS servers as c-ares does: no search domains, each server in turn on each try, TCP when truncated. They use Netty's DNS client, which gives every record type and real TTLs.
-  - **Where they ask:** `AUTOMATELY_EGRESS_DNS` when set (then lookups and the gate ask it too, so a split-horizon system resolver never answers scripts), else the system's.
+  - **Where they ask:** `C93_EGRESS_DNS` when set (then lookups and the gate ask it too, so a split-horizon system resolver never answers scripts), else the system's.
 - **Filtering,** as proposed in §8.2:
   - **Addresses:** only those the tenant could connect to on some port by some protocol. An allow rule for one port is enough; a deny rule hides only if it covers every port and every protocol or `dns`.
-  - **Internal names** answer `ENOTFOUND`, unless a rule names them or the development switch is on: single labels, the special-use suffixes, and `AUTOMATELY_EGRESS_INTERNAL_DOMAINS`.
+  - **Internal names** answer `ENOTFOUND`, unless a rule names them or the development switch is on: single labels, the special-use suffixes, and `C93_EGRESS_INTERNAL_DOMAINS`.
   - **Reverse lookups and `lookupService`:** only for addresses the tenant could connect to.
   - **Record answers:** MX, SRV, CNAME, NS, SOA and NAPTR targets in internal zones are dropped.
 - **The JavaScript modules, `dns` and `dns/promises`:** all of Node 26's, with its arguments, answer shapes and errors: `lookup`, `lookupService`, every `resolve*` (including CAA, NAPTR, SOA, TLSA and ANY), `reverse`, and `Resolver` with `cancel`.
@@ -255,7 +255,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **Timeouts:** 30 s to connect, and **no idle timeout,** as in Node (changed from the 5 min first proposed). A database or Redis connection in a service sits idle for long stretches. Every socket is closed when its run ends, and TCP keepalive finds dead peers.
 - **Connect rate:** 120 new connections a minute per tenant per node.
 - **The SMTP block:** a default cluster deny rule (§10).
-- **Counted** per tenant, in `automately_egress_bytes_total{tenant,direction}`.
+- **Counted** per tenant, in `c93_egress_bytes_total{tenant,direction}`.
 
 **What it unlocks:** `pg`, `mysql2`, `ioredis`, `mongodb` (when its optional native parts are absent), `nodemailer`, and proxy agents. Each is tested against Testcontainers Postgres (also over TLS), MySQL, Redis and MongoDB, plus a mock SMTP server with STARTTLS, and must give real Node's results.
 
@@ -265,7 +265,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - `http`'s `createConnection` option
 
 - 64 KB of host-side buffering per direction, with the script's reads paused beyond that
-- bytes counted per tenant: `automately_egress_bytes_total{tenant,direction}`
+- bytes counted per tenant: `c93_egress_bytes_total{tenant,direction}`
 
 **Ports, and connect rate:** the open question in §8.
 
@@ -294,7 +294,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 - **Two older bugs found and fixed:**
   - **`emitter.once()` bypassed `this.on()`,** so a stream with only a `once('data')` listener never flowed.
   - **The bundler applied the `import` condition to `require()`,** so pg's `require('pg-pool')` got the ES module's namespace object.
-- **Testing against real servers:** pg (Postgres 18, plain and TLS), mysql2 (MySQL 8.4), ioredis (Redis 7), mongodb (MongoDB 8.2; MongoDB 8.0 refuses Linux 6.19 and newer) and nodemailer (Mailpit, STARTTLS). They run in containers, with `AUTOMATELY_TEST_REAL_SERVICES`, and every result matches real Node 26.8.1.
+- **Testing against real servers:** pg (Postgres 18, plain and TLS), mysql2 (MySQL 8.4), ioredis (Redis 7), mongodb (MongoDB 8.2; MongoDB 8.0 refuses Linux 6.19 and newer) and nodemailer (Mailpit, STARTTLS). They run in containers, with `C93_TEST_REAL_SERVICES`, and every result matches real Node 26.8.1.
 
 ## 8. Tony's answers (2026-10-08)
 1. **Raw TCP to the public internet (B5): every port except SMTP.**
@@ -302,10 +302,10 @@ GET /v1/egress-policy                     (the tenant, read-only)
    - **Connect rate:** new connections are capped at 120 a minute per tenant per node, which makes scanning slow and visible.
 2. **DNS records beyond addresses (B4): filtered.** Tony asked how; this is the proposal, to be built with B4:
    - **Addresses** (`lookup`, `resolve4`, `resolve6`): only those the tenant could connect to.
-   - **Internal names:** single-label names, special-use suffixes (`.local`, `.internal`, `.lan`, `.home.arpa`, `.localhost`, `.cluster.local`, `.svc`) and suffixes an operator lists in `AUTOMATELY_EGRESS_INTERNAL_DOMAINS` answer `ENOTFOUND` for every record type, unless a tenant rule names them.
+   - **Internal names:** single-label names, special-use suffixes (`.local`, `.internal`, `.lan`, `.home.arpa`, `.localhost`, `.cluster.local`, `.svc`) and suffixes an operator lists in `C93_EGRESS_INTERNAL_DOMAINS` answer `ENOTFOUND` for every record type, unless a tenant rule names them.
    - **Reverse lookups:** only for addresses the tenant could connect to, so `dns` can't map internal addresses to names.
    - **`MX`, `SRV`, `CNAME` and `NS` answers:** targets in internal zones are dropped. `TXT` answers are returned as they are, since they're only reachable for names that aren't internal.
-   - **Split-horizon DNS:** an operator whose resolver answers internal records for public-looking names sets `AUTOMATELY_EGRESS_DNS` to a public resolver, which then answers every script query.
+   - **Split-horizon DNS:** an operator whose resolver answers internal records for public-looking names sets `C93_EGRESS_DNS` to a public resolver, which then answers every script query.
 3. **`rejectUnauthorized: false` is honoured** (B2, B5). It only affects the tenant's own connection, and the job log notes it once per job.
 4. **B3 (`createServer` over `ctx.serve`): yes.**
 5. **Later and separately:** `worker_threads` as child jobs. (The WebSocket client and `http2`, also listed here at first, are now in this plan: §12 and §13.)
@@ -375,13 +375,13 @@ GET /v1/egress-policy                     (the tenant, read-only)
 **Defaults:**
 - **A new cluster's policy is one cluster deny rule:** `@smtp-ports` over `tcp`, with a note saying why. An operator can edit or remove it, and a tenant allow can't override it.
   - **Lifting it for one tenant:** the operator adds a narrower cluster allow, or moves the deny into specific tenants' policies.
-- **The development switch** (`AUTOMATELY_EGRESS_ALLOW_PRIVATE`) still works as before: it opens every private and reserved address after the deny rules. The node's own ports are still refused.
+- **The development switch** (`C93_EGRESS_ALLOW_PRIVATE`) still works as before: it opens every private and reserved address after the deny rules. The node's own ports are still refused.
 
 **Settings in the cluster policy, from B5:** the connect rate (120 a minute per tenant per node) and the socket caps (16 per execution, 256 per tenant per node). They come with sockets, the first thing that uses them.
 
 **Where it lives:**
-- **Storage:** `Records`, edited through `GET`/`PUT /v1/egress/cluster-policy` (operators, audited) and `automately egress cluster …`.
-- **Seeding:** `AUTOMATELY_EGRESS_POLICY_FILE` seeds it on the cluster's first start only.
+- **Storage:** `Records`, edited through `GET`/`PUT /v1/egress/cluster-policy` (operators, audited) and `c93 egress cluster …`.
+- **Seeding:** `C93_EGRESS_POLICY_FILE` seeds it on the cluster's first start only.
 - **Caching:** nodes cache it as they cache tenant policies.
 - **Tenant policies** gain deny rules and a posture. Today's rules read as allows.
 
@@ -452,7 +452,7 @@ GET /v1/egress-policy                     (the tenant, read-only)
 ## 13. WebSockets (built, D-125)
 - **The ingress** passes a GET that asks to upgrade (`Connection: upgrade`, any `Upgrade`) to the run's node with its `Connection` and `Upgrade`, and waits for the app's answer. A `101` becomes a byte tunnel both ways with backpressure; any other answer is relayed as a response.
   - **Frames aren't parsed:** the bytes are the app's and the client's. A frame size limit belongs to the app (the ws library's `maxPayload`).
-  - **Limits:** upgraded connections per run (`AUTOMATELY_SERVICE_MAX_WEBSOCKETS`, 1,000, counted on the run's node) and idle time (`AUTOMATELY_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS`, 10 minutes with no byte either way).
+  - **Limits:** upgraded connections per run (`C93_SERVICE_MAX_WEBSOCKETS`, 1,000, counted on the run's node) and idle time (`C93_INGRESS_WEBSOCKET_IDLE_TIMEOUT_MS`, 10 minutes with no byte either way).
 - **In the isolate:**
   - **Servers:** `http.Server` emits `upgrade` with a real `net.Socket` on the connection. The app writes its own answer on it, as on Node, and the node reads that head: a 101 switches the connection, anything else goes as a response. So the `ws` library's server works unchanged.
   - **Clients:** an `http.request` that asks to upgrade, or brings its own `createConnection`, is written as HTTP/1.1 over §7's sockets in the isolate, as Node's client does. So the ws client works, and the gate checks it as `tcp`.
