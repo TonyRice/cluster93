@@ -3,27 +3,38 @@
 # Linux native only: GraalVM native-image can't cross-compile, so macOS and Windows
 # binaries are built on their own platforms (see docs/guides/cli.md#build-from-source).
 #
-#   scripts/release-local.sh <version> [--build-only | --keep-draft]
+#   scripts/release-local.sh <version> [--build-only | --keep-draft] [--no-build]
 #
-#     <version>     the exact project version, e.g. 2.0.0-alpha.1 (must equal the pom)
+#     <version>     the exact project version, e.g. 2.0.0-alpha.2 (must equal the pom)
 #     --build-only  build the binary and assemble dist/ + SHA256SUMS; no network
 #     --keep-draft  create the draft release and upload assets, but don't publish
+#     --no-build    reuse the existing build (cluster93-cli/target/c93); skip maven
 #
 # With no flag: build, sign, create a draft release, upload the assets, and publish it.
+#
+# SIGNING: the release key is passphrase-protected. Run this in a terminal and openssl
+# prompts for the passphrase. For a non-interactive run, set C93_RELEASE_PASSPHRASE.
 #
 # Publishing talks to the GitHub REST API with curl — gh is not required. It uses a
 # token from C93_GITHUB_TOKEN / GITHUB_TOKEN / GH_TOKEN, or an authenticated `gh`
 # session (`gh auth token`) if one exists. C93_RELEASES picks another repository.
-#
-# Needs: GraalVM (native-image) on PATH. Publishing also needs openssl and the release
-# key at ~/.config/cluster93/release-signing.key (scripts/release-key.sh makes one).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-version="${1:?usage: scripts/release-local.sh <version> [--build-only|--keep-draft]}"
-mode="${2:-publish}"
+version="${1:?usage: scripts/release-local.sh <version> [--build-only|--keep-draft] [--no-build]}"
+shift
+mode=publish
+build=1
+for a in "$@"; do
+    case "$a" in
+        --build-only) mode=build-only ;;
+        --keep-draft) mode=keep-draft ;;
+        --no-build) build=0 ;;
+        *) printf 'release-local: unknown flag: %s\n' "$a" >&2; exit 1 ;;
+    esac
+done
 tag="v${version}"
 repo="${C93_RELEASES:-TonyRice/cluster93}"
 
@@ -32,14 +43,18 @@ die() { printf 'release-local: %s\n' "$*" >&2; exit 1; }
 pom="$(./mvnw -q -B -ntp -N help:evaluate -Dexpression=project.version -DforceStdout | tail -1)"
 [ "$pom" = "$version" ] || die "the pom version is ${pom}, not ${version}; run scripts/version.sh set ${version} first"
 
-printf '== building the native c93 CLI (linux x64, glibc)\n'
-# -DskipTests (not -Dmaven.test.skip=true): the reactor's other modules need
-# cluster93-core's tests jar, which is only produced when tests are compiled.
-./mvnw -q -B -ntp -Pnative -pl cluster93-cli -am package -DskipTests \
-    "-Dnative.extra.args=-march=compatibility"
+if [ "$build" = 1 ]; then
+    printf '== building the native c93 CLI (linux x64, glibc)\n'
+    # -DskipTests (not -Dmaven.test.skip=true): the reactor's other modules need
+    # cluster93-core's tests jar, which is only produced when tests are compiled.
+    ./mvnw -q -B -ntp -Pnative -pl cluster93-cli -am package -DskipTests \
+        "-Dnative.extra.args=-march=compatibility"
+else
+    printf '== reusing the existing native build (--no-build)\n'
+fi
 
 src="cluster93-cli/target/c93"
-[ -f "$src" ] || die "no native binary at ${src}"
+[ -f "$src" ] || die "no native binary at ${src} (drop --no-build to build one)"
 mkdir -p dist
 cp "$src" dist/cluster93-linux-x64
 printf '== smoke test\n'
@@ -48,7 +63,7 @@ printf '== smoke test\n'
 cp install/install.sh install/install.ps1 dist/
 ( cd dist && sha256sum cluster93-linux-x64 install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS )
 
-if [ "$mode" = "--build-only" ]; then
+if [ "$mode" = "build-only" ]; then
     printf '\nBuilt dist/ (linux x64). Publish with: scripts/release-local.sh %s\n' "$version"
     exit 0
 fi
@@ -69,9 +84,12 @@ uploads="https://uploads.github.com/repos/${repo}"
 auth=(-H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
 json=("${auth[@]}" -H "Content-Type: application/json")
 
-# Sign before uploading, so SHA256SUMS.sig ships with the rest.
+# Sign before uploading, so SHA256SUMS.sig ships with the rest. The key is
+# passphrase-protected: C93_RELEASE_PASSPHRASE (or an interactive prompt) supplies it.
 printf '== signing SHA256SUMS\n'
-openssl dgst -sha256 -sign "$key" -out dist/SHA256SUMS.sig dist/SHA256SUMS
+passin=()
+[ -n "${C93_RELEASE_PASSPHRASE:-}" ] && passin=(-passin env:C93_RELEASE_PASSPHRASE)
+openssl dgst -sha256 "${passin[@]}" -sign "$key" -out dist/SHA256SUMS.sig dist/SHA256SUMS
 
 pre=false
 case "$tag" in *-*) pre=true ;; esac
@@ -97,7 +115,7 @@ for f in dist/*; do
         -X POST "${uploads}/releases/${id}/assets?name=${name}" --data-binary @"$f" >/dev/null
 done
 
-if [ "$mode" = "--keep-draft" ]; then
+if [ "$mode" = "keep-draft" ]; then
     printf 'draft %s created (draft). Publish it when ready.\n' "$tag"
     exit 0
 fi
