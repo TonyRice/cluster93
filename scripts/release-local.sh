@@ -5,8 +5,8 @@
 #   cluster93-linux-x64   the native `c93` CLI (Linux x64, glibc)
 #   cluster93-cli.jar     the same CLI as a portable jar (any OS with Java 21+)
 #   c93.jar               the server (portable; run a node with `java -jar c93.jar`)
-#   worker-javet          the Linux native workers the server spawns in process mode
-#   worker-graaljs
+#   worker-javet.gz       the Linux native workers the server spawns in process mode
+#   worker-graaljs.gz     (gunzip them into bin/ beside the server before running a node)
 #   install.sh / install.ps1, SHA256SUMS, SHA256SUMS.sig
 #
 #   scripts/release-local.sh <version> [--build-only | --keep-draft] [--no-build]
@@ -73,15 +73,17 @@ mkdir -p dist
 cp cluster93-cli/target/c93 dist/cluster93-linux-x64
 cp cluster93-cli/target/cluster93-cli.jar dist/cluster93-cli.jar
 cp cluster93-server/target/c93.jar dist/c93.jar
-cp bin/worker-javet bin/worker-graaljs dist/
-chmod +x dist/cluster93-linux-x64 dist/worker-javet dist/worker-graaljs
+chmod +x dist/cluster93-linux-x64
+# The native workers are huge; ship them gzipped.
+gzip -9 -c bin/worker-javet > dist/worker-javet.gz
+gzip -9 -c bin/worker-graaljs > dist/worker-graaljs.gz
 cp install/install.sh install/install.ps1 dist/
 
 printf '== smoke test\n'
 ./dist/cluster93-linux-x64 --version
 java -jar dist/cluster93-cli.jar --version
 
-( cd dist && sha256sum cluster93-linux-x64 cluster93-cli.jar c93.jar worker-javet worker-graaljs install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS )
+( cd dist && sha256sum cluster93-linux-x64 cluster93-cli.jar c93.jar worker-javet.gz worker-graaljs.gz install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS )
 
 if [ "$mode" = "build-only" ]; then
     printf '\nBuilt dist/ (full bundle). Publish with: scripts/release-local.sh %s\n' "$version"
