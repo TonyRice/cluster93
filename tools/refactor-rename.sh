@@ -347,29 +347,53 @@ def _apply(root, files, path_rules, content_rules, sections, keep_paths, args):
     dirty = git(root, "status", "--porcelain", "--untracked-files=no").strip()
     if dirty:
         die("refusing --apply: tracked files are modified; commit or stash first")
-    # 1. rewrite content
-    if not args.paths_only:
-        for f in files:
-            full = os.path.join(root, f)
-            try:
-                data = open(full, "rb").read()
-            except OSError:
-                continue
-            if b"\x00" in data[:8192] or is_kept(f, keep_paths):
-                continue
-            text = data.decode("utf-8", "replace")
-            new_text, hits, _ = rewrite_content(text, content_rules, sections.get(f, []))
-            if hits:
-                open(full, "w", encoding="utf-8").write(new_text)
-    # 2. move paths
+    # 1. move paths first (git mv on a clean tree), recording old -> new
+    moved = {}
     if not args.content_only:
         for f in files:
             nf = map_path(f, path_rules)
+            moved[f] = nf
             if nf == f:
                 continue
             os.makedirs(os.path.join(root, os.path.dirname(nf)), exist_ok=True)
             subprocess.run(["git", "-C", root, "mv", f, nf], check=True)
+    else:
+        moved = {f: f for f in files}
+    # 2. rewrite content at the (possibly moved) paths
+    if not args.paths_only:
+        for old, new in moved.items():
+            full = os.path.join(root, new)
+            if not os.path.exists(full):
+                continue
+            try:
+                data = open(full, "rb").read()
+            except OSError:
+                continue
+            if b"\x00" in data[:8192] or is_kept(new, keep_paths):
+                continue
+            text = data.decode("utf-8", "replace")
+            new_text, hits, _ = rewrite_content(text, content_rules, sections.get(new, []))
+            if hits:
+                open(full, "w", encoding="utf-8").write(new_text)
+    # 3. prune directories emptied by the moves
+    if not args.content_only:
+        _prune_empty_dirs(root)
     print("apply: done. Review `git status`, then build/test.")
+
+
+def _prune_empty_dirs(root):
+    skip = {".git", "node_modules", "target", ".agents", ".opencode", ".mvn", ".cache"}
+    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
+        if dirpath == root:
+            continue
+        parts = set(os.path.relpath(dirpath, root).split(os.sep))
+        if parts & skip:
+            continue
+        try:
+            if not os.listdir(dirpath):
+                os.rmdir(dirpath)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
