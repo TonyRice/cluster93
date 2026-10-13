@@ -26,6 +26,7 @@ section	ROADMAP.md	^- \*\*Rebrand:	^- \*\*
 # --- The refactor tooling itself (contains the search token by definition) ----
 path	tools/refactor-rename.sh
 path	tools/rename-map.tsv
+path	tools/rename-local.sh
 path	tools/rename-keep.txt
 path	tools/migrate-tool-state.sh
 path	scripts/migrate-home.sh
