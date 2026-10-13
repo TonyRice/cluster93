@@ -16,7 +16,7 @@ class TokenFormatTest {
         Set<String> seen = new HashSet<>();
         for (int i = 0; i < 200; i++) {
             String token = TokenFormat.generate(random);
-            assertThat(token).startsWith("c93_").hasSize(5 + 43 + 6).matches("c93_[0-9A-Za-z]+");
+            assertThat(token).startsWith("c93_").hasSize(TokenFormat.PREFIX.length() + 43 + 6).matches("c93_[0-9A-Za-z]+");
             assertThat(TokenFormat.looksValid(token)).isTrue();
             assertThat(seen.add(token)).isTrue();
         }
