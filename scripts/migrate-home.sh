@@ -64,7 +64,7 @@ rewrite() {
             -e 's/AUTOMATELY_/C93_/g' \
             -e 's/Automately/Cluster93/g' \
             -e 's/"automately"/"c93"/g' \
-            -e 's/"command": *"automately"/"command": "c93"/g' \
+            -e 's/automately/c93/g' \
             "$f"
         rm -f "$f.rename-bak"
     fi
@@ -80,8 +80,9 @@ rename_file() {
 
 say "--- home files (rewritten in place, then moved) ---"
 rewrite "$OLD_HOME/local.env"
-rewrite "$OLD_HOME/node.meta"
 rewrite "$OLD_HOME/mcp.json"
+# node.meta is regenerated from the current checkout by `c93 local update` (write_meta),
+# so it is left alone rather than half-rewritten here.
 rename_file "$OLD_HOME/automately.pid" "$OLD_HOME/c93.pid"
 
 say
