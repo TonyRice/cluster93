@@ -43,6 +43,19 @@ Then it signs `SHA256SUMS`, uploads `SHA256SUMS.sig` and publishes the release (
 the pre-release flag). Until then the release is a draft, which `releases/latest`
 doesn't serve and the installers wouldn't accept.
 
+## When GitHub Actions is unavailable
+
+If the account's Actions are locked (billing) or you just want a local cut, both
+steps have local equivalents:
+
+- **Secret scan:** `scripts/secret-scan.sh` — the same `.gitleaks.toml` CI uses.
+  `scripts/secret-scan.sh --install-hook` wires it as a `pre-push` hook so a secret
+  is caught before it leaves your machine.
+- **Release (Linux only):** `scripts/release-local.sh <version>` builds
+  `cluster93-linux-x64`, assembles `SHA256SUMS`, creates a draft release, and signs +
+  publishes it (add `--keep-draft` to stop before signing). macOS and Windows still
+  need hosted runners, because native-image can't cross-compile.
+
 ## Checking a release by hand
 
 ```bash
