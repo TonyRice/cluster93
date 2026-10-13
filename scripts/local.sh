@@ -363,7 +363,7 @@ cmd_start() {
 
   mkdir -p "$C93_HOME" "$DATA_DIR" "$LOG_DIR"
   echo "== starting the local master node (data: $DATA_DIR)" >&2
-  env \
+  setsid env \
     JDK_JAVA_OPTIONS="$IGNITE_JVM_ARGS" \
     C93_NODE_ID="$NODE_ID" \
     C93_ROLES="$ROLES" \
@@ -379,7 +379,7 @@ cmd_start() {
     C93_METRICS_PORT="$METRICS_PORT" \
     C93_WORKER_MODE="$WORKER_MODE" \
     C93_WORKER_DEFAULT_MODE="$WORKER_ENGINE" \
-    nohup "$(java_bin)" -jar "$SERVER_JAR" </dev/null >"$LOG_FILE" 2>&1 &
+    "$(java_bin)" -jar "$SERVER_JAR" </dev/null >"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
   disown "$!" 2>/dev/null || true
   echo "   pid $(cat "$PID_FILE"), log $LOG_FILE" >&2
@@ -389,6 +389,7 @@ cmd_start() {
     if curl -fsS "${URL}/health" >/dev/null 2>&1; then
       echo "== up at ${URL} (health OK after ${attempt}s)" >&2
       ensure_console || true
+      echo "== web console: http://localhost:${INGRESS_PORT}" >&2
       return 0
     fi
     if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
