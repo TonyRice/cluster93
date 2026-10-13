@@ -345,6 +345,10 @@ final class LocalCommand extends Base {
             }
             boolean cliUpdate = VersionCommand.updateAvailable(cliCommit, head);
 
+            // The local node owns system/console; ask it (as the admin token) whether the deployed console is behind.
+            VersionCommand.ConsoleStatus console = VersionCommand.checkConsoleStatus(new Config(base, token), repoRoot(io), io);
+            boolean consoleUpdate = console.updateAvailable();
+
             if (json()) {
                 ObjectNode result = Json.object()
                         .put("nodeId", nodeId)
@@ -364,6 +368,7 @@ final class LocalCommand extends Base {
                 result.put("cliCommit", cliCommit);
                 result.put("cliBinary", cliBinary);
                 result.put("cliUpdateAvailable", cliUpdate);
+                result.put("consoleUpdateAvailable", consoleUpdate);
                 Output.json(out(), result);
                 return 0;
             }
@@ -381,7 +386,7 @@ final class LocalCommand extends Base {
             out().println("  PID:            " + (pid > 0 ? pid + (running ? " (running)" : " (not running)") : "(not running)"));
             out().println("  health:         " + (health ? "ok" : "unreachable"));
             out().println("  nodes:          " + nodes);
-            if (update || cliUpdate) {
+            if (update || cliUpdate || consoleUpdate) {
                 out().println();
                 if (update) {
                     out().println("\u26a0\ufe0f  Update Available! Running build: " + installed + ", Current repo HEAD: " + head
@@ -391,6 +396,11 @@ final class LocalCommand extends Base {
                     out().println("\u26a0\ufe0f  Update Available! Current CLI build: " + Main.shortCommit(cliCommit)
                             + ", Current repo HEAD: " + Main.shortCommit(head)
                             + ". Run 'scripts/build-cli.sh' or 'c93 local update'.");
+                }
+                if (consoleUpdate) {
+                    out().println("\u26a0\ufe0f  Update Available! Web Console build: " + Main.shortCommit(console.deployedCommit())
+                            + ", Local repo HEAD: " + Main.shortCommit(console.localCommit())
+                            + ". Run 'c93 local update' or 'c93 apps deploy console'.");
                 }
             }
             return 0;

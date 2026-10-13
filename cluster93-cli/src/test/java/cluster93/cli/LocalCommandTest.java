@@ -215,7 +215,7 @@ class LocalCommandTest {
 
         assertThat(result.code()).as(result.err()).isZero();
         com.fasterxml.jackson.databind.JsonNode json = Json.parse(result.out());
-        assertThat(json.at("/mcpServers/cluster93/url").asText()).isEqualTo("http://localhost:9999/mcp");
+        assertThat(json.at("/mcpServers/c93/url").asText()).isEqualTo("http://localhost:9999/mcp");
     }
 
     @Test

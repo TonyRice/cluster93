@@ -15,6 +15,11 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
   - `AppsTab` now detects and preserves non-standard origin ports (`window.location.port`) when constructing preview and canonical application URLs (e.g., preserving `:8000`), preventing connection errors to port 80.
   - Added configurable Ingress Host UI and local storage persistence (`c93_ingress_host`), allowing operators accessing via custom domains, non-standard reverse proxy ports, or tunnels to configure the ingress host directly from the Apps view.
 
+- **CLI Web Console Version Auto-Detection & Admin Update Prompt**:
+  - `c93 version` and `c93 local status` now automatically check the active web console deployment against the local source/repo HEAD commit.
+  - Verification is gated strictly to users with administrator privileges (`/v1/whoami` returning `admin: true`), completely skipping reserved `system` tenant queries for regular tenant users.
+  - When an admin user is connected and the deployed web console is behind the checkout HEAD, an update warning is presented offering `c93 local update` or `c93 apps deploy console`. Included in `--json` as `console.updateAvailable` (`VersionCommand`) and `consoleUpdateAvailable` (`LocalCommand`).
+
 ## [2.0.0-alpha.1] - 2026-10-13
 
 - **Rebrand: Automately → Cluster93 (`c93`)**:
