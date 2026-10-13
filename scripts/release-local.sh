@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
 # Builds and publishes a Cluster93 release locally — no GitHub Actions, and no gh.
-# Linux native only: GraalVM native-image can't cross-compile, so macOS and Windows
-# binaries are built on their own platforms (see docs/guides/cli.md#build-from-source).
+#
+# A release is the whole platform, not just the client:
+#   cluster93-linux-x64   the native `c93` CLI (Linux x64, glibc)
+#   cluster93-cli.jar     the same CLI as a portable jar (any OS with Java 21+)
+#   c93.jar               the server (portable; run a node with `java -jar c93.jar`)
+#   worker-javet          the Linux native workers the server spawns in process mode
+#   worker-graaljs
+#   install.sh / install.ps1, SHA256SUMS, SHA256SUMS.sig
 #
 #   scripts/release-local.sh <version> [--build-only | --keep-draft] [--no-build]
 #
 #     <version>     the exact project version, e.g. 2.0.0-alpha.2 (must equal the pom)
-#     --build-only  build the binary and assemble dist/ + SHA256SUMS; no network
+#     --build-only  build everything and assemble dist/ + SHA256SUMS; no network
 #     --keep-draft  create the draft release and upload assets, but don't publish
-#     --no-build    reuse the existing build (cluster93-cli/target/c93); skip maven
+#     --no-build    reuse the existing build; skip maven and the worker build
 #
 # With no flag: build, sign, create a draft release, upload the assets, and publish it.
 #
-# SIGNING: the release key is passphrase-protected. Run this in a terminal and openssl
-# prompts for the passphrase. For a non-interactive run, set C93_RELEASE_PASSPHRASE.
-#
-# Publishing talks to the GitHub REST API with curl — gh is not required. It uses a
-# token from C93_GITHUB_TOKEN / GITHUB_TOKEN / GH_TOKEN, or an authenticated `gh`
-# session (`gh auth token`) if one exists. C93_RELEASES picks another repository.
+# NOTES
+#   - Linux native, x64 only: native-image can't cross-compile. `c93.jar` (server) and
+#     `cluster93-cli.jar` are portable and cover macOS/Windows.
+#   - The workers are only built if bin/worker-* are missing (they take a few minutes).
+#   - SIGNING: the release key is passphrase-protected. Run in a terminal and openssl
+#     prompts; C93_RELEASE_PASSPHRASE supplies it non-interactively. A signature that
+#     already verifies is reused, so a retry needn't re-enter it.
+#   - Publishing talks to the GitHub REST API with curl — gh is not required. It uses a
+#     token from C93_GITHUB_TOKEN / GITHUB_TOKEN / GH_TOKEN, or an authenticated `gh`
+#     session (`gh auth token`). C93_RELEASES picks another repository.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -44,33 +54,42 @@ pom="$(./mvnw -q -B -ntp -N help:evaluate -Dexpression=project.version -DforceSt
 [ "$pom" = "$version" ] || die "the pom version is ${pom}, not ${version}; run scripts/version.sh set ${version} first"
 
 if [ "$build" = 1 ]; then
-    printf '== building the native c93 CLI (linux x64, glibc)\n'
+    printf '== building the native CLI, the portable CLI jar, and the server jar\n'
     # -DskipTests (not -Dmaven.test.skip=true): the reactor's other modules need
     # cluster93-core's tests jar, which is only produced when tests are compiled.
-    ./mvnw -q -B -ntp -Pnative -pl cluster93-cli -am package -DskipTests \
+    ./mvnw -q -B -ntp -Pnative -pl cluster93-cli,cluster93-server -am package -DskipTests \
         "-Dnative.extra.args=-march=compatibility"
+    if [ ! -x bin/worker-javet ] || [ ! -x bin/worker-graaljs ]; then
+        printf '== building the native workers (first time; a few minutes)\n'
+        scripts/build-workers.sh all
+    fi
 else
-    printf '== reusing the existing native build (--no-build)\n'
+    printf '== reusing the existing build (--no-build)\n'
 fi
 
-src="cluster93-cli/target/c93"
-[ -f "$src" ] || die "no native binary at ${src} (drop --no-build to build one)"
+# ---- assemble dist/ ---------------------------------------------------------- #
+rm -rf dist
 mkdir -p dist
-cp "$src" dist/cluster93-linux-x64
+cp cluster93-cli/target/c93 dist/cluster93-linux-x64
+cp cluster93-cli/target/cluster93-cli.jar dist/cluster93-cli.jar
+cp cluster93-server/target/c93.jar dist/c93.jar
+cp bin/worker-javet bin/worker-graaljs dist/
+chmod +x dist/cluster93-linux-x64 dist/worker-javet dist/worker-graaljs
+cp install/install.sh install/install.ps1 dist/
+
 printf '== smoke test\n'
 ./dist/cluster93-linux-x64 --version
+java -jar dist/cluster93-cli.jar --version
 
-cp install/install.sh install/install.ps1 dist/
-( cd dist && sha256sum cluster93-linux-x64 install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS )
+( cd dist && sha256sum cluster93-linux-x64 cluster93-cli.jar c93.jar worker-javet worker-graaljs install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS )
 
 if [ "$mode" = "build-only" ]; then
-    printf '\nBuilt dist/ (linux x64). Publish with: scripts/release-local.sh %s\n' "$version"
+    printf '\nBuilt dist/ (full bundle). Publish with: scripts/release-local.sh %s\n' "$version"
     exit 0
 fi
 
 # ---- publish over the GitHub REST API (no gh required) ----------------------- #
 token="${C93_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
-# Reuse an authenticated gh session if there is one and no token was given.
 if [ -z "$token" ] && command -v gh >/dev/null 2>&1; then
     token="$(gh auth token 2>/dev/null || true)"
 fi
@@ -90,9 +109,7 @@ if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
     git tag "$tag"
 fi
 
-# Sign before uploading, so SHA256SUMS.sig ships with the rest. The key is
-# passphrase-protected: C93_RELEASE_PASSPHRASE (or an interactive prompt) supplies it.
-# A signature that already verifies is reused, so a retry needn't re-enter it.
+# A signature that already verifies is reused, so a retry needn't re-enter the passphrase.
 if [ -s dist/SHA256SUMS.sig ] && openssl dgst -sha256 -verify "${root}/install/cluster93-release.pem" \
         -signature dist/SHA256SUMS.sig dist/SHA256SUMS >/dev/null 2>&1; then
     printf '== reusing the existing SHA256SUMS.sig\n'
