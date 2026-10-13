@@ -31,9 +31,9 @@ C93_NODE_ID=node1 C93_JOIN=$(cat cluster-tls/node1.join) java -jar c93.jar
 On the machine with `ca.key`:
 ```bash
 c93 node invite node4 --host 10.0.0.14 --ca ./cluster-tls/ca.key
-# C93_JOIN=atly_nodebundle_H4sI…
+# C93_JOIN=c93_nodebundle_H4sI…
 ```
-Run that on the new machine: `C93_JOIN=atly_nodebundle_… java -jar c93.jar`, or `--join atly_nodebundle_…`.
+Run that on the new machine: `C93_JOIN=c93_nodebundle_… java -jar c93.jar`, or `--join c93_nodebundle_…`.
 
 **What's in the line:** node4's private key, its certificate and the CA certificate, gzipped and base64-encoded. **It never contains `ca.key`.**
 - **Treat it like a password for node4:** it can't create other nodes or sign anything.
@@ -66,7 +66,7 @@ c93 node revoke node4      # with the admin token
 | Variable | Default | |
 |---|---|---|
 | `C93_CLUSTER_TLS` | `required` | `off` turns certificates off. **Development only**: nodes then talk without authentication or encryption, and each start logs a warning. |
-| `C93_JOIN` | none | A join line to install (`atly_nodebundle_…` or `atly_nodecert_…`) |
+| `C93_JOIN` | none | A join line to install (`c93_nodebundle_…` or `c93_nodecert_…`) |
 | `C93_TLS_DIR` | `<C93_DATA_DIR>/tls` | Where the node keeps its key and certificates |
 | `C93_CLUSTER_BIND` | the advertised host, if set | The private address Ignite listens on (D-065) |
 | `C93_CLUSTER_JOIN_TIMEOUT_MS` | `60000` | How long a node keeps trying to join members that refuse it (a revoked or foreign certificate) before its start fails |

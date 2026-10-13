@@ -11,7 +11,7 @@ Authorization: Bearer <token>
 ```
 
 - **Admin Token:** Configured via `C93_ADMIN_TOKEN` or generated at initial startup. Manages tenants, operator invites, and cluster storage policies. By design (D-044), the admin token cannot inspect or modify tenant data.
-- **Tenant Tokens (`atly_*`):** Scoped to an individual tenant. Scopes include:
+- **Tenant Tokens (`c93_*`):** Scoped to an individual tenant. Scopes include:
   `jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`, `nodes:read`, `storage:read`, `storage:write`, `secrets:read`, `secrets:write`, `secrets:use`, `members:read`, `members:write`, `audit:read`, or `*`.
 - **Personal Tokens:** Assigned to invited users with roles (`owner`, `admin`, `developer`, `viewer`) or custom role groups.
 - **Storage & Auditing:** Tokens are stored as SHA-256 hashes only. Token lifecycle and configuration changes are recorded in a tamper-evident audit log (`/v1/audit`).

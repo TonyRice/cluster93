@@ -16,7 +16,8 @@
 # `exclude` is an optional comma-separated glob list; the global allowlist is
 # tools/rename-keep.txt.
 #
-1	both	automately-v2	cluster93			# repo slug adamnlynn/automately-v2 -> adamnlynn/cluster93
+0	content	atly_	c93_				# bearer-token + node bundle/cert prefixes (separate brand token)
+1	both	automately-v2	cluster93			# repo slug adamnlynn/automately-v2 -> TonyRice/cluster93
 2	both	AUTOMATELY_	C93_				# env var prefix
 3	both	automately-	cluster93-			# modules, dirs, artifacts, release assets
 4	both	.automately-	.cluster93-			# ephemeral markers (.automately-nodes, .automately-probe-*)

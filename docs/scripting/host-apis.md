@@ -45,7 +45,7 @@ From outside the cluster:
 ```http
 POST /v1/bus/orders                      → 202, publishes the JSON body
 POST /v1/bus/prices/request?timeoutMs=5000 → 200 {"value": ...}, or 404 / 504 / 502
-Authorization: Bearer atly_…
+Authorization: Bearer c93_…
 ```
 
 ## `bus.queue(name)`: durable queues
@@ -289,7 +289,7 @@ PUT    /v1/files/reports/q3.csv          (body streamed) → 201 {"path", "size"
 GET    /v1/files/reports/q3.csv          → 200, or 206 with Range, 304 with If-None-Match
 GET    /v1/files?prefix=reports/&limit=100 → {"files": [...], "cursor": ...}
 DELETE /v1/files/reports/q3.csv          → 204
-Authorization: Bearer atly_…
+Authorization: Bearer c93_…
 ```
 Uploads over the quota get **413** (straight away when `Content-Length` is sent), and uploads when the cluster is out of room get **507**.
 

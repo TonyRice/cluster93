@@ -20,7 +20,7 @@ c93 invites create --tenant acme --role owner --user alice    # prints the code 
 Alice then redeems the code:
 
 ```bash
-c93 login https://cluster93.example.com --invite atly_…
+c93 login https://cluster93.example.com --invite c93_…
 c93 whoami        # alice in tenant acme, an owner (*)
 ```
 

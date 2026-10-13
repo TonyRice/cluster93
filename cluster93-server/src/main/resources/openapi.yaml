@@ -9,7 +9,7 @@ info:
 
     **Authentication.** Every `/v1` call carries `Authorization: Bearer <token>` (D-045). The admin token
     (`C93_ADMIN_TOKEN`, or generated once and logged) manages tenants and tokens only. Tenant tokens
-    (`atly_…`) belong to one tenant and carry scopes; each operation lists the scope it needs. A missing or
+    (`c93_…`) belong to one tenant and carry scopes; each operation lists the scope it needs. A missing or
     unknown token gets `401`, a missing scope `403`.
 
     **Users** (D-070). A personal token belongs to a user, who joins tenants through invites. What it may do is
@@ -2637,7 +2637,7 @@ components:
       type: http
       scheme: bearer
       description: |
-        `atly_…` tenant tokens, or the admin token. Scopes: `jobs:read`, `jobs:write`, `services:read`,
+        `c93_…` tenant tokens, or the admin token. Scopes: `jobs:read`, `jobs:write`, `services:read`,
         `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `queues:read`, `queues:write`, `tokens:write`,
         `nodes:read`, `storage:read`, `storage:write`, `secrets:read`, `secrets:write`, `secrets:use`,
         `members:read`, `members:write`, `audit:read`, `packages:read`, `packages:write`, `packages:admin`, `apps:read`,
@@ -2868,7 +2868,7 @@ components:
               - type: object
                 required: [token]
                 properties:
-                  token: { type: string, pattern: '^atly_[0-9A-Za-z]{49}$' }
+                  token: { type: string, pattern: '^c93_[0-9A-Za-z]{49}$' }
     InviteCreated:
       description: The invite, with its code; shown once.
       content:

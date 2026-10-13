@@ -8,7 +8,7 @@ A **service** is a script the cluster keeps running until you stop it. It's like
 
 ```http
 PUT /v1/services/order-poller
-Authorization: Bearer atly_…
+Authorization: Bearer c93_…
 
 {
   "script": "export default async (input, ctx) => { ... }",

@@ -26,7 +26,7 @@ const login = api.login as unknown as Mock;
 const redeemInvite = api.redeemInvite as unknown as Mock;
 
 const SESSION = {
-  token: 'atly_session',
+  token: 'c93_session',
   admin: false,
   tenant: 'acme',
   user: { id: 'usr_1', name: 'ada', operator: false, disabled: false, createdAt: 1 },
@@ -58,7 +58,7 @@ describe('LoginView', () => {
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
 
     await waitFor(() => expect(login).toHaveBeenCalledWith({ username: 'ada', password: 's3cret-pass' }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('atly_session'));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('c93_session'));
   });
 
   it('includes the optional tenant when one is given', async () => {
@@ -99,10 +99,10 @@ describe('LoginView', () => {
     expect(tokenInput).toBeInTheDocument();
     expect(screen.queryByLabelText('Username')).not.toBeInTheDocument();
 
-    await user.type(tokenInput, 'atly_manual');
+    await user.type(tokenInput, 'c93_manual');
     await user.click(screen.getByRole('button', { name: 'Connect' }));
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('atly_manual'));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('c93_manual'));
     expect(login).not.toHaveBeenCalled();
   });
 
@@ -150,6 +150,6 @@ describe('LoginView', () => {
     await waitFor(() =>
       expect(redeemInvite).toHaveBeenCalledWith({ code: 'inv_code', name: 'ada', password: 's3cret' }),
     );
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('atly_session'));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('c93_session'));
   });
 });

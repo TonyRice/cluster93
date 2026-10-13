@@ -3,7 +3,7 @@
 **File:** `ROADMAP.md`  
 **Author / Organization:** Adam & Lynn Incorporated <tony@adamnlynn.com>  
 **License:** MPL-2.0  
-**Repository:** `git@github.com:adamnlynn/cluster93.git` (`main`)  
+**Repository:** `git@github.com:TonyRice/cluster93.git` (`main`)  
 **Last Updated:** 2026-10-13  
 
 ---
@@ -146,7 +146,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
   - **Verification:** all 11 modules compile; targeted suites green (`ArchitectureTest`, `ImportsTest`, `ServerConfigTest`, `UpgradeTest`, `InstallScriptTest`, `MainHelpTest`, `ClusterTest`, `BinarySchemaTest`, `FileFailoverTest`, `ObservabilityTest`, `DashboardTest`, `ProcessModeParityTest` with `-Pjavet`). One real regression found and fixed: the package-dot rule turned dotted Micrometer names into `cluster93.*` (exported `cluster93_*`) while the dashboard/tests/docs use `c93_*`; an explicit `builder("automately.` → `builder("c93.` rule (map rule 25) aligns them.
   - **Post-rename build steps:** native binaries are not source — rebuild with `scripts/build-workers.sh all` (`bin/worker-javet`, `bin/worker-graaljs`) and `scripts/build-cli.sh` (`bin/c93`). Until the workers are rebuilt, process-mode tests/jobs fail (`PackagesTest`), since the stale `bin/worker-javet` still embeds the old `automately:` scheme.
   - Pre-existing (not rename-caused): running the whole server suite in one JVM can cascade from a `FileFailoverTest` TLS flake ("Ignite instance already started"); it reproduces on the pre-rename tag and each test passes in isolation.
-  - Open follow-up: the token prefix `TokenFormat.PREFIX` is still `atly_` (a brand remnant not matched by the rename) — left unchanged because altering it invalidates existing tokens.
+  - Token prefix: `TokenFormat.PREFIX` (and the node bundle/cert prefixes in `NodeBundle`) changed `atly_` → `c93_`. This invalidates existing tokens by design (they were being retired anyway); the OpenAPI pattern, tests, docs, and the recording redactor were updated with it.
 
 - **Dual Worker Compilation, GraalVM Helper & GraalJS Default Engine:**
   - New `scripts/detect-graalvm.sh` resolves the GraalVM SDK once (`GRAALVM_HOME`, `JAVA_HOME`, SDKMAN `current`/`*graal*` candidates, then `PATH`); sourced by `scripts/build-workers.sh` and `scripts/build-cli.sh` instead of each carrying its own discovery logic.
@@ -170,7 +170,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 - **Username & Password Authentication Architecture (D-133, Phase 6):**
   - **Core Scrypt Password Hashing:** Extended `Identity` with `CREDENTIALS` record kind, random 16-byte cryptographic salts, and `Kdf.scrypt` hashing with constant-time `MessageDigest.isEqual` comparison.
-  - **Public Login Endpoint:** Added `POST /v1/auth/login` to `openapi.yaml`, `RouteScopes.java`, and `IdentityRoutes.java`. Validates user credentials and mints a 30-day personal session token (`atly_...`).
+  - **Public Login Endpoint:** Added `POST /v1/auth/login` to `openapi.yaml`, `RouteScopes.java`, and `IdentityRoutes.java`. Validates user credentials and mints a 30-day personal session token (`c93_...`).
   - **Web Console Dual-Mode Login:** Redesigned `LoginView.tsx` with Username & Password + optional Tenant as the primary interface, retaining an expandable "Sign in with API token" fallback for CLI and token power users.
   - **Full Pre-commit Verification:** Passed `IdentityTest`, `AuthTest`, `ContractTest`, `./mvnw verify -pl cluster93-core,cluster93-server -am -DskipITs`, and `npm test` (26/26 passed) with 0 regressions.
 

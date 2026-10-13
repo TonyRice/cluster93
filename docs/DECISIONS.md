@@ -346,7 +346,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 **Date:** 2026-10-06 · **Status:** Accepted. Replaces the `X-Cluster93-Tenant` stand-in
 
 **Decision:**
-- Tokens look like `atly_` + 32 random bytes (base62) + a checksum, and are sent as `Authorization: Bearer`.
+- Tokens look like `c93_` + 32 random bytes (base62) + a checksum, and are sent as `Authorization: Bearer`.
 - Only their SHA-256 is stored. They are 256-bit random, so a slow hash adds nothing.
 - Each token belongs to one tenant and carries scopes (`jobs:read`, `files:write`, …, or `*`), an optional expiry, and can be revoked.
 - A missing token gets 401, and a missing scope gets 403 naming the scope.
@@ -438,7 +438,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
 
 **Decision:**
 - The tag-only release workflow (`.github/workflows/release.yml`) may use GitHub Actions runners for the macOS, Windows and arm64 builds. It runs on version tags only, never on pushes, so D-017 (no CI) stands.
-- Public downloads come from `adamnlynn/cluster93`'s own GitHub Releases, once Tony makes the repository public. The installers and `c93 upgrade` already default to `https://github.com/adamnlynn/cluster93/releases/latest/download`, so nothing changes at that point.
+- Public downloads come from `TonyRice/cluster93`'s own GitHub Releases, once Tony makes the repository public. The installers and `c93 upgrade` already default to `https://github.com/TonyRice/cluster93/releases/latest/download`, so nothing changes at that point.
 **Until then:** a tag still builds and publishes a release, but its assets need a GitHub login to download. Use `gh release download`, or point `C93_INSTALL_URL` at a mirror.
 
 ### D-056 — File storage backends: metadata in the cluster, bytes in a pluggable BlobStore
@@ -700,12 +700,12 @@ Docker didn't publish them to the host, but every container on the network could
 
 **Decision:**
 - **Creating a cluster:** `c93 cluster init --nodes …` writes `ca.key`, `ca.crt`, and one `<node>.join` line per node.
-- **Adding a node:** `c93 node invite node4 --host … --ca ./ca.key` signs node4's certificate **locally** and prints `C93_JOIN=atly_nodebundle_…`: node4's key, its certificate and the CA certificate, gzipped PEM in base64url. The new node installs it in its TLS directory and starts. Tony asked for a one-liner with the key base64-encoded; it carries **the node's** key, never the CA's, because putting `ca.key` in a one-liner would hand the master key to every node and every shell history.
+- **Adding a node:** `c93 node invite node4 --host … --ca ./ca.key` signs node4's certificate **locally** and prints `C93_JOIN=c93_nodebundle_…`: node4's key, its certificate and the CA certificate, gzipped PEM in base64url. The new node installs it in its TLS directory and starts. Tony asked for a one-liner with the key base64-encoded; it carries **the node's** key, never the CA's, because putting `ca.key` in a one-liner would hand the master key to every node and every shell history.
 - **The bundle is a secret for one node:**
   - it can't create other nodes
   - it's bound to the node's name and addresses
   - a line for one node can't start another
-- **The strict variant:** `cluster93-server --prepare node4` keeps the key on the new machine and prints its public key, and `node invite --key …` returns a certificate-only line (`atly_nodecert_…`).
+- **The strict variant:** `cluster93-server --prepare node4` keeps the key on the new machine and prints its public key, and `node invite --key …` returns a certificate-only line (`c93_nodecert_…`).
 - **Renewing is inviting again.** Nodes warn from 90 days before expiry.
 - **Compose:** a one-shot `tls-init` service makes the CA and certificates in a volume on the first start (`cluster93.tls.ClusterInit`), so `docker compose up`, the demo and the benchmarks stay one command. That's development only, since `ca.key` sits in the volume.
 
@@ -815,7 +815,7 @@ Docker didn't publish them to the host, but every container on the network could
   - The last owner can't be removed, and a role in use can't be deleted.
 - **Getting in: invites, not passwords.**
   - **Creating:** `members:write` holders create invites. Operators do too, including a tenant's first owner (`POST /v1/tenants/{t}/invites`) and other operators (`POST /v1/admin/invites`).
-  - **The code:** an `atly_…` secret, shown once and stored only as its hash. It expires in 7 days by default (at most 30), works once, and can name the user it's for.
+  - **The code:** an `c93_…` secret, shown once and stored only as its hash. It expires in 7 days by default (at most 30), works once, and can name the user it's for.
   - **Redeeming:** on the public `POST /v1/invites/redeem`. Without a token it creates a new user; with your personal token it adds the tenant to you. Either way you get a personal token.
   - **More tenants:** a member mints a token for another of their tenants with `POST /v1/me/tokens`.
 - **Storage:** one implementation of the identity logic (`Identity`), written against a small `Records` interface (get, put, compare-and-set, lookups by indexed field). It has in-memory and Ignite versions sharing one contract test. The tables are `USERS`, `MEMBERS`, `TENANT_ACCESS` and `INVITES`.

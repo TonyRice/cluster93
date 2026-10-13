@@ -42,7 +42,7 @@ public final class Authenticator {
 
     public Future<Principal> authenticate(String authorization) {
         if (authorization == null || !authorization.regionMatches(true, 0, "Bearer ", 0, 7) || authorization.length() <= 7) {
-            return Future.failedFuture(AuthFailure.unauthenticated("Send a token: Authorization: Bearer atly_…"));
+            return Future.failedFuture(AuthFailure.unauthenticated("Send a token: Authorization: Bearer c93_…"));
         }
         String token = authorization.substring(7).trim();
         String hash = TokenFormat.hash(token);

@@ -11,7 +11,7 @@ set -eu
 
 tag="${1:?usage: scripts/sign-release.sh TAG [KEY_FILE]}"
 key="${2:-${XDG_CONFIG_HOME:-$HOME/.config}/cluster93/release-signing.key}"
-repo="${C93_RELEASES:-adamnlynn/cluster93}"
+repo="${C93_RELEASES:-TonyRice/cluster93}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 pem="${root}/install/cluster93-release.pem"
 

@@ -9,6 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
   - Driven by a reviewable, dry-run-first toolset: `tools/refactor-rename.sh`, `tools/rename-map.tsv`, and `tools/rename-keep.txt` (historical/lineage text preserved via allowlist).
   - ⚠️ **Breaking, data compatibility:** the Ignite SQL schema and data region names changed, so durable data written by a pre-rename build is not read by the new build — existing clusters should start fresh or migrate.
   - ⚠️ **Breaking, scripting API:** built-in module imports now use the `c93:` scheme (`import { kv } from 'c93:kv'`).
+  - ⚠️ **Breaking, token format:** the bearer-token prefix changed `atly_` → `c93_` (`TokenFormat.PREFIX`), and the node bundle/cert lines use `c93_nodebundle_` / `c93_nodecert_` (`NodeBundle`). Existing tokens are invalidated by design.
+  - Repository: `git@github.com:TonyRice/cluster93.git` (release/install defaults point at `TonyRice/cluster93`).
 
 - **Full Process-Mode Parity (`AUTOMATELY_WORKER_MODE=process`, D-132)**:
   - Streaming host APIs now work identically out-of-process: `ctx.serve`/`listen` (inbound ingress), `fetch` and `net`/`tls` egress, large-file reads (`files.open`) and `files.respond` are bridged over the worker multiplexer; bus/queue/job listeners arrive as `EVENT` frames and answer with `REPLY`.
@@ -888,7 +890,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
   - **D-036's shared secret** on the internal endpoint is retired when certificates are on.
 - **One-line joins (D-067):**
   - **`automately cluster init`** creates the CA and a join line per node. **`ca.key` stays on your machine**, and the cluster never stores it.
-  - **`automately node invite node4 --host … --ca ca.key`** signs node4's certificate locally and prints `AUTOMATELY_JOIN=atly_nodebundle_…`, carrying node4's own key and certificate, never the CA key.
+  - **`automately node invite node4 --host … --ca ca.key`** signs node4's certificate locally and prints `AUTOMATELY_JOIN=c93_nodebundle_…`, carrying node4's own key and certificate, never the CA key.
   - **The strict variant:** `automately-server --prepare` with `node invite --key` sends no secrets.
 - **`automately node revoke`:** every node refuses the node's certificate from then on, and if it's in the cluster it's forced out through discovery (`failNode`), its process stopping. Inviting it again lets it back.
 - **`AUTOMATELY_CLUSTER_JOIN_TIMEOUT_MS`** (60 s): a node whose certificate is refused fails its start instead of retrying forever, which is Ignite's default.
@@ -939,7 +941,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lar
   - **Afterwards:** the cluster stays up for Grafana, and `scripts/demo.sh down` removes it.
   - **Why scripted:** it runs the same way every time, needs no API key, and doubles as a smoke test. Tony agreed a live agent session isn't needed.
 - **`docs/demo.html`:** a self-contained page that plays the recording offline, with the player and the recording inlined and "jump to" buttons for the kill and the recovery.
-- **`docs/demo.cast`:** a recording of a real run (asciicast v2). It was made by `scripts/record.py`, which needs no asciinema and redacts `atly_` tokens.
+- **`docs/demo.cast`:** a recording of a real run (asciicast v2). It was made by `scripts/record.py`, which needs no asciinema and redacts `c93_` tokens.
 - **Metrics:**
   - `automately_queue_messages_total{outcome}`: pushed, claimed, acked, retried, reclaimed, released, dead.
   - `automately_callbacks_deliveries_total{outcome}`: delivered, retry, failed.
@@ -1143,7 +1145,7 @@ A review against the 2017 code found completion callbacks, jobs starting jobs, a
 
 ### Added
 - **Bearer tokens on every `/v1` call** (D-045):
-  - Tokens look like `atly_` + 43 base62 characters + a 6-character checksum. Only their SHA-256 is stored.
+  - Tokens look like `c93_` + 43 base62 characters + a 6-character checksum. Only their SHA-256 is stored.
   - Each belongs to one tenant, carries scopes (`jobs:read`, `jobs:write`, `services:read`, `services:write`, `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`, `nodes:read`, or `*`), may expire, and can be revoked with effect on the next request, on every node.
   - A missing token gets 401 with `WWW-Authenticate: Bearer`, and a missing scope gets 403 naming it.
   - **Why:** weak spot #7. The tenant header let anyone act as any tenant.

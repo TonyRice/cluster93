@@ -270,7 +270,7 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
                   autoFocus
                   value={token}
                   onChange={(event) => setToken(event.target.value)}
-                  placeholder="atly_…"
+                  placeholder="c93_…"
                   className="input pl-9 font-mono"
                 />
               </div>

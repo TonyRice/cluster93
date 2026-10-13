@@ -76,7 +76,7 @@ The compose file reads those `.join` files, so `docker compose up` (and the demo
 # on the operator's machine (ca.key is here)
 c93 node invite node4 --host 10.0.0.14 --ca ./ca.key
 # prints a line to run on the new machine:
-C93_JOIN=atly_nodebundle_H4sIAAAA…  docker compose up -d node4     # or: cluster93-server --join atly_nodebundle_…
+C93_JOIN=c93_nodebundle_H4sIAAAA…  docker compose up -d node4     # or: cluster93-server --join c93_nodebundle_…
 ```
 **What the CLI does, locally:** it generates node4's key pair, signs node4's certificate (subject alternative names: `node4`, `10.0.0.14`) with `ca.key`, and packs **node4's key, node4's certificate and the CA certificate** into one base64 string (gzipped, about 1–2 KB). The new node unpacks it into `<data>/tls/` and starts with TLS.
 

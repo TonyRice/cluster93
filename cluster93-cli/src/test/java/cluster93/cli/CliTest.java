@@ -117,7 +117,7 @@ class CliTest {
 
     @Test
     void aBadTokenIsRefusedAtLogin() {
-        Result refused = cli(Map.of(), "atly_nonsense\n", "login", url);
+        Result refused = cli(Map.of(), "c93_nonsense\n", "login", url);
         assertThat(refused.code()).isEqualTo(1);
         assertThat(refused.err()).contains("error:");
         assertThat(Files.exists(config.resolve("config.json"))).isFalse();
@@ -172,7 +172,7 @@ class CliTest {
 
         Result invite = cli("node", "invite", "node3", "--host", "10.0.0.13", "--ca", out.resolve("ca.key").toString());
         assertThat(invite.code()).as(invite.err()).isZero();
-        assertThat(invite.out().strip()).startsWith("C93_JOIN=atly_nodebundle_");
+        assertThat(invite.out().strip()).startsWith("C93_JOIN=c93_nodebundle_");
         assertThat(invite.err()).contains("treat it like a password");
 
         // The strict way: the node keeps its key and sends only the public half.
@@ -323,7 +323,7 @@ class CliTest {
         Result created = cli("tokens", "create", "ci", "--scope", "jobs:read");
         assertThat(created.code()).as(created.err()).isZero();
         String secret = created.out().strip();
-        assertThat(secret).startsWith("atly_");
+        assertThat(secret).startsWith("c93_");
         assertThat(created.err()).contains("shown only once");
 
         Result ci = cli(Map.of("C93_TOKEN", secret), "", "whoami");

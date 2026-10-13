@@ -46,7 +46,7 @@
 
 ## After phase 5: move the repository to Tony's personal GitHub
 Builds on the company account fail with "recent account payments have failed or your spending limit needs to be increased".
-- Transfer `adamnlynn/cluster93` to the personal account. GitHub redirects the old URL afterwards.
+- Transfer `TonyRice/cluster93` to the personal account. GitHub redirects the old URL afterwards.
 - Point `origin` at the new location.
 - Update the defaults that name the repository: `install.sh`, `install.ps1`, `c93 upgrade` (`C93_RELEASES`), and the README and guide download URLs. The release workflow needs no change.
 - Check the new account's Actions and billing settings before tagging the first release.

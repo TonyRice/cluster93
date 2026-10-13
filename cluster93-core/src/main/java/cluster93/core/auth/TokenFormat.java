@@ -9,13 +9,13 @@ import java.util.HexFormat;
 import java.util.zip.CRC32;
 
 /**
- * Token strings (D-045): {@code atly_} + 43 base62 characters (32 random bytes) + a 6-character base62 CRC32 of
+ * Token strings (D-045): {@code c93_} + 43 base62 characters (32 random bytes) + a 6-character base62 CRC32 of
  * the random part. The prefix lets secret scanners recognise a leaked token; the checksum lets them, and us, reject
  * a mistyped or made-up string without a lookup. Only {@link #hash} is ever stored.
  */
 public final class TokenFormat {
 
-    public static final String PREFIX = "atly_";
+    public static final String PREFIX = "c93_";
     static final int BODY_LENGTH = 43;
     static final int CHECKSUM_LENGTH = 6;
     private static final String BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";

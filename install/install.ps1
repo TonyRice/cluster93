@@ -1,5 +1,5 @@
 # Installs the c93 CLI on Windows (D-049):
-#   irm https://github.com/adamnlynn/cluster93/releases/latest/download/install.ps1 | iex
+#   irm https://github.com/TonyRice/cluster93/releases/latest/download/install.ps1 | iex
 #
 # Environment: C93_VERSION (a tag, default latest), C93_INSTALL_DIR
 # (default %LOCALAPPDATA%\Programs\cluster93), C93_RELEASES (owner/repo), C93_INSTALL_URL,
@@ -62,7 +62,7 @@ function Install-Cluster93 {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
 
-    $repo = if ($env:C93_RELEASES) { $env:C93_RELEASES } else { 'adamnlynn/cluster93' }
+    $repo = if ($env:C93_RELEASES) { $env:C93_RELEASES } else { 'TonyRice/cluster93' }
     if ($env:C93_INSTALL_URL) { $base = $env:C93_INSTALL_URL.TrimEnd('/') }
     elseif ($env:C93_VERSION) { $base = "https://github.com/$repo/releases/download/$($env:C93_VERSION)" }
     else { $base = "https://github.com/$repo/releases/latest/download" }

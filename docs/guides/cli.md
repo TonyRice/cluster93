@@ -6,11 +6,11 @@
 
 ```bash
 # Linux and macOS
-curl -fsSL https://github.com/adamnlynn/cluster93/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/TonyRice/cluster93/releases/latest/download/install.sh | sh
 ```
 ```powershell
 # Windows (PowerShell)
-irm https://github.com/adamnlynn/cluster93/releases/latest/download/install.ps1 | iex
+irm https://github.com/TonyRice/cluster93/releases/latest/download/install.ps1 | iex
 ```
 
 The installer:

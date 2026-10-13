@@ -68,5 +68,5 @@
 [87.967, "o", "\r\n"]
 [87.967, "o", "\u001b[1m\u001b[36m== Done in 88s\u001b[0m\r\n"]
 [87.967, "o", "   Grafana:  http://localhost:3000   (the Cluster93 dashboard: the kill, the restart, the queue draining)\r\n"]
-[87.967, "o", "   API:      http://localhost:8082   token: C93_TOKEN=atly_…\r\n"]
+[87.967, "o", "   API:      http://localhost:8082   token: C93_TOKEN=c93_…\r\n"]
 [87.967, "o", "   Stop it:  scripts/demo.sh down\r\n"]

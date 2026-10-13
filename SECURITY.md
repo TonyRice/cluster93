@@ -49,7 +49,7 @@ Cluster93 runs other people's code. This page describes who is trusted, what eac
   - **Export (D-073):** set `C93_AUDIT_S3_BUCKET` to copy the log out of the cluster. That's the record someone with database access can't rewrite, including its newest entries.
 
 **API access** (D-044 to D-046, D-050, D-051):
-- **Tokens.** Every `/v1` call needs a bearer token. Tokens are 256-bit random with a checksum and a scanner-friendly `atly_` prefix. Only their SHA-256 is stored, and revocation takes effect on the next request.
+- **Tokens.** Every `/v1` call needs a bearer token. Tokens are 256-bit random with a checksum and a scanner-friendly `c93_` prefix. Only their SHA-256 is stored, and revocation takes effect on the next request.
 - **Scopes and the admin.** Scopes limit each token. The admin token manages tenants and tokens but can't read tenant data.
 - **Validation.** Requests are validated against the OpenAPI contract before any handler runs.
 - **Limits.** Per-tenant rate limits and storage quotas (D-043, D-051) bound what one tenant can take. Admission control refuses writes before disk or memory runs out, so uploads can't crash a node (D-038).

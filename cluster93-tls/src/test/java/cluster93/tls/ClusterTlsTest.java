@@ -84,7 +84,7 @@ class ClusterTlsTest {
     void damagedOrForeignBundlesAreRefused() {
         String bundle = NodeBundle.bundle(ca.issueNode("node6", List.of()));
         assertThatThrownBy(() -> NodeBundle.decode(bundle.substring(0, bundle.length() - 10))).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> NodeBundle.decode("atly_join_nope")).hasMessageContaining("Not a node bundle");
+        assertThatThrownBy(() -> NodeBundle.decode("c93_join_nope")).hasMessageContaining("Not a node bundle");
 
         // A certificate from another CA, packed with this CA's certificate, doesn't verify.
         NodeIdentity foreign = ClusterCa.create("other").issueNode("node6", List.of());

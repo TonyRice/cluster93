@@ -1,11 +1,11 @@
 #!/bin/sh
 # Installs the c93 CLI (D-049):
-#   curl -fsSL https://github.com/adamnlynn/cluster93/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/TonyRice/cluster93/releases/latest/download/install.sh | sh
 #
 # Environment:
 #   C93_VERSION      a release tag to install, e.g. v2.1.0 (default: the latest)
 #   C93_INSTALL_DIR  where to put the binary (default: ~/.local/bin, or /usr/local/bin as root)
-#   C93_RELEASES     the GitHub repository publishing releases (default: adamnlynn/cluster93)
+#   C93_RELEASES     the GitHub repository publishing releases (default: TonyRice/cluster93)
 #   C93_INSTALL_URL  a base URL serving the release assets instead of GitHub
 #   C93_RELEASE_PUBLIC_KEY  a PEM file to check signatures with, instead of the key below (a re-signing mirror)
 #   C93_INSECURE_SKIP_SIGNATURE=1  install without checking the signature, trusting HTTPS alone
@@ -24,7 +24,7 @@ hD6NugZBZL+S2K5MijsmPijVZJI3y+kVcyioFmPTDdzKdSnWJj3916QN/Q==
 -----END PUBLIC KEY-----'
 
 main() {
-    repo="${C93_RELEASES:-adamnlynn/cluster93}"
+    repo="${C93_RELEASES:-TonyRice/cluster93}"
     if [ -n "${C93_INSTALL_URL:-}" ]; then
         base="${C93_INSTALL_URL%/}"
     elif [ -n "${C93_VERSION:-}" ]; then

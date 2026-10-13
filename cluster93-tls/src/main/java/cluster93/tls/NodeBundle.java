@@ -17,17 +17,17 @@ import java.util.zip.GZIPOutputStream;
  * What a node needs to join, in one line (D-067): gzipped PEM blocks, base64url-encoded, behind a prefix that says
  * what's inside.
  * <ul>
- *   <li>{@code atly_nodebundle_…}: the node's private key, its certificate and the CA certificate. A secret for
+ *   <li>{@code c93_nodebundle_…}: the node's private key, its certificate and the CA certificate. A secret for
  *   that node only: it can't create other nodes or sign anything.</li>
- *   <li>{@code atly_nodecert_…}: the certificate and the CA certificate, for a node that made its own key
+ *   <li>{@code c93_nodecert_…}: the certificate and the CA certificate, for a node that made its own key
  *   ({@code --prepare}); nothing secret travels.</li>
  * </ul>
  * It never contains the CA's private key.
  */
 public final class NodeBundle {
 
-    public static final String BUNDLE_PREFIX = "atly_nodebundle_";
-    public static final String CERT_PREFIX = "atly_nodecert_";
+    public static final String BUNDLE_PREFIX = "c93_nodebundle_";
+    public static final String CERT_PREFIX = "c93_nodecert_";
 
     /** A decoded bundle; {@code key} is null for a certificate-only one. */
     public record Contents(PrivateKey key, X509Certificate certificate, X509Certificate ca) {

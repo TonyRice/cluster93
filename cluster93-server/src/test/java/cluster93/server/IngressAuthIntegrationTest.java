@@ -133,7 +133,7 @@ class IngressAuthIntegrationTest {
         assertThat(loggedIn.statusCode()).as(loggedIn.bodyAsString()).isEqualTo(200);
         JsonObject session = loggedIn.bodyAsJsonObject();
         String sessionToken = session.getString("token");
-        assertThat(sessionToken).startsWith("atly_");
+        assertThat(sessionToken).startsWith("c93_");
         assertThat(session.getString("tenant")).isEqualTo("banking");
         assertThat(session.getJsonObject("user").getString("name")).isEqualTo("alice");
 

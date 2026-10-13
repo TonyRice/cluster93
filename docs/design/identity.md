@@ -62,7 +62,7 @@ A caller can only grant what they hold themselves.
 - **Custom roles:** a role in use can't be deleted. Custom role names can't shadow built-in ones.
 
 ## Getting in: invites
-1. **Inviting:** an owner or admin (`members:write`) creates an invite with roles and groups, optionally naming a user. The response shows the code once, as `atly_…`; only its hash is stored. Invites expire after 7 days by default (at most 30) and work once.
+1. **Inviting:** an owner or admin (`members:write`) creates an invite with roles and groups, optionally naming a user. The response shows the code once, as `c93_…`; only its hash is stored. Invites expire after 7 days by default (at most 30) and work once.
 2. **Redeeming:** the user runs `c93 login --invite CODE https://cluster` (`POST /v1/invites/redeem`, a public route).
    - **New user:** they choose a name, or take the one the invite names. The user is created, and they get a personal token for that tenant.
    - **Existing user:** they redeem while logged in (sending their own token). The invite adds a membership, and they get a token for the new tenant.

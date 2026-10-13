@@ -22,8 +22,8 @@ You submit code to any node. The cluster schedules it on the least-loaded worker
 ## Install the CLI
 
 ```bash
-curl -fsSL https://github.com/adamnlynn/cluster93/releases/latest/download/install.sh | sh     # Linux, macOS
-irm https://github.com/adamnlynn/cluster93/releases/latest/download/install.ps1 | iex           # Windows
+curl -fsSL https://github.com/TonyRice/cluster93/releases/latest/download/install.sh | sh     # Linux, macOS
+irm https://github.com/TonyRice/cluster93/releases/latest/download/install.ps1 | iex           # Windows
 ```
 
 Native binaries compile via GraalVM with zero JVM requirements on the client. See the [CLI guide](docs/guides/cli.md). To connect AI agents via MCP, see the [MCP guide](docs/guides/mcp.md).
@@ -203,7 +203,7 @@ Cluster93 uses a **contract-first architecture**: [`openapi.yaml`](cluster93-ser
 
 All `/v1` endpoints require an HTTP Bearer token:
 - **Admin Token:** Manages tenants, operators, and storage policies. Admin tokens cannot read or manipulate tenant data (D-044).
-- **Tenant Tokens (`atly_*`):** Scoped to specific permissions (`jobs:write`, `services:read`, `files:write`, etc.) and rate-limited via token buckets (`RateLimit-Policy` / `RateLimit`).
+- **Tenant Tokens (`c93_*`):** Scoped to specific permissions (`jobs:write`, `services:read`, `files:write`, etc.) and rate-limited via token buckets (`RateLimit-Policy` / `RateLimit`).
 - **Audit Logging:** Every administrative and configuration event is recorded in a tamper-evident audit log (`/v1/audit`).
 
 For complete schema details and parameter documentation, refer to the [API Endpoint Reference](docs/api/endpoints.md) or inspect `/v1/openapi.json`.

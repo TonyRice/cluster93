@@ -34,7 +34,7 @@ final class TestAuth {
         BEARERS.clear();
     }
 
-    /** {@code Bearer atly_…} for the tenant, creating the tenant and a token with every scope if needed. */
+    /** {@code Bearer c93_…} for the tenant, creating the tenant and a token with every scope if needed. */
     static String bearer(String tenant) {
         return BEARERS.computeIfAbsent(tenant, TestAuth::mint);
     }

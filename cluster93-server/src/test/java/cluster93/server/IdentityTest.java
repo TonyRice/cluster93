@@ -77,7 +77,7 @@ class IdentityTest {
         assertThat(redeem(code, "first", null).statusCode()).isEqualTo(201);
         HttpResponse<Buffer> again = redeem(code, "second", null);
         assertThat(again.statusCode()).isEqualTo(404);
-        assertThat(redeem("atly_made-up", "third", null).statusCode()).isEqualTo(404);
+        assertThat(redeem("c93_made-up", "third", null).statusCode()).isEqualTo(404);
 
         JsonObject withdrawn = invite(alice, new JsonObject().put("roles", new JsonArray().add("viewer")));
         assertThat(call(HttpMethod.GET, alice, "/v1/invites", null).bodyAsString()).contains(withdrawn.getString("id")).doesNotContain(withdrawn.getString("code"));

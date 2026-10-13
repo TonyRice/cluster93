@@ -12,12 +12,12 @@
 ## Milestone 1: tenants and scoped tokens
 - **Tenants become explicit.** `POST /v1/tenants {name}`, `GET /v1/tenants`, `DELETE /v1/tenants/{name}` (refused while it still has services or files). They're admin only. Names follow the existing rule (they're part of hostnames).
 - **Tokens.**
-  - Format: `atly_` + 32 random bytes (base62) + a 6-character checksum. The prefix lets secret scanners (GitHub, gitleaks) recognise a leaked token, and the checksum lets them tell a real one from a random string without calling us.
+  - Format: `c93_` + 32 random bytes (base62) + a 6-character checksum. The prefix lets secret scanners (GitHub, gitleaks) recognise a leaked token, and the checksum lets them tell a real one from a random string without calling us.
   - Storage: only `SHA-256(token)`. The tokens are 256-bit random, so a slow hash adds nothing. GitHub stores its tokens this way too.
   - Record: `id` (`tok_…`, public), tenant, name, scopes, `createdAt`, optional `expiresAt`, `lastUsedAt` (written at most once a minute per token, not per request).
   - API: `POST /v1/tokens {name, scopes, expiresInDays?}` returns the token **once**. `GET /v1/tokens` lists without secrets. `DELETE /v1/tokens/{id}` revokes. A tenant token with `tokens:write` can mint tokens for its own tenant with a subset of its own scopes. The admin token can mint for any tenant.
 - **Scopes:** `jobs:read`, `jobs:write`, `services:read`, `services:write` (includes domains), `files:read`, `files:write`, `bus:publish`, `bus:request`, `tokens:write`, `nodes:read`, and `*` for every tenant scope. A missing scope gets **403** with the scope named. A missing or bad token gets **401** with `WWW-Authenticate: Bearer`.
-- **`Authorization: Bearer atly_…`** replaces `X-Cluster93-Tenant` everywhere. The header is no longer read. `/health` stays open. The ingress (services' public traffic) is unaffected, since services do their own auth.
+- **`Authorization: Bearer c93_…`** replaces `X-Cluster93-Tenant` everywhere. The header is no longer read. `/health` stays open. The ingress (services' public traffic) is unaffected, since services do their own auth.
 - **Admin token.** If `C93_ADMIN_TOKEN` is set, every node compares against it in constant time. Otherwise the first node of a new cluster generates one, stores only its hash in the cluster, and logs it once ("save this; it won't be shown again"). `POST /v1/admin/rotate` replaces it.
 - **Stores:** `TenantStore` and `TokenStore`, each with SharedData and Ignite implementations and shared contract tests, as for the other stores.
 - **Tests:** scope enforcement on every route (a test that walks the route table, so a new route without a scope fails), revocation taking effect immediately, expiry, a tenant unable to see another's tokens or data, the admin token unable to read tenant data, and the checksum format. Every existing test moves to tokens.
@@ -68,7 +68,7 @@ irm https://<release host>/install.ps1 | iex
 1. **The release workflow needs GitHub Actions** for the macOS and Windows runners. It would run only on version tags, not on every push, so it isn't CI and D-017 stands. Is that OK?
 2. **Where the one-liner downloads from.** Assets in a **private** repo need a GitHub token to download, so `curl … | sh` can't fetch them anonymously. The options:
    - (a) make `cluster93` public when releasing
-   - (b) publish releases to a separate public repo (for example `adamnlynn/cluster93-releases`), keeping the source private
+   - (b) publish releases to a separate public repo (for example `TonyRice/cluster93-releases`), keeping the source private
    - (c) serve `install.sh` from a short domain you own, pointing at (a) or (b)
 
 ### Commands

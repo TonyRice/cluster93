@@ -19,7 +19,7 @@ There are no MCP tools for users, members or roles: agents don't manage people. 
 
 ```bash
 claude mcp add --transport http c93 https://cluster93.example.com/mcp \
-  --header "Authorization: Bearer atly_…"
+  --header "Authorization: Bearer c93_…"
 ```
 
 **Clients that only launch local processes** use the CLI's stdio bridge. For example, in a desktop client's MCP config:
@@ -30,7 +30,7 @@ claude mcp add --transport http c93 https://cluster93.example.com/mcp \
     "c93": {
       "command": "c93",
       "args": ["mcp"],
-      "env": { "C93_URL": "https://cluster93.example.com", "C93_TOKEN": "atly_…" }
+      "env": { "C93_URL": "https://cluster93.example.com", "C93_TOKEN": "c93_…" }
     }
   }
 }

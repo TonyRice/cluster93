@@ -23,8 +23,8 @@ with open(out, "w") as cast:
     cast.write(json.dumps([0.0, "o", "$ " + " ".join(command) + "\r\n"]) + "\n")
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for line in iter(process.stdout.readline, b""):
-        # Tokens never go into a recording, even a throwaway cluster's: atly_ tokens are made to trip secret scanners.
-        text = re.sub(r"atly_[A-Za-z0-9]+", "atly_…", line.decode("utf-8", "replace")).replace("\n", "\r\n")
+        # Tokens never go into a recording, even a throwaway cluster's: c93_ tokens are made to trip secret scanners.
+        text = re.sub(r"c93_[A-Za-z0-9]+", "c93_…", line.decode("utf-8", "replace")).replace("\n", "\r\n")
         cast.write(json.dumps([round(time.monotonic() - start, 3), "o", text]) + "\n")
         sys.stdout.write(line.decode("utf-8", "replace"))
         sys.stdout.flush()

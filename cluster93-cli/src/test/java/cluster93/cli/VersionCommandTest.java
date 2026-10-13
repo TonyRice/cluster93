@@ -155,6 +155,6 @@ class VersionCommandTest {
     private void saveLogin(String url) throws Exception {
         Files.createDirectories(configDir);
         Files.writeString(configDir.resolve("config.json"),
-                "{\"url\": \"" + url + "\", \"token\": \"atly_local_test_token\"}\n");
+                "{\"url\": \"" + url + "\", \"token\": \"c93_local_test_token\"}\n");
     }
 }

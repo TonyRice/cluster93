@@ -63,7 +63,7 @@ class AuthTest {
             String path = route.substring(route.indexOf(' ') + 1).replaceAll(":[a-z]+", "x").replace(".+", "x");
             HttpResponse<Buffer> anonymous = await(client.request(HttpMethod.valueOf(method), node.httpPort(), "localhost", path).send());
             HttpResponse<Buffer> wrong = await(client.request(HttpMethod.valueOf(method), node.httpPort(), "localhost", path)
-                    .putHeader("Authorization", "Bearer atly_not-a-real-token").send());
+                    .putHeader("Authorization", "Bearer c93_not-a-real-token").send());
 
             // A route with no rule would answer 404 here: rules fail closed (D-045).
             assertThat(anonymous.statusCode()).as(route).isEqualTo(401);
@@ -98,7 +98,7 @@ class AuthTest {
         assertThat(signedIn.statusCode()).as(signedIn.bodyAsString()).isEqualTo(200);
         assertThat(signedIn.getHeader("Cache-Control")).isEqualTo("no-store");
         JsonObject session = signedIn.bodyAsJsonObject();
-        assertThat(session.getString("token")).startsWith("atly_");
+        assertThat(session.getString("token")).startsWith("c93_");
         assertThat(session.getBoolean("admin")).isFalse();
         assertThat(session.getString("tenant")).isEqualTo("logins");
         assertThat(session.getJsonObject("user").getString("name")).isEqualTo("lena");

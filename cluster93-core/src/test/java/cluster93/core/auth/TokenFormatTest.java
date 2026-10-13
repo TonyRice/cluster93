@@ -16,7 +16,7 @@ class TokenFormatTest {
         Set<String> seen = new HashSet<>();
         for (int i = 0; i < 200; i++) {
             String token = TokenFormat.generate(random);
-            assertThat(token).startsWith("atly_").hasSize(5 + 43 + 6).matches("atly_[0-9A-Za-z]+");
+            assertThat(token).startsWith("c93_").hasSize(5 + 43 + 6).matches("c93_[0-9A-Za-z]+");
             assertThat(TokenFormat.looksValid(token)).isTrue();
             assertThat(seen.add(token)).isTrue();
         }
@@ -29,7 +29,7 @@ class TokenFormatTest {
         String typo = token.substring(0, 10) + (last == 'a' ? 'b' : 'a') + token.substring(11);
 
         assertThat(TokenFormat.looksValid(typo)).isFalse();
-        assertThat(TokenFormat.looksValid("atly_" + "x".repeat(49))).isFalse();
+        assertThat(TokenFormat.looksValid("c93_" + "x".repeat(49))).isFalse();
         assertThat(TokenFormat.looksValid(token.substring(1))).isFalse();
         assertThat(TokenFormat.looksValid(null)).isFalse();
     }

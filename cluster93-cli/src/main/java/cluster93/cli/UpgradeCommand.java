@@ -28,7 +28,7 @@ import java.util.Locale;
 @Command(name = "upgrade", description = "Install the latest release of the CLI (or --version), after checking its signature.")
 final class UpgradeCommand extends Base {
 
-    static final String DEFAULT_RELEASES = "adamnlynn/cluster93";
+    static final String DEFAULT_RELEASES = "TonyRice/cluster93";
 
     @Option(names = "--version", paramLabel = "TAG", description = "A release tag, e.g. v2.1.0.")
     String version;

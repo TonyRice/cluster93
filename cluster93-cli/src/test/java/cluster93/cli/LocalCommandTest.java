@@ -190,7 +190,7 @@ class LocalCommandTest {
         writeLocalEnv();
         Files.createDirectories(configDir);
         Files.writeString(configDir.resolve("config.json"), """
-                {"url": "http://localhost:9999", "token": "atly_local_test_token"}
+                {"url": "http://localhost:9999", "token": "c93_local_test_token"}
                 """);
 
         Result result = run("local", "mcp");
@@ -198,7 +198,7 @@ class LocalCommandTest {
         assertThat(result.code()).as(result.err()).isZero();
         assertThat(result.out())
                 .contains("http://localhost:9999/mcp")
-                .contains("atly_local_test_token")
+                .contains("c93_local_test_token")
                 .contains("claude mcp add --transport http c93")
                 .contains("stdio bridge");
     }
@@ -208,7 +208,7 @@ class LocalCommandTest {
         writeLocalEnv();
         Files.createDirectories(configDir);
         Files.writeString(configDir.resolve("config.json"), """
-                {"url": "http://localhost:9999", "token": "atly_local_test_token"}
+                {"url": "http://localhost:9999", "token": "c93_local_test_token"}
                 """);
 
         Result result = run("--json", "local", "mcp");
