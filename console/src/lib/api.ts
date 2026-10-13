@@ -11,6 +11,7 @@ import type {
   NodeList,
   Service,
   ServiceList,
+  Tenant,
   Whoami,
 } from './types';
 
@@ -89,6 +90,22 @@ export function clearToken(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Target tenant
+// ---------------------------------------------------------------------------
+
+let targetTenant: string | null = null;
+
+/** Scopes subsequent requests to a tenant (the `X-Automately-Tenant` header). */
+export function setTargetTenant(tenant: string | null): void {
+  targetTenant = tenant;
+}
+
+/** The tenant currently targeted, or `null` for the operator's cluster view. */
+export function getTargetTenant(): string | null {
+  return targetTenant;
+}
+
+// ---------------------------------------------------------------------------
 // Unauthorized listeners
 // ---------------------------------------------------------------------------
 
@@ -128,6 +145,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (targetTenant) headers['X-Automately-Tenant'] = targetTenant;
 
   const token = getToken();
   if (auth && token) headers.Authorization = `Bearer ${token}`;
@@ -190,6 +208,44 @@ async function extractErrorMessage(response: Response): Promise<string> {
   return `Request failed with status ${response.status}.`;
 }
 
+/** Strips leading slashes from a VFS path so it can be appended to `/v1/files/`. */
+function cleanPath(path: string): string {
+  return path.replace(/^\/+/, '').trim();
+}
+
+/**
+ * Downloads raw file bytes/text from `GET /v1/files/{path}`. Unlike {@link request}
+ * this returns the body verbatim (files are not JSON), so it does its own fetch
+ * while still sending the bearer token and any target-tenant header.
+ */
+async function fetchFileContent(path: string, signal?: AbortSignal): Promise<string> {
+  const headers: Record<string, string> = { Accept: '*/*' };
+  if (targetTenant) headers['X-Automately-Tenant'] = targetTenant;
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response: Response;
+  try {
+    response = await fetch(`/v1/files/${cleanPath(path)}`, { method: 'GET', headers, signal });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
+    throw new ApiError(0, 'Could not reach the Automately API.', undefined);
+  }
+
+  if (response.status === 401) {
+    clearToken();
+    const message = await extractErrorMessage(response);
+    emitUnauthorized();
+    throw new UnauthorizedError(message);
+  }
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await extractErrorMessage(response));
+  }
+
+  return await response.text();
+}
+
 // ---------------------------------------------------------------------------
 // Typed API surface
 // ---------------------------------------------------------------------------
@@ -203,6 +259,16 @@ export const api = {
   /** `GET /v1/nodes` — live nodes with capacity and load. */
   getNodes(signal?: AbortSignal): Promise<NodeList> {
     return request<NodeList>('/v1/nodes', { signal });
+  },
+
+  /** `GET /v1/tenants` — every tenant workspace (admin). */
+  getTenants(signal?: AbortSignal): Promise<{ tenants: Tenant[] }> {
+    return request<{ tenants: Tenant[] }>('/v1/tenants', { signal });
+  },
+
+  /** `POST /v1/tenants` — create a tenant workspace (admin). */
+  createTenant(name: string, signal?: AbortSignal): Promise<Tenant> {
+    return request<Tenant>('/v1/tenants', { method: 'POST', body: { name }, signal });
   },
 
   /** `GET /health` — liveness; no token required. */
@@ -281,6 +347,11 @@ export const api = {
   /** `GET /v1/files` — the tenant's files, by path. */
   getFiles(signal?: AbortSignal): Promise<FileList> {
     return request<FileList>('/v1/files', { signal });
+  },
+
+  /** `GET /v1/files/{path}` — a file's raw contents as text. */
+  getFileContent(path: string, signal?: AbortSignal): Promise<string> {
+    return fetchFileContent(path, signal);
   },
 };
 

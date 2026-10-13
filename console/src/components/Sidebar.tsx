@@ -12,11 +12,12 @@ import {
   Rocket,
   Settings,
   ShieldAlert,
+  Users,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type OperatorTab = 'overview' | 'nodes' | 'storage' | 'settings';
+export type OperatorTab = 'overview' | 'nodes' | 'tenants' | 'storage' | 'settings';
 export type TenantTab = 'overview' | 'jobs' | 'services' | 'apps' | 'files' | 'audit';
 export type ConsoleRole = 'operator' | 'tenant';
 
@@ -29,6 +30,7 @@ interface NavItem<T extends string> {
 const OPERATOR_NAV: NavItem<OperatorTab>[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'nodes', label: 'Cluster Nodes', icon: Boxes },
+  { id: 'tenants', label: 'Tenants', icon: Users },
   { id: 'storage', label: 'Storage & Memory', icon: Database },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];

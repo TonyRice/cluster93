@@ -184,6 +184,12 @@ export interface FileList {
   cursor?: string | null;
 }
 
+/** `GET /v1/tenants`, `POST /v1/tenants` — one tenant workspace (admin). */
+export interface Tenant {
+  name: string;
+  createdAt: number;
+}
+
 /** The `message`/`code` shape the API returns on failure. */
 export interface ApiErrorBody {
   error: {

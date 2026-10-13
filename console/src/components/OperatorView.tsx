@@ -1,23 +1,24 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   Activity,
   Boxes,
   Cpu,
   Database,
-  HardDrive,
+  ExternalLink,
+  Gauge,
   Info,
   Loader2,
-  Lock,
+  Plus,
   RefreshCw,
   Server,
   ShieldCheck,
   TriangleAlert,
 } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
-import type { Health, Node, Whoami } from '@/lib/types';
-import { cn, formatRelative, toneClasses } from '@/lib/utils';
+import type { Health, Node, Tenant, Whoami } from '@/lib/types';
+import { cn, formatDateTime, formatRelative, toneClasses } from '@/lib/utils';
 import type { OperatorTab } from './Sidebar';
 
 interface OperatorViewProps {
@@ -25,14 +26,22 @@ interface OperatorViewProps {
   activeTab: OperatorTab;
   refreshKey: number;
   health: Health | null;
+  /** Switch into a tenant workspace (drives the operator's tenant inspection). */
+  onSelectTenant?: (tenant: string) => void;
 }
 
 /**
- * The system/cluster dashboard. Operators see infrastructure only: node
- * membership, capacity, and load. Tenant data and secrets are deliberately out
- * of reach (see the D-044 notice).
+ * The system/cluster dashboard. Operators see infrastructure — node membership,
+ * capacity, and load — plus the cluster's tenant workspaces, which they may
+ * inspect by switching context (scoping requests via `X-Automately-Tenant`).
  */
-export function OperatorView({ whoami, activeTab, refreshKey, health }: OperatorViewProps) {
+export function OperatorView({
+  whoami,
+  activeTab,
+  refreshKey,
+  health,
+  onSelectTenant,
+}: OperatorViewProps) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +72,8 @@ export function OperatorView({ whoami, activeTab, refreshKey, health }: Operator
     return { capacity, running, free: Math.max(0, capacity - running) };
   }, [nodes]);
 
+  const utilization = totals.capacity > 0 ? Math.round((totals.running / totals.capacity) * 100) : 0;
+
   return (
     <div className="space-y-4">
       {error ? (
@@ -78,11 +89,49 @@ export function OperatorView({ whoami, activeTab, refreshKey, health }: Operator
       {activeTab === 'overview' ? (
         <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard icon={Boxes} label="Nodes" value={nodes.length} hint="live in cluster" />
-            <StatCard icon={Cpu} label="Capacity" value={totals.capacity} hint="execution slots" />
-            <StatCard icon={Activity} label="Running" value={totals.running} hint="slots in use" />
-            <StatCard icon={HardDrive} label="Free" value={totals.free} hint="slots available" />
+            <StatCard
+              icon={Boxes}
+              label="Compute Nodes"
+              value={nodes.length}
+              hint="online cluster nodes"
+            />
+            <StatCard
+              icon={Cpu}
+              label="Worker Concurrency"
+              value={totals.capacity}
+              hint="isolate execution slots"
+            />
+            <StatCard
+              icon={Activity}
+              label="Active Executions"
+              value={totals.running}
+              hint={`running workers (${utilization}%)`}
+            />
+            <StatCard
+              icon={Gauge}
+              label="Available Headroom"
+              value={totals.free}
+              hint="idle slots ready for work"
+            />
           </div>
+
+          <section className="panel p-5">
+            <div className="flex items-center justify-between text-xs text-subtle">
+              <span className="font-medium uppercase tracking-wider">Concurrency load</span>
+              <span className="tabular-nums">
+                {totals.running} / {totals.capacity} slots · {utilization}%
+              </span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-elevated">
+              <div
+                className={cn(
+                  'h-full rounded-full transition-all',
+                  utilization > 85 ? 'bg-danger' : utilization > 60 ? 'bg-warning' : 'bg-accent',
+                )}
+                style={{ width: `${Math.min(100, utilization)}%` }}
+              />
+            </div>
+          </section>
 
           <HealthPanel health={health} nodes={nodes} loading={loading} />
 
@@ -114,9 +163,11 @@ export function OperatorView({ whoami, activeTab, refreshKey, health }: Operator
             )}
           </section>
 
-          <D044Notice />
+          <TenantsSection onSelectTenant={onSelectTenant} />
         </>
       ) : null}
+
+      {activeTab === 'tenants' ? <TenantsSection onSelectTenant={onSelectTenant} /> : null}
 
       {activeTab === 'nodes' ? (
         <section className="panel">
@@ -251,10 +302,161 @@ export function OperatorView({ whoami, activeTab, refreshKey, health }: Operator
               />
             </dl>
           </section>
-          <D044Notice />
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Lists every tenant workspace and lets the operator create one or switch into
+ * it. Rendered both as its own tab and as an overview section.
+ */
+function TenantsSection({ onSelectTenant }: { onSelectTenant?: (tenant: string) => void }) {
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [name, setName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const load = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    try {
+      const { tenants: list } = await api.getTenants(signal);
+      setTenants([...list].sort((a, b) => a.name.localeCompare(b.name)));
+      setError(null);
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'AbortError') return;
+      setError(cause instanceof ApiError ? cause.message : 'Failed to load tenants.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
+
+  async function create(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed || creating) return;
+    setCreating(true);
+    setFormError(null);
+    try {
+      const created = await api.createTenant(trimmed);
+      setTenants((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setName('');
+      setShowForm(false);
+    } catch (cause) {
+      setFormError(cause instanceof ApiError ? cause.message : 'Failed to create tenant.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <h2 className="text-sm font-semibold tracking-tight">Tenants</h2>
+          <p className="text-xs text-subtle">
+            Every tenant workspace on this cluster, and a route into each one.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowForm((value) => !value)}
+          className="btn btn-primary"
+        >
+          <Plus className="h-4 w-4" aria-hidden />
+          Create Tenant
+        </button>
+      </div>
+
+      {showForm ? (
+        <form
+          onSubmit={create}
+          className="flex items-start gap-2 border-b border-border/70 px-5 py-4"
+        >
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="tenant-name"
+            autoFocus
+            spellCheck={false}
+            className="input max-w-sm"
+          />
+          <button
+            type="submit"
+            disabled={creating || name.trim().length === 0}
+            className="btn btn-primary"
+          >
+            {creating ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            ) : (
+              <Plus className="h-4 w-4" aria-hidden />
+            )}
+            Create
+          </button>
+        </form>
+      ) : null}
+
+      {formError ? (
+        <div className="border-b border-border/70 px-5 py-3">
+          <div className="flex items-start gap-3 rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <span>{formError}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {loading ? (
+        <LoadingRow label="Loading tenants…" />
+      ) : error ? (
+        <div className="p-6">
+          <div className="flex items-start gap-3 rounded-lg border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <span className="flex-1">{error}</span>
+            <button type="button" onClick={() => void load()} className="btn btn-ghost">
+              Retry
+            </button>
+          </div>
+        </div>
+      ) : tenants.length === 0 ? (
+        <EmptyRow label="No tenants yet. Create the first workspace." />
+      ) : (
+        <ul className="divide-y divide-border/40">
+          {tenants.map((tenant) => (
+            <li key={tenant.name} className="flex flex-wrap items-center gap-4 px-5 py-4">
+              <div className="min-w-48 flex-1">
+                <div className="flex items-center gap-2">
+                  <Boxes className="h-4 w-4 shrink-0 text-accent" aria-hidden />
+                  <span className="font-medium text-foreground">{tenant.name}</span>
+                </div>
+                <div className="mt-1 text-xs text-subtle" title={formatDateTime(tenant.createdAt)}>
+                  created {formatDateTime(tenant.createdAt)}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onSelectTenant?.(tenant.name)}
+                disabled={!onSelectTenant}
+                className="btn btn-ghost"
+                title={onSelectTenant ? `Inspect ${tenant.name}` : 'Tenant inspection unavailable'}
+              >
+                <ExternalLink className="h-4 w-4" aria-hidden />
+                Inspect Workspace
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -353,25 +555,6 @@ function HealthPanel({
           Liveness from <code className="font-mono">GET /health</code>
           {health?.node ? ` · ${health.node}` : ''}
         </span>
-      </div>
-    </section>
-  );
-}
-
-function D044Notice() {
-  return (
-    <section className="panel border-accent/20 p-5">
-      <div className="flex items-start gap-3">
-        <Lock className="mt-0.5 h-5 w-5 shrink-0 text-accent" aria-hidden />
-        <div>
-          <h3 className="text-sm font-semibold tracking-tight">Tenant data stays isolated</h3>
-          <p className="mt-1 text-sm text-muted">
-            Per decision <span className="font-mono text-foreground">D-044</span>, operator access
-            is limited to cluster infrastructure. Tenant private data — job inputs and outputs,
-            script logs, secrets, and VFS contents — is not readable by operators through this
-            console or the public API.
-          </p>
-        </div>
       </div>
     </section>
   );

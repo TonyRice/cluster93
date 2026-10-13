@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, RefreshCw, TriangleAlert } from 'lucide-react';
-import { api, ApiError, clearToken, getToken, onUnauthorized, setToken } from '@/lib/api';
-import type { Health, Whoami } from '@/lib/types';
+import { api, ApiError, clearToken, getToken, onUnauthorized, setTargetTenant, setToken } from '@/lib/api';
+import type { Health, Tenant, Whoami } from '@/lib/types';
 import { Header, type ConnectionStatus } from '@/components/Header';
 import { LoginView } from '@/components/LoginView';
 import { OperatorView } from '@/components/OperatorView';
@@ -33,6 +33,8 @@ export default function ConsolePage() {
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedTenant, setSelectedTenant] = useState<string | null>(null);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
 
   const mounted = useRef(true);
   useEffect(() => {
@@ -46,6 +48,8 @@ export default function ConsolePage() {
   useEffect(() => {
     return onUnauthorized(() => {
       if (!mounted.current) return;
+      setTargetTenant(null);
+      setSelectedTenant(null);
       setWhoami(null);
       setError('Your token was rejected. Please sign in again.');
       setPhase('login');
@@ -67,6 +71,24 @@ export default function ConsolePage() {
     return () => window.clearInterval(timer);
   }, [pollHealth]);
 
+  // Operators list the cluster's tenants for the context switcher.
+  useEffect(() => {
+    if (!whoami?.admin) {
+      setTenants([]);
+      return;
+    }
+    const controller = new AbortController();
+    api
+      .getTenants(controller.signal)
+      .then(({ tenants: list }) => {
+        if (mounted.current) setTenants([...list].sort((a, b) => a.name.localeCompare(b.name)));
+      })
+      .catch(() => {
+        /* the operator tenants section surfaces a readable error instead */
+      });
+    return () => controller.abort();
+  }, [whoami?.admin, refreshKey]);
+
   /** Validates the stored/entered token and resolves the operator/tenant role. */
   const connect = useCallback(async () => {
     setError(null);
@@ -75,6 +97,8 @@ export default function ConsolePage() {
       const identity = await api.whoami();
       if (!mounted.current) return;
       setWhoami(identity);
+      setSelectedTenant(null);
+      setTargetTenant(null);
       setActiveTab('overview');
       setRefreshKey((key) => key + 1);
       setPhase('ready');
@@ -108,9 +132,18 @@ export default function ConsolePage() {
 
   const handleLogout = useCallback(() => {
     clearToken();
+    setTargetTenant(null);
+    setSelectedTenant(null);
     setWhoami(null);
     setError(null);
     setPhase('login');
+  }, []);
+
+  const handleSelectTenant = useCallback((tenant: string | null) => {
+    setTargetTenant(tenant);
+    setSelectedTenant(tenant);
+    setActiveTab('overview');
+    setRefreshKey((key) => key + 1);
   }, []);
 
   const handleRefresh = useCallback(() => {
@@ -119,7 +152,11 @@ export default function ConsolePage() {
     void pollHealth().finally(() => setRefreshing(false));
   }, [pollHealth]);
 
-  const role: ConsoleRole = whoami?.admin ? 'operator' : 'tenant';
+  const isAdmin = Boolean(whoami?.admin);
+  // The header keeps the operator identity (and its context switcher) for admins,
+  // while the sidebar reflects the active context: cluster or a tenant workspace.
+  const headerRole: ConsoleRole = isAdmin ? 'operator' : 'tenant';
+  const contextRole: ConsoleRole = isAdmin && !selectedTenant ? 'operator' : 'tenant';
   const status: ConnectionStatus =
     phase === 'ready' ? 'connected' : phase === 'error' ? 'error' : 'connecting';
 
@@ -173,28 +210,38 @@ export default function ConsolePage() {
     <>
       <Header
         status={status}
-        role={role}
+        role={headerRole}
         identity={identity}
         node={health?.node}
         onRefresh={handleRefresh}
         refreshing={refreshing}
         onLogout={handleLogout}
+        selectedTenant={isAdmin ? selectedTenant : null}
+        tenants={tenants}
+        onSelectTenant={isAdmin ? handleSelectTenant : undefined}
       />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
-          role={role}
+          role={contextRole}
           activeTab={activeTab}
           onSelect={setActiveTab}
           onLogout={handleLogout}
         />
         <main className="flex-1 overflow-y-auto p-6">
           <div className="mx-auto w-full max-w-7xl">
-            {role === 'operator' ? (
+            {isAdmin && selectedTenant !== null ? (
+              <TenantView
+                tenant={selectedTenant}
+                activeTab={(activeTab as TenantTab) ?? 'overview'}
+                refreshKey={refreshKey}
+              />
+            ) : isAdmin ? (
               <OperatorView
                 whoami={whoami}
                 activeTab={(activeTab as OperatorTab) ?? 'overview'}
                 refreshKey={refreshKey}
                 health={health}
+                onSelectTenant={handleSelectTenant}
               />
             ) : (
               <TenantView
