@@ -8,7 +8,7 @@ import picocli.CommandLine.Parameters;
 import java.util.ArrayList;
 import java.util.List;
 
-@Command(name = "users", description = "Operators: every user (D-070). Invite operators with: invites create --operator.",
+@Command(name = "users", description = "Operators: manage all cluster users. Invite operators with: invites create --operator.",
         subcommands = {UsersCommand.Ls.class, UsersCommand.Rename.class, UsersCommand.Disable.class, UsersCommand.Enable.class,
                 UsersCommand.Operator.class, UsersCommand.Rm.class})
 final class UsersCommand extends Base {

@@ -8,7 +8,7 @@ import picocli.CommandLine.Parameters;
 import java.util.ArrayList;
 import java.util.List;
 
-@Command(name = "members", description = "Your tenant's members, and their roles and groups (D-070). New members come in with: invites create.",
+@Command(name = "members", description = "Your tenant's members, and their roles and groups. New members come in with: invites create.",
         subcommands = {MembersCommand.Ls.class, MembersCommand.Set.class, MembersCommand.Rm.class})
 final class MembersCommand extends Base {
 

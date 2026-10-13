@@ -8,7 +8,7 @@ import picocli.CommandLine.Parameters;
 import java.util.ArrayList;
 import java.util.List;
 
-@Command(name = "groups", description = "Groups: roles for everyone in them (D-070). Put members in with: members set USER --group NAME.",
+@Command(name = "groups", description = "Groups: assign roles to team members. Put members in with: members set USER --group NAME.",
         subcommands = {GroupsCommand.Ls.class, GroupsCommand.Set.class, GroupsCommand.Rm.class})
 final class GroupsCommand extends Base {
 

@@ -48,6 +48,9 @@ public final class Main implements Runnable {
     @Option(names = "--token", scope = ScopeType.INHERIT, description = "Token (default: AUTOMATELY_TOKEN, then the saved login).")
     String token;
 
+    @Option(names = "--tenant", scope = ScopeType.INHERIT, description = "Tenant name (default: AUTOMATELY_TENANT, then the saved login).")
+    String tenant;
+
     final Io io;
 
     Main(Io io) {
@@ -60,7 +63,7 @@ public final class Main implements Runnable {
     }
 
     Config config() {
-        return Config.resolve(io, url, token);
+        return Config.resolve(io, url, token, tenant);
     }
 
     Api api() {

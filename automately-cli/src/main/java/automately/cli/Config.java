@@ -9,16 +9,21 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 
-/** Where to connect and with which token: flags, then environment, then the saved login. */
-public record Config(String url, String token) {
+/** Where to connect, with which token, and in which tenant's context: flags, then environment, then the saved login. */
+public record Config(String url, String token, String tenant) {
 
     static final String FILE = "config.json";
 
-    public static Config resolve(Io io, String urlFlag, String tokenFlag) {
+    public Config(String url, String token) {
+        this(url, token, null);
+    }
+
+    public static Config resolve(Io io, String urlFlag, String tokenFlag, String tenantFlag) {
         Config saved = load(io);
         String url = first(urlFlag, io.env().get("AUTOMATELY_URL"), saved == null ? null : saved.url());
         String token = first(tokenFlag, io.env().get("AUTOMATELY_TOKEN"), saved == null ? null : saved.token());
-        return new Config(url == null ? null : stripSlash(url), token);
+        String tenant = first(tenantFlag, io.env().get("AUTOMATELY_TENANT"), saved == null ? null : saved.tenant());
+        return new Config(url == null ? null : stripSlash(url), token, tenant);
     }
 
     public Config require() {
@@ -39,7 +44,8 @@ public record Config(String url, String token) {
         try {
             JsonNode json = Json.parse(Files.readString(file));
             return new Config(Json.text(json, "url").isEmpty() ? null : Json.text(json, "url"),
-                    Json.text(json, "token").isEmpty() ? null : Json.text(json, "token"));
+                    Json.text(json, "token").isEmpty() ? null : Json.text(json, "token"),
+                    Json.text(json, "tenant").isEmpty() ? null : Json.text(json, "tenant"));
         } catch (IOException e) {
             throw new CliException("Can't read " + file + ": " + e.getMessage());
         }
@@ -49,6 +55,9 @@ public record Config(String url, String token) {
     public void save(Io io) {
         Path file = io.configDir().resolve(FILE);
         ObjectNode json = Json.object().put("url", url).put("token", token);
+        if (tenant != null) {
+            json.put("tenant", tenant);
+        }
         try {
             Files.createDirectories(io.configDir());
             Path temporary = io.configDir().resolve(FILE + ".tmp");

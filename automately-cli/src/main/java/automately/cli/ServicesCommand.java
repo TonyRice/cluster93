@@ -122,7 +122,7 @@ final class ServicesCommand extends Base {
                 return 0;
             }
             service.path("routes").forEach(route -> out().println(describeRoute(route)));
-            out().println("Any other port the service listens on is reached at <service>--<tenant>--<port>, as the ports above (D-112).");
+            out().println("Any other port the service listens on is reached at <service>--<tenant>--<port>, as the ports above.");
             return 0;
         }
     }

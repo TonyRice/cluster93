@@ -8,7 +8,7 @@ import picocli.CommandLine.Parameters;
 import java.util.ArrayList;
 import java.util.List;
 
-@Command(name = "invites", description = "Invite people (D-070). They redeem the code with: automately login URL --invite CODE.",
+@Command(name = "invites", description = "Invite people to a tenant or cluster. They redeem the code with: automately login URL --invite CODE.",
         subcommands = {InvitesCommand.Create.class, InvitesCommand.Ls.class, InvitesCommand.Rm.class})
 final class InvitesCommand extends Base {
 
@@ -35,9 +35,6 @@ final class InvitesCommand extends Base {
         @Option(names = "--note", paramLabel = "TEXT")
         String note;
 
-        @Option(names = "--tenant", paramLabel = "TENANT", description = "Operators: invite into this tenant.")
-        String tenant;
-
         @Option(names = "--operator", description = "Operators: invite another operator.")
         boolean operator;
 
@@ -57,7 +54,7 @@ final class InvitesCommand extends Base {
             if (note != null) {
                 body.put("note", note);
             }
-            String path = operator ? "/v1/admin/invites" : tenant != null ? "/v1/tenants/" + Api.segment(tenant) + "/invites" : "/v1/invites";
+            String path = operator ? "/v1/admin/invites" : root().tenant != null ? "/v1/tenants/" + Api.segment(root().tenant) + "/invites" : "/v1/invites";
             JsonNode created = api().post(path, body);
             if (!printedJson(created)) {
                 out().println(Json.text(created, "code"));

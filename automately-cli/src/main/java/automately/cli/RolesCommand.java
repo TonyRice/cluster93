@@ -8,7 +8,7 @@ import picocli.CommandLine.Parameters;
 import java.util.ArrayList;
 import java.util.List;
 
-@Command(name = "roles", description = "Roles: the built-in ones, and your tenant's own, as sets of scopes (D-070).",
+@Command(name = "roles", description = "Roles: the built-in ones, and your tenant's own, as sets of scopes.",
         subcommands = {RolesCommand.Ls.class, RolesCommand.Set.class, RolesCommand.Rm.class})
 final class RolesCommand extends Base {
 

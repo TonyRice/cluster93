@@ -7,7 +7,7 @@ import picocli.CommandLine.Option;
 import java.util.ArrayList;
 import java.util.List;
 
-@Command(name = "profile", description = "You, and your tenants (D-070). With options, change your name, display name or email.")
+@Command(name = "profile", description = "Your user profile and tenant memberships. With options, change your name, display name or email.")
 final class ProfileCommand extends Base {
 
     @Option(names = "--name", paramLabel = "NAME", description = "A new user name; your memberships and tokens follow.")

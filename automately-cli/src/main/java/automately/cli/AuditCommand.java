@@ -7,7 +7,7 @@ import picocli.CommandLine.Option;
 import java.util.ArrayList;
 import java.util.List;
 
-@Command(name = "audit", description = "Who changed what, newest first (D-071). Needs audit:read; --operators shows the cluster's log.",
+@Command(name = "audit", description = "Who changed what, newest first. Needs audit:read; --operators shows the cluster's log.",
         subcommands = AuditCommand.Verify.class)
 final class AuditCommand extends Base {
 

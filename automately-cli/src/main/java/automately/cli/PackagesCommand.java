@@ -22,7 +22,7 @@ import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
-@Command(name = "packages", description = "Versioned JavaScript you publish once and import from scripts (D-083).",
+@Command(name = "packages", description = "Versioned JavaScript packages published to the cluster.",
         subcommands = {PackagesCommand.Publish.class, PackagesCommand.ListPackages.class, PackagesCommand.Info.class,
                 PackagesCommand.Yank.class, PackagesCommand.Unyank.class, PackagesCommand.Block.class, PackagesCommand.Unblock.class,
                 PackagesCommand.Purge.class})
@@ -81,9 +81,6 @@ final class PackagesCommand extends Base {
         @Parameters(index = "1", paramLabel = "VERSION")
         String version;
 
-        @Option(names = "--tenant", description = "Operators: the tenant whose package it is.")
-        String tenant;
-
         abstract String action();
 
         ObjectNode body() {
@@ -96,7 +93,7 @@ final class PackagesCommand extends Base {
         @Override
         int execute() {
             check();
-            String uri = path(name) + "/versions/" + Api.segment(version) + "/" + action() + (tenant == null ? "" : "?tenant=" + Api.segment(tenant));
+            String uri = path(name) + "/versions/" + Api.segment(version) + "/" + action() + (root().tenant == null ? "" : "?tenant=" + Api.segment(root().tenant));
             JsonNode changed = api().post(uri, body() == null ? Json.object() : body());
             if (!printedJson(changed)) {
                 out().println(name + "@" + version + ": " + action() + (action().endsWith("e") ? "d" : "ed"));
@@ -465,14 +462,14 @@ final class PackagesCommand extends Base {
             result.path("natives").forEach(n -> natives.add(n.asText()));
             if (!natives.isEmpty()) {
                 throw new CliException("This needs native code, which packages can't hold:\n  " + String.join("\n  ", natives)
-                        + "\nSet \"runtime\": \"node\" in automately.json to run it as a Node service instead (the Node runtime, D-084).");
+                        + "\nSet \"runtime\": \"node\" in automately.json to run it as a Node service instead (the Node runtime).");
             }
             List<String> builtins = new ArrayList<>();
             result.path("builtins").forEach(b -> builtins.add(b.asText()));
             if (!builtins.isEmpty()) {
                 throw new CliException("These Node built-ins aren't available to packages:\n  " + String.join("\n  ", builtins)
                         + "\nPackages run in the isolate, which provides most of Node's modules and the automately:* ones (each, with its "
-                        + "limits, is in docs/scripting/node-compat.md); for the rest of Node, set \"runtime\": \"node\" (D-084).");
+                        + "limits, is in docs/scripting/node-compat.md); for the rest of Node, set \"runtime\": \"node\".");
             }
             Map<String, Path> files = new TreeMap<>();
             result.path("files").forEach(f -> files.put(f.asText(), outdir.resolve(f.asText())));

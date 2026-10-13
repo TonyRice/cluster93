@@ -93,6 +93,11 @@ class MainHelpTest {
     }
 
     @Test
+    void theHelpHasNoInternalDecisionTags() {
+        assertThat(run("--help")).as("internal decision tags like '(D-070)' stay out of the help").doesNotContain("(D-");
+    }
+
+    @Test
     void everySubcommandBelongsToExactlyOneCategory() {
         Set<String> seen = new HashSet<>();
         int total = 0;

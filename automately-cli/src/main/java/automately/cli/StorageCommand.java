@@ -174,7 +174,7 @@ final class StorageCommand extends Base {
         }
     }
 
-    @Command(name = "mounts", description = "Your mounts: folders bound to one of your providers (D-078).")
+    @Command(name = "mounts", description = "Your mounts: folders bound to one of your providers.")
     static final class Mounts extends Base {
         @Override
         int execute() {

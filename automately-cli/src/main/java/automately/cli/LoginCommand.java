@@ -19,14 +19,11 @@ final class LoginCommand extends Base {
     @Parameters(index = "0", arity = "0..1", paramLabel = "URL", description = "The cluster, e.g. https://automately.example.com")
     String url;
 
-    @Option(names = "--invite", paramLabel = "CODE", description = "An invite code (D-070).")
+    @Option(names = "--invite", paramLabel = "CODE", description = "An invite code.")
     String invite;
 
     @Option(names = "--name", paramLabel = "USER", description = "With --invite: the user name to take, for a new user.")
     String name;
-
-    @Option(names = "--tenant", paramLabel = "TENANT", description = "Log in to another tenant you belong to.")
-    String tenant;
 
     @Override
     int execute() throws Exception {
@@ -38,7 +35,7 @@ final class LoginCommand extends Base {
         if (invite != null) {
             return redeem(base, saved);
         }
-        if (tenant != null) {
+        if (root().tenant != null) {
             return switchTenant(base);
         }
         String token = root().token != null ? root().token : io().env().get("AUTOMATELY_TOKEN");
@@ -76,7 +73,7 @@ final class LoginCommand extends Base {
     private int switchTenant(String base) {
         Config current = root().config().require();
         JsonNode minted = new Api(new Config(base, current.token())).post("/v1/me/tokens",
-                Json.object().put("name", "cli").put("tenant", tenant));
+                Json.object().put("name", "cli").put("tenant", root().tenant));
         return save(new Config(base, Json.text(minted, "token")));
     }
 

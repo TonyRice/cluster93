@@ -21,12 +21,14 @@ public final class Api {
 
     private final String url;
     private final String token;
+    private final String tenant;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER).build();
 
     public Api(Config config) {
         this.url = config.url();
         this.token = config.token();
+        this.tenant = config.tenant();
     }
 
     public String url() {
@@ -139,6 +141,9 @@ public final class Api {
                 .header("Accept", "application/json").header("User-Agent", "automately-cli/" + Main.version());
         if (token != null) {
             builder.header("Authorization", "Bearer " + token);
+        }
+        if (tenant != null && !tenant.isBlank()) {
+            builder.header("X-Automately-Tenant", tenant.trim());
         }
         if (contentType != null) {
             builder.header("Content-Type", contentType);

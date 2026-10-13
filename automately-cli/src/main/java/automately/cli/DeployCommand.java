@@ -37,7 +37,7 @@ final class DeployCommand extends Base {
         JsonNode settings = Files.exists(root.resolve("automately.json")) ? Json.parse(Files.readString(root.resolve("automately.json"))) : Json.object();
         String runtime = settings.path("runtime").asText("isolate");
         if (runtime.equals("node")) {
-            throw new CliException("\"runtime\": \"node\" runs the project as a Node service, and the Node runtime isn't built yet (D-084); "
+            throw new CliException("\"runtime\": \"node\" runs the project as a Node service, and the Node runtime isn't built yet; "
                     + "until it is, deploy code that runs in the isolate");
         }
         if (!runtime.equals("isolate")) {
