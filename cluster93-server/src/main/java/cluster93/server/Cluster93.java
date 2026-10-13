@@ -121,7 +121,7 @@ public final class Cluster93 {
         return cluster.vertx(vertxOptions(security), new MicrometerMetricsFactory(registry))
                 .compose(vertx -> {
                     Metrics.install(vertx, registry);
-                    io.micrometer.core.instrument.Gauge.builder("cluster93.ignite.data.region.used", cluster, IgniteCluster::dataRegionUsedBytes)
+                    io.micrometer.core.instrument.Gauge.builder("c93.ignite.data.region.used", cluster, IgniteCluster::dataRegionUsedBytes)
                             .description("Bytes used in the cluster data region on this node").baseUnit("bytes").register(registry);
                     IgniteStores durable = IgniteStores.open(vertx, cluster);
                     StorageCapacity capacity = IgniteCapacity.of(cluster, config.minFreeDiskBytes());
@@ -217,9 +217,9 @@ public final class Cluster93 {
         Metrics metrics = Metrics.of(vertx);
         java.util.concurrent.atomic.AtomicInteger live = new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.atomic.AtomicInteger leader = new java.util.concurrent.atomic.AtomicInteger();
-        io.micrometer.core.instrument.Gauge.builder("cluster93.cluster.nodes", live, java.util.concurrent.atomic.AtomicInteger::get)
+        io.micrometer.core.instrument.Gauge.builder("c93.cluster.nodes", live, java.util.concurrent.atomic.AtomicInteger::get)
                 .description("Live nodes this node sees").register(metrics.registry());
-        io.micrometer.core.instrument.Gauge.builder("cluster93.cluster.leader", leader, java.util.concurrent.atomic.AtomicInteger::get)
+        io.micrometer.core.instrument.Gauge.builder("c93.cluster.leader", leader, java.util.concurrent.atomic.AtomicInteger::get)
                 .description("1 if this node is the leader").register(metrics.registry());
         vertx.setPeriodic(0, config.heartbeat().toMillis() * 5, id -> nodes.liveNodes().onSuccess(all -> {
             live.set(all.size());

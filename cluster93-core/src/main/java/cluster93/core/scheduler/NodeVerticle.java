@@ -105,9 +105,9 @@ public final class NodeVerticle extends VerticleBase {
 
     @Override
     public Future<?> start() {
-        io.micrometer.core.instrument.Gauge.builder("cluster93.jobs.running", slots, java.util.Map::size)
+        io.micrometer.core.instrument.Gauge.builder("c93.jobs.running", slots, java.util.Map::size)
                 .description("Attempts running on this node (one isolate each)").register(cluster93.core.metrics.Metrics.of(vertx).registry());
-        io.micrometer.core.instrument.Gauge.builder("cluster93.jobs.capacity", () -> capacity)
+        io.micrometer.core.instrument.Gauge.builder("c93.jobs.capacity", () -> capacity)
                 .description("Attempts this node can run at once").register(cluster93.core.metrics.Metrics.of(vertx).registry());
         heartbeatTimer = vertx.setPeriodic(heartbeat.toMillis(), id -> {
             announce();
