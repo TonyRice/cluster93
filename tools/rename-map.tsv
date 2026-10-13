@@ -11,7 +11,7 @@
 # Three deliberate targets for the bare token:
 #   - command / process / service identity (CLI, Server header, MCP name, jar, pid) -> c93
 #   - filesystem / config / Maven-coordinate contexts                            -> cluster93
-#   - in PATHS, a bare `automately` segment becomes `cluster93` (rule 29)
+#   - in PATHS, a bare `automately` segment becomes `cluster93` (rule 30)
 #
 # `exclude` is an optional comma-separated glob list; the global allowlist is
 # tools/rename-keep.txt.
@@ -40,8 +40,9 @@
 22	content	automately.pid	c93.pid				# local pid file
 23	content	automately.exe	c93.exe				# Windows CLI binary
 24	content	automately/	cluster93/			# in-text path segment (resources/automately/runtime, /automately/core)
-25	both	automately.	cluster93.			# Java packages + JS Symbol.for('automately.*')
-26	content	automately	c93				# bare token: command, headers, MCP name, prose id
-27	both	Automately	Cluster93			# TitleCase: prose, X-Automately-*, class name
-28	content	AUTOMATELY	CLUSTER93			# standalone upper literal (Ignite SQL schema)
-29	path	automately	cluster93			# bare token as a path segment: package/dir names
+25	content	builder("automately.	builder("c93.			# Micrometer metric names (dotted) -> exported c93_* prefix
+26	both	automately.	cluster93.			# Java packages + JS Symbol.for('automately.*')
+27	content	automately	c93				# bare token: command, headers, MCP name, prose id
+28	both	Automately	Cluster93			# TitleCase: prose, X-Automately-*, class name
+29	content	AUTOMATELY	CLUSTER93			# standalone upper literal (Ignite SQL schema)
+30	path	automately	cluster93			# bare token as a path segment: package/dir names
