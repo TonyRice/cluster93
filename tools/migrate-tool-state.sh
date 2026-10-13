@@ -8,16 +8,18 @@
 #
 # WHAT IT DOES
 #   Name-keyed (always) — stale references to the old module names:
-#     - ~/.gemini/antigravity-cli/settings.json  permission allow-list commands
-#       ("find automately-runtime-js/src …" -> "find cluster93-runtime-js/src …")
-#     - MCP server keys / "command" strings that point at the old `automately` CLI
-#       in ~/.claude.json, ~/.cursor/mcp.json, ~/.gemini/antigravity/mcp_config.json,
-#       ~/.gemini/settings.json
-#     - the automately project's own entry in ~/.claude.json (allowedTools etc.)
+#     - ~/.gemini/  config + cache JSON (settings, mcp_config, keybindings, cache/*)
+#       permission allow-list commands ("find automately-runtime-js/src …" ->
+#       "find cluster93-runtime-js/src …"), MCP server keys / "command" strings
+#     - ~/.claude.json  the automately project's allowedTools / mcpServers
+#     - ~/.cursor/mcp.json  MCP server keys / "command" strings
 #
 #   Path-keyed (only with --move-directory) — retarget the absolute repo path, for
 #   when the checkout moves from ~/src/automately to ~/src/cluster93:
 #     - ~/.gemini/antigravity-cli/settings.json  trustedWorkspaces
+#     - ~/.gemini/antigravity-cli/cache/last_conversations.json  workspace-path keys
+#       (this is what keeps your Antigravity conversations attached to the project)
+#     - ~/.gemini/antigravity-cli/history.jsonl  command history lines
 #     - ~/.claude.json  projects["<old>"] -> projects["<new>"]
 #     - ~/.claude/projects/-home-…-automately  ->  ~/.claude/projects/-home-…-cluster93
 #     - ~/.local/share/opencode/opencode.db  project.worktree / worktree.worktree /
@@ -27,12 +29,15 @@
 #   single run relocates the tree and retargets all of the above. Run it from a
 #   plain terminal, then restart your editor / agent sessions.
 #
+# DELIBERATELY NOT TOUCHED
+#   ~/.gemini/antigravity-cli/{brain,log,conversations}/* and conversation_summaries.db
+#   are historical transcripts (thousands of files, mostly binary DBs). They record
+#   what happened under the old name; retargeting them changes history and is not
+#   needed — the cache/settings above are what future sessions read. Same for
+#   ~/.local/share/opencode/{snapshot,shell}/<hash> (opaque id, not a path hash).
+#
 # SCOPE: project-scoped. It never rewrites unrelated projects' memory, and it leaves
 # ~/.claude/projects/-home-tony-src-jsync-io (which merely mentions the project) alone.
-#
-# NOT HANDLED: ~/.local/share/opencode/{snapshot,shell}/<hash> are keyed by an opaque
-# id (not a plain path hash); they are left in place and simply orphaned — OpenCode
-# recreates them for the new path.
 #
 # SUGGESTED USE
 #   tools/migrate-tool-state.sh                       # see what would change (no move)
@@ -41,6 +46,7 @@
 set -euo pipefail
 exec python3 - "$@" <<'PY'
 import argparse
+import glob
 import json
 import os
 import re
@@ -66,6 +72,22 @@ RULES = [
 ]
 BARE = re.compile(r"(?<![-\w.:/])automately(?![-\w.:/])")
 
+# ~/.gemini config + cache JSON (relative to HOME). Historical brain/log are excluded.
+GEMINI_JSON = [
+    ".gemini/settings.json",
+    ".gemini/config/config.json",
+    ".gemini/config/mcp_config.json",
+    ".gemini/antigravity/mcp_config.json",
+    ".gemini/antigravity-cli/settings.json",
+    ".gemini/antigravity-cli/keybindings.json",
+    ".gemini/antigravity-cli/mcp_oauth_tokens.json",
+    ".gemini/antigravity-cli/cache/last_conversations.json",
+    ".gemini/antigravity-cli/cache/projects.json",
+    ".gemini/antigravity-cli/cache/conversation_metadata.json",
+    ".gemini/antigravity-cli/cache/onboarding.json",
+]
+GEMINI_HISTORY = ".gemini/antigravity-cli/history.jsonl"
+
 
 def rename_text(s):
     if not isinstance(s, str) or "automately" not in s.lower():
@@ -73,6 +95,17 @@ def rename_text(s):
     for a, b in RULES:
         s = s.replace(a, b)
     return BARE.sub("c93", s)
+
+
+def transform_string(s, args):
+    """A string that holds the repo path is retargeted (only when moving); anything
+    else gets the name-keyed rename. A path is never name-rewritten, so an un-moved
+    ~/src/automately is left intact."""
+    if not isinstance(s, str):
+        return s
+    if args.old_dir and args.old_dir in s:
+        return s.replace(args.old_dir, args.new_dir) if args.move_directory else s
+    return rename_text(s)
 
 
 def die(msg, code=1):
@@ -108,37 +141,63 @@ def write_json(path, data, apply):
     os.replace(tmp, path)
 
 
-def transform_list(path, items, report, apply):
-    changed = False
-    for i, v in enumerate(items):
-        nv = rename_text(v)
-        if nv != v:
-            report.note(path, v, nv)
-            items[i] = nv
-            changed = True
-    return changed
+def transform_obj(obj, args, path, report):
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            nk = transform_string(k, args)
+            if nk != k:
+                report.note(path, f"key: {k}", nk)
+            out[nk] = transform_obj(v, args, path, report)
+        return out
+    if isinstance(obj, list):
+        return [transform_obj(v, args, path, report) for v in obj]
+    if isinstance(obj, str):
+        nv = transform_string(obj, args)
+        if nv != obj:
+            report.note(path, obj, nv)
+        return nv
+    return obj
 
 
 # --------------------------------------------------------------------------- #
-def do_antigravity_settings(args, report):
-    path = os.path.join(HOME, ".gemini", "antigravity-cli", "settings.json")
+def do_gemini_json(args, report):
+    for rel in GEMINI_JSON:
+        path = os.path.join(HOME, rel)
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            continue
+        try:
+            data = load_json(path)
+        except Exception as e:
+            print(f"  skip (unreadable): {rel}: {e}")
+            continue
+        before = report.changes
+        new = transform_obj(data, args, path, report)
+        if report.changes > before:
+            write_json(path, new, args.apply)
+            report.files += 1
+
+
+def do_gemini_history(args, report):
+    if not args.move_directory:
+        return
+    path = os.path.join(HOME, GEMINI_HISTORY)
     if not os.path.exists(path):
         return
-    data = load_json(path)
-    changed = False
-    perms = data.get("permissions", {})
-    for key in ("allow", "deny", "ask"):
-        if isinstance(perms.get(key), list):
-            changed |= transform_list(path, perms[key], report, args.apply)
-    if args.move_directory and isinstance(data.get("trustedWorkspaces"), list):
-        for i, v in enumerate(data["trustedWorkspaces"]):
-            if isinstance(v, str) and v.startswith(args.old_dir):
-                nv = args.new_dir + v[len(args.old_dir):]
-                report.note(path, v, nv)
-                data["trustedWorkspaces"][i] = nv
-                changed = True
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        lines = fh.readlines()
+    changed = 0
+    for i, line in enumerate(lines):
+        nv = line.replace(args.old_dir, args.new_dir)
+        if nv != line:
+            report.note(path, f"line {i + 1}: {line.strip()[:80]}", nv.strip()[:80])
+            lines[i] = nv
+            changed += 1
     if changed:
-        write_json(path, data, args.apply)
+        if args.apply:
+            shutil.copy2(path, f"{path}.bak-{TS}")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.writelines(lines)
         report.files += 1
 
 
@@ -147,14 +206,13 @@ def do_claude_json(args, report):
     if not os.path.exists(path):
         return
     data = load_json(path)
-    changed = False
+    before = report.changes
     servers = data.get("mcpServers")
     if isinstance(servers, dict) and "automately" in servers:
         report.note(path, "mcpServers.automately", "mcpServers.c93")
         servers["c93"] = servers.pop("automately")
         if isinstance(servers["c93"], dict) and servers["c93"].get("command"):
             servers["c93"]["command"] = rename_text(servers["c93"]["command"])
-        changed = True
     projects = data.get("projects", {})
     for key in list(projects.keys()):
         if args.old_dir not in key:
@@ -163,54 +221,36 @@ def do_claude_json(args, report):
         for field in ("allowedTools", "disallowedTools", "enabledMcpjsonServers",
                       "disabledMcpjsonServers", "mcpContextUris"):
             if isinstance(entry.get(field), list):
-                changed |= transform_list(path, entry[field], report, args.apply)
+                for i, v in enumerate(entry[field]):
+                    nv = transform_string(v, args)
+                    if nv != v:
+                        report.note(path, v, nv)
+                        entry[field][i] = nv
         if isinstance(entry.get("mcpServers"), dict):
             for name in list(entry["mcpServers"].keys()):
                 if name == "automately":
                     entry["mcpServers"]["c93"] = entry["mcpServers"].pop("automately")
-                    changed = True
         if args.move_directory:
             new_key = args.new_dir + key[len(args.old_dir):]
             report.note(path, f"projects[{key}]", f"projects[{new_key}]")
             projects[new_key] = projects.pop(key)
-            changed = True
-    if changed:
+    if report.changes > before:
         write_json(path, data, args.apply)
         report.files += 1
 
 
-def do_named_mcp_configs(args, report):
-    for path in (
-        os.path.join(HOME, ".cursor", "mcp.json"),
-        os.path.join(HOME, ".gemini", "antigravity", "mcp_config.json"),
-        os.path.join(HOME, ".gemini", "settings.json"),
-    ):
+def do_cursor_mcp(args, report):
+    for path in (os.path.join(HOME, ".cursor", "mcp.json"),):
         if not os.path.exists(path):
             continue
         try:
             data = load_json(path)
         except Exception:
             continue
-        servers = data.get("mcpServers") if isinstance(data, dict) else None
-        if not isinstance(servers, dict):
-            continue
-        changed = False
-        for name in list(servers.keys()):
-            entry = servers[name]
-            new_name = rename_text(name)
-            if new_name != name:
-                report.note(path, f"mcpServers.{name}", f"mcpServers.{new_name}")
-                servers[new_name] = servers.pop(name)
-                changed = True
-                entry = servers[new_name]
-            if isinstance(entry, dict) and isinstance(entry.get("command"), str):
-                nv = rename_text(entry["command"])
-                if nv != entry["command"]:
-                    report.note(path, entry["command"], nv)
-                    entry["command"] = nv
-                    changed = True
-        if changed:
-            write_json(path, data, args.apply)
+        before = report.changes
+        new = transform_obj(data, args, path, report)
+        if report.changes > before:
+            write_json(path, new, args.apply)
             report.files += 1
 
 
@@ -276,7 +316,7 @@ def main():
     g.add_argument("--dry-run", action="store_true", help="report only (default)")
     g.add_argument("--apply", action="store_true", help="write changes (with .bak copies)")
     ap.add_argument("--move-directory", action="store_true",
-                    help="also retarget path-keyed state (Claude/Antigravity/OpenCode)")
+                    help="also retarget path-keyed state (Gemini/Claude/OpenCode)")
     ap.add_argument("--move-repo-dir", action="store_true",
                     help="move the checkout to --new-dir and retarget (implies --move-directory)")
     ap.add_argument("--old-dir", default=os.path.join(HOME, "src", "automately"))
@@ -291,9 +331,10 @@ def main():
     print()
 
     report = Report()
-    do_antigravity_settings(args, report)
+    do_gemini_json(args, report)
+    do_gemini_history(args, report)
     do_claude_json(args, report)
-    do_named_mcp_configs(args, report)
+    do_cursor_mcp(args, report)
     do_claude_project_dir(args, report)
     do_opencode_db(args, report)
     do_move_repo_dir(args, report)
