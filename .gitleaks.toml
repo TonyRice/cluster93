@@ -1,0 +1,64 @@
+# gitleaks configuration for Cluster93.
+#
+# Extends the default ruleset and allowlists the *known, non-secret* fixtures in
+# this repository, so a scan stays green without hiding real leaks. Every entry
+# here is a test vector, a documentation example, or a generated/vendored file —
+# none of them protect anything.
+#
+# Path patterns match both the current `cluster93-*` names and the pre-rename
+# `automately-*` names, because gitleaks scans all of git history.
+#
+#   gitleaks detect --source . --config .gitleaks.toml --redact --verbose
+#
+title = "Cluster93"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures, documentation examples, and generated files (no real secrets)."
+
+paths = [
+    # Self-labelled throwaway crypto keys for the real-npm tests (D-101):
+    # "they sign nothing real".
+    '''(automately|cluster93)-cli/src/test/resources/realnpm/src/testkeys\.js''',
+    # Test suites that use obviously-fake secret values (…-test-secrets-key-…,
+    # sk_live_0123456789).
+    '''(automately|cluster93)-(server|cli)/src/test/java/(automately|cluster93)/(server|cli)/(SecretsTest|FsTest|AppsCliTest)\.java''',
+    # Test vectors and example credentials.
+    '''cluster93-core/src/test/java/cluster93/core/files/s3/S3SignerTest\.java''',
+    '''cluster93-core/src/test/java/cluster93/core/host/crypto/CryptoVectorsTest\.java''',
+    # TLS code: `PrivateKey key, X509Certificate …` trips a generic-api-key heuristic.
+    '''(automately|cluster93)-tls/src/main/java/(automately|cluster93)/tls/.*\.java''',
+    # Placeholder AWS key id in the storage guide (`--access-key-id AKIA…`).
+    '''docs/guides/storage\.md''',
+    # Local dev / demo / CI smoke tokens — obviously fake.
+    '''scripts/dev\.sh''',
+    '''scripts/demo\.sh''',
+    '''\.github/workflows/release\.yml''',
+    # The terminal recording and its generated offline player.
+    '''docs/demo\.cast''',
+    '''docs/demo\.html''',
+    # Public release key (only the public half is ever committed).
+    '''install/(automately|cluster93)-release\.pem''',
+    # Rename tooling: contains the old token prefixes as search tokens, not secrets.
+    '''tools/.*''',
+    # Build output (gitignored) — copies of the fixtures above, never published.
+    '''.*/target/.*''',
+    # This config file itself lists the example strings below.
+    '''\.gitleaks\.toml''',
+]
+
+# Individual strings that trip generic rules but are documented examples,
+# placeholders, or obviously-fake test values.
+regexes = [
+    '''AKIAIOSFODNN7EXAMPLE''',
+    '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+    '''AKIA…''',
+    '''(release-smoke|dev)-admin-token''',
+    '''-test-secrets-key-0123456789abcdef''',
+    '''secrets-test-key-0123456789abcdef''',
+    '''sk_live_0123456789''',
+    # `PrivateKey key, X509Certificate …` — a Java signature, not an api key.
+    '''PrivateKey key, X509Certificate''',
+]
