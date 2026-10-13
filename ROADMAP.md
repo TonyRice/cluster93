@@ -137,6 +137,14 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 5. Recent Key Achievements & Bug Fixes
 
+- **Admin Tenant Visibility, Worker Concurrency Metrics & VFS File Explorer (Phase 6):**
+  - **Operator Cross-Tenant Context Routing:** Evolved `ApiVerticle` authorization to allow cluster operators and the admin token (`principal.admin() == true`) to inspect and administer any tenant's workloads (jobs, services, apps, files) by passing `X-Automately-Tenant` or `?tenant=<name>`. Replaced rigid D-044/D-070 rejection strings with helpful guidance.
+  - **CLI Ergonomics & Jargon Removal:** Added an inherited `--tenant <name>` option to `automately` CLI, attaching `X-Automately-Tenant` on API requests. Purged internal decision tags (`(D-044)`, `(D-070)`, `(D-071)`, `(D-083)`, `(D-084)`, `(D-092)`, `(D-112)`) from command descriptions and user error messages.
+  - **Web Console Tenant Context Switcher:** Added interactive dropdown to `Header.tsx` allowing operators to seamlessly toggle between Cluster Infrastructure and any tenant workspace (`local`, `system`, or user-created), dynamically updating the API client's target tenant context.
+  - **Intuitive Worker Concurrency Metrics:** Replaced cryptic "slots in use / available" cards in `OperatorView.tsx` with clear compute metrics: Compute Nodes, Worker Concurrency Limit, Active Executions (with percentage load and progress bar), and Available Headroom.
+  - **Tenants Management & Workspace Inspection:** Removed `D044Notice` banner and added a dedicated Tenants tab and overview card to list all cluster tenants with creation dates, 1-click workspace inspection, and inline tenant creation.
+  - **Hierarchical VFS File Explorer:** Upgraded `FilesTab.tsx` into a full directory tree browser with folder navigation, clickable breadcrumbs, file size/MIME badges, search filtering, and an in-browser File Content Preview Modal for reading text, JSON, code, HTML, and markdown files directly.
+
 - **Local Master Node Orchestration & Web Console Live Verification (Phase 6):**
   - Added foreground `run` command to `scripts/local.sh` with PID file tracking and `exec env ...`, enabling clean supervision under daemon task runners and system process supervisors without background subshell or cgroup termination.
   - Exposed `seed` as a top-level command in `scripts/local.sh` for on-demand re-provisioning without resetting configuration.
