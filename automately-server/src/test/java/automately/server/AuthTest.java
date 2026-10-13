@@ -93,9 +93,22 @@ class AuthTest {
     }
 
     @Test
-    void theAdminManagesTenantsButCantTouchTheirData() throws Exception {
-        assertThat(call("GET", "/v1/jobs", TestAuth.ADMIN, null).statusCode()).isEqualTo(403);
+    void theAdminRequiresTargetTenantToAccessTenantData() throws Exception {
+        // Operators and the admin token must name the tenant whose data they mean.
+        HttpResponse<Buffer> noTarget = call("GET", "/v1/jobs", TestAuth.ADMIN, null);
+        assertThat(noTarget.statusCode()).isEqualTo(403);
+        assertThat(noTarget.bodyAsJsonObject().getJsonObject("error").getString("message"))
+                .isEqualTo("Specify a target tenant via the X-Automately-Tenant header or ?tenant parameter");
         assertThat(call("GET", "/v1/files", TestAuth.ADMIN, null).statusCode()).isEqualTo(403);
+
+        // Named with ?tenant or the header, they administer that tenant's workloads.
+        createTenant("admintest");
+        assertThat(call("GET", "/v1/jobs?tenant=admintest", TestAuth.ADMIN, null).statusCode()).isEqualTo(200);
+        HttpResponse<Buffer> withHeader = await(client.get(node.httpPort(), "localhost", "/v1/files")
+                .putHeader("Authorization", TestAuth.ADMIN)
+                .putHeader("X-Automately-Tenant", "admintest").send());
+        assertThat(withHeader.statusCode()).isEqualTo(200);
+
         assertThat(call("GET", "/v1/nodes", TestAuth.ADMIN, null).statusCode()).isEqualTo(200);
         assertThat(call("GET", "/v1/whoami", TestAuth.ADMIN, null).bodyAsJsonObject().getBoolean("admin")).isTrue();
 

@@ -271,8 +271,18 @@ public final class ApiVerticle extends VerticleBase {
                 return;
             }
             automately.core.auth.Principal principal = ar.result();
+            // An operator or the admin token must name the tenant it acts on (X-Automately-Tenant, else ?tenant).
+            if (principal.admin()) {
+                String target = ctx.request().getHeader("X-Automately-Tenant");
+                if (target == null) {
+                    target = ctx.request().getParam("tenant");
+                }
+                if (target != null && !target.isBlank()) {
+                    ctx.put("tenant", target.trim());
+                }
+            }
             audited(ctx, rule.get(), principal);
-            String denied = denied(rule.get(), principal);
+            String denied = denied(rule.get(), principal, ctx);
             if (denied != null) {
                 error(ctx, 403, "forbidden", denied);
                 return;
@@ -355,15 +365,22 @@ public final class ApiVerticle extends VerticleBase {
         return invalid.getMessage() + where;
     }
 
-    private static String denied(RouteScopes.Rule rule, automately.core.auth.Principal principal) {
+    private static String denied(RouteScopes.Rule rule, automately.core.auth.Principal principal, RoutingContext ctx) {
         return switch (rule.who()) {
             case PUBLIC, ANY -> null;
             case ADMIN -> principal.admin() ? null : "Only operators, or the admin token, can do this";
             case ADMIN_OR_TENANT -> principal.admin() || principal.allows(rule.scope()) ? null : lacks(rule.scope());
-            case TENANT -> principal.admin()
-                    ? "Operators and the admin token manage tenants, users and tokens only; use a tenant token for tenant data (D-044)"
-                    : principal.allows(rule.scope()) ? null : lacks(rule.scope());
-            case USER -> principal.user() != null ? null : "Only a user's own personal token can do this (D-070)";
+            case TENANT -> {
+                if (principal.admin()) {
+                    String target = ctx.get("tenant");
+                    if (target == null || target.isBlank()) {
+                        yield "Specify a target tenant via the X-Automately-Tenant header or ?tenant parameter";
+                    }
+                    yield null;
+                }
+                yield principal.allows(rule.scope()) ? null : lacks(rule.scope());
+            }
+            case USER -> principal.user() != null ? null : "Only a user's own personal token can do this";
         };
     }
 
@@ -384,6 +401,9 @@ public final class ApiVerticle extends VerticleBase {
         }
         String path = ctx.request().path();
         String tenant = principal.tenant();
+        if (tenant == null) {
+            tenant = ctx.get("tenant");
+        }
         if (tenant == null) {
             java.util.regex.Matcher inPath = TENANT_PATH.matcher(path);
             tenant = inPath.find() ? inPath.group(1) : null;
