@@ -7,6 +7,7 @@ import {
   Loader2,
   Rocket,
   RotateCcw,
+  Settings2,
   TriangleAlert,
 } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
@@ -17,27 +18,30 @@ interface AppsTabProps {
   refreshKey: number;
 }
 
+const INGRESS_HOST_STORAGE_KEY = 'c93_ingress_host';
+
 /**
- * Derives the ingress base domain from the current origin so preview and
- * canonical URLs can be shown. The console is reached at `console.<ingress>`
- * (or `<deployment>--console--system.<ingress>`); dropping the leading
- * `console*` label leaves the ingress domain.
+ * Derives the default ingress host (including port if present) from the current origin
+ * so preview and canonical URLs can be routed properly.
+ * If accessed at `console.<ingress>` or `<deployment>--console--system.<ingress>`,
+ * the leading labels are stripped down to the ingress host.
  */
-function ingressBase(): string {
+export function defaultIngressHost(): string {
   if (typeof window === 'undefined') return '';
-  const { hostname } = window.location;
+  const { host, hostname, port } = window.location;
   const labels = hostname.split('.');
-  if (labels.length > 1 && labels[0].startsWith('console')) {
-    return labels.slice(1).join('.');
+  let baseDomain = hostname;
+  if (labels.length > 1 && (labels[0].startsWith('console') || labels[0].includes('--console--'))) {
+    baseDomain = labels.slice(1).join('.');
   }
-  return hostname;
+  return port ? `${baseDomain}:${port}` : baseDomain;
 }
 
-function appUrl(subdomain: string): string {
-  const base = ingressBase();
-  const protocol = typeof window !== 'undefined' ? window.location.protocol : 'https:';
-  if (!base) return '';
-  return `${protocol}//${subdomain}.${base}/`;
+export function buildAppUrl(subdomain: string, ingressHost: string): string {
+  const host = ingressHost.trim();
+  const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
+  if (!host) return '';
+  return `${protocol}//${subdomain}.${host}/`;
 }
 
 /** Lists deployed apps with their live deployment, preview URLs, and actions. */
@@ -49,6 +53,35 @@ export function AppsTab({ refreshKey }: AppsTabProps) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [ingressHost, setIngressHost] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem(INGRESS_HOST_STORAGE_KEY) || defaultIngressHost();
+  });
+  const [editingHost, setEditingHost] = useState(false);
+  const [hostDraft, setHostDraft] = useState(ingressHost);
+
+  const handleSaveHost = useCallback((e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmed = hostDraft.trim();
+    if (!trimmed) {
+      const fallback = defaultIngressHost();
+      setIngressHost(fallback);
+      setHostDraft(fallback);
+      localStorage.removeItem(INGRESS_HOST_STORAGE_KEY);
+    } else {
+      setIngressHost(trimmed);
+      localStorage.setItem(INGRESS_HOST_STORAGE_KEY, trimmed);
+    }
+    setEditingHost(false);
+  }, [hostDraft]);
+
+  const handleResetHost = useCallback(() => {
+    const fallback = defaultIngressHost();
+    setIngressHost(fallback);
+    setHostDraft(fallback);
+    localStorage.removeItem(INGRESS_HOST_STORAGE_KEY);
+    setEditingHost(false);
+  }, []);
 
   const loadApps = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -171,6 +204,52 @@ export function AppsTab({ refreshKey }: AppsTabProps) {
           <h2 className="text-sm font-semibold tracking-tight">Apps</h2>
           <span className="text-xs text-subtle">{apps.length}</span>
         </div>
+        <div className="border-b border-border/60 px-3 py-2 text-xs">
+          <div className="flex items-center justify-between text-subtle">
+            <span className="flex items-center gap-1 font-medium">
+              <Settings2 className="h-3.5 w-3.5" aria-hidden />
+              Ingress Host
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setHostDraft(ingressHost);
+                setEditingHost(!editingHost);
+              }}
+              className="text-[11px] text-accent hover:underline"
+            >
+              {editingHost ? 'Cancel' : 'Configure'}
+            </button>
+          </div>
+          {editingHost ? (
+            <form onSubmit={handleSaveHost} className="mt-2 space-y-1.5">
+              <input
+                type="text"
+                value={hostDraft}
+                onChange={(e) => setHostDraft(e.target.value)}
+                placeholder="e.g. localhost:8000"
+                className="input h-7 w-full font-mono text-xs"
+                autoFocus
+              />
+              <div className="flex items-center justify-end gap-1.5 pt-1">
+                <button
+                  type="button"
+                  onClick={handleResetHost}
+                  className="btn btn-ghost h-6 px-2 text-[11px]"
+                >
+                  Reset
+                </button>
+                <button type="submit" className="btn btn-primary h-6 px-2 text-[11px]">
+                  Save
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="mt-1 font-mono text-[11px] text-muted truncate" title={ingressHost}>
+              {ingressHost || '(default)'}
+            </div>
+          )}
+        </div>
         <ul className="p-2">
           {apps.map((app) => (
             <li key={app.name}>
@@ -218,7 +297,7 @@ export function AppsTab({ refreshKey }: AppsTabProps) {
             <div className="flex items-center gap-2">
               {selectedApp.activeDeploymentId ? (
                 <a
-                  href={appUrl(`${selectedApp.name}--${selectedApp.tenant}`)}
+                  href={buildAppUrl(`${selectedApp.name}--${selectedApp.tenant}`, ingressHost)}
                   target="_blank"
                   rel="noreferrer"
                   className="btn btn-ghost"
@@ -263,8 +342,9 @@ export function AppsTab({ refreshKey }: AppsTabProps) {
             <ul className="divide-y divide-border/40">
               {deployments.map((deployment) => {
                 const isActive = deployment.deploymentId === selectedApp.activeDeploymentId;
-                const preview = appUrl(
+                const preview = buildAppUrl(
                   `${deployment.deploymentId}--${selectedApp.name}--${selectedApp.tenant}`,
+                  ingressHost,
                 );
                 return (
                   <li

@@ -11,9 +11,9 @@
 #
 # With no flag: build, sign, create a draft release, upload the assets, and publish it.
 #
-# Publishing talks to the GitHub REST API with curl and a token — gh is not needed.
-# Set C93_GITHUB_TOKEN (or GITHUB_TOKEN / GH_TOKEN) to a token with contents:write
-# on the repository. C93_RELEASES picks another repository.
+# Publishing talks to the GitHub REST API with curl — gh is not required. It uses a
+# token from C93_GITHUB_TOKEN / GITHUB_TOKEN / GH_TOKEN, or an authenticated `gh`
+# session (`gh auth token`) if one exists. C93_RELEASES picks another repository.
 #
 # Needs: GraalVM (native-image) on PATH. Publishing also needs openssl and the release
 # key at ~/.config/cluster93/release-signing.key (scripts/release-key.sh makes one).
@@ -53,9 +53,13 @@ if [ "$mode" = "--build-only" ]; then
     exit 0
 fi
 
-# ---- publish over the GitHub REST API (no gh) -------------------------------- #
+# ---- publish over the GitHub REST API (no gh required) ----------------------- #
 token="${C93_GITHUB_TOKEN:-${GITHUB_TOKEN:-${GH_TOKEN:-}}}"
-[ -n "$token" ] || die "set C93_GITHUB_TOKEN (a token with contents:write) to publish, or use --build-only"
+# Reuse an authenticated gh session if there is one and no token was given.
+if [ -z "$token" ] && command -v gh >/dev/null 2>&1; then
+    token="$(gh auth token 2>/dev/null || true)"
+fi
+[ -n "$token" ] || die "set C93_GITHUB_TOKEN (a token with contents:write), or run 'gh auth login', or use --build-only"
 command -v openssl >/dev/null 2>&1 || die "need openssl to sign"
 key="${XDG_CONFIG_HOME:-$HOME/.config}/cluster93/release-signing.key"
 [ -r "$key" ] || die "no release key at ${key} (scripts/release-key.sh makes one)"

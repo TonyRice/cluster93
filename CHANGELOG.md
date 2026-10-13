@@ -11,6 +11,10 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
   - The console's sign-in card (`LoginView`) probes setup status on load and, when needed, presents an **Initial Setup** screen — username defaulting to `admin`, password and confirmation — that creates the administrator and signs in immediately (`api.getSetupStatus`/`api.setupAdmin`).
   - **Why:** a fresh cluster had no way to create its first operator from the web console; the admin token was the only path in.
 
+- **Configurable Ingress Host & Port Preservation in Web Console (`AppsTab`)**:
+  - `AppsTab` now detects and preserves non-standard origin ports (`window.location.port`) when constructing preview and canonical application URLs (e.g., preserving `:8000`), preventing connection errors to port 80.
+  - Added configurable Ingress Host UI and local storage persistence (`c93_ingress_host`), allowing operators accessing via custom domains, non-standard reverse proxy ports, or tunnels to configure the ingress host directly from the Apps view.
+
 ## [2.0.0-alpha.1] - 2026-10-13
 
 - **Rebrand: Automately → Cluster93 (`c93`)**:
