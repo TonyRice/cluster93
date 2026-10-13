@@ -84,12 +84,24 @@ uploads="https://uploads.github.com/repos/${repo}"
 auth=(-H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
 json=("${auth[@]}" -H "Content-Type: application/json")
 
+# The tag must exist locally before it can be pushed.
+if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+    printf '== creating tag %s at %s\n' "$tag" "$(git rev-parse --short HEAD)"
+    git tag "$tag"
+fi
+
 # Sign before uploading, so SHA256SUMS.sig ships with the rest. The key is
 # passphrase-protected: C93_RELEASE_PASSPHRASE (or an interactive prompt) supplies it.
-printf '== signing SHA256SUMS\n'
-passin=()
-[ -n "${C93_RELEASE_PASSPHRASE:-}" ] && passin=(-passin env:C93_RELEASE_PASSPHRASE)
-openssl dgst -sha256 "${passin[@]}" -sign "$key" -out dist/SHA256SUMS.sig dist/SHA256SUMS
+# A signature that already verifies is reused, so a retry needn't re-enter it.
+if [ -s dist/SHA256SUMS.sig ] && openssl dgst -sha256 -verify "${root}/install/cluster93-release.pem" \
+        -signature dist/SHA256SUMS.sig dist/SHA256SUMS >/dev/null 2>&1; then
+    printf '== reusing the existing SHA256SUMS.sig\n'
+else
+    printf '== signing SHA256SUMS\n'
+    passin=()
+    [ -n "${C93_RELEASE_PASSPHRASE:-}" ] && passin=(-passin env:C93_RELEASE_PASSPHRASE)
+    openssl dgst -sha256 "${passin[@]}" -sign "$key" -out dist/SHA256SUMS.sig dist/SHA256SUMS
+fi
 
 pre=false
 case "$tag" in *-*) pre=true ;; esac
