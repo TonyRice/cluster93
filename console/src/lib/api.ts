@@ -16,6 +16,74 @@ import type {
 } from './types';
 
 /**
+ * A signed-in user, as the API's `User` schema describes it (D-070). `operator`
+ * manages the cluster; `disabled` means their tokens all stop working.
+ */
+export interface User {
+  id: string;
+  name: string;
+  displayName?: string | null;
+  email?: string | null;
+  operator: boolean;
+  disabled: boolean;
+  createdAt: number;
+  /** Whether the user has a password configured for console login (D-133). */
+  hasPassword?: boolean;
+}
+
+/** `POST /v1/auth/login` request body. */
+export interface LoginRequest {
+  username: string;
+  password: string;
+  /** Optional: the tenant to scope the session to (defaults to the first the user belongs to). */
+  tenant?: string;
+}
+
+/** `POST /v1/auth/login` response: a personal session token and the user it belongs to. */
+export interface LoginResponse {
+  token: string;
+  admin: boolean;
+  tenant: string | null;
+  user: User;
+}
+
+/** A tenant member, as `GET /v1/members` describes it (D-070). */
+export interface Member {
+  tenant: string;
+  user?: string | null;
+  userId?: string;
+  roles: string[];
+  groups: string[];
+  scopes: string[];
+  owner: boolean;
+  joinedAt?: number;
+  invitedBy?: string | null;
+}
+
+/** An open invite, as `GET /v1/invites` describes it (D-070); `code` is present only on creation. */
+export interface Invite {
+  id: string;
+  tenant: string;
+  roles: string[];
+  groups: string[];
+  user?: string | null;
+  note?: string | null;
+  createdBy?: string | null;
+  createdAt?: number;
+  expiresAt?: number;
+  code?: string;
+}
+
+/** `POST /v1/invites/redeem` request body. */
+export interface RedeemInviteRequest {
+  code: string;
+  name?: string;
+  displayName?: string;
+  email?: string;
+  password?: string;
+}
+
+/**
  * Browser-side client for the Automately public REST API.
  *
  * The console is served by the ingress on the same origin as the API, and the
@@ -251,6 +319,64 @@ async function fetchFileContent(path: string, signal?: AbortSignal): Promise<str
 // ---------------------------------------------------------------------------
 
 export const api = {
+  /**
+   * `POST /v1/auth/login` — exchange a username and password for a personal
+   * session token. Public: sends no bearer credential.
+   */
+  async login(req: LoginRequest): Promise<LoginResponse> {
+    return request<LoginResponse>('/v1/auth/login', { method: 'POST', body: req, auth: false });
+  },
+
+  /** `PUT /v1/me/password` — set or change your own password (D-133). */
+  updatePassword(req: { currentPassword?: string; newPassword: string }): Promise<{ status: string }> {
+    return request<{ status: string }>('/v1/me/password', { method: 'PUT', body: req });
+  },
+
+  /** `POST /v1/invites/redeem` — redeem an invite for a new user, with a password. */
+  redeemInvite(req: RedeemInviteRequest): Promise<LoginResponse> {
+    return request<LoginResponse>('/v1/invites/redeem', { method: 'POST', body: req, auth: false });
+  },
+
+  /** `GET /v1/members` — the tenant's members. */
+  getMembers(signal?: AbortSignal): Promise<{ members: Member[] }> {
+    return request<{ members: Member[] }>('/v1/members', { signal });
+  },
+
+  /** `GET /v1/invites` — the tenant's open invites. */
+  getTenantInvites(signal?: AbortSignal): Promise<{ invites: Invite[] }> {
+    return request<{ invites: Invite[] }>('/v1/invites', { signal });
+  },
+
+  /** `POST /v1/invites` — invite someone to the current tenant. */
+  createTenantInvite(req: { roles: string[]; groups?: string[]; user?: string; note?: string }): Promise<Invite> {
+    return request<Invite>('/v1/invites', { method: 'POST', body: req });
+  },
+
+  /** `DELETE /v1/invites/{id}` — withdraw a tenant invite. */
+  revokeTenantInvite(id: string): Promise<void> {
+    return request<void>(`/v1/invites/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  /** `GET /v1/users` — every user on the cluster (admin). */
+  getUsers(signal?: AbortSignal): Promise<{ users: User[] }> {
+    return request<{ users: User[] }>('/v1/users', { signal });
+  },
+
+  /** `GET /v1/admin/invites` — open operator invites (admin). */
+  getAdminInvites(signal?: AbortSignal): Promise<{ invites: Invite[] }> {
+    return request<{ invites: Invite[] }>('/v1/admin/invites', { signal });
+  },
+
+  /** `POST /v1/admin/invites` — invite an operator (admin). */
+  createAdminInvite(req: { user?: string; note?: string }): Promise<Invite> {
+    return request<Invite>('/v1/admin/invites', { method: 'POST', body: req });
+  },
+
+  /** `DELETE /v1/admin/invites/{id}` — withdraw an operator invite (admin). */
+  revokeAdminInvite(id: string): Promise<void> {
+    return request<void>(`/v1/admin/invites/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
   /** `GET /v1/whoami` — the token's identity and scopes. */
   whoami(signal?: AbortSignal): Promise<Whoami> {
     return request<Whoami>('/v1/whoami', { signal });

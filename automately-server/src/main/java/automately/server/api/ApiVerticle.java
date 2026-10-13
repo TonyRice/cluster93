@@ -4,6 +4,7 @@ import automately.core.job.Attempt;
 import automately.core.job.Job;
 import automately.core.job.JobStore;
 import automately.core.job.OrphanPolicy;
+import automately.core.job.ScriptConfig;
 import automately.core.node.NodeInfo;
 import automately.core.node.NodeRegistry;
 import automately.core.scheduler.Addresses;
@@ -452,6 +453,8 @@ public final class ApiVerticle extends VerticleBase {
             error(ctx, 400, "invalid_request", "\"input\" must be a JSON object");
             return;
         }
+        // What the script declares for itself (docs/design/orphaned-jobs.md); explicit body options win below.
+        ScriptConfig scriptConfig = ScriptConfig.parse(script);
         Duration timeout = config.defaultTimeout();
         if (body.containsKey("timeoutMs")) {
             if (!(body.getValue("timeoutMs") instanceof Number ms) || ms.longValue() < 1 || ms.longValue() > config.maxTimeout().toMillis()) {
@@ -459,13 +462,20 @@ public final class ApiVerticle extends VerticleBase {
                 return;
             }
             timeout = Duration.ofMillis(((Number) body.getValue("timeoutMs")).longValue());
+        } else if (scriptConfig.timeoutMs() != null) {
+            timeout = Duration.ofMillis(Math.min(scriptConfig.timeoutMs(), config.maxTimeout().toMillis()));
         }
 
-        Object policyValue = body.getValue("onOrphan", "fail");
-        OrphanPolicy onOrphan = policyValue instanceof String name ? OrphanPolicy.fromApi(name) : null;
-        if (onOrphan == null) {
-            error(ctx, 400, "invalid_request", "\"onOrphan\" must be \"fail\", \"retry\" or \"resume\"");
-            return;
+        OrphanPolicy onOrphan;
+        if (body.containsKey("onOrphan")) {
+            Object policyValue = body.getValue("onOrphan");
+            onOrphan = policyValue instanceof String name ? OrphanPolicy.fromApi(name) : null;
+            if (onOrphan == null) {
+                error(ctx, 400, "invalid_request", "\"onOrphan\" must be \"fail\", \"retry\" or \"resume\"");
+                return;
+            }
+        } else {
+            onOrphan = scriptConfig.onOrphan() == null ? OrphanPolicy.FAIL : scriptConfig.onOrphan();
         }
         int maxAttempts = onOrphan == OrphanPolicy.FAIL ? 1 : OrphanPolicy.DEFAULT_MAX_ATTEMPTS;
         if (body.containsKey("maxAttempts")) {
@@ -478,6 +488,8 @@ public final class ApiVerticle extends VerticleBase {
                 return;
             }
             maxAttempts = requested;
+        } else if (scriptConfig.maxAttempts() != null && onOrphan != OrphanPolicy.FAIL) {
+            maxAttempts = scriptConfig.maxAttempts();
         }
 
         Object packagesValue = body.getValue("packages", true);

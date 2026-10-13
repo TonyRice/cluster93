@@ -26,6 +26,31 @@ class ProcessModeDefaultTest {
     }
 
     @Test
+    @DisplayName("ServerConfig defaults the worker engine to graaljs")
+    void defaultsWorkerEngineToGraaljs() {
+        assertEquals("graaljs", ServerConfig.fromEnv(Map.of()).workerDefaultMode());
+    }
+
+    @Test
+    @DisplayName("The default worker binary points to graaljs when it is the default mode")
+    void defaultBinaryPointsToGraaljs() {
+        String graaljs = automately.runner.protocol.pool.TenantWorkerPool.resolvePath("bin/worker-graaljs");
+        Assumptions.assumeTrue(graaljs != null, "no bin/worker-graaljs present; skipping default-binary assertion");
+
+        ServerConfig config = ServerConfig.fromEnv(Map.of());
+        assertThat(config.workerDefaultMode()).isEqualTo("graaljs");
+        assertThat(config.workerBinaries().get("graaljs")).isEqualTo(graaljs);
+        assertThat(config.workerBinaries().get("default")).isEqualTo(graaljs);
+    }
+
+    @Test
+    @DisplayName("An explicit javet default mode switches the default worker engine")
+    void explicitJavetDefaultModeIsHonoured() {
+        ServerConfig config = ServerConfig.fromEnv(Map.of("AUTOMATELY_WORKER_DEFAULT_MODE", "javet"));
+        assertThat(config.workerDefaultMode()).isEqualTo("javet");
+    }
+
+    @Test
     @DisplayName("An explicit embedded mode is honoured")
     void embeddedModeIsHonoured() {
         assertEquals("embedded", ServerConfig.fromEnv(Map.of("AUTOMATELY_WORKER_MODE", "embedded")).workerMode());

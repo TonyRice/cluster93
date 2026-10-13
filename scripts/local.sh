@@ -38,7 +38,8 @@ PID_FILE="${AUTOMATELY_HOME}/automately.pid"
 MCP_FILE="${AUTOMATELY_HOME}/mcp.json"
 CONFIG_FILE="${AUTOMATELY_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/automately}/config.json"
 SERVER_JAR="${REPO_ROOT}/automately-server/target/automately.jar"
-WORKER_BINARY="${REPO_ROOT}/bin/worker-javet"
+JAVET_WORKER="${REPO_ROOT}/bin/worker-javet"
+GRAALJS_WORKER="${REPO_ROOT}/bin/worker-graaljs"
 CLI_BINARY="${REPO_ROOT}/bin/automately"
 START_TIMEOUT_SECONDS="${START_TIMEOUT_SECONDS:-60}"
 
@@ -53,6 +54,7 @@ DEFAULT_HTTP_PORT="8080"
 DEFAULT_INGRESS_PORT="8000"
 DEFAULT_METRICS_PORT="9090"
 DEFAULT_WORKER_MODE="process"
+DEFAULT_WORKER_ENGINE="graaljs"
 DEFAULT_TENANT="local"
 
 # Apache Ignite 2.18 on JDK 21 needs these module opens (pom.xml's ignite.jvm.args, the
@@ -119,13 +121,53 @@ generate_token() {
   fi
 }
 
+generate_password() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 16
+  else
+    head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+
+# A password for console login: prompted for on a terminal, else generated (and shown, since nobody typed it).
+ask_password() {
+  local prompt="$1" answer
+  if [[ "${ASSUME_YES:-false}" == "true" || ! -t 0 ]]; then
+    answer=$(generate_password)
+    echo "   generated an admin password: ${answer}" >&2
+    printf '%s' "$answer"
+    return
+  fi
+  IFS= read -r -s -p "  ${prompt} [empty generates one]: " answer
+  echo >&2
+  if [[ -z "$answer" ]]; then
+    answer=$(generate_password)
+    echo "   generated an admin password: ${answer}" >&2
+  fi
+  printf '%s' "$answer"
+}
+
+# JSON-encodes a string (with surrounding quotes), so it can be embedded in a request body.
+json_escape() {
+  local value="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$value" | python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.read().rstrip("\n")))'
+  else
+    printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+  fi
+}
+
 load_env_file() {
   if [[ ! -f "$ENV_FILE" ]]; then
     echo "Error: no configuration at $ENV_FILE. Run: scripts/local.sh setup" >&2
     exit 1
   fi
+  # REPO_ROOT always follows this script's own location. The copy persisted in local.env is there so the
+  # `automately local` CLI can recover the checkout when it runs from elsewhere, so it must not override it.
+  local script_repo_root="$REPO_ROOT"
   # shellcheck disable=SC1090
   source "$ENV_FILE"
+  REPO_ROOT="$script_repo_root"
   : "${NODE_ID:=$DEFAULT_NODE_ID}"
   : "${ROLES:=$DEFAULT_ROLES}"
   : "${DATA_DIR:=$DEFAULT_DATA_DIR}"
@@ -134,6 +176,8 @@ load_env_file() {
   : "${INGRESS_PORT:=$DEFAULT_INGRESS_PORT}"
   : "${METRICS_PORT:=$DEFAULT_METRICS_PORT}"
   : "${WORKER_MODE:=$DEFAULT_WORKER_MODE}"
+  : "${DEFAULT_WORKER_ENGINE:=graaljs}"
+  : "${WORKER_ENGINE:=$DEFAULT_WORKER_ENGINE}"
   : "${ADMIN_TOKEN:=}"
   : "${TENANT:=$DEFAULT_TENANT}"
   URL="http://localhost:${HTTP_PORT}"
@@ -146,6 +190,7 @@ write_env_file() {
   cat >"$ENV_FILE" <<ENV
 # Automately local master node configuration (scripts/local.sh setup).
 # Read by scripts/local.sh (start, status, mcp) and automately local ...
+REPO_ROOT="${REPO_ROOT}"
 NODE_ID="${NODE_ID}"
 ROLES="${ROLES}"
 DATA_DIR="${DATA_DIR}"
@@ -154,6 +199,8 @@ HTTP_PORT="${HTTP_PORT}"
 INGRESS_PORT="${INGRESS_PORT}"
 METRICS_PORT="${METRICS_PORT}"
 WORKER_MODE="${WORKER_MODE}"
+DEFAULT_WORKER_ENGINE="${DEFAULT_WORKER_ENGINE}"
+WORKER_ENGINE="${WORKER_ENGINE}"
 ADMIN_TOKEN="${ADMIN_TOKEN}"
 TENANT="${TENANT}"
 ENV
@@ -177,8 +224,11 @@ installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 git_commit=${commit}
 git_branch=${branch}
 version=${version}
+repo_root=${REPO_ROOT}
 server_jar=${SERVER_JAR}
 cli_binary=${CLI_BINARY}
+worker_javet=${JAVET_WORKER}
+worker_graaljs=${GRAALJS_WORKER}
 META
   chmod 600 "$META_FILE"
 }
@@ -197,9 +247,9 @@ ensure_build() {
       echo "   (native CLI build skipped; 'automately local' works from the jar too)" >&2
     fi
   fi
-  if [[ ! -x "$WORKER_BINARY" ]]; then
-    echo "== building bin/worker-javet" >&2
-    if ! "$REPO_ROOT/scripts/build-workers.sh" javet; then
+  if [[ ! -x "$JAVET_WORKER" || ! -x "$GRAALJS_WORKER" ]]; then
+    echo "== building bin/worker-javet and bin/worker-graaljs" >&2
+    if ! "$REPO_ROOT/scripts/build-workers.sh" all; then
       echo "   (worker build skipped; process mode falls back to a child JVM)" >&2
     fi
   fi
@@ -236,6 +286,7 @@ cmd_setup() {
   INGRESS_PORT=$(ask "Ingress port" "$DEFAULT_INGRESS_PORT")
   METRICS_PORT=$(ask "Metrics port" "$DEFAULT_METRICS_PORT")
   WORKER_MODE=$(ask "Worker mode (process/embedded)" "$DEFAULT_WORKER_MODE")
+  WORKER_ENGINE="${WORKER_ENGINE:-$DEFAULT_WORKER_ENGINE}"
   ADMIN_TOKEN=$(ask "Admin token (empty generates one)" "")
   if [[ -z "$ADMIN_TOKEN" ]]; then
     ADMIN_TOKEN=$(generate_token)
@@ -327,6 +378,7 @@ cmd_start() {
     AUTOMATELY_INGRESS_PORT="$INGRESS_PORT" \
     AUTOMATELY_METRICS_PORT="$METRICS_PORT" \
     AUTOMATELY_WORKER_MODE="$WORKER_MODE" \
+    AUTOMATELY_WORKER_DEFAULT_MODE="$WORKER_ENGINE" \
     nohup "$(java_bin)" -jar "$SERVER_JAR" </dev/null >"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
   disown "$!" 2>/dev/null || true
@@ -336,6 +388,7 @@ cmd_start() {
   for attempt in $(seq 1 "$START_TIMEOUT_SECONDS"); do
     if curl -fsS "${URL}/health" >/dev/null 2>&1; then
       echo "== up at ${URL} (health OK after ${attempt}s)" >&2
+      ensure_console || true
       return 0
     fi
     if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -381,6 +434,7 @@ cmd_run() {
     AUTOMATELY_INGRESS_PORT="$INGRESS_PORT" \
     AUTOMATELY_METRICS_PORT="$METRICS_PORT" \
     AUTOMATELY_WORKER_MODE="$WORKER_MODE" \
+    AUTOMATELY_WORKER_DEFAULT_MODE="$WORKER_ENGINE" \
     "$(java_bin)" -jar "$SERVER_JAR"
 }
 
@@ -417,11 +471,11 @@ redeem_token() {
   printf '%s' "$token"
 }
 
-# Provisions the default 'admin' operator: an operator invite minted with the admin token, redeemed as 'admin'.
-# Prints the operator personal token; reuses the saved one if 'admin' already exists on a re-run.
+# Provisions the default 'admin' operator: an operator invite minted with the admin token, redeemed as 'admin'
+# with a console password. Prints the operator personal token; reuses the saved one if 'admin' already exists.
 provision_admin() {
   echo "== provisioning the 'admin' operator" >&2
-  local invited code redeemed token
+  local invited code redeemed token admin_password body
   invited=$(curl -sS -m 10 -X POST "${URL}/v1/admin/invites" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -432,9 +486,12 @@ provision_admin() {
     saved_operator_token
     return 0
   fi
+  admin_password=$(ask_password "Admin password for console")
+  body=$(printf '{"code":%s,"name":"admin","tokenName":"operator","password":%s}' \
+    "$(json_escape "$code")" "$(json_escape "$admin_password")")
   redeemed=$(curl -sS -m 10 -X POST "${URL}/v1/invites/redeem" \
     -H "Content-Type: application/json" \
-    -d "{\"code\":\"${code}\",\"name\":\"admin\",\"tokenName\":\"operator\"}")
+    -d "$body")
   token=$(redeem_token "$redeemed")
   if [[ -z "$token" ]]; then
     echo "   ('admin' already exists; reusing the saved operator token)" >&2
@@ -488,9 +545,9 @@ deploy_console() {
   fi
 }
 
-cmd_seed() {
-  load_env_file
-
+# Ensures the system tenant exists and the console SPA is deployed to system/console, idempotently. Safe to call
+# after every start: it rebuilds only when needed and skips redeploying while the console already answers.
+ensure_console() {
   echo "== ensuring system tenant 'system'" >&2
   curl -sS -m 10 -X POST "${URL}/v1/tenants" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
@@ -504,18 +561,29 @@ cmd_seed() {
       (cd "$REPO_ROOT/console" && npm run build) || echo "   (console build failed; skipping the console deploy)" >&2
     fi
     if [[ -f "$REPO_ROOT/console/out/index.html" ]]; then
+      # Skip the redeploy when the console is already being served.
+      if curl -fsS -m 2 "http://localhost:${INGRESS_PORT}" 2>/dev/null | grep -q "Automately" 2>/dev/null; then
+        echo "== console already active at http://localhost:${INGRESS_PORT}" >&2
+        return 0
+      fi
       echo "== minting a token for 'system'" >&2
       local system_minted system_token
       system_minted=$(curl -sS -m 10 -X POST "${URL}/v1/tenants/system/tokens" \
         -H "Authorization: Bearer ${ADMIN_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d '{"name":"console-deploy","scopes":["*"]}')
+        -d '{"name":"console-deploy","scopes":["*"]}' || true)
       system_token=$(mint_token "$system_minted")
       if [[ -n "$system_token" ]] && deploy_console "$system_token"; then
         echo "== console app deployed to system/console: http://localhost:${INGRESS_PORT}" >&2
       fi
     fi
   fi
+}
+
+cmd_seed() {
+  load_env_file
+
+  ensure_console
 
   # The CLI's default identity is the operator personal token; it is what the console and MCP also use.
   local operator_token
@@ -709,10 +777,25 @@ MCP
 # --------------------------------------------------------------------------
 # update
 # --------------------------------------------------------------------------
+# True when a native automately CLI was built before (installed in the checkout, left in target/, or in ~/.local/bin).
+native_cli_was_built() {
+  [[ -x "$CLI_BINARY" ]] || [[ -e "$REPO_ROOT/automately-cli/target/automately" ]] || [[ -e "${HOME}/.local/bin/automately" ]]
+}
+
 cmd_update() {
   echo "== rebuilding from $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" >&2
   "$REPO_ROOT/mvnw" -q package -pl automately-server -am -DskipTests
-  "$REPO_ROOT/scripts/build-workers.sh" javet || true
+  "$REPO_ROOT/scripts/build-workers.sh" all || true
+  # Refresh the native CLI binary when it was built before, so its embedded commit tracks the checkout.
+  if native_cli_was_built; then
+    echo "== rebuilding the native automately CLI" >&2
+    "$REPO_ROOT/scripts/build-cli.sh" || echo "   (native CLI rebuild skipped)" >&2
+  fi
+  # Rebuild and redeploy the web console too, so an update is complete for the browser UI as well.
+  if [[ -f "$ENV_FILE" ]]; then
+    load_env_file
+    ensure_console || true
+  fi
   write_meta
   echo "== updated $META_FILE" >&2
   if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then

@@ -150,6 +150,9 @@ public record ServerConfig(
         Duration heartbeat = Duration.ofMillis(Long.parseLong(env.getOrDefault("AUTOMATELY_HEARTBEAT_MS", "1000")));
         // Resolved once so the /tmp default and the durable directory agree on whether this node persists.
         Path dataDirectory = dataDirectory(env);
+        // The process-mode worker engine used when a run does not name one; AUTOMATELY_WORKER_ENGINE is the legacy alias.
+        String workerDefaultMode = env.getOrDefault("AUTOMATELY_WORKER_DEFAULT_MODE",
+                env.getOrDefault("AUTOMATELY_WORKER_ENGINE", "graaljs")).trim().toLowerCase(java.util.Locale.ROOT);
         return new ServerConfig(
                 env.getOrDefault("AUTOMATELY_NODE_ID", defaultNodeId()),
                 Integer.parseInt(env.getOrDefault("AUTOMATELY_HTTP_PORT", "8080")),
@@ -219,8 +222,8 @@ public record ServerConfig(
                 Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MEMORY_MB", dataDirectory == null ? "64" : "8").trim()),
                 Long.parseLong(env.getOrDefault("AUTOMATELY_TMP_MB", "1024").trim()),
                 env.getOrDefault("AUTOMATELY_WORKER_MODE", "process").trim().toLowerCase(java.util.Locale.ROOT),
-                env.getOrDefault("AUTOMATELY_WORKER_DEFAULT_MODE", env.getOrDefault("AUTOMATELY_WORKER_ENGINE", "javet")).trim().toLowerCase(java.util.Locale.ROOT),
-                parseWorkerBinaries(env),
+                workerDefaultMode,
+                parseWorkerBinaries(env, workerDefaultMode),
                 parseSet(env.getOrDefault("AUTOMATELY_ROLES", String.join(",", ROLES))),
                 parseSet(env.getOrDefault("AUTOMATELY_CAPABILITIES", "")),
                 // The console's host binding and the networks allowed to reach it (docs/design/apps-and-console.md).
@@ -262,7 +265,7 @@ public record ServerConfig(
         return Path.of(System.getProperty("user.home"), ".automately", "data");
     }
 
-    private static Map<String, String> parseWorkerBinaries(Map<String, String> env) {
+    private static Map<String, String> parseWorkerBinaries(Map<String, String> env, String workerDefaultMode) {
         Map<String, String> binaries = new java.util.HashMap<>();
         String genericBinary = blankToNull(env.get("AUTOMATELY_WORKER_BINARY"));
         if (genericBinary != null) {
@@ -274,12 +277,24 @@ public record ServerConfig(
             String javet = automately.runner.protocol.pool.TenantWorkerPool.resolvePath("bin/worker-javet");
             if (javet != null) {
                 binaries.put("javet", javet);
-                binaries.putIfAbsent("default", javet);
             }
             String graaljs = automately.runner.protocol.pool.TenantWorkerPool.resolvePath("bin/worker-graaljs");
             if (graaljs != null) {
                 binaries.put("graaljs", graaljs);
-                binaries.putIfAbsent("default", graaljs);
+            }
+            // Select the "default" binary according to the worker default mode, falling back to whichever is present.
+            String defaultBinary = null;
+            if ("graaljs".equals(workerDefaultMode) && graaljs != null) {
+                defaultBinary = graaljs;
+            } else if ("javet".equals(workerDefaultMode) && javet != null) {
+                defaultBinary = javet;
+            } else if (graaljs != null) {
+                defaultBinary = graaljs;
+            } else if (javet != null) {
+                defaultBinary = javet;
+            }
+            if (defaultBinary != null) {
+                binaries.put("default", defaultBinary);
             }
         }
         for (Map.Entry<String, String> entry : env.entrySet()) {

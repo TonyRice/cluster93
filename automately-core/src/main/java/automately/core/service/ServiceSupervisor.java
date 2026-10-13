@@ -67,6 +67,8 @@ public final class ServiceSupervisor extends VerticleBase {
 
     @Override
     public Future<?> start() {
+        // A node that restarted must reconcile what it left behind now, not after the first interval.
+        sweep();
         timer = vertx.setPeriodic(interval.toMillis(), id -> sweep());
         return Future.succeededFuture();
     }

@@ -19,7 +19,7 @@ public final class IgniteStores {
             IgniteJobStore.TABLE, IgniteJobStateStore.TABLE, IgniteServiceStore.TABLE, IgniteDomainStore.TABLE, IgniteKvStore.TABLE,
             IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteFileStore.DIRS, IgniteFileStore.REFS, IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
             IgniteStorageConfigStore.POLICIES, IgniteStorageConfigStore.PROVIDERS, IgniteStorageConfigStore.ROUTES,
-            IgniteQueueStore.TABLE, IgniteAuditLog.TABLE),
+            IgniteQueueStore.TABLE, IgniteAuditLog.TABLE, IgniteAppStore.APPS, IgniteAppStore.APP_DEPLOYMENTS),
             java.util.stream.Stream.concat(automately.core.identity.Identity.KINDS.stream(),
                     java.util.stream.Stream.of(automately.core.audit.AuditExporter.STATE, automately.core.files.FileTree.OPS,
                     automately.core.files.FileLocks.KIND, automately.core.packages.PackageStore.VERSIONS,
@@ -38,6 +38,7 @@ public final class IgniteStores {
     /** Users, memberships, roles and groups, and invites (D-070). */
     public final automately.core.identity.Records.Factory records;
     public final automately.core.audit.AuditLog audit;
+    public final automately.core.apps.AppStore apps;
     private final Vertx vertx;
     private final IgniteCluster cluster;
 
@@ -52,6 +53,7 @@ public final class IgniteStores {
         this.queues = new IgniteQueueStore(vertx, cluster.ignite());
         this.records = kind -> new IgniteRecords(vertx, cluster.ignite(), kind);
         this.audit = new IgniteAuditLog(vertx, cluster.ignite());
+        this.apps = new IgniteAppStore(vertx, cluster.ignite());
         this.vertx = vertx;
         this.cluster = cluster;
     }

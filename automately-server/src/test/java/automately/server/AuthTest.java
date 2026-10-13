@@ -55,7 +55,7 @@ class AuthTest {
         // The contract itself is public (D-046), and so is redeeming an invite, whose code is the credential (D-070);
         // everything else under /v1 needs a token.
         List<String> routes = node.apiRoutes().stream().filter(route -> route.contains(" /v1/") && !route.endsWith("/v1/openapi.json")
-                && !route.endsWith("/v1/invites/redeem") && !route.contains("/v1/shared/")).toList();
+                && !route.endsWith("/v1/invites/redeem") && !route.endsWith("/v1/auth/login") && !route.contains("/v1/shared/")).toList();
         assertThat(routes).hasSizeGreaterThan(25);
 
         for (String route : routes) {
@@ -72,6 +72,89 @@ class AuthTest {
         }
         assertThat(await(client.get(node.httpPort(), "localhost", "/health").send()).statusCode()).isEqualTo(200);
         assertThat(await(client.get(node.httpPort(), "localhost", "/v1/openapi.json").send()).statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    void usersSignInWithAUsernameAndPassword() throws Exception {
+        createTenant("logins");
+        HttpResponse<Buffer> invited = call("POST", "/v1/tenants/logins/invites", TestAuth.ADMIN,
+                new JsonObject().put("roles", new JsonArray().add("owner")).put("user", "lena"));
+        assertThat(invited.statusCode()).as(invited.bodyAsString()).isEqualTo(201);
+
+        // Redeeming the invite with a password sets what the user signs in with (D-133).
+        HttpResponse<Buffer> redeemed = publicCall("POST", "/v1/invites/redeem",
+                new JsonObject().put("code", invited.bodyAsJsonObject().getString("code")).put("password", "s3cret-pass"));
+        assertThat(redeemed.statusCode()).as(redeemed.bodyAsString()).isEqualTo(201);
+
+        // An unknown user and a wrong password answer the same 401.
+        assertThat(publicCall("POST", "/v1/auth/login", new JsonObject().put("username", "lena").put("password", "not-it"))
+                .statusCode()).isEqualTo(401);
+        assertThat(publicCall("POST", "/v1/auth/login", new JsonObject().put("username", "nobody").put("password", "not-it"))
+                .statusCode()).isEqualTo(401);
+
+        // The right password mints a personal session token for one of the user's tenants.
+        HttpResponse<Buffer> signedIn = publicCall("POST", "/v1/auth/login",
+                new JsonObject().put("username", "lena").put("password", "s3cret-pass"));
+        assertThat(signedIn.statusCode()).as(signedIn.bodyAsString()).isEqualTo(200);
+        assertThat(signedIn.getHeader("Cache-Control")).isEqualTo("no-store");
+        JsonObject session = signedIn.bodyAsJsonObject();
+        assertThat(session.getString("token")).startsWith("atly_");
+        assertThat(session.getBoolean("admin")).isFalse();
+        assertThat(session.getString("tenant")).isEqualTo("logins");
+        assertThat(session.getJsonObject("user").getString("name")).isEqualTo("lena");
+
+        // The session token works like any other personal token.
+        String bearer = "Bearer " + session.getString("token");
+        assertThat(call("GET", "/v1/whoami", bearer, null).bodyAsJsonObject().getString("user")).isEqualTo("lena");
+        assertThat(call("GET", "/v1/jobs", bearer, null).statusCode()).isEqualTo(200);
+
+        // Naming a tenant the user isn't a member of is refused, not silently ignored.
+        assertThat(publicCall("POST", "/v1/auth/login", new JsonObject().put("username", "lena")
+                .put("password", "s3cret-pass").put("tenant", "elsewhere")).statusCode()).isEqualTo(403);
+
+        // A disabled user can no longer sign in.
+        assertThat(call("PATCH", "/v1/users/lena", TestAuth.ADMIN, new JsonObject().put("disabled", true)).statusCode()).isEqualTo(200);
+        assertThat(publicCall("POST", "/v1/auth/login", new JsonObject().put("username", "lena").put("password", "s3cret-pass"))
+                .statusCode()).isEqualTo(401);
+    }
+
+    @Test
+    void usersSetAndChangeTheirPassword() throws Exception {
+        createTenant("passwords");
+        HttpResponse<Buffer> invited = call("POST", "/v1/tenants/passwords/invites", TestAuth.ADMIN,
+                new JsonObject().put("roles", new JsonArray().add("developer")).put("user", "mara"));
+        assertThat(invited.statusCode()).as(invited.bodyAsString()).isEqualTo(201);
+
+        HttpResponse<Buffer> redeemed = publicCall("POST", "/v1/invites/redeem",
+                new JsonObject().put("code", invited.bodyAsJsonObject().getString("code")));
+        assertThat(redeemed.statusCode()).as(redeemed.bodyAsString()).isEqualTo(201);
+        String bearer = "Bearer " + redeemed.bodyAsJsonObject().getJsonObject("token").getString("token");
+
+        // No password yet: whoami says so, and a blank one is refused.
+        assertThat(call("GET", "/v1/whoami", bearer, null).bodyAsJsonObject().getBoolean("hasPassword")).isFalse();
+        assertThat(call("PUT", "/v1/me/password", bearer, new JsonObject().put("newPassword", " ")).statusCode()).isEqualTo(400);
+
+        // The first password needs no current password.
+        assertThat(call("PUT", "/v1/me/password", bearer, new JsonObject().put("newPassword", "first-pass")).statusCode())
+                .as("sets the first password").isEqualTo(200);
+        assertThat(call("GET", "/v1/whoami", bearer, null).bodyAsJsonObject().getBoolean("hasPassword")).isTrue();
+        assertThat(publicCall("POST", "/v1/auth/login", new JsonObject().put("username", "mara").put("password", "first-pass"))
+                .statusCode()).isEqualTo(200);
+
+        // Changing it needs the current password; the wrong one is refused with 401.
+        assertThat(call("PUT", "/v1/me/password", bearer, new JsonObject().put("newPassword", "second-pass")).statusCode())
+                .isEqualTo(401);
+        assertThat(call("PUT", "/v1/me/password", bearer,
+                new JsonObject().put("currentPassword", "nope").put("newPassword", "second-pass")).statusCode()).isEqualTo(401);
+
+        // The right current password changes it, and the old one no longer signs in.
+        assertThat(call("PUT", "/v1/me/password", bearer,
+                new JsonObject().put("currentPassword", "first-pass").put("newPassword", "second-pass")).statusCode())
+                .isEqualTo(200);
+        assertThat(publicCall("POST", "/v1/auth/login", new JsonObject().put("username", "mara").put("password", "first-pass"))
+                .statusCode()).isEqualTo(401);
+        assertThat(publicCall("POST", "/v1/auth/login", new JsonObject().put("username", "mara").put("password", "second-pass"))
+                .statusCode()).isEqualTo(200);
     }
 
     @Test
@@ -222,6 +305,12 @@ class AuthTest {
 
     private static HttpResponse<Buffer> call(String method, String path, String bearer, JsonObject body) throws Exception {
         var request = client.request(HttpMethod.valueOf(method), node.httpPort(), "localhost", path).putHeader("Authorization", bearer);
+        return await(body == null ? request.send() : request.sendJsonObject(body));
+    }
+
+    /** A public call: no Authorization header at all. */
+    private static HttpResponse<Buffer> publicCall(String method, String path, JsonObject body) throws Exception {
+        var request = client.request(HttpMethod.valueOf(method), node.httpPort(), "localhost", path);
         return await(body == null ? request.send() : request.sendJsonObject(body));
     }
 

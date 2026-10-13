@@ -6,10 +6,13 @@ import automately.core.auth.AuthStore;
 import automately.core.auth.Principal;
 import automately.core.auth.Scopes;
 import automately.core.auth.TokenFormat;
+import automately.core.host.crypto.Kdf;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -42,8 +45,10 @@ public final class Identity {
     public static final Records.Kind MEMBERS = new Records.Kind("MEMBERS", List.of("tenant", "user"));
     public static final Records.Kind ACCESS = new Records.Kind("TENANT_ACCESS", List.of());
     public static final Records.Kind INVITES = new Records.Kind("INVITES", List.of("tenant", "id"));
+    /** Password credentials, by user id (D-133). */
+    public static final Records.Kind CREDENTIALS = new Records.Kind("CREDENTIALS", List.of());
     /** Every collection identity keeps, for stores that create tables up front. */
-    public static final List<Records.Kind> KINDS = List.of(USERS, USER_NAMES, MEMBERS, ACCESS, INVITES);
+    public static final List<Records.Kind> KINDS = List.of(USERS, USER_NAMES, MEMBERS, ACCESS, INVITES, CREDENTIALS);
 
     public static final String USER_RULE = "lowercase letters, digits, '_' and '-', up to 39 characters, starting with a letter or digit";
     public static final String NAME_RULE = "lowercase letters, digits, '_' and '-', up to 63 characters, starting with a letter or digit";
@@ -65,6 +70,7 @@ public final class Identity {
     private final Records members;
     private final Records access;
     private final Records invites;
+    private final Records credentials;
     private final AuthStore tokens;
     private final LongSupplier clock;
     private final SecureRandom random = new SecureRandom();
@@ -79,6 +85,7 @@ public final class Identity {
         this.members = records.open(MEMBERS);
         this.access = records.open(ACCESS);
         this.invites = records.open(INVITES);
+        this.credentials = records.open(CREDENTIALS);
         this.tokens = tokens;
         this.clock = clock;
     }
@@ -107,6 +114,85 @@ public final class Identity {
                         Roles.intersect(token.scopes(), Roles.scopes(member, acc)), token.id(), user.id(), user.name(), member.owner()));
             });
         });
+    }
+
+    // ---- Passwords (D-133) ----
+
+    /** scrypt cost for stored passwords: N=16,384, r=8, p=1, a 16-byte salt and a 64-byte hash. */
+    private static final int SCRYPT_N = 16_384;
+    private static final int SCRYPT_R = 8;
+    private static final int SCRYPT_P = 1;
+    private static final int SALT_BYTES = 16;
+    private static final int HASH_BYTES = 64;
+    private static final String INVALID_LOGIN = "Invalid username or password";
+
+    /** Sets (or replaces) a user's password, storing a salt and a scrypt hash, never the password itself. */
+    public Future<Void> setPassword(String userId, String password) {
+        byte[] salt = new byte[SALT_BYTES];
+        random.nextBytes(salt);
+        byte[] hash = Kdf.scrypt(password.getBytes(StandardCharsets.UTF_8), salt, HASH_BYTES, SCRYPT_N, SCRYPT_R, SCRYPT_P,
+                Kdf.MAX_SCRYPT_MEMORY);
+        JsonObject credential = new JsonObject()
+                .put("userId", userId)
+                .put("saltHex", HexFormat.of().formatHex(salt))
+                .put("hashHex", HexFormat.of().formatHex(hash))
+                .put("updatedAt", clock.getAsLong());
+        return credentials.put(userId, credential);
+    }
+
+    /** Whether a user has password credentials configured (D-133). */
+    public Future<Boolean> hasPassword(String userId) {
+        if (userId == null) {
+            return Future.succeededFuture(false);
+        }
+        return credentials.get(userId).map(c -> c != null);
+    }
+
+    /**
+     * Sets or changes a user's password (D-133). If a password is already configured, currentPassword
+     * must match; if no password was previously set, currentPassword is not required.
+     */
+    public Future<Void> updatePassword(String userId, String currentPassword, String newPassword) {
+        if (newPassword == null || newPassword.isBlank()) {
+            return failed(invalid("A new password is required"));
+        }
+        return credentials.get(userId).compose(credential -> {
+            if (credential != null) {
+                if (currentPassword == null || currentPassword.isBlank()) {
+                    return failed(AuthFailure.unauthenticated("Current password is required"));
+                }
+                byte[] salt = HexFormat.of().parseHex(credential.getString("saltHex"));
+                byte[] expected = HexFormat.of().parseHex(credential.getString("hashHex"));
+                byte[] candidate = Kdf.scrypt(currentPassword.getBytes(StandardCharsets.UTF_8), salt, expected.length, SCRYPT_N,
+                        SCRYPT_R, SCRYPT_P, Kdf.MAX_SCRYPT_MEMORY);
+                if (!MessageDigest.isEqual(candidate, expected)) {
+                    return failed(AuthFailure.unauthenticated("Current password is incorrect"));
+                }
+            }
+            return setPassword(userId, newPassword);
+        });
+    }
+
+    /**
+     * Exchanges a username and password for the user (D-133). Answers 401, with one message for every reason, whenever
+     * the user doesn't exist, is disabled, has no password, or the password doesn't match; the comparison is constant
+     * time.
+     */
+    public Future<User> authenticate(String username, String password) {
+        return user(username).compose(user -> user == null || user.disabled() || password == null
+                ? failed(AuthFailure.unauthenticated(INVALID_LOGIN))
+                : credentials.get(user.id()).compose(credential -> {
+                    if (credential == null) {
+                        return failed(AuthFailure.unauthenticated(INVALID_LOGIN));
+                    }
+                    byte[] salt = HexFormat.of().parseHex(credential.getString("saltHex"));
+                    byte[] expected = HexFormat.of().parseHex(credential.getString("hashHex"));
+                    byte[] candidate = Kdf.scrypt(password.getBytes(StandardCharsets.UTF_8), salt, expected.length, SCRYPT_N,
+                            SCRYPT_R, SCRYPT_P, Kdf.MAX_SCRYPT_MEMORY);
+                    return MessageDigest.isEqual(candidate, expected)
+                            ? Future.succeededFuture(user)
+                            : failed(AuthFailure.unauthenticated(INVALID_LOGIN));
+                }));
     }
 
     // ---- Users ----
@@ -170,17 +256,19 @@ public final class Identity {
 
     // ---- You ----
 
-    /** A user, with each tenant they belong to and what they may do there. */
+    /** A user, with each tenant they belong to, whether they have a password, and what they may do there. */
     public Future<JsonObject> me(String id) {
         return userById(id).compose(user -> {
             if (user == null) {
                 return failed(notFound("No such user"));
             }
-            return memberships(id).compose(owned -> {
+            return hasPassword(id).compose(hasPass -> memberships(id).compose(owned -> {
                 List<Future<JsonObject>> views = owned.stream().map(m -> access(m.tenant()).map(acc -> view(m, user.name(), acc))).toList();
-                return Future.all(views).map(all -> user.toJson().put("memberships",
-                        new JsonArray(views.stream().map(Future::result).toList())));
-            });
+                return Future.all(views).map(all -> user.toJson()
+                        .put("hasPassword", hasPass)
+                        .put("memberships",
+                                new JsonArray(views.stream().map(Future::result).toList())));
+            }));
         });
     }
 
@@ -589,9 +677,11 @@ public final class Identity {
     /**
      * Redeems an invite. Without a caller, a new user is created, named by the invite or by {@code name}. With one (a
      * personal token), the invite is added to that existing user. Either way the invite is used up, and the answer
-     * carries a new personal token for the tenant: {@code {user, tenant, operator, roles, groups, token}}.
+     * carries a new personal token for the tenant: {@code {user, tenant, operator, roles, groups, token}}. A non-blank
+     * {@code password} sets the password the user signs in with (D-133).
      */
-    public Future<JsonObject> redeem(String code, Principal caller, String name, String displayName, String email, String tokenName) {
+    public Future<JsonObject> redeem(String code, Principal caller, String name, String displayName, String email, String tokenName,
+                                     String password) {
         if (code == null || !TokenFormat.looksValid(code)) {
             return failed(notFound(INVITE_GONE));
         }
@@ -619,21 +709,21 @@ public final class Identity {
                     if (existing != null) {
                         throw conflict("The user " + target + " already exists. If that's you, log in and redeem the invite with your token");
                     }
-                    return claim(hash, json, invite, null, target, displayName, email, now, tokenName);
+                    return claim(hash, json, invite, null, target, displayName, email, now, tokenName, password);
                 });
             }
             return userById(caller.user()).compose(user -> {
                 if (invite.user() != null && !invite.user().equals(user.name())) {
                     throw forbidden("This invite is for the user " + invite.user());
                 }
-                return claim(hash, json, invite, user, user.name(), null, null, now, tokenName);
+                return claim(hash, json, invite, user, user.name(), null, null, now, tokenName, password);
             });
         });
     }
 
     /** Uses up the invite and joins {@code existing} (or a new user named {@code name}) to its tenant or the operators. */
     private Future<JsonObject> claim(String hash, JsonObject stored, Invite invite, User existing, String name, String displayName, String email,
-                                     long now, String tokenName) {
+                                     long now, String tokenName, String password) {
         boolean operators = OPERATORS.equals(invite.tenant());
         if (operators && existing != null && existing.operator()) {
             return failed(conflict(name + " is already an operator"));
@@ -660,17 +750,18 @@ public final class Identity {
                             ? (member.owner() ? claimOwner(invite.tenant(), joining.id()) : Future.<Void>succeededFuture())
                             : restore(hash, stored).compose(v -> failed(conflict(name + " is already a member of " + invite.tenant()))));
                 }
-                return joined.compose(v -> {
-                    Minted minted = mint(invite.tenant(), tokenName == null || tokenName.isBlank() ? "login" : tokenName, Set.of(Scopes.ALL),
-                            null, joining.id(), joining.id());
-                    return tokens.saveToken(minted.token()).compose(x -> userById(joining.id())).map(saved -> new JsonObject()
-                            .put("user", saved.toJson())
-                            .put("tenant", operators ? null : invite.tenant())
-                            .put("operator", operators)
-                            .put("roles", new JsonArray(invite.roles()))
-                            .put("groups", new JsonArray(invite.groups()))
-                            .put("token", minted.toJson()));
-                });
+                return joined.compose(v -> (password == null || password.isBlank() ? Future.<Void>succeededFuture() : setPassword(joining.id(), password)))
+                        .compose(v -> {
+                            Minted minted = mint(invite.tenant(), tokenName == null || tokenName.isBlank() ? "login" : tokenName, Set.of(Scopes.ALL),
+                                    null, joining.id(), joining.id());
+                            return tokens.saveToken(minted.token()).compose(x -> userById(joining.id())).map(saved -> new JsonObject()
+                                    .put("user", saved.toJson())
+                                    .put("tenant", operators ? null : invite.tenant())
+                                    .put("operator", operators)
+                                    .put("roles", new JsonArray(invite.roles()))
+                                    .put("groups", new JsonArray(invite.groups()))
+                                    .put("token", minted.toJson()));
+                        });
             });
         });
     }

@@ -501,6 +501,27 @@ class CliTest {
     }
 
     @Test
+    void redeemingAnInviteSetsTheConsolePassword() {
+        assertThat(cli("--url", url, "--token", ADMIN, "tenants", "create", "pwlogin").code()).isZero();
+        Result invite = cli("--url", url, "--token", ADMIN, "invites", "create", "--tenant", "pwlogin", "--role", "owner", "--user", "nel");
+        assertThat(invite.code()).as(invite.err()).isZero();
+
+        // Redeem with a password; the new user can then sign in with it.
+        Result login = cli("login", url, "--invite", invite.out().strip(), "--password", "s3cret-pass");
+        assertThat(login.code()).as(login.err()).isZero();
+        assertThat(login.err()).contains("nel joined pwlogin");
+        assertThat(cli("whoami").out()).contains("nel in tenant pwlogin");
+
+        // The password works: changing it needs the current one; a wrong one is refused.
+        Result changed = cli("profile", "passwd", "--current-password", "s3cret-pass", "--password", "new-pass");
+        assertThat(changed.code()).as(changed.err()).isZero();
+        assertThat(changed.out()).contains("Password updated");
+        Result wrong = cli("profile", "passwd", "--current-password", "s3cret-pass", "--password", "other");
+        assertThat(wrong.code()).isNotZero();
+        assertThat(wrong.err()).contains("Current password is incorrect");
+    }
+
+    @Test
     void deployPublishesAndRunsTheVersionAsAService() throws Exception {
         loginAsNewTenant("deploy-cli");
         Path site = Files.createDirectories(home.resolve("site"));

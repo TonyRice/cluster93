@@ -20,6 +20,7 @@ import { api, ApiError } from '@/lib/api';
 import type { Health, Node, Tenant, Whoami } from '@/lib/types';
 import { cn, formatDateTime, formatRelative, toneClasses } from '@/lib/utils';
 import type { OperatorTab } from './Sidebar';
+import { UsersTab } from './UsersTab';
 
 interface OperatorViewProps {
   whoami: Whoami;
@@ -99,19 +100,19 @@ export function OperatorView({
               icon={Cpu}
               label="Worker Concurrency"
               value={totals.capacity}
-              hint="isolate execution slots"
+              hint="total execution capacity"
             />
             <StatCard
               icon={Activity}
               label="Active Executions"
               value={totals.running}
-              hint={`running workers (${utilization}%)`}
+              hint={`${utilization}% cluster utilization`}
             />
             <StatCard
               icon={Gauge}
-              label="Available Headroom"
+              label="Available Slots"
               value={totals.free}
-              hint="idle slots ready for work"
+              hint="ready for new jobs"
             />
           </div>
 
@@ -168,6 +169,8 @@ export function OperatorView({
       ) : null}
 
       {activeTab === 'tenants' ? <TenantsSection onSelectTenant={onSelectTenant} /> : null}
+
+      {activeTab === 'users' ? <UsersTab refreshKey={refreshKey} /> : null}
 
       {activeTab === 'nodes' ? (
         <section className="panel">
@@ -568,7 +571,7 @@ function StatCard({
 }: {
   icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   label: string;
-  value: number;
+  value: number | string;
   hint?: string;
 }) {
   return (

@@ -7,6 +7,7 @@ import automately.core.auth.AuthFailure;
 import automately.core.auth.AuthStore;
 import automately.core.auth.Authenticator;
 import automately.core.auth.Principal;
+import automately.core.auth.Scopes;
 import automately.core.identity.Access;
 import automately.core.identity.Identity;
 import automately.core.identity.Invite;
@@ -32,6 +33,9 @@ final class IdentityRoutes {
 
     static final int DEFAULT_PAGE = 100;
 
+    /** How long a personal session token minted by signing in lasts (D-133). */
+    static final long SESSION_DAYS = 30;
+
     private final Identity identity;
     private final AuditLog audit;
     private final AuthStore authStore;
@@ -49,11 +53,13 @@ final class IdentityRoutes {
     }
 
     void mount(Router router) {
+        router.post("/v1/auth/login").handler(this::login);
         router.post("/v1/invites/redeem").handler(this::redeem);
 
         router.get("/v1/me").handler(ctx -> respond(ctx, identity.me(principal(ctx).user()), 200));
         router.patch("/v1/me").handler(ctx -> withBody(ctx, body -> respond(ctx, identity.updateProfile(principal(ctx).user(),
                 body.getString("name"), body.getString("displayName"), body.getString("email")).map(User::toJson), 200)));
+        router.put("/v1/me/password").handler(this::updateMyPassword);
         router.get("/v1/me/tokens").handler(ctx -> respond(ctx, identity.tokensOf(principal(ctx).user())
                 .map(all -> new JsonObject().put("tokens", new JsonArray(all.stream().map(ApiToken::toViewJson).toList()))), 200));
         router.post("/v1/me/tokens").handler(this::createMyToken);
@@ -87,16 +93,23 @@ final class IdentityRoutes {
         router.get("/v1/audit").handler(ctx -> authStore.tenant(tenant(ctx)).onFailure(ctx::fail).onSuccess(found ->
                 page(ctx, (before, limit) -> audit.tenant(tenant(ctx), found == null ? Long.MAX_VALUE : found.createdAt(), before, limit))));
 
-        router.get("/v1/users").handler(ctx -> respond(ctx, identity.users().map(all -> list("users", all.stream().map(User::toJson).toList())), 200));
+        router.get("/v1/users").handler(ctx -> respond(ctx, identity.users().compose(users -> {
+            List<Future<JsonObject>> views = users.stream().map(this::userView).toList();
+            return Future.all(views).map(all -> list("users", views.stream().map(Future::result).toList()));
+        }), 200));
         router.get("/v1/users/:name").handler(ctx -> respond(ctx, identity.user(ctx.pathParam("name")).compose(user -> user == null
                 ? Future.failedFuture(new AuthFailure(404, "not_found", "No user named " + ctx.pathParam("name")))
-                : Future.succeededFuture(user.toJson())), 200));
+                : userView(user)), 200));
         router.patch("/v1/users/:name").handler(ctx -> withBody(ctx, body -> respond(ctx, identity.updateUser(ctx.pathParam("name"),
                 body.getString("name"), body.getBoolean("disabled"), body.getBoolean("operator")).map(User::toJson), 200)));
         router.delete("/v1/users/:name").handler(ctx -> respond(ctx, identity.deleteUser(ctx.pathParam("name"))
                 .map(tokens -> left(ctx.pathParam("name"), tokens)), 200));
         router.get("/v1/admin/audit/verify").handler(ctx -> respond(ctx, automately.core.audit.AuditVerifier.verify(audit, secretsKey), 200));
+        router.get("/v1/admin/invites").handler(ctx -> respond(ctx, identity.invites(Identity.OPERATORS)
+                .map(all -> list("invites", all.stream().map(Invite::toJson).toList())), 200));
         router.post("/v1/admin/invites").handler(ctx -> invite(ctx, Identity.OPERATORS));
+        router.delete("/v1/admin/invites/:id").handler(ctx -> removed(ctx, identity.deleteInvite(Identity.OPERATORS, ctx.pathParam("id")),
+                "No such invite"));
         router.get("/v1/admin/audit").handler(ctx -> page(ctx, audit::operators));
         router.get("/v1/tenants/:tenant/members").handler(ctx -> withTenant(ctx, tenant ->
                 respond(ctx, identity.members(tenant).map(all -> list("members", all)), 200)));
@@ -109,7 +122,7 @@ final class IdentityRoutes {
             String authorization = ctx.request().getHeader("Authorization");
             Future<Principal> caller = authorization == null ? Future.succeededFuture() : authenticator.authenticate(authorization);
             Future<JsonObject> redeemed = caller.compose(principal -> identity.redeem(body.getString("code"), principal, body.getString("name"),
-                    body.getString("displayName"), body.getString("email"), body.getString("tokenName")));
+                    body.getString("displayName"), body.getString("email"), body.getString("tokenName"), body.getString("password")));
             redeemed.onSuccess(result -> {
                 JsonObject token = result.getJsonObject("token");
                 // Public routes aren't audited on the way in, since nobody is known yet; this records who it became.
@@ -121,6 +134,58 @@ final class IdentityRoutes {
             });
             respond(ctx, redeemed, 201);
         });
+    }
+
+    /** Public: a user signs in with their username and password and is handed a personal session token (D-133). */
+    private void login(RoutingContext ctx) {
+        withBody(ctx, body -> {
+            ctx.response().putHeader("Cache-Control", "no-store");
+            respond(ctx, identity.authenticate(body.getString("username"), body.getString("password"))
+                    .compose(user -> session(user, body.getString("tenant"))), 200);
+        });
+    }
+
+    /**
+     * A fresh personal session token for an authenticated user, scoped to one of their tenants, or, for an operator,
+     * acting as the admin (the named tenant merely scopes the console's view).
+     */
+    private Future<JsonObject> session(User user, String requested) {
+        String wanted = requested == null || requested.isBlank() ? null : requested.trim();
+        if (user.operator()) {
+            Principal self = Principal.operator(user.id(), user.name(), null);
+            return identity.createPersonalToken(self, Identity.OPERATORS, "session", Set.of(Scopes.ALL), SESSION_DAYS)
+                    .map(minted -> sessionJson(minted, user, wanted));
+        }
+        Future<String> target = wanted != null
+                ? Future.succeededFuture(wanted)
+                : identity.me(user.id()).compose(me -> {
+                    JsonArray memberships = me.getJsonArray("memberships");
+                    return memberships == null || memberships.isEmpty()
+                            ? Future.failedFuture(AuthFailure.forbidden("You aren't a member of any tenant yet; ask an operator for an invite"))
+                            : Future.succeededFuture(memberships.getJsonObject(0).getString("tenant"));
+                });
+        return target.compose(tenant -> {
+            Principal self = new Principal(false, tenant, Set.of(Scopes.ALL), null, user.id(), user.name(), false);
+            return identity.createPersonalToken(self, tenant, "session", Set.of(Scopes.ALL), SESSION_DAYS)
+                    .map(minted -> sessionJson(minted, user, tenant));
+        });
+    }
+
+    private static JsonObject sessionJson(Identity.Minted minted, User user, String tenant) {
+        return new JsonObject().put("token", minted.secret()).put("admin", user.operator()).put("tenant", tenant)
+                .put("user", user.toJson());
+    }
+
+    /** A user sets or changes their own password (D-133): {@code currentPassword} is needed only once one is set. */
+    private void updateMyPassword(RoutingContext ctx) {
+        withBody(ctx, body -> respond(ctx, identity.updatePassword(principal(ctx).user(),
+                body.getString("currentPassword"), body.getString("newPassword"))
+                .map(v -> new JsonObject().put("status", "ok")), 200));
+    }
+
+    /** A user as the API shows them, with whether they have a password configured (D-133). */
+    private Future<JsonObject> userView(User user) {
+        return identity.hasPassword(user.id()).map(has -> user.toJson().put("hasPassword", has));
     }
 
     private void createMyToken(RoutingContext ctx) {

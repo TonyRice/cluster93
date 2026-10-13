@@ -19,49 +19,15 @@ cd "$REPO_ROOT"
 # --------------------------------------------------------------------------
 # GraalVM SDK discovery
 # --------------------------------------------------------------------------
-detect_graalvm() {
-  if [[ -n "${GRAALVM_HOME:-}" && -x "$GRAALVM_HOME/bin/native-image" ]]; then
-    return 0
-  fi
-  if [[ -n "${JAVA_HOME:-}" && -x "$JAVA_HOME/bin/native-image" ]]; then
-    GRAALVM_HOME="$JAVA_HOME"
-    return 0
-  fi
-  # SDKMAN: the pinned GraalVM this project builds with, then the active candidate,
-  # then the highest installed GraalVM candidate.
-  local pinned="${HOME}/.sdkman/candidates/java/25.4.4+1-graal"
-  if [[ -x "$pinned/bin/native-image" ]]; then
-    GRAALVM_HOME="$pinned"
-    return 0
-  fi
-  if [[ -x "${HOME}/.sdkman/candidates/java/current/bin/native-image" ]]; then
-    GRAALVM_HOME="${HOME}/.sdkman/candidates/java/current"
-    return 0
-  fi
-  if [[ -d "${HOME}/.sdkman/candidates/java" ]]; then
-    local candidate
-    candidate=$(find "${HOME}/.sdkman/candidates/java" -maxdepth 1 -name '*graal*' ! -name 'current' | sort -V | tail -1)
-    if [[ -n "$candidate" && -x "$candidate/bin/native-image" ]]; then
-      GRAALVM_HOME="$candidate"
-      return 0
-    fi
-  fi
-  if command -v native-image >/dev/null 2>&1; then
-    local ni_path
-    ni_path=$(command -v native-image)
-    GRAALVM_HOME=$(dirname "$(dirname "$(realpath "$ni_path")")")
-    return 0
-  fi
-  echo "Error: GraalVM not found. Set GRAALVM_HOME or install via SDKMAN (e.g. sdk install java 25.4.4+1-graal)." >&2
-  exit 1
-}
-
-detect_graalvm
-export GRAALVM_HOME
+# Resolve GRAALVM_HOME once (and prepend its bin/ to PATH), shared with build-workers.sh.
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/detect-graalvm.sh"
 
 echo "== building the native automately CLI with GraalVM at $GRAALVM_HOME" >&2
 env JAVA_HOME="$GRAALVM_HOME" GRAALVM_HOME="$GRAALVM_HOME" \
-  ./mvnw -q -DskipTests -DskipITs -pl automately-cli -am package -Pnative
+  ./mvnw -q -DskipTests -DskipITs -pl automately-cli -am package -Pnative \
+  -Dgit.commit="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo dev)" \
+  -Dbuild.time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 SOURCE="$REPO_ROOT/automately-cli/target/automately"
 if [[ ! -f "$SOURCE" ]]; then

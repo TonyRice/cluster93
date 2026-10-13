@@ -4,7 +4,7 @@
 **Author / Organization:** Adam & Lynn Incorporated <tony@adamnlynn.com>  
 **License:** MPL-2.0  
 **Repository:** `git@github.com:adamnlynn/automately-v2.git` (`main`)  
-**Last Updated:** 2026-10-12  
+**Last Updated:** 2026-10-13  
 
 ---
 
@@ -137,11 +137,36 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 5. Recent Key Achievements & Bug Fixes
 
+- **Dual Worker Compilation, GraalVM Helper & GraalJS Default Engine:**
+  - New `scripts/detect-graalvm.sh` resolves the GraalVM SDK once (`GRAALVM_HOME`, `JAVA_HOME`, SDKMAN `current`/`*graal*` candidates, then `PATH`); sourced by `scripts/build-workers.sh` and `scripts/build-cli.sh` instead of each carrying its own discovery logic.
+  - `scripts/local.sh` and `scripts/dev.sh` now build both native workers (`bin/worker-javet` and `bin/worker-graaljs`) via `build-workers.sh all` when either is missing (and on `local update`), so the engines can be switched back and forth seamlessly.
+  - `ServerConfig` defaults `AUTOMATELY_WORKER_DEFAULT_MODE` (and the legacy `AUTOMATELY_WORKER_ENGINE`) to `graaljs`, auto-registers both workers from `bin/`, and selects the `"default"` binary according to the default mode. `scripts/local.sh` records both worker paths in `node.meta` and honors `DEFAULT_WORKER_ENGINE`/`WORKER_ENGINE` in `local.env`.
+  - `ProcessModeDefaultTest` locks the `graaljs` default, the `"default"` binary pointing at `graaljs`, and the `javet` switch via `AUTOMATELY_WORKER_DEFAULT_MODE`.
+
+- **Member Management & Password Lifecycle (Phase 6):**
+  - **Self-Service Password Updates:** Added `PUT /v1/me/password` (`updateMyPassword`) across `openapi.yaml`, `RouteScopes.java`, and `IdentityRoutes.java`. A user sets a first password without a current one, or changes an existing one by proving it (`Kdf.scrypt` + `MessageDigest.isEqual`); wrong or missing current passwords answer `401`.
+  - **`hasPassword` Everywhere:** `/v1/whoami`, `/v1/me`, `/v1/users`, and `/v1/users/{name}` now expose `hasPassword` (and the `User`/`Whoami` OpenAPI schemas document it), so the console can offer password management.
+  - **Operator Invite Lifecycle:** Added `GET /v1/admin/invites` (`listOperatorInvites`) and `DELETE /v1/admin/invites/{id}` (`revokeOperatorInvite`) so the console can list and withdraw operator invites, complementing the existing `POST /v1/admin/invites`.
+  - **CLI Password Flow:** `automately login --invite CODE --password …` (with interactive prompt) sets a password on redemption, and `automately profile passwd` (`--password` / `--current-password`, prompting otherwise) changes it. `scripts/local.sh` `provision_admin` now prompts for (or generates) an admin console password and passes it when redeeming the operator invite.
+  - **Web Console Identity Tabs:** `LoginView` gains a "Redeem Invite" mode (code, username, password, confirm); the sidebar gains `Users & Invites` (operator) and `Members & Invites` (tenant), backed by new `UsersTab` / `MembersTab` components and `api.ts` methods (`updatePassword`, `redeemInvite`, `getMembers`, `getTenantInvites`, `createTenantInvite`, `revokeTenantInvite`, `getUsers`, `getAdminInvites`, `createAdminInvite`, `revokeAdminInvite`).
+  - **Coverage:** Added `AuthTest.usersSetAndChangeTheirPassword`, `IngressAuthIntegrationTest.ingressPasswordUpdateRoundTrips`, `CliTest.redeemingAnInviteSetsTheConsolePassword`, `LoginView` redeem tests, and `UsersTab`/`MembersTab` component tests, plus `ContractTest` coverage for the new operations.
+
+- **Pure Web Test Suite for Web Console & Ergonomic Capacity Metrics (Phase 6):**
+  - **Vitest & React Testing Library Test Harness:** Established a pure web test harness in `console/` using Vitest, React Testing Library, and jsdom with path alias resolution and in-memory DOM shims.
+  - **Component & API Client Tests:** Added 26 unit and component tests across `api.test.ts` (token lifecycle, tenant scoping, error handling, unauthorized interception), `OperatorView.test.tsx` (capacity and utilization metrics without jargon), `Header.test.tsx` (tenant context switcher), and `LoginView.test.tsx` (credentials exchange).
+  - **Intuitive Cluster Capacity Metrics:** Replaced cryptic "Available Headroom" / "idle slots ready for work" cards in `OperatorView.tsx` with clean, professional compute metrics: Compute Nodes, Worker Concurrency, Active Executions (with percentage load and progress bar), and Available Slots.
+  - **Ingress Cross-Tenant Header Forwarding:** Fixed `IngressVerticle.proxy()` to allow `X-Automately-Tenant` on public API proxy rewrites (`proxyApi`), allowing operators to scope API queries without encountering 403 Forbidden errors.
+
+- **Username & Password Authentication Architecture (D-133, Phase 6):**
+  - **Core Scrypt Password Hashing:** Extended `Identity` with `CREDENTIALS` record kind, random 16-byte cryptographic salts, and `Kdf.scrypt` hashing with constant-time `MessageDigest.isEqual` comparison.
+  - **Public Login Endpoint:** Added `POST /v1/auth/login` to `openapi.yaml`, `RouteScopes.java`, and `IdentityRoutes.java`. Validates user credentials and mints a 30-day personal session token (`atly_...`).
+  - **Web Console Dual-Mode Login:** Redesigned `LoginView.tsx` with Username & Password + optional Tenant as the primary interface, retaining an expandable "Sign in with API token" fallback for CLI and token power users.
+  - **Full Pre-commit Verification:** Passed `IdentityTest`, `AuthTest`, `ContractTest`, `./mvnw verify -pl automately-core,automately-server -am -DskipITs`, and `npm test` (26/26 passed) with 0 regressions.
+
 - **Admin Tenant Visibility, Worker Concurrency Metrics & VFS File Explorer (Phase 6):**
   - **Operator Cross-Tenant Context Routing:** Evolved `ApiVerticle` authorization to allow cluster operators and the admin token (`principal.admin() == true`) to inspect and administer any tenant's workloads (jobs, services, apps, files) by passing `X-Automately-Tenant` or `?tenant=<name>`. Replaced rigid D-044/D-070 rejection strings with helpful guidance.
   - **CLI Ergonomics & Jargon Removal:** Added an inherited `--tenant <name>` option to `automately` CLI, attaching `X-Automately-Tenant` on API requests. Purged internal decision tags (`(D-044)`, `(D-070)`, `(D-071)`, `(D-083)`, `(D-084)`, `(D-092)`, `(D-112)`) from command descriptions and user error messages.
   - **Web Console Tenant Context Switcher:** Added interactive dropdown to `Header.tsx` allowing operators to seamlessly toggle between Cluster Infrastructure and any tenant workspace (`local`, `system`, or user-created), dynamically updating the API client's target tenant context.
-  - **Intuitive Worker Concurrency Metrics:** Replaced cryptic "slots in use / available" cards in `OperatorView.tsx` with clear compute metrics: Compute Nodes, Worker Concurrency Limit, Active Executions (with percentage load and progress bar), and Available Headroom.
   - **Tenants Management & Workspace Inspection:** Removed `D044Notice` banner and added a dedicated Tenants tab and overview card to list all cluster tenants with creation dates, 1-click workspace inspection, and inline tenant creation.
   - **Hierarchical VFS File Explorer:** Upgraded `FilesTab.tsx` into a full directory tree browser with folder navigation, clickable breadcrumbs, file size/MIME badges, search filtering, and an in-browser File Content Preview Modal for reading text, JSON, code, HTML, and markdown files directly.
 
@@ -150,6 +175,34 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
   - Exposed `seed` as a top-level command in `scripts/local.sh` for on-demand re-provisioning without resetting configuration.
   - Successfully seeded the running master node: ensured `system` tenant, built and deployed Next.js web console (`console/`) to `system/console` via `automately apps deploy`, provisioned default `admin` operator (`admin: true`), and verified live serving at `http://localhost:8000` with HTTP 200 HTML and asset delivery.
   - Verified D-044 security isolation with `admin` operator personal token (`whoami.admin == true`): operator manages cluster/nodes/tenants/users while tenant data remains strictly isolated.
+
+- **Durable App Storage & Local Start Console Auto-Provisioning (Phase 6.2):**
+  - Implemented `IgniteAppStore` on Apache Ignite with durable tables `APPS` (`tenant`, `name`) and `APP_DEPLOYMENTS` (`tenant`, `app`, `deploymentId`), registered in `IgniteStores.TABLES` and wired into clustered `Automately` server startup. App registrations, deployment histories, promotion state, and rollbacks now survive full cluster stops and restarts.
+  - Comprehensive contract test suite in `IgniteAppStoreTest` covers deployment idempotency, version conflicts, promotions, rollbacks, deletions, and concurrent compare-and-set updates.
+  - Updated `scripts/local.sh` and `scripts/dev.sh` to extract idempotent `ensure_console()`: ensures `system` tenant, verifies active web console availability on the ingress port, and automatically builds/deploys the console SPA upon startup (`automately local start` / `scripts/local.sh start`).
+
+- **Single-Node Restart Job & Service Recovery (Phase 6.3):**
+  - Added in-script execution capability declarations via `ScriptConfig` (`automately.core.job.ScriptConfig`): scripts can declare `export const config = { onOrphan: 'resume' | 'retry', maxAttempts: N, timeoutMs: T };` (or direct exports `export const onOrphan = ...`). `ApiVerticle` automatically adopts script-declared policies when omitted from the request body while preserving CLI/API flag overrides, safely falling back to `fail` if neither declares a policy.
+  - Accelerated recovery on restart: `OrphanReaper` and `ServiceSupervisor` now execute an immediate `sweep()` upon startup instead of idling for their initial periodic timer interval.
+  - Implemented fast-path orphan reaping for known-dead instances: when a job's node matches this node's `nodeId` but has an older `nodeInstance`, the job is immediately reaped and re-queued without waiting for the 15–30s orphan grace period.
+  - `ServiceSupervisor` promptly resumes runs on dead node instances and provisions fresh runs carrying forward previous state.
+  - Verified with 20 unit tests in `ScriptConfigTest` and full cluster crash/restart end-to-end integration test in `SingleNodeRestartRecoveryTest`.
+
+- **Repo Path Auto-Detection & Recovery Hardening (Phase 6.4):**
+  - Enabled `automately local` commands (`automately local update`, `start`, `setup`) to reliably find the system repository from anywhere on the machine outside the git checkout: `scripts/local.sh` persists `REPO_ROOT` to `local.env` and `node.meta`, and `LocalCommand.java` resolves it in order from `AUTOMATELY_REPO`, `local.env`, `node.meta`, and CWD git walks. Verified in `LocalCommandTest`.
+  - Added automatic web console rebuild and redeployment to `automately local update` via `ensure_console`, with curl exit guarding under `set -e`.
+  - Partition safety in `OrphanReaper`: removed the `soleNode` shortcut, ensuring rolling restarts, temporary GC pauses, and network partitions in multi-node clusters always observe the full 3-heartbeat grace period.
+  - Hardened `ScriptConfig`: replaced regexes with a string- and comment-aware balanced-brace depth scanner supporting nested structures and numeric separators (`30_000`).
+  - Added end-to-end app and deployment persistence verification to `FullRestartTest`.
+
+- **CLI Versioning, Git Metadata & Update Detection (Phase 6.5):**
+  - Added `<git.commit>` and `<build.time>` build-time metadata properties in `automately-cli/pom.xml` and resource filtering into `automately-cli.properties`.
+  - Added accessor methods `Main.commit()`, `Main.builtAt()`, and `Main.shortCommit()`.
+  - Updated `VersionCommand` to support `--json`, display git commit and build timestamp, and auto-detect the local repository root (using `LocalCommand.findRepoRoot()`). When a repo is present, it inspects `HEAD` to indicate whether the CLI is up to date or has an update available (`run 'automately local update' or 'scripts/build-cli.sh' to recompile`).
+  - Updated `LocalCommand.status` to display the active CLI commit and update status alongside the cluster status.
+  - Updated `scripts/build-cli.sh` to extract the current git commit and UTC build timestamp, passing them via `-Dgit.commit` and `-Dbuild.time` during native image and jar packaging.
+  - Updated `scripts/local.sh:cmd_update` to re-run `scripts/build-cli.sh` when a native CLI binary exists, ensuring the native CLI stays in sync after repo updates.
+  - Verified with 7 unit tests in `VersionCommandTest` (version formatting, commit display, repo detection, update detection, and JSON schema).
 
 - **CLI Help Grouping & Default Operator Onboarding (Developer Ergonomics):**
   - `automately --help` no longer prints a flat ~30-command list: `Main` replaces picocli's single command-list section with five categorized sections — **Developer & Applications**, **Platform Resources**, **Identity & Access**, **Cluster & Local Node**, and **Tools & Automation** — while subcommands keep their own command lists (e.g. `automately help local`).

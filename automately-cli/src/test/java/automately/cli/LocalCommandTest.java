@@ -69,6 +69,36 @@ class LocalCommandTest {
     }
 
     @Test
+    void repoRootResolvesFromTheEnvFileWhenTheWorkingDirectoryIsElsewhere() throws Exception {
+        Path checkout = home.resolve("checkout");
+        Files.createDirectories(checkout.resolve("scripts"));
+        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        Files.writeString(home.resolve("local.env"), "REPO_ROOT=\"" + checkout + "\"\n");
+
+        assertThat(LocalCommand.repoRoot(io())).isEqualTo(checkout);
+    }
+
+    @Test
+    void repoRootResolvesFromNodeMetaWhenTheEnvFileIsMissing() throws Exception {
+        Path checkout = home.resolve("checkout");
+        Files.createDirectories(checkout.resolve("scripts"));
+        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        Files.writeString(home.resolve("node.meta"), "repo_root=" + checkout + "\n");
+
+        assertThat(LocalCommand.repoRoot(io())).isEqualTo(checkout);
+    }
+
+    @Test
+    void repoRootPrefersTheEnvironmentOverride() throws Exception {
+        Path checkout = home.resolve("checkout");
+        Files.createDirectories(checkout.resolve("scripts"));
+        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        env.put("AUTOMATELY_REPO", checkout.toString());
+
+        assertThat(LocalCommand.repoRoot(io())).isEqualTo(checkout);
+    }
+
+    @Test
     void statusSaysSoWhenNothingIsSetUp() {
         Result result = run("local", "status");
 

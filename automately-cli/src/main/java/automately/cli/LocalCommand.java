@@ -161,12 +161,16 @@ final class LocalCommand extends Base {
     }
 
     static Path repoRoot(Io io) {
-        String explicit = value(io.env().get("AUTOMATELY_REPO"));
-        if (explicit == null) {
-            explicit = value(System.getenv("AUTOMATELY_REPO"));
-        }
-        if (explicit != null) {
-            return Path.of(explicit);
+        List<String> candidates = new ArrayList<>();
+        addRepoCandidate(candidates, io.env().get("AUTOMATELY_REPO"));
+        addRepoCandidate(candidates, System.getenv("AUTOMATELY_REPO"));
+        addRepoCandidate(candidates, loadConfig(io).get("REPO_ROOT"));
+        addRepoCandidate(candidates, loadMeta(io).get("repo_root"));
+        for (String candidate : candidates) {
+            Path path = Path.of(candidate).toAbsolutePath();
+            if (Files.isDirectory(path) && Files.isRegularFile(path.resolve("scripts").resolve("local.sh"))) {
+                return path;
+            }
         }
         for (Path dir = Path.of("").toAbsolutePath(); dir != null; dir = dir.getParent()) {
             if (Files.isDirectory(dir.resolve(".git"))) {
@@ -174,6 +178,13 @@ final class LocalCommand extends Base {
             }
         }
         return null;
+    }
+
+    private static void addRepoCandidate(List<String> candidates, String candidate) {
+        String value = value(candidate);
+        if (value != null) {
+            candidates.add(value);
+        }
     }
 
     static Path findScript(Io io) {
@@ -326,6 +337,14 @@ final class LocalCommand extends Base {
             String head = gitHead(io);
             boolean update = installed != null && head != null && !installed.equals(head);
 
+            String cliCommit = Main.commit();
+            String cliBinary = meta.get("cli_binary");
+            if (cliBinary == null || cliBinary.isBlank()) {
+                Path root = repoRoot(io);
+                cliBinary = root != null ? root.resolve("bin").resolve("automately").toString() : "";
+            }
+            boolean cliUpdate = VersionCommand.updateAvailable(cliCommit, head);
+
             if (json()) {
                 ObjectNode result = Json.object()
                         .put("nodeId", nodeId)
@@ -342,6 +361,9 @@ final class LocalCommand extends Base {
                 result.put("installedCommit", installed == null ? "" : installed);
                 result.put("currentCommit", head == null ? "" : head);
                 result.put("updateAvailable", update);
+                result.put("cliCommit", cliCommit);
+                result.put("cliBinary", cliBinary);
+                result.put("cliUpdateAvailable", cliUpdate);
                 Output.json(out(), result);
                 return 0;
             }
@@ -354,13 +376,22 @@ final class LocalCommand extends Base {
             out().println("  API:            " + base);
             out().println("  Ingress:        http://localhost:" + config.getOrDefault("INGRESS_PORT", DEFAULT_INGRESS_PORT));
             out().println("  Worker mode:    " + config.getOrDefault("WORKER_MODE", DEFAULT_WORKER_MODE));
+            out().println("  CLI commit:     " + cliCommit);
+            out().println("  CLI binary:     " + cliBinary);
             out().println("  PID:            " + (pid > 0 ? pid + (running ? " (running)" : " (not running)") : "(not running)"));
             out().println("  health:         " + (health ? "ok" : "unreachable"));
             out().println("  nodes:          " + nodes);
-            if (update) {
+            if (update || cliUpdate) {
                 out().println();
-                out().println("\u26a0\ufe0f  Update Available! Running build: " + installed + ", Current repo HEAD: " + head
-                        + ". Run 'scripts/local.sh update' or 'automately local update'.");
+                if (update) {
+                    out().println("\u26a0\ufe0f  Update Available! Running build: " + installed + ", Current repo HEAD: " + head
+                            + ". Run 'scripts/local.sh update' or 'automately local update'.");
+                }
+                if (cliUpdate) {
+                    out().println("\u26a0\ufe0f  Update Available! Current CLI build: " + Main.shortCommit(cliCommit)
+                            + ", Current repo HEAD: " + Main.shortCommit(head)
+                            + ". Run 'scripts/build-cli.sh' or 'automately local update'.");
+                }
             }
             return 0;
         }

@@ -4,6 +4,7 @@ import automately.server.Automately.RunningNode;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
@@ -117,6 +118,12 @@ class FullRestartTest {
                 .putHeader("Authorization", TestAuth.bearer(TENANT)).sendBuffer(Buffer.buffer(file)));
         assertThat(uploaded.statusCode()).as(uploaded.bodyAsString()).isEqualTo(201);
 
+        HttpResponse<Buffer> deployed = post("/v1/apps/shop/deployments",
+                new JsonObject().put("deploymentId", "dpl_restart").put("manifest", new JsonObject().put("name", "shop")));
+        assertThat(deployed.statusCode()).as(deployed.bodyAsString()).isEqualTo(201);
+        assertThat(post("/v1/apps/shop/promote", new JsonObject().put("deploymentId", "dpl_restart")).statusCode())
+                .as("shop is promoted before the restart").isEqualTo(200);
+
         stopNodes();
         startNodes();
 
@@ -129,6 +136,12 @@ class FullRestartTest {
         assertThat(downloaded.statusCode()).isEqualTo(200);
         assertThat(downloaded.getHeader("ETag")).isEqualTo(uploaded.getHeader("ETag"));
         assertThat(downloaded.body().getBytes()).as("the file survived").isEqualTo(file);
+
+        JsonArray apps = get("/v1/apps").bodyAsJsonObject().getJsonArray("apps");
+        assertThat(apps).hasSize(1);
+        assertThat(apps.getJsonObject(0).getString("name")).isEqualTo("shop");
+        assertThat(get("/v1/apps/shop").bodyAsJsonObject().getString("activeDeploymentId"))
+                .as("the promoted deployment survived the full restart").isEqualTo("dpl_restart");
 
         JsonObject restarted = awaitJson("/v1/services/counter", s -> "RUNNING".equals(s.getString("status")) && s.getInteger("runs") >= 2);
         String secondRun = restarted.getString("currentJobId");

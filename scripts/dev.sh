@@ -202,9 +202,9 @@ cmd_build() {
   echo "== building the native CLI" >&2
   "$REPO_ROOT/scripts/build-cli.sh"
 
-  if [[ ! -x "$REPO_ROOT/bin/worker-javet" ]]; then
-    echo "== bin/worker-javet is missing; building it" >&2
-    "$REPO_ROOT/scripts/build-workers.sh" javet
+  if [[ ! -x "$REPO_ROOT/bin/worker-javet" || ! -x "$REPO_ROOT/bin/worker-graaljs" ]]; then
+    echo "== one or both worker binaries are missing; building them" >&2
+    "$REPO_ROOT/scripts/build-workers.sh" all
   fi
   echo "== build complete" >&2
 }
@@ -243,6 +243,7 @@ cmd_start() {
   mkdir -p "$AUTOMATELY_HOME" "$data_dir"
   echo "== starting the server (data dir: $data_dir)" >&2
   env \
+    REPO_ROOT="$REPO_ROOT" \
     JDK_JAVA_OPTIONS="$IGNITE_JVM_ARGS" \
     AUTOMATELY_NODE_ID=local-dev \
     AUTOMATELY_ROLES=api,ingress,worker,data,console \
@@ -267,6 +268,7 @@ cmd_start() {
   for attempt in $(seq 1 "$timeout"); do
     if curl -fsS "${URL}/health" >/dev/null 2>&1; then
       echo "== up at ${URL} (health OK after ${attempt}s)" >&2
+      ensure_console || true
       return 0
     fi
     if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -327,33 +329,48 @@ cmd_status() {
 # --------------------------------------------------------------------------
 # seed
 # --------------------------------------------------------------------------
-cmd_seed() {
+# Ensures the system tenant exists and the console SPA is deployed to system/console, idempotently. Safe to call
+# after every start: it rebuilds only when needed and skips redeploying while the console already answers.
+ensure_console() {
   echo "== ensuring tenant 'system'" >&2
   curl -sS -m 10 -X POST "${URL}/v1/tenants" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     -d '{"name":"system"}' >/dev/null || true
 
-  # A console-role node serves the web console at system/console; deploy it when the SPA is built and a CLI exists.
-  if [[ -f "$REPO_ROOT/console/out/index.html" ]]; then
-    local cli
-    cli=$(cli_bin)
-    if [[ -n "$cli" ]]; then
-      echo "== deploying the console to system/console" >&2
-      local system_minted system_token
-      system_minted=$(curl -sS -m 10 -X POST "${URL}/v1/tenants/system/tokens" \
-        -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-        -H "Content-Type: application/json" \
-        -d '{"name":"console-deploy","scopes":["*"]}')
-      system_token=$(mint_token "$system_minted")
-      if [[ -n "$system_token" ]]; then
-        "$cli" --url "$URL" --token "$system_token" apps deploy "$REPO_ROOT/console"
-        echo "== console app deployed to system/console: http://localhost:8000" >&2
-      fi
-    else
-      echo "   (no automately CLI on PATH; skipping the console deploy)" >&2
-    fi
+  if [[ ! -f "$REPO_ROOT/console/out/index.html" ]] && command -v npm >/dev/null 2>&1; then
+    echo "== building the console SPA (npm run build)" >&2
+    (cd "$REPO_ROOT/console" && npm run build) || echo "   (console build failed; skipping the console deploy)" >&2
   fi
+  [[ -f "$REPO_ROOT/console/out/index.html" ]] || return 0
+
+  # Skip the redeploy when the console is already being served.
+  if curl -fsS -m 2 "http://localhost:8000" 2>/dev/null | grep -q "Automately" 2>/dev/null; then
+    echo "== console already active at http://localhost:8000" >&2
+    return 0
+  fi
+
+  local cli
+  cli=$(cli_bin)
+  if [[ -z "$cli" ]]; then
+    echo "   (no automately CLI on PATH; skipping the console deploy)" >&2
+    return 0
+  fi
+  echo "== deploying the console to system/console" >&2
+  local system_minted system_token
+  system_minted=$(curl -sS -m 10 -X POST "${URL}/v1/tenants/system/tokens" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"console-deploy","scopes":["*"]}')
+  system_token=$(mint_token "$system_minted")
+  if [[ -n "$system_token" ]]; then
+    "$cli" --url "$URL" --token "$system_token" apps deploy "$REPO_ROOT/console"
+    echo "== console app deployed to system/console: http://localhost:8000" >&2
+  fi
+}
+
+cmd_seed() {
+  ensure_console
 
   # The CLI's default identity is the operator personal token; it is what the console and MCP also use.
   local operator_token token

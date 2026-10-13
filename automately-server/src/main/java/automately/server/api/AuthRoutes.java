@@ -61,11 +61,20 @@ final class AuthRoutes {
 
     private void whoami(RoutingContext ctx) {
         Principal principal = ctx.get("principal");
-        ctx.json(principal.admin()
-                ? new JsonObject().put("admin", true).put("user", principal.userName()).put("userId", principal.user()).put("token", principal.tokenId())
-                : new JsonObject().put("admin", false).put("tenant", principal.tenant()).put("token", principal.tokenId())
-                        .put("user", principal.userName()).put("userId", principal.user()).put("owner", principal.owner())
-                        .put("scopes", new JsonArray(principal.scopes().stream().sorted().toList())));
+        Future<Boolean> hasPass = principal.user() == null
+                ? Future.succeededFuture(false)
+                : identity.hasPassword(principal.user());
+        hasPass.onFailure(ctx::fail).onSuccess(hasPassword -> {
+            JsonObject json = principal.admin()
+                    ? new JsonObject().put("admin", true).put("user", principal.userName()).put("userId", principal.user()).put("token", principal.tokenId())
+                    : new JsonObject().put("admin", false).put("tenant", principal.tenant()).put("token", principal.tokenId())
+                            .put("user", principal.userName()).put("userId", principal.user()).put("owner", principal.owner())
+                            .put("scopes", new JsonArray(principal.scopes().stream().sorted().toList()));
+            if (principal.user() != null) {
+                json.put("hasPassword", hasPassword);
+            }
+            ctx.json(json);
+        });
     }
 
     private void createTenant(RoutingContext ctx) {

@@ -98,40 +98,9 @@ fi
 # --------------------------------------------------------------------------
 # GraalVM SDK discovery
 # --------------------------------------------------------------------------
-detect_graalvm() {
-  if [[ -n "${GRAALVM_HOME:-}" && -x "$GRAALVM_HOME/bin/native-image" ]]; then
-    return 0
-  fi
-  if [[ -n "${JAVA_HOME:-}" && -x "$JAVA_HOME/bin/native-image" ]]; then
-    GRAALVM_HOME="$JAVA_HOME"
-    return 0
-  fi
-  # SDKMAN: the active candidate, then the highest installed GraalVM candidate.
-  if [[ -d "${HOME}/.sdkman/candidates/java" ]]; then
-    if [[ -x "${HOME}/.sdkman/candidates/java/current/bin/native-image" ]]; then
-      GRAALVM_HOME="${HOME}/.sdkman/candidates/java/current"
-      return 0
-    fi
-    local candidate
-    candidate=$(find "${HOME}/.sdkman/candidates/java" -maxdepth 1 -name '*graal*' ! -name 'current' | sort -V | tail -1)
-    if [[ -n "$candidate" && -x "$candidate/bin/native-image" ]]; then
-      GRAALVM_HOME="$candidate"
-      return 0
-    fi
-  fi
-  # Fall back to PATH.
-  if command -v native-image >/dev/null 2>&1; then
-    local ni_path
-    ni_path=$(command -v native-image)
-    GRAALVM_HOME=$(dirname "$(dirname "$(realpath "$ni_path")")")
-    return 0
-  fi
-  echo "Error: GraalVM not found. Set GRAALVM_HOME or install via SDKMAN (e.g. sdk install java 25.4.4+1-graal)." >&2
-  exit 1
-}
-
-detect_graalvm
-export GRAALVM_HOME
+# Resolve GRAALVM_HOME once (and prepend its bin/ to PATH), shared with build-cli.sh.
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/detect-graalvm.sh"
 
 # Identify GraalVM version and edition (Oracle vs Community).
 NI_VERSION_RAW=$("$GRAALVM_HOME/bin/native-image" --version 2>&1 || true)

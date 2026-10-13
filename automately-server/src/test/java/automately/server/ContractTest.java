@@ -247,11 +247,15 @@ class ContractTest {
         JsonObject ownerInvite = calls.check("createTenantInvite", "POST", "/v1/tenants/contract/invites", admin,
                 new JsonObject().put("roles", new JsonArray().add("owner")).put("user", "casey")).bodyAsJsonObject();
         JsonObject redeemed = calls.check("redeemInvite", "POST", "/v1/invites/redeem", null,
-                new JsonObject().put("code", ownerInvite.getString("code"))).bodyAsJsonObject();
+                new JsonObject().put("code", ownerInvite.getString("code")).put("password", "casey-pass")).bodyAsJsonObject();
         String person = "Bearer " + redeemed.getJsonObject("token").getString("token");
+        calls.check("login", "POST", "/v1/auth/login", null,
+                new JsonObject().put("username", "casey").put("password", "casey-pass"));
         calls.check("listTenantMembers", "GET", "/v1/tenants/contract/members", admin, null);
         calls.check("getMe", "GET", "/v1/me", person, null);
         calls.check("updateMe", "PATCH", "/v1/me", person, new JsonObject().put("displayName", "Casey").put("name", "casey-c"));
+        calls.check("updateMyPassword", "PUT", "/v1/me/password", person,
+                new JsonObject().put("currentPassword", "casey-pass").put("newPassword", "casey-pass-2"));
         JsonObject laptop = calls.check("createMyToken", "POST", "/v1/me/tokens", person, new JsonObject().put("name", "laptop")).bodyAsJsonObject();
         calls.check("listMyTokens", "GET", "/v1/me/tokens", person, null);
         calls.check("revokeMyToken", "DELETE", "/v1/me/tokens/" + laptop.getString("id"), person, null);
@@ -273,7 +277,10 @@ class ContractTest {
         JsonObject spareInvite = calls.call("POST", "/v1/invites", person, new JsonObject().put("roles", new JsonArray().add("viewer"))).bodyAsJsonObject();
         calls.check("deleteInvite", "DELETE", "/v1/invites/" + spareInvite.getString("id"), person, null);
         calls.check("listAudit", "GET", "/v1/audit?limit=5", person, null);
-        calls.check("createOperatorInvite", "POST", "/v1/admin/invites", admin, new JsonObject().put("note", "a second operator"));
+        JsonObject operatorInvite = calls.check("createOperatorInvite", "POST", "/v1/admin/invites", admin,
+                new JsonObject().put("note", "a second operator")).bodyAsJsonObject();
+        calls.check("listOperatorInvites", "GET", "/v1/admin/invites", admin, null);
+        calls.check("revokeOperatorInvite", "DELETE", "/v1/admin/invites/" + operatorInvite.getString("id"), admin, null);
         calls.check("listOperatorAudit", "GET", "/v1/admin/audit?limit=5", admin, null);
         calls.check("verifyAudit", "GET", "/v1/admin/audit/verify", admin, null);
         calls.check("listUsers", "GET", "/v1/users", admin, null);

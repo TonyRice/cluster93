@@ -25,6 +25,9 @@ final class LoginCommand extends Base {
     @Option(names = "--name", paramLabel = "USER", description = "With --invite: the user name to take, for a new user.")
     String name;
 
+    @Option(names = "--password", paramLabel = "PASSWORD", description = "With --invite: the password for console login (prompts if omitted).")
+    String password;
+
     @Override
     int execute() throws Exception {
         Config saved = Config.load(io());
@@ -60,6 +63,14 @@ final class LoginCommand extends Base {
         ObjectNode body = Json.object().put("code", invite.trim()).put("tokenName", "cli");
         if (name != null) {
             body.put("name", name);
+        }
+        String pass = password;
+        if (pass == null && current == null && io().interactive() && System.console() != null) {
+            char[] typed = System.console().readPassword("Password (for console login): ");
+            pass = typed == null || typed.length == 0 ? null : new String(typed);
+        }
+        if (pass != null && !pass.isBlank()) {
+            body.put("password", pass);
         }
         JsonNode redeemed = new Api(new Config(base, current)).post("/v1/invites/redeem", body);
         JsonNode user = redeemed.path("user");

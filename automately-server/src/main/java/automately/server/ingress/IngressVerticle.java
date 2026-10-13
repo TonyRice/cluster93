@@ -244,7 +244,11 @@ public final class IngressVerticle extends VerticleBase {
         MultiMap headers = MultiMap.caseInsensitiveMultiMap();
         request.headers().forEach(h -> {
             String name = h.getKey().toLowerCase(Locale.ROOT);
-            if (!HOP_BY_HOP.contains(name) && !name.startsWith("x-automately-") && !name.equals("content-length") && !name.equals("expect")) {
+            // The public API rewrite forwards the tenant selector so the API can scope the request; every other
+            // x-automately-* header is the cluster's own routing state and never crosses that boundary.
+            boolean tenantSelector = !internal && name.equals("x-automately-tenant");
+            if (!HOP_BY_HOP.contains(name) && (!name.startsWith("x-automately-") || tenantSelector)
+                    && !name.equals("content-length") && !name.equals("expect")) {
                 headers.add(h.getKey(), h.getValue());
             }
         });

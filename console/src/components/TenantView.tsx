@@ -19,6 +19,7 @@ import { JobsTab } from './JobsTab';
 import { ServicesTab } from './ServicesTab';
 import { AppsTab } from './AppsTab';
 import { FilesTab } from './FilesTab';
+import { MembersTab } from './MembersTab';
 
 interface TenantViewProps {
   tenant: string;
@@ -37,6 +38,8 @@ export function TenantView({ tenant, activeTab, refreshKey }: TenantViewProps) {
       return <AppsTab refreshKey={refreshKey} />;
     case 'files':
       return <FilesTab refreshKey={refreshKey} />;
+    case 'members':
+      return <MembersTab refreshKey={refreshKey} />;
     case 'audit':
       return <AuditPlaceholder />;
     case 'overview':

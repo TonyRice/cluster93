@@ -12,13 +12,14 @@ import {
   Rocket,
   Settings,
   ShieldAlert,
+  UserPlus,
   Users,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type OperatorTab = 'overview' | 'nodes' | 'tenants' | 'storage' | 'settings';
-export type TenantTab = 'overview' | 'jobs' | 'services' | 'apps' | 'files' | 'audit';
+export type OperatorTab = 'overview' | 'nodes' | 'tenants' | 'users' | 'storage' | 'settings';
+export type TenantTab = 'overview' | 'jobs' | 'services' | 'apps' | 'files' | 'members' | 'audit';
 export type ConsoleRole = 'operator' | 'tenant';
 
 interface NavItem<T extends string> {
@@ -31,6 +32,7 @@ const OPERATOR_NAV: NavItem<OperatorTab>[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'nodes', label: 'Cluster Nodes', icon: Boxes },
   { id: 'tenants', label: 'Tenants', icon: Users },
+  { id: 'users', label: 'Users & Invites', icon: UserPlus },
   { id: 'storage', label: 'Storage & Memory', icon: Database },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
@@ -41,6 +43,7 @@ const TENANT_NAV: NavItem<TenantTab>[] = [
   { id: 'services', label: 'Services', icon: Activity },
   { id: 'apps', label: 'Apps', icon: Rocket },
   { id: 'files', label: 'Files', icon: FileText },
+  { id: 'members', label: 'Members & Invites', icon: Users },
   { id: 'audit', label: 'Audit Log', icon: ShieldAlert },
 ];
 

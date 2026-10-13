@@ -137,7 +137,7 @@ public final class Automately {
                     }).onFailure(err -> LOG.warn("Couldn't add existing files to the directory tree: {}", err.getMessage()));
                     Stores stores = new Stores(durable.jobs, durable.state, durable.services, durable.domains, durable.kv,
                             fileStore, blobs, capacity, durable.auth, durable.storage, routed, diskRootShared, durable.queues,
-                            durable.records, durable.audit, new automately.core.apps.SharedDataAppStore(vertx));
+                            durable.records, durable.audit, durable.apps);
                     return wire(config, txt, vertx, stores, cluster, security);
                 })
                 .recover(err -> {
@@ -473,7 +473,7 @@ public final class Automately {
                             runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port(),
                             new automately.core.packages.PackageLoader(packages, config.packageCacheBytes(),
                                     automately.core.metrics.Metrics.of(vertx)), tenantSecrets)))
-                    .compose(id -> vertx.deployVerticle(new OrphanReaper(instanceId, jobs, nodes, scheduler, config.heartbeat(),
+                    .compose(id -> vertx.deployVerticle(new OrphanReaper(config.nodeId(), instanceId, jobs, nodes, scheduler, config.heartbeat(),
                             config.orphanGrace(), config.requeueAfter())))
                     .compose(id -> vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler,
                             config.heartbeat(), ServiceSupervisor.Timing.DEFAULT)))

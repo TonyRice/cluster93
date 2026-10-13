@@ -1701,6 +1701,39 @@ paths:
         '204': { description: 'Deleted.' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [identity]
+      summary: Authenticate with username and password
+      description: Exchanging username and password for a personal session token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, minLength: 1, maxLength: 64 }
+                password: { type: string, minLength: 1, maxLength: 128 }
+                tenant: { type: string }
+      responses:
+        '200':
+          description: Authenticated session token and user identity.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, user, admin]
+                properties:
+                  token: { type: string }
+                  admin: { type: boolean }
+                  tenant: { type: [string, 'null'] }
+                  user: { $ref: '#/components/schemas/User' }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/invites/redeem:
     post:
       operationId: redeemInvite
@@ -1726,6 +1759,7 @@ paths:
                 displayName: { type: string, maxLength: 100 }
                 email: { type: string, maxLength: 254 }
                 tokenName: { type: string, minLength: 1, maxLength: 100 }
+                password: { type: string, minLength: 1, maxLength: 128 }
       responses:
         '201':
           description: You, the tenant, and your new token.
@@ -1787,6 +1821,38 @@ paths:
                 email: { type: [string, 'null'], maxLength: 254 }
       responses:
         '200': { $ref: '#/components/responses/User' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/me/password:
+    put:
+      operationId: updateMyPassword
+      tags: [identity]
+      summary: Set or change your password
+      description: |
+        If you already have a password, `currentPassword` must match. If you have none yet, `newPassword` alone sets
+        the first one.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newPassword]
+              properties:
+                currentPassword: { type: string, minLength: 1, maxLength: 128 }
+                newPassword: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/me/tokens:
@@ -2138,6 +2204,23 @@ paths:
         default: { $ref: '#/components/responses/Error' }
 
   /v1/admin/invites:
+    get:
+      operationId: listOperatorInvites
+      tags: [admin]
+      summary: Open operator invites
+      security:
+        - bearer: [admin]
+      responses:
+        '200':
+          description: Open operator invites, without their codes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [invites]
+                properties:
+                  invites: { type: array, items: { $ref: '#/components/schemas/Invite' } }
+        default: { $ref: '#/components/responses/Error' }
     post:
       operationId: createOperatorInvite
       tags: [admin]
@@ -2156,6 +2239,19 @@ paths:
                 note: { type: string, maxLength: 200 }
       responses:
         '201': { $ref: '#/components/responses/InviteCreated' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/admin/invites/{id}:
+    parameters:
+      - $ref: '#/components/parameters/inviteId'
+    delete:
+      operationId: revokeOperatorInvite
+      tags: [admin]
+      summary: Withdraw an operator invite
+      security:
+        - bearer: [admin]
+      responses:
+        '204': { description: 'Withdrawn.' }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/admin/audit:
@@ -2953,6 +3049,7 @@ components:
         user: { type: [string, 'null'], description: "The user's name, for a personal token (D-070)." }
         userId: { type: [string, 'null'] }
         owner: { type: boolean }
+        hasPassword: { type: boolean, description: 'Whether the signed-in user has a password configured (D-133).' }
         scopes:
           type: array
           items: { type: string }
@@ -3103,6 +3200,7 @@ components:
         operator: { type: boolean }
         disabled: { type: boolean }
         createdAt: { type: integer }
+        hasPassword: { type: boolean, description: 'Whether this user has a password configured (D-133).' }
     Member:
       type: object
       required: [tenant, user, roles, groups, scopes, owner, joinedAt]

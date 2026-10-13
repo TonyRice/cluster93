@@ -16,6 +16,9 @@
         <picocli.version>4.7.7</picocli.version>
         <jackson.version>2.21.6</jackson.version>
         <native.maven.plugin.version>0.10.6</native.maven.plugin.version>
+        <!-- The commit and build time the native binary embeds; scripts/build-cli.sh overrides both. -->
+        <git.commit>dev</git.commit>
+        <build.time></build.time>
     </properties>
 
     <dependencies>

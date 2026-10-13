@@ -47,7 +47,7 @@ final class TestIgnite {
                 IgniteDomainStore.TABLE, IgniteKvStore.TABLE, IgniteFileStore.FILES, IgniteFileStore.GARBAGE, IgniteFileStore.DIRS, IgniteFileStore.REFS,
                 IgniteAuthStore.TENANTS, IgniteAuthStore.TOKENS, IgniteAuthStore.SETTINGS,
                 IgniteStorageConfigStore.POLICIES, IgniteStorageConfigStore.PROVIDERS, IgniteStorageConfigStore.ROUTES,
-                IgniteQueueStore.TABLE)) {
+                IgniteQueueStore.TABLE, IgniteAppStore.APPS, IgniteAppStore.APP_DEPLOYMENTS)) {
             cluster.ignite().cache(table.name()).clear();
         }
         cluster.ignite().cache(IgniteAuditLog.TABLE.name()).clear();

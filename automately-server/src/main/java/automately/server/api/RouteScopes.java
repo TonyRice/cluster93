@@ -49,8 +49,10 @@ final class RouteScopes {
 
             // Identity (D-070) and the audit log (D-071).
             json("POST", "/v1/invites/redeem", "redeemInvite", Who.PUBLIC, null, SMALL),
+            json("POST", "/v1/auth/login", "login", Who.PUBLIC, null, SMALL),
             rule("GET", "/v1/me", "getMe", Who.USER, null),
             json("PATCH", "/v1/me", "updateMe", Who.USER, null, SMALL),
+            json("PUT", "/v1/me/password", "updateMyPassword", Who.USER, null, SMALL),
             rule("GET", "/v1/me/tokens", "listMyTokens", Who.USER, null),
             json("POST", "/v1/me/tokens", "createMyToken", Who.USER, null, SMALL),
             rule("DELETE", "/v1/me/tokens/" + SEG, "revokeMyToken", Who.USER, null),
@@ -72,7 +74,9 @@ final class RouteScopes {
             rule("GET", "/v1/users/" + SEG, "getUser", Who.ADMIN, null),
             json("PATCH", "/v1/users/" + SEG, "updateUser", Who.ADMIN, null, SMALL),
             rule("DELETE", "/v1/users/" + SEG, "deleteUser", Who.ADMIN, null),
+            rule("GET", "/v1/admin/invites", "listOperatorInvites", Who.ADMIN, null),
             json("POST", "/v1/admin/invites", "createOperatorInvite", Who.ADMIN, null, SMALL),
+            rule("DELETE", "/v1/admin/invites/" + SEG, "revokeOperatorInvite", Who.ADMIN, null),
             rule("GET", "/v1/admin/audit", "listOperatorAudit", Who.ADMIN, null),
             rule("GET", "/v1/admin/audit/verify", "verifyAudit", Who.ADMIN, null),
             rule("GET", "/v1/tenants/" + SEG + "/members", "listTenantMembers", Who.ADMIN, null),

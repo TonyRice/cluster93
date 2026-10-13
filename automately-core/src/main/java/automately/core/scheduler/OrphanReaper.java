@@ -29,12 +29,14 @@ import java.util.stream.Collectors;
  * only one change wins.
  *
  * <p>A job is only reaped after its node has been missing for {@code grace}, on top of the registry's
- * TTL, so a long GC pause doesn't trigger a takeover.
+ * TTL, so a long GC pause doesn't trigger a takeover. A job known to have run on an earlier incarnation of
+ * this node (a restart, so its instance id moved on) skips that wait, so a restart recovers at once.
  */
 public final class OrphanReaper extends VerticleBase {
 
     private static final Logger LOG = LoggerFactory.getLogger(OrphanReaper.class);
 
+    private final String nodeId;
     private final String instanceId;
     private final JobStore jobs;
     private final NodeRegistry nodes;
@@ -48,8 +50,13 @@ public final class OrphanReaper extends VerticleBase {
     private boolean sweeping;
     private long timer;
 
-    public OrphanReaper(String instanceId, JobStore jobs, NodeRegistry nodes, JobScheduler scheduler,
+    /**
+     * @param nodeId   this node's stable name, or null to disable the fast path that recognises jobs left
+     *                 behind by an earlier incarnation of this node (the overload without it)
+     */
+    public OrphanReaper(String nodeId, String instanceId, JobStore jobs, NodeRegistry nodes, JobScheduler scheduler,
                         Duration interval, Duration grace, Duration requeueAfter) {
+        this.nodeId = nodeId;
         this.instanceId = instanceId;
         this.jobs = jobs;
         this.nodes = nodes;
@@ -59,8 +66,16 @@ public final class OrphanReaper extends VerticleBase {
         this.requeueAfter = requeueAfter;
     }
 
+    /** Backward-compatible constructor without a node name; the same-node fast path is then disabled. */
+    public OrphanReaper(String instanceId, JobStore jobs, NodeRegistry nodes, JobScheduler scheduler,
+                        Duration interval, Duration grace, Duration requeueAfter) {
+        this(null, instanceId, jobs, nodes, scheduler, interval, grace, requeueAfter);
+    }
+
     @Override
     public Future<?> start() {
+        // A node that restarted must recover what it left behind now, not after the first interval.
+        sweep();
         timer = vertx.setPeriodic(interval.toMillis(), id -> sweep());
         return Future.succeededFuture();
     }
@@ -98,6 +113,11 @@ public final class OrphanReaper extends VerticleBase {
     /**
      * Suspects are tracked on every node, leader or not, so that a change of leader doesn't restart the
      * grace period. Only the leader acts.
+     *
+     * <p>A suspect whose node is known to have run on an earlier incarnation of this node is reaped at once,
+     * without the grace that protects a node that only looked dead (a partition or a long GC pause). That is
+     * safe because this node itself restarted and holds a newer instance id, so its previous incarnation
+     * cannot be running anything.
      */
     private Future<Void> reap(List<Job> active, List<NodeInfo> live, boolean leader) {
         long now = System.currentTimeMillis();
@@ -109,7 +129,7 @@ public final class OrphanReaper extends VerticleBase {
                 String key = job.id() + "#" + job.attempt();
                 stillSuspect.add(key);
                 long firstSeen = suspects.computeIfAbsent(key, k -> now);
-                if (leader && now - firstSeen >= grace.toMillis()) {
+                if (leader && (knownDead(job, live, liveInstances) || now - firstSeen >= grace.toMillis())) {
                     orphan(job, now);
                 }
             } else if (leader && job.status() == JobStatus.QUEUED && now - job.queuedAt() >= requeueAfter.toMillis()) {
@@ -120,6 +140,21 @@ public final class OrphanReaper extends VerticleBase {
         }
         suspects.keySet().retainAll(stillSuspect);
         return Future.succeededFuture();
+    }
+
+    /**
+     * Whether the job's node is certainly gone: it ran on an earlier incarnation of this node (a restart, so
+     * its instance id moved on). Peer nodes in a multi-node cluster always observe the full grace period: a
+     * partition or a long GC pause on a lone survivor must not trigger a premature takeover.
+     *
+     * <p>A reaper built without this node's name keeps the conservative grace path: without that name it can't
+     * tell whether a job belonged here, and the overload exists precisely to preserve the older behaviour.
+     */
+    private boolean knownDead(Job job, List<NodeInfo> live, Set<String> liveInstances) {
+        if (nodeId == null) {
+            return false;
+        }
+        return job.node() != null && job.node().equals(nodeId) && !instanceId.equals(job.nodeInstance());
     }
 
     private void orphan(Job job, long now) {
