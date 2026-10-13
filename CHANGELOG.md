@@ -6,6 +6,8 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+## [2.0.0-alpha.1] - 2026-10-13
+
 - **Rebrand: Automately → Cluster93 (`c93`)**:
   - The platform is renamed from **Automately** to **Cluster93**, with the `c93` CLI. This repository continues the pre-2018 open-source **Automately** codebase — a clustered, distributed backend platform first published in 2014 and acquired before 2018. See [DEDICATION.md](DEDICATION.md) and the [archived original](https://web.archive.org/web/20160204012506/https://github.com/Automately).
   - Mechanical rename applied repo-wide: modules `automately-*` → `cluster93-*`; Java packages `automately.*` → `cluster93.*`; Maven groupId/artifactId `automately` → `cluster93`; env prefix `AUTOMATELY_*` → `C93_*`; home/config dirs `~/.automately` → `~/.cluster93` and `~/.config/automately` → `~/.config/cluster93`; app manifest `automately.json` → `cluster93.json`; built-in imports `automately:*` → `c93:*` (`Symbol.for('automately.*')` → `Symbol.for('cluster93.*')`); CLI/binary and server jar `automately` → `c93` (`c93.jar`, `c93.pid`); wire identifiers `X-Automately-*` / `Automately-Signature` / `Server: automately` → `X-Cluster93-*` / `Cluster93-Signature` / `Server: c93`; Ignite SQL schema `AUTOMATELY` → `CLUSTER93` and data region `automately` → `cluster93`.
