@@ -20,3 +20,8 @@ console/out/
 console/next-env.d.ts
 package-lock.json
 *.tsbuildinfo
+
+# Local build output: the CLI (scripts/build-cli.sh), the native workers
+# (scripts/build-workers.sh), and release artifacts (scripts/release-local.sh).
+/bin/
+/dist/
