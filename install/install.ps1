@@ -77,7 +77,9 @@ function Install-Cluster93 {
     try {
         Write-Host "Downloading $asset from $base"
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile (Join-Path $tmp $asset)
+        # Prebuilt native binaries are Linux-only for now (see docs/guides/cli.md).
+        try { Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile (Join-Path $tmp $asset) }
+        catch { throw "Prebuilt c93 binaries are Linux-only for now. Build the CLI on Windows from source: https://github.com/$repo/blob/main/docs/guides/cli.md#build-from-source" }
         Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile (Join-Path $tmp 'SHA256SUMS')
         if ($env:C93_INSECURE_SKIP_SIGNATURE -eq '1') {
             Write-Warning "Not checking the release's signature (C93_INSECURE_SKIP_SIGNATURE=1)"

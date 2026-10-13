@@ -4,22 +4,49 @@
 
 ## Install
 
+> **Prebuilt native binaries are Linux-only for now.** On macOS and Windows, build
+> from source (below); the CLI also builds as a portable jar that runs anywhere with Java 21+.
+
 ```bash
-# Linux and macOS
+# Linux (x64 or arm64)
 curl -fsSL https://github.com/TonyRice/cluster93/releases/latest/download/install.sh | sh
-```
-```powershell
-# Windows (PowerShell)
-irm https://github.com/TonyRice/cluster93/releases/latest/download/install.ps1 | iex
 ```
 
 The installer:
-- picks the binary for your platform (Linux x64, a static build that runs on any distro including Alpine; Linux arm64; macOS Apple silicon and Intel; Windows x64)
-- **checks the release's signature** (`SHA256SUMS.sig`, made with the project's release key, which is built into the installers), then the binary's SHA-256 against the signed `SHA256SUMS`. It installs nothing unless both hold (D-069). On Linux and macOS this uses `openssl`.
-- installs to `~/.local/bin`, or `/usr/local/bin` as root, or `%LOCALAPPDATA%\Programs\cluster93` on Windows
+- picks the Linux binary for your CPU (a static x64 build that runs on any distro including Alpine, or arm64)
+- **checks the release's signature** (`SHA256SUMS.sig`, made with the project's release key, which is built into the installer), then the binary's SHA-256 against the signed `SHA256SUMS`. It installs nothing unless both hold (D-069), using `openssl`.
+- installs to `~/.local/bin`, or `/usr/local/bin` as root
 - tells you if that directory isn't on your `PATH`
 
 The binaries are GraalVM native images: about 50 MB, they start in about 10 ms, and they need no Java.
+
+### Platform support
+
+| Platform | Prebuilt binary | How |
+|---|---|---|
+| Linux x64 | ✅ native (static) | `install.sh` |
+| Linux arm64 | ✅ native | `install.sh` |
+| macOS (Apple silicon / Intel) | — | build from source, below |
+| Windows x64 | — | build from source, below |
+
+GraalVM `native-image` can't cross-compile, so macOS and Windows binaries have to be built on those platforms; they'll be published here once the release pipeline covers them.
+
+### Build from source
+
+With a JDK 21+ and Maven, on any platform:
+
+```bash
+git clone https://github.com/TonyRice/cluster93.git && cd cluster93
+./mvnw -pl cluster93-cli -am package -DskipTests
+java -jar cluster93-cli/target/cluster93-cli.jar --version   # portable; needs a JVM
+```
+
+With GraalVM on `PATH`, add `-Pnative` for a native binary for the host platform:
+
+```bash
+./mvnw -Pnative -pl cluster93-cli -am package -Dmaven.test.skip=true
+# -> cluster93-cli/target/c93   (c93.exe on Windows)
+```
 
 Options, as environment variables:
 
@@ -36,9 +63,7 @@ Options, as environment variables:
 
 To check a download by hand: `openssl dgst -sha256 -verify cluster93-release.pem -signature SHA256SUMS.sig SHA256SUMS`. The key is [`install/cluster93-release.pem`](../../install/cluster93-release.pem). Maintainers: see [releasing](releasing.md).
 
-> Releases are built by GitHub Actions when a version tag is pushed, and served from this repository's GitHub Releases (D-055). Until the repository is public, its assets need a GitHub login (`gh release download`).
-
-From source: `./mvnw -pl cluster93-cli -am package -DskipTests`, then `java -jar cluster93-cli/target/cluster93-cli.jar`. Add `-Pnative` (with GraalVM) for a native binary.
+> Releases are built when a version tag is pushed and served from this repository's GitHub Releases (D-055). When GitHub Actions is unavailable, Linux binaries can be built and published locally with `scripts/release-local.sh` (see [releasing](releasing.md)).
 
 ## Log in
 

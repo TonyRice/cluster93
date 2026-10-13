@@ -35,11 +35,12 @@ main() {
 
     os="$(uname -s)"
     arch="$(uname -m)"
+    # Prebuilt native binaries are Linux-only for now (see docs/guides/cli.md). macOS,
+    # Windows and anything else: build the CLI from source.
     case "$os" in
         Linux) os=linux ;;
-        Darwin) os=macos ;;
-        MINGW* | MSYS* | CYGWIN*) fail "On Windows, use PowerShell: irm ${base}/install.ps1 | iex" ;;
-        *) fail "No c93 build for ${os}. Builds exist for Linux, macOS and Windows." ;;
+        MINGW* | MSYS* | CYGWIN*) fail "Prebuilt c93 binaries are Linux-only for now. On Windows, build the CLI from source: https://github.com/${repo}/blob/main/docs/guides/cli.md#build-from-source" ;;
+        *) fail "Prebuilt c93 binaries are Linux-only for now (${os} isn't covered). Build the CLI from source: https://github.com/${repo}/blob/main/docs/guides/cli.md#build-from-source" ;;
     esac
     case "$arch" in
         x86_64 | amd64) arch=x64 ;;

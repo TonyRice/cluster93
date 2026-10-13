@@ -1,34 +1,28 @@
 #!/usr/bin/env bash
-# Builds and publishes a Cluster93 release from this machine — no GitHub Actions.
-# For when the account's Actions are locked, or you just want a local cut.
+# Builds a Cluster93 release locally — no GitHub Actions. Linux native only:
+# GraalVM native-image can't cross-compile, so macOS and Windows binaries are built
+# on their own platforms (see docs/guides/cli.md#build-from-source).
 #
-#   scripts/release-local.sh <version> [--keep-draft]
+#   scripts/release-local.sh <version> [--build-only | --keep-draft]
 #
 #     <version>     the exact project version, e.g. 2.0.0-alpha.1 (must equal the pom)
-#     --keep-draft  create the draft release and stop (sign later with scripts/sign-release.sh)
+#     --build-only  build the binary and assemble dist/ + SHA256SUMS; no gh, no publish
+#     --keep-draft  create a draft GitHub release and stop (sign later with sign-release.sh)
 #
-# It builds the native `c93` CLI for this machine (Linux x64, glibc), assembles the
-# release assets with SHA256SUMS, creates a draft GitHub release, and — unless
-# --keep-draft — signs and publishes it with scripts/sign-release.sh.
+# With no flag: build, create a draft release, then sign and publish it.
 #
-# LINUX ONLY: GraalVM native-image can't cross-compile, so macOS and Windows
-# binaries still need those machines (or hosted runners once Actions is unlocked).
-#
-# Needs: GraalVM (native-image) on PATH, gh (authenticated), openssl, and the
-# release signing key at ~/.config/cluster93/release-signing.key.
+# Needs GraalVM (native-image) on PATH. Publishing also needs gh (authenticated) and
+# openssl, plus the release key at ~/.config/cluster93/release-signing.key.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-version="${1:?usage: scripts/release-local.sh <version> [--keep-draft]}"
-keep_draft=""
-[ "${2:-}" = "--keep-draft" ] && keep_draft=1
+version="${1:?usage: scripts/release-local.sh <version> [--build-only|--keep-draft]}"
+mode="${2:-publish}"
 tag="v${version}"
 
 die() { printf 'release-local: %s\n' "$*" >&2; exit 1; }
-
-for t in gh openssl; do command -v "$t" >/dev/null 2>&1 || die "need $t"; done
 
 pom="$(./mvnw -q -B -ntp -N help:evaluate -Dexpression=project.version -DforceStdout | tail -1)"
 [ "$pom" = "$version" ] || die "the pom version is ${pom}, not ${version}; run scripts/version.sh set ${version} first"
@@ -47,12 +41,20 @@ printf '== smoke test\n'
 cp install/install.sh install/install.ps1 dist/
 ( cd dist && sha256sum cluster93-linux-x64 install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS )
 
+if [ "$mode" = "--build-only" ]; then
+    printf '\nBuilt dist/ (linux x64). Sign and publish with scripts/sign-release.sh %s\n' "$tag"
+    printf 'or create the draft release here: scripts/release-local.sh %s\n' "$version"
+    exit 0
+fi
+
+for t in gh openssl; do command -v "$t" >/dev/null 2>&1 || die "need $t to publish (or use --build-only)"; done
+
 flags="--title ${tag} --generate-notes"
 case "$tag" in *-*) flags="${flags} --prerelease" ;; esac
 printf '== creating draft release %s\n' "$tag"
 gh release create "$tag" dist/* --draft ${flags}
 
-if [ -n "$keep_draft" ]; then
+if [ "$mode" = "--keep-draft" ]; then
     printf 'draft created. Sign and publish with: scripts/sign-release.sh %s\n' "$tag"
 else
     scripts/sign-release.sh "$tag"

@@ -21,10 +21,13 @@ You submit code to any node. The cluster schedules it on the least-loaded worker
 
 ## Install the CLI
 
+Prebuilt native binaries are **Linux-only for now** (x64 and arm64):
+
 ```bash
-curl -fsSL https://github.com/TonyRice/cluster93/releases/latest/download/install.sh | sh     # Linux, macOS
-irm https://github.com/TonyRice/cluster93/releases/latest/download/install.ps1 | iex           # Windows
+curl -fsSL https://github.com/TonyRice/cluster93/releases/latest/download/install.sh | sh
 ```
+
+On macOS and Windows, build the CLI from source — GraalVM `native-image` can't cross-compile, so those binaries have to be built on their own platforms. See the [CLI guide](docs/guides/cli.md#build-from-source).
 
 Native binaries compile via GraalVM with zero JVM requirements on the client. See the [CLI guide](docs/guides/cli.md). To connect AI agents via MCP, see the [MCP guide](docs/guides/mcp.md).
 
