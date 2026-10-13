@@ -2,6 +2,9 @@
 
 All notable changes to Cluster93 are recorded here, with **what** changed and **why**.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Larger choices are explained in [docs/DECISIONS.md](docs/DECISIONS.md).
+Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md). Entries live under `## [Unreleased]` until a release dates them.
+
+## [Unreleased]
 
 - **Rebrand: Automately → Cluster93 (`c93`)**:
   - The platform is renamed from **Automately** to **Cluster93**, with the `c93` CLI. This repository continues the pre-2018 open-source **Automately** codebase — a clustered, distributed backend platform first published in 2014 and acquired before 2018. See [DEDICATION.md](DEDICATION.md) and the [archived original](https://web.archive.org/web/20160204012506/https://github.com/Automately).

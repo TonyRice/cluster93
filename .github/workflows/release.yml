@@ -14,7 +14,24 @@ permissions:
   contents: write
 
 jobs:
+  # A tag must match the project version, so the CLI never reports the wrong one.
+  guard:
+    name: tag matches the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag must match the project version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pom="$(./mvnw -q -B -ntp -N help:evaluate -Dexpression=project.version -DforceStdout | tail -1)"
+          echo "tag=${tag}  pom=${pom}"
+          if [ "$tag" != "$pom" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the project version ${pom}; run scripts/version.sh set ${tag}"
+            exit 1
+          fi
+
   native:
+    needs: guard
     name: ${{ matrix.asset }}
     strategy:
       fail-fast: false
@@ -81,4 +98,10 @@ jobs:
       - name: Draft the release, for scripts/sign-release.sh to sign and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --draft --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          tag="$GITHUB_REF_NAME"
+          # A pre-release (tag contains a hyphen, e.g. v2.0.0-alpha.1) is marked as
+          # such, so releases/latest never serves it.
+          flags="--draft --title $tag --generate-notes"
+          case "$tag" in *-*) flags="$flags --prerelease" ;; esac
+          gh release create "$tag" dist/* $flags

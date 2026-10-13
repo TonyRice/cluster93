@@ -16,16 +16,32 @@ This asks for a passphrase and writes:
 
 ## Each release
 
+Versions are SemVer — see [VERSIONING.md](../../VERSIONING.md). `main` carries the next
+`-SNAPSHOT`; a release is cut from a non-snapshot version whose tag matches the pom.
+
 ```bash
-git tag v2.1.0 && git push origin v2.1.0     # builds every platform and leaves a draft release
-scripts/sign-release.sh v2.1.0               # needs gh and openssl; asks for the passphrase
+scripts/version.sh set 2.0.0-alpha.1     # or 2.0.0 for a stable release
+# edit CHANGELOG.md: move [Unreleased] entries under ## [2.0.0-alpha.1] - <date>
+git commit -am "release: 2.0.0-alpha.1"
+git tag v2.0.0-alpha.1
+git push origin main v2.0.0-alpha.1      # builds every platform and leaves a draft release
+scripts/sign-release.sh v2.0.0-alpha.1   # needs gh and openssl; asks for the passphrase
+scripts/version.sh bump minor            # back to 2.1.0-SNAPSHOT on main
 ```
+
+- The release workflow **fails if the tag doesn't match `project.version`**, so the
+  CLI never reports the wrong version.
+- A tag with a hyphen (`-alpha.1`, `-beta.1`, `-rc.1`) is published as a GitHub
+  **pre-release**, so `releases/latest` never serves it; users opt in with
+  `C93_VERSION=v2.0.0-alpha.1`.
 
 `sign-release.sh` downloads the draft and checks:
 - every asset is listed in `SHA256SUMS` and matches it
 - both installers carry the release key
 
-Then it signs `SHA256SUMS`, uploads `SHA256SUMS.sig` and publishes the release. Until then the release is a draft, which `releases/latest` doesn't serve and the installers wouldn't accept.
+Then it signs `SHA256SUMS`, uploads `SHA256SUMS.sig` and publishes the release (keeping
+the pre-release flag). Until then the release is a draft, which `releases/latest`
+doesn't serve and the installers wouldn't accept.
 
 ## Checking a release by hand
 

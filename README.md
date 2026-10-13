@@ -365,6 +365,7 @@ For the master implementation roadmap, active milestones, and upcoming work, see
 - [docs/DECISIONS.md](docs/DECISIONS.md): Architectural decision records (ADRs D-001 through D-132)
 - [docs/api/endpoints.md](docs/api/endpoints.md): Complete OpenAPI endpoint and scope reference
 - [SECURITY.md](SECURITY.md): Threat model, trust boundaries, and security policies
+- [VERSIONING.md](VERSIONING.md): SemVer scheme, pre-release channels, and the version line
 - [docs/benchmarks.md](docs/benchmarks.md): Performance benchmarks and reproduction instructions
 - [docs/guides/cli.md](docs/guides/cli.md): CLI installation and usage guide
 - [docs/guides/mcp.md](docs/guides/mcp.md): Connecting AI agents via Model Context Protocol

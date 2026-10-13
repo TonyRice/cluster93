@@ -55,6 +55,9 @@ openssl dgst -sha256 -sign "$key" -out SHA256SUMS.sig SHA256SUMS
 openssl dgst -sha256 -verify "$pem" -signature SHA256SUMS.sig SHA256SUMS >/dev/null
 
 gh release upload "$tag" SHA256SUMS.sig -R "$repo"
-gh release edit "$tag" -R "$repo" --draft=false
+# Keep pre-releases (a tag with a hyphen, e.g. v2.0.0-alpha.1) marked as such, so
+# releases/latest never serves them.
+case "$tag" in *-*) pre="--prerelease" ;; *) pre="" ;; esac
+gh release edit "$tag" -R "$repo" --draft=false $pre
 echo "Signed and published ${tag}"
 cat SHA256SUMS
