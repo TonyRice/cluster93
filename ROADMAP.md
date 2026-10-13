@@ -137,6 +137,14 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 5. Recent Key Achievements & Bug Fixes
 
+- **Rebrand: Automately → Cluster93 (`c93`):**
+  - Repo-wide mechanical rename (711 path renames, 712 files rewritten, 0 residue) driven by `tools/refactor-rename.sh` from a reviewable map (`tools/rename-map.tsv`) and allowlist (`tools/rename-keep.txt`); historical/lineage text preserved.
+  - Modules `automately-*` → `cluster93-*`; packages `automately.*` → `cluster93.*`; Maven groupId/artifactId `cluster93`; env `AUTOMATELY_*` → `C93_*`; home `~/.automately` → `~/.cluster93`; config `~/.config/automately` → `~/.config/cluster93`; app manifest `cluster93.json`; built-in imports `c93:*`; CLI/server jar `c93` (`c93.jar`, `c93.pid`); wire IDs `X-Cluster93-*` / `Cluster93-Signature` / `Server: c93`; Ignite SQL schema `CLUSTER93` and data region `cluster93`.
+  - Added `DEDICATION.md` and a README `## Heritage` memorial (lineage: first published 2014, acquired before 2018; archived original at `web.archive.org/.../github.com/Automately`).
+  - Migration tooling: `scripts/migrate-home.sh` (local user state) and `tools/migrate-tool-state.sh` (agent/IDE memory, opt-in; `--move-directory` for a later tree move).
+  - ⚠️ **Breaking:** the Ignite SQL schema and data region changed (durable data written by a pre-rename build is not read); built-in module imports are now `c93:` (`import { kv } from 'c93:kv'`).
+  - Open follow-up: the token prefix `TokenFormat.PREFIX` is still `atly_` (a brand remnant not matched by the rename) — left unchanged because altering it invalidates existing tokens.
+
 - **Dual Worker Compilation, GraalVM Helper & GraalJS Default Engine:**
   - New `scripts/detect-graalvm.sh` resolves the GraalVM SDK once (`GRAALVM_HOME`, `JAVA_HOME`, SDKMAN `current`/`*graal*` candidates, then `PATH`); sourced by `scripts/build-workers.sh` and `scripts/build-cli.sh` instead of each carrying its own discovery logic.
   - `scripts/local.sh` and `scripts/dev.sh` now build both native workers (`bin/worker-javet` and `bin/worker-graaljs`) via `build-workers.sh all` when either is missing (and on `local update`), so the engines can be switched back and forth seamlessly.
