@@ -28,7 +28,9 @@ pom="$(./mvnw -q -B -ntp -N help:evaluate -Dexpression=project.version -DforceSt
 [ "$pom" = "$version" ] || die "the pom version is ${pom}, not ${version}; run scripts/version.sh set ${version} first"
 
 printf '== building the native c93 CLI (linux x64, glibc)\n'
-./mvnw -q -B -ntp -Pnative -pl cluster93-cli -am package -Dmaven.test.skip=true \
+# -DskipTests (not -Dmaven.test.skip=true): the reactor's other modules need
+# cluster93-core's tests jar, which is only produced when tests are compiled.
+./mvnw -q -B -ntp -Pnative -pl cluster93-cli -am package -DskipTests \
     "-Dnative.extra.args=-march=compatibility"
 
 src="cluster93-cli/target/c93"

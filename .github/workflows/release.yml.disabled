@@ -57,7 +57,7 @@ jobs:
           native-image-musl: ${{ matrix.musl }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build the native binary
-        run: ./mvnw -B -ntp -Pnative -pl cluster93-cli -am package -Dmaven.test.skip=true "-Dnative.extra.args=${{ matrix.extra }}"
+        run: ./mvnw -B -ntp -Pnative -pl cluster93-cli -am package -DskipTests "-Dnative.extra.args=${{ matrix.extra }}"
       - name: Name it for the release
         run: |
           if [ -f cluster93-cli/target/c93.exe ]; then src=cluster93-cli/target/c93.exe; else src=cluster93-cli/target/c93; fi
