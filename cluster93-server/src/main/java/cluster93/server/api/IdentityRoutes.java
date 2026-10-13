@@ -54,6 +54,8 @@ final class IdentityRoutes {
 
     void mount(Router router) {
         router.post("/v1/auth/login").handler(this::login);
+        router.get("/v1/auth/setup-status").handler(this::setupStatus);
+        router.post("/v1/auth/setup").handler(this::setupAdmin);
         router.post("/v1/invites/redeem").handler(this::redeem);
 
         router.get("/v1/me").handler(ctx -> respond(ctx, identity.me(principal(ctx).user()), 200));
@@ -142,6 +144,20 @@ final class IdentityRoutes {
             ctx.response().putHeader("Cache-Control", "no-store");
             respond(ctx, identity.authenticate(body.getString("username"), body.getString("password"))
                     .compose(user -> session(user, body.getString("tenant"))), 200);
+        });
+    }
+
+    /** Public: whether the cluster has no operator account yet, so the console offers initial setup (D-070). */
+    private void setupStatus(RoutingContext ctx) {
+        respond(ctx, identity.needsSetup().map(needs -> new JsonObject().put("needsSetup", needs)), 200);
+    }
+
+    /** Public: creates the cluster's first operator account and signs them in; refused once one exists (D-070, D-133). */
+    private void setupAdmin(RoutingContext ctx) {
+        withBody(ctx, body -> {
+            ctx.response().putHeader("Cache-Control", "no-store");
+            respond(ctx, identity.initialSetup(body.getString("username"), body.getString("displayName"),
+                    body.getString("email"), body.getString("password")), 201);
         });
     }
 

@@ -1701,6 +1701,60 @@ paths:
         '204': { description: 'Deleted.' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/auth/setup-status:
+    get:
+      operationId: getSetupStatus
+      tags: [identity]
+      summary: Whether the cluster still needs its first operator
+      description: |
+        Public: `true` while no operator account exists, so the console offers initial setup (D-070).
+      security: []
+      responses:
+        '200':
+          description: Whether first-run setup is still needed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [needsSetup]
+                properties:
+                  needsSetup: { type: boolean }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/setup:
+    post:
+      operationId: initialSetup
+      tags: [identity]
+      summary: Create the first operator account
+      description: |
+        Public, and only while no operator account exists: creates an operator user with the given password and signs
+        them straight in with a personal operator session token, shown once. Answers 409 once an operator exists.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { $ref: '#/components/schemas/UserName' }
+                password: { type: string, minLength: 1, maxLength: 128 }
+                displayName: { type: string, maxLength: 100 }
+                email: { type: string, maxLength: 254 }
+      responses:
+        '201':
+          description: The new operator and their session token, shown once.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, token]
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  token: { type: string, pattern: '^c93_[0-9A-Za-z]{49}$' }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/auth/login:
     post:
       operationId: login

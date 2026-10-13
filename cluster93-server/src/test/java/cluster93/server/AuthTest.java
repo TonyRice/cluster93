@@ -55,7 +55,8 @@ class AuthTest {
         // The contract itself is public (D-046), and so is redeeming an invite, whose code is the credential (D-070);
         // everything else under /v1 needs a token.
         List<String> routes = node.apiRoutes().stream().filter(route -> route.contains(" /v1/") && !route.endsWith("/v1/openapi.json")
-                && !route.endsWith("/v1/invites/redeem") && !route.endsWith("/v1/auth/login") && !route.contains("/v1/shared/")).toList();
+                && !route.endsWith("/v1/invites/redeem") && !route.endsWith("/v1/auth/login") && !route.endsWith("/v1/auth/setup-status")
+                && !route.endsWith("/v1/auth/setup") && !route.contains("/v1/shared/")).toList();
         assertThat(routes).hasSizeGreaterThan(25);
 
         for (String route : routes) {
@@ -155,6 +156,41 @@ class AuthTest {
                 .statusCode()).isEqualTo(401);
         assertThat(publicCall("POST", "/v1/auth/login", new JsonObject().put("username", "mara").put("password", "second-pass"))
                 .statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    void firstRunSetupCreatesTheFirstOperatorAndSignsThemIn() throws Exception {
+        // With no operator account yet, the cluster offers initial setup (D-070).
+        HttpResponse<Buffer> status = publicCall("GET", "/v1/auth/setup-status", null);
+        assertThat(status.statusCode()).as(status.bodyAsString()).isEqualTo(200);
+        assertThat(status.bodyAsJsonObject().getBoolean("needsSetup")).isTrue();
+
+        // A bad username is refused before any account is made.
+        assertThat(publicCall("POST", "/v1/auth/setup",
+                new JsonObject().put("username", "Not Valid").put("password", "s3cret")).statusCode()).isEqualTo(400);
+
+        // The first setup creates the operator, stores their password and mints an operator session token.
+        HttpResponse<Buffer> created = publicCall("POST", "/v1/auth/setup",
+                new JsonObject().put("username", "admin").put("password", "s3cret-pass").put("displayName", "Admin"));
+        assertThat(created.statusCode()).as(created.bodyAsString()).isEqualTo(201);
+        JsonObject body = created.bodyAsJsonObject();
+        assertThat(body.getString("token")).startsWith("c93_");
+        assertThat(body.getJsonObject("user").getBoolean("operator")).isTrue();
+        assertThat(body.getJsonObject("user").getString("name")).isEqualTo("admin");
+
+        // The minted token acts as the admin does.
+        String operator = "Bearer " + body.getString("token");
+        assertThat(call("GET", "/v1/whoami", operator, null).bodyAsJsonObject().getBoolean("admin")).isTrue();
+        assertThat(call("GET", "/v1/users", operator, null).statusCode()).isEqualTo(200);
+
+        // The operator can sign in with the password setup stored; setup is then neither needed nor allowed.
+        HttpResponse<Buffer> signedIn = publicCall("POST", "/v1/auth/login",
+                new JsonObject().put("username", "admin").put("password", "s3cret-pass"));
+        assertThat(signedIn.statusCode()).as(signedIn.bodyAsString()).isEqualTo(200);
+        assertThat(signedIn.bodyAsJsonObject().getBoolean("admin")).isTrue();
+        assertThat(publicCall("GET", "/v1/auth/setup-status", null).bodyAsJsonObject().getBoolean("needsSetup")).isFalse();
+        assertThat(publicCall("POST", "/v1/auth/setup",
+                new JsonObject().put("username", "second").put("password", "s3cret")).statusCode()).isEqualTo(409);
     }
 
     @Test

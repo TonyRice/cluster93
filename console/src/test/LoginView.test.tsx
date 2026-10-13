@@ -18,12 +18,16 @@ vi.mock('@/lib/api', () => {
     api: {
       login: vi.fn(),
       redeemInvite: vi.fn(),
+      getSetupStatus: vi.fn(),
+      setupAdmin: vi.fn(),
     },
   };
 });
 
 const login = api.login as unknown as Mock;
 const redeemInvite = api.redeemInvite as unknown as Mock;
+const getSetupStatus = api.getSetupStatus as unknown as Mock;
+const setupAdmin = api.setupAdmin as unknown as Mock;
 
 const SESSION = {
   token: 'c93_session',
@@ -36,6 +40,10 @@ describe('LoginView', () => {
   beforeEach(() => {
     login.mockReset();
     redeemInvite.mockReset();
+    getSetupStatus.mockReset();
+    setupAdmin.mockReset();
+    // By default the cluster already has an operator, so the card stays a login.
+    getSetupStatus.mockResolvedValue({ needsSetup: false });
   });
 
   it('shows the username and password fields by default', () => {
@@ -151,5 +159,47 @@ describe('LoginView', () => {
       expect(redeemInvite).toHaveBeenCalledWith({ code: 'inv_code', name: 'ada', password: 's3cret' }),
     );
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('c93_session'));
+  });
+
+  it('offers initial setup when the cluster has no operator account', async () => {
+    getSetupStatus.mockResolvedValue({ needsSetup: true });
+
+    render(<LoginView onSubmit={vi.fn()} />);
+
+    expect(await screen.findByRole('heading', { name: 'Initial Setup' })).toBeInTheDocument();
+    expect(screen.getByText(/create your administrator account/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Username')).toHaveValue('admin');
+    expect(screen.getByLabelText('Confirm Password')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create Administrator Account' })).toBeInTheDocument();
+  });
+
+  it('creates the administrator account and hands the token to onSubmit', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    getSetupStatus.mockResolvedValue({ needsSetup: true });
+    setupAdmin.mockResolvedValue({ token: 'c93_admin', user: SESSION.user });
+
+    render(<LoginView onSubmit={onSubmit} />);
+    await screen.findByLabelText('Confirm Password');
+    await user.type(screen.getByLabelText('Password'), 's3cret');
+    await user.type(screen.getByLabelText('Confirm Password'), 's3cret');
+    await user.click(screen.getByRole('button', { name: 'Create Administrator Account' }));
+
+    await waitFor(() => expect(setupAdmin).toHaveBeenCalledWith({ username: 'admin', password: 's3cret' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('c93_admin'));
+  });
+
+  it('rejects mismatched passwords on the setup form', async () => {
+    const user = userEvent.setup();
+    getSetupStatus.mockResolvedValue({ needsSetup: true });
+
+    render(<LoginView onSubmit={vi.fn()} />);
+    await screen.findByLabelText('Confirm Password');
+    await user.type(screen.getByLabelText('Password'), 's3cret');
+    await user.type(screen.getByLabelText('Confirm Password'), 'different');
+    await user.click(screen.getByRole('button', { name: 'Create Administrator Account' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Passwords do not match');
+    expect(setupAdmin).not.toHaveBeenCalled();
   });
 });

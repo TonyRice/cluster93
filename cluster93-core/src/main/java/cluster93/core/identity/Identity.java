@@ -195,6 +195,43 @@ public final class Identity {
                 }));
     }
 
+    // ---- First-run setup ----
+
+    /** Whether the cluster has no operator account yet: the console offers initial setup until one exists. */
+    public Future<Boolean> needsSetup() {
+        return users().map(all -> all.stream().noneMatch(User::operator));
+    }
+
+    /**
+     * Creates the cluster's first operator account, the first-run setup the console offers while {@link #needsSetup()}
+     * holds. Sets their password (D-133) and mints an operator session token, shown once. Fails 409 once an operator
+     * exists. Completes with {@code {user, token}}.
+     */
+    public Future<JsonObject> initialSetup(String name, String displayName, String email, String password) {
+        try {
+            checkUserName(name);
+            checkProfile(displayName, email);
+            if (password == null || password.isEmpty()) {
+                throw invalid("\"password\" is required");
+            }
+        } catch (AuthFailure e) {
+            return Future.failedFuture(e);
+        }
+        return needsSetup().compose(needed -> {
+            if (!needed) {
+                return failed(conflict("The cluster already has an operator account"));
+            }
+            return createUser(name, displayName, email, clock.getAsLong())
+                    .compose(user -> users.update(user.id(), json -> Optional.of(User.fromJson(json).withOperator(true).toJson()))
+                            .map(updated -> User.fromJson(updated.orElseThrow())))
+                    .compose(operator -> setPassword(operator.id(), password).compose(v -> {
+                        Minted minted = mint(OPERATORS, "session", Set.of(Scopes.ALL), null, operator.id(), operator.id());
+                        return tokens.saveToken(minted.token())
+                                .map(saved -> new JsonObject().put("user", operator.toJson()).put("token", minted.secret()));
+                    }));
+        });
+    }
+
     // ---- Users ----
 
     /** By name; null if there's none. */

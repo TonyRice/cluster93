@@ -97,6 +97,9 @@ class ContractTest {
         calls.check("getHealth", "GET", "/health", null, null);
         calls.check("getReady", "GET", "/ready", null, null);
         calls.check("getOpenApi", "GET", "/v1/openapi.json", null, null);
+        calls.check("getSetupStatus", "GET", "/v1/auth/setup-status", null, null);
+        calls.check("initialSetup", "POST", "/v1/auth/setup", null,
+                new JsonObject().put("username", "bootstrap-admin").put("password", "bootstrap-pass"));
         calls.check("listNodes", "GET", "/v1/nodes", admin, null);
         calls.check("createTenant", "POST", "/v1/tenants", admin, new JsonObject().put("name", "contract"));
         calls.check("listTenants", "GET", "/v1/tenants", admin, null);
@@ -287,6 +290,7 @@ class ContractTest {
         calls.check("getUser", "GET", "/v1/users/sam", admin, null);
         calls.check("updateUser", "PATCH", "/v1/users/sam", admin, new JsonObject().put("disabled", true));
         calls.check("deleteUser", "DELETE", "/v1/users/sam", admin, null);
+        calls.call("DELETE", "/v1/users/bootstrap-admin", admin, null);
 
         calls.check("deleteTenant", "DELETE", "/v1/tenants/contract", admin, null);
 

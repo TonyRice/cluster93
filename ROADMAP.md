@@ -215,6 +215,13 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
   - Updated `scripts/local.sh:cmd_update` to re-run `scripts/build-cli.sh` when a native CLI binary exists, ensuring the native CLI stays in sync after repo updates.
   - Verified with 7 unit tests in `VersionCommandTest` (version formatting, commit display, repo detection, update detection, and JSON schema).
 
+- **First-Run Web Console Administrator Setup Wizard (Phase 6.6):**
+  - Added public setup status probe `GET /v1/auth/setup-status` and administrator account creation endpoint `POST /v1/auth/setup`.
+  - Core identity lifecycle in `Identity`: `needsSetup()` returns true while no operator account exists in the cluster; `initialSetup(name, displayName, email, password)` provisions the operator, hashes password using Scrypt, mints a full-permission operator session token (`c93_...`), and fails closed with HTTP 409 Conflict once an operator exists.
+  - Web Console dynamic first-run onboarding in `LoginView.tsx`: probes setup status on load; if uninitialized, automatically renders the "Initial Setup" administrator creation form, prompting for password confirmation and seamlessly logging into the dashboard on submission.
+  - Documented OpenAPI operations in `openapi.yaml` and registered public routes in `RouteScopes.java`.
+  - Verified with `AuthTest` (11/11), `ContractTest` (100% operation coverage), and Vitest component suite in `LoginView.test.tsx` (36/36 passed).
+
 - **CLI Help Grouping & Default Operator Onboarding (Developer Ergonomics):**
   - `c93 --help` no longer prints a flat ~30-command list: `Main` replaces picocli's single command-list section with five categorized sections — **Developer & Applications**, **Platform Resources**, **Identity & Access**, **Cluster & Local Node**, and **Tools & Automation** — while subcommands keep their own command lists (e.g. `c93 help local`).
   - New `MainHelpTest` locks the category headings, the command-to-category mapping, and that only the top-level list is categorized (no `Commands:` heading at the top, but subcommands still show theirs).

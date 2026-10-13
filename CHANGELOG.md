@@ -6,6 +6,11 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **Initial Admin Setup Wizard**:
+  - New public `GET /v1/auth/setup-status` reports `needsSetup` while the cluster has no operator account, and `POST /v1/auth/setup` creates the first operator user (validating the username and requiring a password), stores an scrypt password (D-133), and answers `201` with the new user and a freshly minted operator session token; a second call is refused `409` once an operator exists (`Identity.needsSetup`/`Identity.initialSetup`, `IdentityRoutes`, `RouteScopes`, `openapi.yaml`).
+  - The console's sign-in card (`LoginView`) probes setup status on load and, when needed, presents an **Initial Setup** screen — username defaulting to `admin`, password and confirmation — that creates the administrator and signs in immediately (`api.getSetupStatus`/`api.setupAdmin`).
+  - **Why:** a fresh cluster had no way to create its first operator from the web console; the admin token was the only path in.
+
 ## [2.0.0-alpha.1] - 2026-10-13
 
 - **Rebrand: Automately → Cluster93 (`c93`)**:

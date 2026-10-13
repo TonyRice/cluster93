@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { KeyRound, Loader2, Lock, ShieldCheck, Terminal, UserPlus } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -15,14 +15,16 @@ interface LoginViewProps {
   online?: boolean;
 }
 
-type Mode = 'password' | 'redeem' | 'token';
+type Mode = 'password' | 'redeem' | 'token' | 'setup';
 
 /**
  * Sign-in card. By default it exchanges a username and password for a personal
  * session token (`POST /v1/auth/login`, D-133). A second mode redeems an invite
  * code to create a new account; an expandable option lets CLI / service-token
- * power users paste a bearer token directly. Passkeys and OIDC arrive in a
- * later phase. See `ideas/console.md` §2.
+ * power users paste a bearer token directly. When the cluster has no operator
+ * account yet, it offers first-run setup instead (`GET /v1/auth/setup-status`,
+ * `POST /v1/auth/setup`). Passkeys and OIDC arrive in a later phase. See
+ * `ideas/console.md` §2.
  */
 export function LoginView({ onSubmit, error, loading = false, node, online }: LoginViewProps) {
   const [mode, setMode] = useState<Mode>('password');
@@ -34,6 +36,26 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
   const [confirmPassword, setConfirmPassword] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // First-run onboarding (D-070): when the cluster has no operator account yet,
+  // take over the card with initial setup instead of a login that can't succeed.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getSetupStatus()
+      .then((status) => {
+        if (!cancelled && status?.needsSetup) {
+          setUsername((current) => current || 'admin');
+          setMode('setup');
+        }
+      })
+      .catch(() => {
+        /* best-effort probe: fall back to the normal sign-in card */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const busy = loading || submitting;
   const shownError = error ?? localError;
@@ -62,6 +84,25 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
       try {
         const redeemed = await api.redeemInvite({ code, name, password });
         await onSubmit(redeemed.token);
+      } catch (cause) {
+        setLocalError(cause instanceof ApiError ? cause.message : 'Could not reach the cluster.');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    if (mode === 'setup') {
+      const name = username.trim();
+      if (!name || password.length === 0) return;
+      if (password !== confirmPassword) {
+        setLocalError('Passwords do not match.');
+        return;
+      }
+      setSubmitting(true);
+      try {
+        const created = await api.setupAdmin({ username: name, password });
+        await onSubmit(created.token);
       } catch (cause) {
         setLocalError(cause instanceof ApiError ? cause.message : 'Could not reach the cluster.');
       } finally {
@@ -101,14 +142,18 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
           username.trim().length > 0 &&
           password.length > 0 &&
           confirmPassword.length > 0
-        : username.trim().length > 0 && password.length > 0;
+        : mode === 'setup'
+          ? username.trim().length > 0 && password.length > 0 && confirmPassword.length > 0
+          : username.trim().length > 0 && password.length > 0;
 
   const subtitle =
-    mode === 'password'
-      ? 'Sign in with your username and password.'
-      : mode === 'redeem'
-        ? 'Redeem an invite code to create your account.'
-        : 'Sign in with a Cluster93 bearer token.';
+    mode === 'setup'
+      ? 'Welcome to Cluster93. Create your administrator account to get started.'
+      : mode === 'password'
+        ? 'Sign in with your username and password.'
+        : mode === 'redeem'
+          ? 'Redeem an invite code to create your account.'
+          : 'Sign in with a Cluster93 bearer token.';
 
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
@@ -118,13 +163,67 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
             <ShieldCheck className="h-6 w-6" aria-hidden />
           </div>
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Cluster93 Console</h1>
+            <h1 className="text-xl font-semibold tracking-tight">
+              {mode === 'setup' ? 'Initial Setup' : 'Cluster93 Console'}
+            </h1>
             <p className="mt-1 text-sm text-muted">{subtitle}</p>
           </div>
         </div>
 
         <form onSubmit={handleSubmit} className="panel p-6">
-          {mode === 'password' ? (
+          {mode === 'setup' ? (
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="username" className="stat-label">
+                  Username
+                </label>
+                <input
+                  id="username"
+                  name="username"
+                  type="text"
+                  autoComplete="username"
+                  spellCheck={false}
+                  autoFocus
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  placeholder="admin"
+                  className="input mt-2"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="password" className="stat-label">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="••••••••"
+                  className="input mt-2"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="confirm-password" className="stat-label">
+                  Confirm Password
+                </label>
+                <input
+                  id="confirm-password"
+                  name="confirm-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  placeholder="••••••••"
+                  className="input mt-2"
+                />
+              </div>
+            </div>
+          ) : mode === 'password' ? (
             <div className="space-y-4">
               <div>
                 <label htmlFor="username" className="stat-label">
@@ -292,12 +391,21 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
             ) : (
               <Lock className="h-4 w-4" aria-hidden />
             )}
-            {busy ? 'Verifying…' : mode === 'password' ? 'Sign in' : mode === 'redeem' ? 'Redeem invite' : 'Connect'}
+            {busy
+              ? 'Verifying…'
+              : mode === 'setup'
+                ? 'Create Administrator Account'
+                : mode === 'password'
+                  ? 'Sign in'
+                  : mode === 'redeem'
+                    ? 'Redeem invite'
+                    : 'Connect'}
           </button>
 
-          <div className="mt-6 space-y-3 border-t border-border/80 pt-5 text-sm text-muted">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              {mode !== 'password' ? (
+          {mode === 'setup' ? null : (
+            <div className="mt-6 space-y-3 border-t border-border/80 pt-5 text-sm text-muted">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                {mode !== 'password' ? (
                 <button
                   type="button"
                   onClick={() => switchMode('password')}
@@ -335,7 +443,8 @@ export function LoginView({ onSubmit, error, loading = false, node, online }: Lo
                   ? 'Redeeming creates your account (or joins you to a tenant) and signs you straight in.'
                   : 'Mint a tenant token with c93 tokens create, or sign in with the admin token for operator access.'}
             </p>
-          </div>
+            </div>
+          )}
         </form>
 
         <p className="mt-6 flex items-center justify-center gap-2 text-xs text-subtle">

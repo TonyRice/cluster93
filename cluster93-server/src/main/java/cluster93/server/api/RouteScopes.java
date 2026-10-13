@@ -50,6 +50,8 @@ final class RouteScopes {
             // Identity (D-070) and the audit log (D-071).
             json("POST", "/v1/invites/redeem", "redeemInvite", Who.PUBLIC, null, SMALL),
             json("POST", "/v1/auth/login", "login", Who.PUBLIC, null, SMALL),
+            rule("GET", "/v1/auth/setup-status", "getSetupStatus", Who.PUBLIC, null),
+            json("POST", "/v1/auth/setup", "initialSetup", Who.PUBLIC, null, SMALL),
             rule("GET", "/v1/me", "getMe", Who.USER, null),
             json("PATCH", "/v1/me", "updateMe", Who.USER, null, SMALL),
             json("PUT", "/v1/me/password", "updateMyPassword", Who.USER, null, SMALL),

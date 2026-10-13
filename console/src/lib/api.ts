@@ -327,6 +327,31 @@ export const api = {
     return request<LoginResponse>('/v1/auth/login', { method: 'POST', body: req, auth: false });
   },
 
+  /**
+   * `GET /v1/auth/setup-status` — whether the cluster still needs its first
+   * operator account. Public: sends no bearer credential. Drives the console's
+   * initial setup screen (D-070).
+   */
+  getSetupStatus(): Promise<{ needsSetup: boolean }> {
+    return request<{ needsSetup: boolean }>('/v1/auth/setup-status', { auth: false });
+  },
+
+  /**
+   * `POST /v1/auth/setup` — create the cluster's first operator account and
+   * sign in. Public, and only while no operator exists.
+   */
+  setupAdmin(data: {
+    username: string;
+    password: string;
+    displayName?: string;
+  }): Promise<{ token: string; user: User }> {
+    return request<{ token: string; user: User }>('/v1/auth/setup', {
+      method: 'POST',
+      body: data,
+      auth: false,
+    });
+  },
+
   /** `PUT /v1/me/password` — set or change your own password (D-133). */
   updatePassword(req: { currentPassword?: string; newPassword: string }): Promise<{ status: string }> {
     return request<{ status: string }>('/v1/me/password', { method: 'PUT', body: req });
