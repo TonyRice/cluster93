@@ -384,7 +384,12 @@ public final class Cluster93 {
             );
             workerPoolRef.set(poolManager);
             runtime = new cluster93.runner.protocol.runtime.WorkerProcessRuntime(vertx, poolManager);
-            LOG.info("Configured process-based ScriptRuntime with TenantWorkerPoolManager (default mode: {})", config.workerDefaultMode());
+            // Say plainly what this node can run at once, and how the workers are shared: one worker per concurrent
+            // job, and the pool is handed out round-robin between tenants, so one tenant cannot take all of them
+            // (D-153). Tenants themselves are not capped — only concurrency is.
+            LOG.info("Process workers: up to {} concurrent jobs ({} MB each), one worker per job, shared round-robin "
+                            + "between tenants; default engine {}. Raise C93_CAPACITY for more concurrency.",
+                    config.capacity(), config.maxHeapMb(), config.workerDefaultMode());
         } else {
             runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
         }

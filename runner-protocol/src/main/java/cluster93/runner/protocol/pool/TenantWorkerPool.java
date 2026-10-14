@@ -18,6 +18,9 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -59,7 +62,15 @@ public class TenantWorkerPool {
     private final Queue<WorkerProcessHandle> warmUnboundQueue = new ArrayDeque<>();
     private final Map<String, List<WorkerProcessHandle>> tenantWarmQueue = new ConcurrentHashMap<>();
     private final Map<Long, WorkerProcessHandle> activeWorkers = new ConcurrentHashMap<>();
-    private final Queue<PendingAcquire> pendingAcquires = new ArrayDeque<>();
+    /**
+     * Waiters, per tenant. Insertion-ordered, so the earliest-arrived tenant wins a tie: a single global FIFO let a
+     * tenant that queued ten requests be served all ten before a tenant that queued one, which starves it.
+     */
+    private final Map<String, Deque<PendingAcquire>> pendingByTenant = new LinkedHashMap<>();
+    /** How many workers each tenant is currently running, for reporting how the pool is shared out. */
+    private final Map<String, Integer> activeByTenant = new HashMap<>();
+    /** Who gets the next freed worker (D-153). */
+    private final TenantRotation rotation = new TenantRotation();
     private final AtomicInteger totalWorkers = new AtomicInteger(0);
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -138,6 +149,7 @@ public class TenantWorkerPool {
                 WorkerProcessHandle worker = list.remove(list.size() - 1);
                 if (worker.isAlive()) {
                     activeWorkers.put(worker.pid(), worker);
+                    countActive(tenantId, 1);
                     return Future.succeededFuture(worker);
                 } else {
                     recycleWorker(worker);
@@ -150,6 +162,7 @@ public class TenantWorkerPool {
             WorkerProcessHandle warm = warmUnboundQueue.poll();
             if (warm.isAlive()) {
                 activeWorkers.put(warm.pid(), warm);
+                countActive(tenantId, 1);
                 ensureWarmPool();
                 return warm.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
                         .map(v -> warm)
@@ -167,6 +180,7 @@ public class TenantWorkerPool {
                     WorkerProcessHandle spawned = ar.result();
                     synchronized (TenantWorkerPool.this) {
                         activeWorkers.put(spawned.pid(), spawned);
+                        countActive(tenantId, 1);
                     }
                     spawned.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
                             .onSuccess(v -> promise.complete(spawned))
@@ -183,7 +197,8 @@ public class TenantWorkerPool {
 
         // 4. At capacity: queue the request
         Promise<WorkerProcessHandle> promise = Promise.promise();
-        pendingAcquires.add(new PendingAcquire(tenantId, promise));
+        pendingByTenant.computeIfAbsent(tenantId, k -> new ArrayDeque<>()).add(new PendingAcquire(tenantId, promise));
+        rotation.enqueue(tenantId);
         return promise.future();
     }
 
@@ -192,6 +207,7 @@ public class TenantWorkerPool {
      */
     public synchronized void release(WorkerProcessHandle worker, boolean errorOrOom) {
         activeWorkers.remove(worker.pid());
+        countActive(worker.boundTenantId(), -1);
 
         boolean oomKilled = cgroupLimiter.checkOomKilled(worker.pid());
         if (errorOrOom || oomKilled || !worker.isAlive() || reusePolicy == ReusePolicy.FRESH_PER_JOB) {
@@ -206,16 +222,83 @@ public class TenantWorkerPool {
     }
 
     private synchronized void processNextPending() {
-        while (!pendingAcquires.isEmpty()) {
-            PendingAcquire next = pendingAcquires.poll();
-            acquire(next.tenantId()).onComplete(ar -> {
-                if (ar.succeeded()) {
-                    next.promise().complete(ar.result());
-                } else {
-                    next.promise().fail(ar.cause());
+        String tenantId = rotation.next();
+        if (tenantId == null) {
+            return;
+        }
+        Deque<PendingAcquire> queue = pendingByTenant.get(tenantId);
+        PendingAcquire next = queue.poll();
+        if (queue.isEmpty()) {
+            pendingByTenant.remove(tenantId);
+        }
+        // A tenant with more waiting rotates to the back, so its next turn comes after everyone else's.
+        rotation.served(tenantId, !queue.isEmpty());
+        acquire(next.tenantId()).onComplete(ar -> {
+            if (ar.succeeded()) {
+                next.promise().complete(ar.result());
+            } else {
+                next.promise().fail(ar.cause());
+            }
+        });
+    }
+
+    /**
+     * Who gets the next freed worker: a round-robin over the tenants waiting, never handing one straight back to the
+     * tenant just served. Skipping the last-served tenant is the rule that matters — without it a freed worker goes
+     * back to whoever just had one, and a tenant with a backlog keeps the pool while another waits. With n tenants
+     * competing each gets roughly capacity/n; a tenant that is the only one waiting still gets everything.
+     *
+     * <p>Split out from the pool so the fairness rule is testable without spawning a worker (D-153).
+     */
+    static final class TenantRotation {
+        private final Deque<String> order = new ArrayDeque<>();
+        private String lastServed;
+
+        /** A tenant joined the queue. Idempotent: a tenant is in the rotation once, however many it queues. */
+        void enqueue(String tenantId) {
+            if (!order.contains(tenantId)) {
+                order.addLast(tenantId);
+            }
+        }
+
+        /** The next tenant to serve, or null when nobody is waiting. */
+        String next() {
+            for (String tenantId : order) {
+                if (!tenantId.equals(lastServed)) {
+                    return tenantId;
                 }
-            });
-            break;
+            }
+            // Only the last-served tenant is waiting: better it has the worker than nobody does.
+            return order.peekFirst();
+        }
+
+        /** Records that a tenant was served; it goes to the back of the rotation if it still has work. */
+        void served(String tenantId, boolean stillWaiting) {
+            order.remove(tenantId);
+            if (stillWaiting) {
+                order.addLast(tenantId);
+            }
+            lastServed = tenantId;
+        }
+
+        void clear() {
+            order.clear();
+            lastServed = null;
+        }
+
+        int waiting() {
+            return order.size();
+        }
+    }
+
+    /** Tracks how many workers a tenant is running, for reporting how the pool is shared out. */
+    private void countActive(String tenantId, int delta) {
+        if (tenantId == null) {
+            return;
+        }
+        activeByTenant.merge(tenantId, delta, Integer::sum);
+        if (activeByTenant.get(tenantId) <= 0) {
+            activeByTenant.remove(tenantId);
         }
     }
 
@@ -416,10 +499,13 @@ public class TenantWorkerPool {
             }
             activeWorkers.clear();
 
-            for (PendingAcquire pending : pendingAcquires) {
-                pending.promise().fail(new IllegalStateException("Worker pool closed"));
+            rotation.clear();
+            for (Deque<PendingAcquire> queue : pendingByTenant.values()) {
+                for (PendingAcquire pending : queue) {
+                    pending.promise().fail(new IllegalStateException("Worker pool closed"));
+                }
             }
-            pendingAcquires.clear();
+            pendingByTenant.clear();
         }
     }
 

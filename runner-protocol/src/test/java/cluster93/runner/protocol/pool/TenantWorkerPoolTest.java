@@ -24,6 +24,62 @@ import static org.junit.jupiter.api.Assertions.*;
 class TenantWorkerPoolTest {
 
     @Test
+    @DisplayName("A freed worker does not go straight back to the tenant that just had one (D-153)")
+    void aTenantWithABacklogDoesNotKeepThePool() {
+        TenantWorkerPool.TenantRotation rotation = new TenantWorkerPool.TenantRotation();
+        // One tenant queues a burst; another queues a single request behind it.
+        for (int i = 0; i < 10; i++) {
+            rotation.enqueue("acme");
+        }
+        rotation.enqueue("globex");
+
+        // acme is served first (it arrived first) and keeps waiting, because it has a backlog.
+        assertEquals("acme", rotation.next());
+        rotation.served("acme", true);
+
+        // The next freed worker goes to globex, not to acme's ninth queued request: this is the starvation fix.
+        assertEquals("globex", rotation.next());
+        rotation.served("globex", false);
+
+        // With globex satisfied, acme has the pool to itself again.
+        assertEquals("acme", rotation.next());
+    }
+
+    @Test
+    @DisplayName("A tenant waiting alone still gets every worker, so a quiet cluster is not throttled")
+    void aLoneTenantIsNotThrottled() {
+        TenantWorkerPool.TenantRotation rotation = new TenantWorkerPool.TenantRotation();
+        rotation.enqueue("acme");
+
+        assertEquals("acme", rotation.next());
+        rotation.served("acme", true);
+        // The only waiter, and the one just served: it still gets the next one.
+        assertEquals("acme", rotation.next());
+        assertEquals(1, rotation.waiting());
+    }
+
+    @Test
+    @DisplayName("The rotation holds each waiting tenant once, however many requests it queued")
+    void theRotationCountsTenantsNotRequests() {
+        TenantWorkerPool.TenantRotation rotation = new TenantWorkerPool.TenantRotation();
+        for (int i = 0; i < 5; i++) {
+            rotation.enqueue("acme");
+        }
+        rotation.enqueue("globex");
+        rotation.enqueue("initech");
+
+        assertEquals(3, rotation.waiting());
+        // Three tenants, so three turns; each arrives in order and stays only while it has work.
+        assertEquals("acme", rotation.next());
+        rotation.served("acme", false);
+        assertEquals("globex", rotation.next());
+        rotation.served("globex", false);
+        assertEquals("initech", rotation.next());
+        rotation.served("initech", false);
+        assertNull(rotation.next());
+    }
+
+    @Test
     @DisplayName("CgroupMemoryLimiter handles non-existent or restricted paths gracefully")
     void testCgroupMemoryLimiterFallback() throws IOException {
         Path tempDir = Files.createTempDirectory("cgroup-test");
