@@ -115,3 +115,37 @@ Phase B finished on 2026-10-09 with WebSockets (D-125).
 - **Then the links design's review** (`ideas/links.md`; not accepted yet).
   - **Its conflict to settle:** it has to decide TCP and UDP servers on a link's own host (D-112), against its "never listening publicly" rule.
 
+
+---
+
+## One unified `c93 cluster` pathway (install, dev, Docker, cluster setup)
+
+*Captured 2026-10-13.*
+
+### Background
+The CLI's cluster-facing surface is fragmented across three commands that overlap, so `c93 --help` shows four names for a node and no single front door:
+
+- `c93 cluster` — the cluster's own CA and join lines (`cluster init`).
+- `c93 local` — the local master node; a deprecated alias of `c93 node` as of D-134, kept for one release.
+- `c93 node` — install/run/manage a node, plus the operator's `invite`/`revoke`.
+
+Standing up a cluster means knowing which of the three to reach for, and the *ways to get a node* are spread across the CLI (systemd/launchd/direct, `c93 node install`), the shell orchestrators (`scripts/local.sh`, `scripts/dev.sh`), and Docker (`docker-compose.yml`, `scripts/demo.sh`) with no shared story.
+
+### The idea
+One unified **`c93 cluster …`** pathway for standing up and managing Cluster93, with explicit, first-class routes:
+
+- **Master node** — the permanent node a machine (or a checkout) owns. Today: `c93 node install` / `scripts/local.sh setup`.
+- **Dev node** — a throwaway local stack for development. Today: `scripts/dev.sh` (W1 folds it into `scripts/local.sh <profile>`).
+- **Docker node** — run a node as a container, driven from the CLI rather than hand-edited Compose. Today: `docker-compose.yml` + `scripts/demo.sh` only.
+- **Cluster** — the multi-node story: `cluster init` (CA + one-line joins), then each node joins; `invite`/`revoke` belong to the same group instead of a separate `node` group.
+
+The goal is a `--help` that reads as one story — set up a master, set up a dev node, run a node in Docker, set up a cluster — instead of four names for a node and three places to configure one. It should audit the whole pathway (CLI surface, node deploy for a real cluster, the setup wizard, docs) rather than patch it.
+
+### Open questions (settle when this is picked up)
+- Does `c93 cluster` absorb `c93 node`, or does `node` stay the per-machine command while `cluster` orchestrates several?
+- Is the Docker route a CLI verb (`c93 cluster docker …`) that drives Compose, or generated compose/env a user runs?
+- What happens to `c93 local` — drop the alias, or keep it as the explicit "dev node" verb?
+- How does it interact with W1's profile split (`scripts/local.sh dev|master`): does the CLI shell out to a profile, or take over the orchestration?
+- Where do the three "install pathways" share code — `c93 node install` (release fetch + layout) is the one implementation today; does the Docker route reuse the same artifacts?
+
+**Related:** Phase 11 consolidation (W1, W5) already removes some of the duplication; this is the bigger follow-up.
