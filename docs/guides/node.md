@@ -84,7 +84,7 @@ c93 node start · stop · restart
 c93 node status                  # backend, PID, /health, /v1/nodes (add --json)
 c93 node logs [--follow] [-n N]  # server.log, or the journal under a unit
 c93 node mcp                     # ready-to-paste MCP configuration for AI agents
-c93 node update                  # fetch the next release and restart (a checkout rebuilds from source)
+c93 update --node               # fetch the next release and restart (a checkout rebuilds from source)
 c93 node uninstall [--purge]     # stop, remove the program and unit; --purge also deletes the data
 ```
 

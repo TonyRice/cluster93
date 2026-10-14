@@ -785,7 +785,7 @@ update_notice() {
   [[ -n "$head" ]] || return 0
   if [[ "$installed" != "$head" ]]; then
     branch=$(sed -n 's/^git_branch=//p' "$META_FILE" | head -1)
-    printf '\n\342\232\240\357\270\217  Update Available! Running build: %s, Current repo HEAD: %s. Run '"'"'scripts/local.sh update'"'"' or '"'"'c93 local update'"'"'.\n' \
+    printf '\n\342\232\240\357\270\217  Update Available! Running build: %s, Current repo HEAD: %s. Run '"'"'scripts/local.sh update'"'"' or '"'"'c93 update --node'"'"'.\n' \
       "$installed" "$head"
     [[ -n "$branch" ]] && printf '   (installed from %s; the checkout has moved on)\n' "$branch"
   fi

@@ -20,7 +20,11 @@
 #
 # NOTES
 #   - Linux native, x64 only: native-image can't cross-compile. `c93.jar` (server) and
-#     `cluster93-cli.jar` are portable and cover macOS/Windows.
+#     `cluster93-cli.jar` are portable and cover macOS/Windows; the full per-platform
+#     matrix (Linux x64/arm64, macOS arm64/x64, Windows x64) is built by
+#     .github/workflows/release.yml, one runner per platform. See docs/guides/releasing.md.
+#   - The bundle ships the CLI as well as the server, so `c93 update` (--cli/--node) can
+#     refresh both halves of an install from the same release.
 #   - The workers are only built if bin/worker-* are missing (they take a few minutes).
 #   - SIGNING: the release key is passphrase-protected. Run in a terminal and openssl
 #     prompts; C93_RELEASE_PASSPHRASE supplies it non-interactively. A signature that

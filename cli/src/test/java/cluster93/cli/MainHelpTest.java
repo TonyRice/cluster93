@@ -33,8 +33,8 @@ class MainHelpTest {
                 List.of("files", "secrets", "queues", "packages", "storage", "domains", "egress", "callbacks"));
         CATEGORIES.put("Identity & Access",
                 List.of("login", "logout", "whoami", "profile", "tokens", "members", "roles", "groups", "invites"));
-        CATEGORIES.put("Cluster & Node", List.of("cluster", "node", "tenants", "users", "audit"));
-        CATEGORIES.put("Tools & Automation", List.of("mcp", "version", "upgrade", "help"));
+        CATEGORIES.put("Cluster & Node", List.of("cluster", "node", "update", "tenants", "users", "audit"));
+        CATEGORIES.put("Tools & Automation", List.of("mcp", "version", "help"));
     }
 
     @TempDir

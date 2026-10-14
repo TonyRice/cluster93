@@ -20,7 +20,7 @@ import java.util.Properties;
         subcommands = {LoginCommand.class, LogoutCommand.class, WhoamiCommand.class, RunCommand.class, JobsCommand.class,
                 ServicesCommand.class, DomainsCommand.class, FilesCommand.class, QueuesCommand.class, CallbacksCommand.class, SecretsCommand.class, PackagesCommand.class, DeployCommand.class, AppsCommand.class, StorageCommand.class, EgressCommand.class, ClusterCommand.class, NodeCommand.class, TokensCommand.class, TenantsCommand.class,
                 MembersCommand.class, RolesCommand.class, GroupsCommand.class, InvitesCommand.class, UsersCommand.class, AuditCommand.class, ProfileCommand.class,
-                McpCommand.class, LocalCommand.class, VersionCommand.class, UpgradeCommand.class, CommandLine.HelpCommand.class})
+                McpCommand.class, LocalCommand.class, VersionCommand.class, UpdateCommand.class, UpgradeCommand.class, CommandLine.HelpCommand.class})
 public final class Main implements Runnable {
 
     /**
@@ -36,8 +36,8 @@ public final class Main implements Runnable {
                     List.of("files", "secrets", "queues", "packages", "storage", "domains", "egress", "callbacks")),
             new Group("Identity & Access",
                     List.of("login", "logout", "whoami", "profile", "tokens", "members", "roles", "groups", "invites")),
-            new Group("Cluster & Node", List.of("cluster", "node", "tenants", "users", "audit")),
-            new Group("Tools & Automation", List.of("mcp", "version", "upgrade", "help")));
+            new Group("Cluster & Node", List.of("cluster", "node", "update", "tenants", "users", "audit")),
+            new Group("Tools & Automation", List.of("mcp", "version", "help")));
 
     @Option(names = "--json", scope = ScopeType.INHERIT, description = "Print the API's JSON instead of a summary.")
     boolean json;

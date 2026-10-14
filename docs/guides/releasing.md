@@ -56,6 +56,26 @@ steps have local equivalents:
   publishes it (add `--keep-draft` to stop before signing). macOS and Windows still
   need hosted runners, because native-image can't cross-compile.
 
+### The platform matrix
+
+One release carries the whole platform: a portable `c93.jar` (server), a portable
+`cluster93-cli.jar` (CLI), and the Linux native workers. Native CLI binaries are built
+per platform by `.github/workflows/release.yml`; `release-local.sh` builds the Linux x64
+one locally.
+
+| Asset | Built by | Notes |
+|---|---|---|
+| `cluster93-linux-x64` | workflow or `release-local.sh` | static (musl): any distro, Alpine included |
+| `cluster93-linux-arm64` | workflow (arm64 runner) | glibc, `-march=compatibility` |
+| `cluster93-macos-arm64` / `-x64` | workflow (macOS runners) | |
+| `cluster93-windows-x64.exe` | workflow (Windows runner) | |
+| `cluster93-cli.jar` | workflow or `release-local.sh` | portable; the Windows installer uses it |
+| `c93.jar` | workflow or `release-local.sh` | the server, portable |
+| `worker-javet.gz` / `worker-graaljs.gz` | workflow or `release-local.sh` | **Linux only** (x64/arm64); a node elsewhere runs `C93_WORKER_MODE=embedded` |
+
+`c93 update` refreshes both halves of an install from this bundle: `--cli` replaces the
+native binary (or the jar it runs from) and `--node` re-fetches the node.
+
 ## Checking a release by hand
 
 ```bash

@@ -595,17 +595,17 @@ final class NodeCommand extends Base {
                 out().println();
                 if (update) {
                     out().println("\u26a0\ufe0f  Update Available! Running build: " + installed + ", Current repo HEAD: " + head
-                            + ". Run 'scripts/local.sh update' or 'c93 node update'.");
+                            + ". Run 'scripts/local.sh update' or 'c93 update --node'.");
                 }
                 if (cliUpdate) {
                     out().println("\u26a0\ufe0f  Update Available! Current CLI build: " + Main.shortCommit(cliCommit)
                             + ", Current repo HEAD: " + Main.shortCommit(head)
-                            + ". Run 'scripts/build-cli.sh' or 'c93 node update'.");
+                            + ". Run 'scripts/build-cli.sh' or 'c93 update --node'.");
                 }
                 if (consoleUpdate) {
                     out().println("\u26a0\ufe0f  Update Available! Web Console build: " + Main.shortCommit(console.deployedCommit())
                             + ", Local repo HEAD: " + Main.shortCommit(console.localCommit())
-                            + ". Run 'c93 node update' or 'c93 apps deploy console'.");
+                            + ". Run 'c93 update --node' or 'c93 apps deploy console'.");
                 }
             }
             return 0;
@@ -991,7 +991,34 @@ final class NodeCommand extends Base {
         }
     }
 
-    @Command(name = "update", description = "Update the node: rebuild from a checkout, or fetch the next release.")
+    /**
+     * Updates the node: an installed node is re-fetched from the signed release (and restarted if it was running); a
+     * checkout rebuilds from source via {@code scripts/local.sh update}. Shared by {@code c93 update --node} and the
+     * hidden {@code c93 node update} alias (D-138).
+     */
+    static int updateNode(Io io, String version, boolean json) throws Exception {
+        if (NodeInstall.isInstalled(io)) {
+            NodeInstall.Layout layout = NodeInstall.installedLayout(io);
+            NodeService.Target target = NodeService.target(io, layout);
+            boolean wasRunning = NodeService.running(io, target);
+            if (!json) {
+                io.out().println(wasRunning ? "Updating a running node; it will restart." : "Updating the installed node.");
+            }
+            NodeInstall.install(io, layout.system(), layout.system() ? null : layout.programDir(), version, true, json);
+            if (wasRunning) {
+                return NodeService.restart(io, target);
+            }
+            return 0;
+        }
+        int code = runScript(io, "update");
+        if (code < 0) {
+            throw new CliException("No installed node, and scripts/local.sh wasn't found; "
+                    + "run it from a checkout, or install a node with `c93 node install`.");
+        }
+        return code;
+    }
+
+    @Command(name = "update", hidden = true, description = "Deprecated alias of `c93 update --node`.")
     static final class Update extends Base {
 
         @Option(names = "--version", paramLabel = "TAG", description = "A release tag to install (default: the latest).")
@@ -999,24 +1026,7 @@ final class NodeCommand extends Base {
 
         @Override
         int execute() throws Exception {
-            Io io = io();
-            if (NodeInstall.isInstalled(io)) {
-                NodeInstall.Layout layout = NodeInstall.installedLayout(io);
-                NodeService.Target target = NodeService.target(io, layout);
-                boolean wasRunning = NodeService.running(io, target);
-                io.out().println(wasRunning ? "Updating a running node; it will restart." : "Updating the installed node.");
-                NodeInstall.install(io, layout.system(), layout.system() ? null : layout.programDir(), version, true, json());
-                if (wasRunning) {
-                    return NodeService.restart(io, target);
-                }
-                return 0;
-            }
-            int code = runScript(io, "update");
-            if (code < 0) {
-                throw new CliException("No installed node, and scripts/local.sh wasn't found; "
-                        + "run it from a checkout, or install a node with `c93 node install`.");
-            }
-            return code;
+            return updateNode(io(), version, json());
         }
     }
 

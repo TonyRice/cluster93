@@ -2708,3 +2708,30 @@ The defaults were `C93_HTTP_PORT=8080`, `C93_INGRESS_PORT=8000`, `C93_METRICS_PO
 
 **Evidence:**
 - `ServerConfigTest` and the full `verify -pl cli,server -am -DskipITs` suite pass with the new defaults; `NodeCommandTest` asserts `node.env` is written with `C93_HTTP_PORT=9393`; the native `c93 node install` smoke test writes and reports the new ports.
+
+### D-138 — One update surface: `c93 update [--cli|--node]`
+**Date:** 2026-10-14 · **Status:** Accepted. Completes D-049/D-069 (release fetch and signing) and D-134 (node install).
+
+**Context:**
+Installing had one path (`c93 node install`), but updating had three names and two behaviours: `c93 upgrade` (the CLI, and only from a native binary or with `--to`), `c93 node update` (release or checkout, detected), and `scripts/local.sh update` (the checkout). A portable-jar install — the Windows layout, and any JVM run — had **no** way to update itself, because `upgrade` refused to guess what to replace.
+
+**Decision:**
+1. **`c93 update` is the front door**, with `--cli` and `--node`; **neither flag does both**. `--version TAG` pins a release.
+   - `--cli` replaces the CLI asset: the running **native binary** on a native image, or the **jar it was launched from** on the JVM (the portable layout). `--to FILE` names a target explicitly (needed when running from classes).
+   - `--node` updates the node: an installed node is re-fetched from the signed release and restarted if it was running; a checkout rebuilds from source via `scripts/local.sh update`.
+2. **`c93 upgrade` and `c93 node update` stay as hidden aliases** of the two halves, so existing scripts, docs and habits keep working. The CLI's own update hints now say `c93 update --node`.
+3. **One bundle feeds both halves.** The release ships the CLI (`cluster93-linux-x64`, `cluster93-cli.jar`) beside the server (`c93.jar`) and the Linux workers, so a single signed release refreshes an install; `docs/guides/releasing.md` carries the platform matrix (native CLI per platform; workers Linux-only).
+
+**Alternatives considered:**
+- **Keep the three commands.** Rejected: one job with three names and inconsistent behaviour (a checkout vs a release) is exactly the fragmentation this phase is removing.
+- **Update the CLI only from a native binary** (the status quo). Rejected: portable-jar installs could never update.
+- **Make `--cli` infer a target on the JVM without `--to`.** Kept, but only when the code source is a jar; from classes it still asks for `--to`, so a development run can't clobber a directory.
+
+**Consequences:**
+- Updating an install is one command with explicit halves; `--json` reports it, and neither half touches the other's files unless asked.
+- `upgrade`/`node update` disappear from `--help` (still callable), and `c93 update` takes the Cluster & Node group.
+- A native install replaces its binary in place; a jar install replaces the jar file.
+
+**Evidence:**
+- `UpdateCommandTest`: `--cli` replaces a jar after the signature/checksum check; neither flag updates both; `--node` leaves the CLI alone; the `c93 node update` alias still works; a tampered jar is refused; `--help` lists `update` but not the hidden `upgrade`.
+- `UpgradeTest` and the rest of the CLI suite unchanged and green; `scripts/release-local.sh --build-only` assembles a bundle with the CLI, the server, the workers and both installers.

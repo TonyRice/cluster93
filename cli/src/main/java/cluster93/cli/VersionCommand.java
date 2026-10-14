@@ -87,13 +87,13 @@ final class VersionCommand extends Base {
             out().println();
             out().println("\u26a0\ufe0f  Update Available! Web Console build: " + Main.shortCommit(console.deployedCommit())
                     + ", Local repo HEAD: " + Main.shortCommit(console.localCommit())
-                    + ". Run 'c93 node update' or 'c93 apps deploy console'.");
+                    + ". Run 'c93 update --node' or 'c93 apps deploy console'.");
         }
         if (updateAvailable) {
             out().println();
             out().println("\u26a0\ufe0f  Update Available! Current CLI build: " + Main.shortCommit(commit)
                     + ", Current repo HEAD: " + Main.shortCommit(repoHead)
-                    + ". Run 'scripts/build-cli.sh' or 'c93 node update'.");
+                    + ". Run 'scripts/build-cli.sh' or 'c93 update --node'.");
         }
         return 0;
     }

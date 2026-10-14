@@ -112,7 +112,7 @@ class VersionCommandTest {
                     .contains("Current CLI build: " + build.substring(0, 8))
                     .contains("Current repo HEAD: " + head.substring(0, 8))
                     .contains("scripts/build-cli.sh")
-                    .contains("c93 node update");
+                    .contains("c93 update --node");
 
             Result json = run("--json", "version");
             assertThat(json.code()).as(json.err()).isZero();
@@ -198,7 +198,7 @@ class VersionCommandTest {
                 .contains("console 2.0.0 (commit " + deployed.substring(0, 8) + ")")
                 .contains("Update Available! Web Console build: " + deployed.substring(0, 8))
                 .contains("Local repo HEAD: " + head.substring(0, 8))
-                .contains("c93 node update")
+                .contains("c93 update --node")
                 .contains("c93 apps deploy console");
 
         Result json = run("--json", "version");

@@ -6,6 +6,13 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **One update surface: `c93 update [--cli|--node]` (D-138)**:
+  - `c93 update` is the front door: `--cli` replaces the CLI (the native binary, or — on the JVM — the `cluster93-cli.jar` it was launched from), `--node` updates the node (an installed node is re-fetched from the signed release and restarted; a checkout rebuilds from source), and **with neither flag it does both**. `--version TAG` pins a release; `--to FILE` names a CLI target.
+  - `c93 upgrade` and `c93 node update` stay as **hidden aliases**, so existing scripts and docs keep working; the CLI's update hints now say `c93 update --node`.
+  - `docs/guides/releasing.md` gains the platform matrix (Linux x64/arm64, macOS arm64/x64, Windows x64; the CLI ships in the same bundle as the server) and `release-local.sh`'s header points at it.
+  - **Why:** installing had one path (`c93 node install`) but updating had three names and two behaviours; one command with explicit halves removes the guesswork.
+
+
 - **`examples/js/` by language, with a runner that also exercises the service example**:
   - The seven examples move to `examples/js/` (their header paths updated); new `examples/README.md` indexes them by language and notes Python is planned (Phase 9).
   - `scripts/local.sh dev test-examples` is now directory-driven (`examples/js/*.js`), so adding an example needs no script edit; a file marked `// c93: service` is deployed as a service (waited for on the ingress, then removed) instead of being run as a job.

@@ -188,7 +188,7 @@ class NodeCommandTest {
 
         assertThat(result.code()).isZero();
         assertThat(result.out()).contains("Update Available").contains(head)
-                .contains("scripts/local.sh update").contains("c93 node update");
+                .contains("scripts/local.sh update").contains("c93 update --node");
     }
 
     @Test

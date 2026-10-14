@@ -24,11 +24,15 @@ import java.util.Locale;
  * Replaces this binary with the latest release, or a pinned one (D-049). It does what the installer does, in-process:
  * checks SHA256SUMS against the release key built into this binary (D-069), then the download against SHA256SUMS, and
  * only then swaps the file. Nothing from the network runs before it's checked.
+ *
+ * <p>A hidden alias of {@code c93 update --cli} (D-138); the shared logic lives in {@link #updateCli}.
  */
-@Command(name = "upgrade", description = "Install the latest release of the CLI (or --version), after checking its signature.")
+@Command(name = "upgrade", hidden = true, description = "Deprecated alias of `c93 update --cli`.")
 final class UpgradeCommand extends Base {
 
     static final String DEFAULT_RELEASES = "TonyRice/cluster93";
+    /** The portable CLI jar, for a JVM install (the native binary is platform-named instead). */
+    static final String CLI_JAR = "cluster93-cli.jar";
 
     @Option(names = "--version", paramLabel = "TAG", description = "A release tag, e.g. v2.1.0.")
     String version;
@@ -38,15 +42,26 @@ final class UpgradeCommand extends Base {
 
     @Override
     int execute() throws Exception {
-        String base = installBase(io(), version);
-        if (!base.startsWith("https://") && io().env().get("C93_INSTALL_URL") == null) {
+        return updateCli(io(), version, to, json());
+    }
+
+    /**
+     * Replaces the CLI with a release's asset: the native binary for this platform, or {@code cluster93-cli.jar} when
+     * the target is a jar (a JVM install). Shared by {@code c93 update --cli} and the {@code c93 upgrade} alias.
+     */
+    static int updateCli(Io io, String version, Path to, boolean quiet) throws Exception {
+        String base = installBase(io, version);
+        if (!base.startsWith("https://") && io.env().get("C93_INSTALL_URL") == null) {
             throw new CliException("Releases are downloaded over HTTPS only: " + base);
         }
-        Path target = to != null ? to.toAbsolutePath() : currentBinary();
-        String asset = asset(System.getProperty("os.name", ""), System.getProperty("os.arch", ""));
+        Path target = to != null ? to.toAbsolutePath() : currentCli();
+        boolean jar = target.getFileName().toString().endsWith(".jar");
+        String asset = jar ? CLI_JAR : asset(System.getProperty("os.name", ""), System.getProperty("os.arch", ""));
         HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(15)).build();
 
-        out().println("Downloading " + asset + " from " + base);
+        if (!quiet) {
+            io.out().println("Downloading " + asset + " from " + base);
+        }
         byte[] sums = fetch(http, base + "/SHA256SUMS");
         byte[] signature;
         try {
@@ -54,7 +69,7 @@ final class UpgradeCommand extends Base {
         } catch (CliException e) {
             throw new CliException(e.getMessage() + ". Releases are signed; an unsigned one isn't installed.");
         }
-        if (!ReleaseSignature.verify(sums, signature, ReleaseSignature.key(io()))) {
+        if (!ReleaseSignature.verify(sums, signature, ReleaseSignature.key(io))) {
             throw new CliException("SHA256SUMS isn't signed by the c93 release key. Nothing was installed.");
         }
         String expected = checksum(new String(sums, StandardCharsets.UTF_8), asset);
@@ -78,7 +93,9 @@ final class UpgradeCommand extends Base {
         } finally {
             Files.deleteIfExists(download);
         }
-        out().println("Installed " + asset + " (signature and checksum checked) to " + target);
+        if (!quiet) {
+            io.out().println("Installed " + asset + " (signature and checksum checked) to " + target);
+        }
         return 0;
     }
 
@@ -128,14 +145,26 @@ final class UpgradeCommand extends Base {
         throw new CliException("SHA256SUMS has no entry for " + asset);
     }
 
-    private static Path currentBinary() {
-        // Set by native-image; on a JVM, "this binary" would be java itself.
-        if (System.getProperty("org.graalvm.nativeimage.imagecode") == null) {
-            throw new CliException("upgrade replaces the native binary, and this is running on a JVM; pass --to FILE");
+    /**
+     * The CLI file to replace: the running native binary, or — on the JVM — the jar this CLI was launched from (the
+     * {@code install.ps1} portable layout). Anything else needs {@code --to FILE}.
+     */
+    private static Path currentCli() {
+        if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
+            return ProcessHandle.current().info().command().map(Path::of)
+                    .orElseThrow(() -> new CliException("Can't tell where this binary is; pass --to FILE"))
+                    .toAbsolutePath();
         }
-        return ProcessHandle.current().info().command().map(Path::of)
-                .orElseThrow(() -> new CliException("Can't tell where this binary is; pass --to FILE"))
-                .toAbsolutePath();
+        try {
+            java.net.URL location = UpgradeCommand.class.getProtectionDomain().getCodeSource().getLocation();
+            Path path = Path.of(location.toURI());
+            if (Files.isRegularFile(path) && path.getFileName().toString().endsWith(".jar")) {
+                return path.toAbsolutePath();
+            }
+        } catch (Exception ignored) {
+            // falls through to the message below
+        }
+        throw new CliException("This CLI is running from classes, not a binary or jar; pass --to FILE");
     }
 
     private static boolean isWindows() {

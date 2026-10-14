@@ -73,7 +73,7 @@ Options, as environment variables:
 | `C93_RELEASE_PUBLIC_KEY=FILE` | Check signatures with another key, for a mirror that re-signs |
 | `C93_INSECURE_SKIP_SIGNATURE=1` | Don't check the signature, trusting HTTPS alone (for a machine without `openssl`) |
 
-`c93 upgrade [--version TAG]` does the same checks itself, with the key built into the CLI, and then replaces its own binary. It doesn't run a downloaded script.
+`c93 update` keeps an install current: `--cli` replaces the native binary (or the jar it runs from), `--node` re-fetches the node, and with neither flag it does both. `--version TAG` pins a release. It does the same checks itself, with the key built into the CLI, and never runs a downloaded script. (`c93 upgrade` and `c93 node update` are hidden aliases.)
 
 To check a download by hand: `openssl dgst -sha256 -verify cluster93-release.pem -signature SHA256SUMS.sig SHA256SUMS`. The key is [`install/cluster93-release.pem`](../../install/cluster93-release.pem). Maintainers: see [releasing](releasing.md).
 
@@ -132,6 +132,6 @@ The URL and token are saved in `~/.config/cluster93/config.json` (`%APPDATA%\clu
 | `node start · stop · restart · status · logs [--follow] · mcp · update` | Drive the node: its service unit (systemd/launchd), or the process directly. `c93 local …` is a deprecated alias for one release |
 | `node env [--set K=V] [--edit]` | Show or change the node's `node.env` (`C93_*` settings, short names accepted) |
 | `node invite ID [--host ADDR] [--key PUBLIC_KEY] --ca ca.key` · `node revoke ID` | Operator: a one-line join for a new node (also renews); revoke a node |
-| `version · upgrade` | |
+| `version` · `update [--cli|--node] [--version TAG]` | Show the version · update the CLI and/or the node from a signed release (`--cli`, `--node`; neither = both) |
 
 Add `--json` to any command for the API's JSON instead of a summary.

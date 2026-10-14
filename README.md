@@ -50,6 +50,10 @@ The native **workers** the server spawns are Linux-only (`bin/worker-*`, x64 and
 elsewhere runs `C93_WORKER_MODE=embedded`, and on Windows a node is Docker or WSL2 — see the
 [node guide](docs/guides/node.md).
 
+Keep it current with `c93 update`: `--cli` replaces the CLI (the native binary, or the jar it runs
+from), `--node` re-fetches the node, and neither flag does both — always after checking the release's
+signature and checksum.
+
 Native binaries compile via GraalVM with zero JVM requirements on the client. See the [CLI guide](docs/guides/cli.md). To connect AI agents via MCP, see the [MCP guide](docs/guides/mcp.md).
 
 ---
@@ -169,7 +173,7 @@ c93 node mcp            # Claude Code, Cursor, Antigravity, and the stdio bridge
 `status` compares the commit the running build came from against the checkout's `git HEAD` and flags any drift, so a stale node is never a mystery:
 
 ```text
-⚠️  Update Available! Running build: 666cefa9…, Current repo HEAD: 8d4b1c02…. Run 'scripts/local.sh update' or 'c93 node update'.
+⚠️  Update Available! Running build: 666cefa9…, Current repo HEAD: 8d4b1c02…. Run 'scripts/local.sh update' or 'c93 update --node'.
 ```
 
 `scripts/local.sh update` rebuilds the server jar and worker from the current checkout, rewrites the provenance in `node.meta`, and restarts the node if it was running.
