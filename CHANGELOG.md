@@ -6,6 +6,11 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **Benchmarks de-emphasised (they are indicative, not a claim)**:
+  - `docs/benchmarks.md` — and the harness that generates it — now open with "Indicative, not a benchmark claim … not maintained", the engine suite's README says the same about its runs, and the README index lists the page as indicative rather than as performance documentation.
+  - The harness stays (`benchmarks/run.sh cluster|engines|all`): the numbers are a rough sense of the platform's shape, not a guarantee.
+
+
 - **`ctx.serve` answers 500 for an invalid status instead of hanging (D-139)**:
   - `serve.js` mapped a handler's `{status, headers, body}` with `Number(value.status ?? 200)`, so a guest writing `{status: 'ok', …}` produced `NaN` and the exchange never completed — the client waited until it timed out, with nothing logged. A status that isn't an integer in `100..599` now answers **500** with the handler's body and headers still sent; only an absent status defaults to 200.
   - Found while fixing `examples/js/07-microservice.js`, which had exactly that mistake and had never been caught (the example runner skipped it). Covered by `HostBridgeTest.servedResponsesAreNormalised` (`/bad-status`).

@@ -415,7 +415,7 @@ For the master implementation roadmap, active milestones, and upcoming work, see
 - [docs/api/endpoints.md](docs/api/endpoints.md): Complete OpenAPI endpoint and scope reference
 - [SECURITY.md](SECURITY.md): Threat model, trust boundaries, and security policies
 - [VERSIONING.md](VERSIONING.md): SemVer scheme, pre-release channels, and the version line
-- [docs/benchmarks.md](docs/benchmarks.md): Performance benchmarks and reproduction instructions
+- [docs/benchmarks.md](docs/benchmarks.md): Indicative single-machine numbers (not maintained) and how to reproduce them
 - [docs/guides/cli.md](docs/guides/cli.md): CLI installation and usage guide
 - [docs/guides/node.md](docs/guides/node.md): installing and running a node (`c93 node`)
 - [docs/guides/mcp.md](docs/guides/mcp.md): Connecting AI agents via Model Context Protocol

@@ -133,7 +133,9 @@ ENGINES="javet graaljs" ./run.sh
 
 ### Step 4: Reviewing Results
 
-Results are placed in `benchmarks/engines/results/<YYYY-MM-DD-HHMM>/`:
+Runs are **indicative single-machine numbers**, kept to compare engines on the same hardware on the same
+day; they are not a maintained performance claim. Results are placed in
+`benchmarks/engines/results/<YYYY-MM-DD-HHMM>/` (git-ignored):
 - `summary.md`: Formatted Markdown report comparing start-up, idle memory, warm iteration times, p99 tail latency, cold starts, and hostile test outcomes.
 - `results.jsonl`: Raw per-iteration and per-workload metrics.
 - `thermal.csv`: CPU clock speed and package temperature history.

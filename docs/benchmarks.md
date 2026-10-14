@@ -1,7 +1,11 @@
 # Benchmarks
 
+> **Indicative, not a benchmark claim.** Single-machine numbers, kept as a rough sense of the
+> platform's shape. They are not a performance guarantee, and this page is not maintained: rerun
+> `benchmarks/run.sh cluster` on your own hardware for numbers that mean something to you.
+
 Measured 2026-10-07 with `benchmarks/run.sh cluster`: the three-node demo cluster in Docker on one machine,
-driven from the same machine through Docker's port mapping. Rerun it on your hardware: numbers depend on it.
+driven from the same machine through Docker's port mapping.
 
 - **Machine:** 11th Gen Intel(R) Core(TM) i7-1185G7 @ 3.00GHz, 8 CPUs, 30 GB RAM
 - **Software:** Docker version 29.8.2, Cluster93 2.0.0-SNAPSHOT, JDK 21 (Temurin) in each container
