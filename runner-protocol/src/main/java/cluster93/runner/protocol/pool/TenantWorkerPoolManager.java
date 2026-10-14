@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Supervises per-tenant {@link TenantWorkerPool} instances, isolating warm worker pools,
  * memory bounds, and recycling lifecycles across tenants (D-127).
  */
-public class TenantWorkerPoolManager {
+public class TenantWorkerPoolManager implements NodeArbiter {
 
     private final Vertx vertx;
     private final Map<String, String> modeBinaries;
@@ -22,6 +22,11 @@ public class TenantWorkerPoolManager {
     private final int maxTotalPerTenant;
     /** The node-wide allowance shared by every tenant's pool, so n tenants cannot spawn n × capacity (D-156). */
     private final WorkerBudget nodeBudget;
+    /**
+     * Who gets a freed worker when tenants contend (D-161). This is the only place more than one tenant is visible:
+     * a per-tenant pool sees just itself, so fairness installed there could never fire.
+     */
+    private final TenantRotation rotation = new TenantRotation();
     private final int heapMb;
     private final TenantWorkerPool.ReusePolicy reusePolicy;
     private final CgroupMemoryLimiter cgroupLimiter;
@@ -62,7 +67,8 @@ public class TenantWorkerPoolManager {
         Objects.requireNonNull(tenantId, "tenantId");
         return tenantPools.computeIfAbsent(tenantId, t -> {
             String binary = resolveModeBinary(defaultMode);
-            return new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget);
+            return new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget)
+                    .arbiter(this);
         });
     }
 
@@ -80,7 +86,8 @@ public class TenantWorkerPoolManager {
         String poolKey = tenantId + ":" + effectiveMode;
         TenantWorkerPool pool = tenantPools.computeIfAbsent(poolKey, k -> {
             String binary = resolveModeBinary(effectiveMode);
-            return new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget);
+            return new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget)
+                    .arbiter(this);
         });
         return pool.acquire(tenantId);
     }
@@ -114,6 +121,38 @@ public class TenantWorkerPoolManager {
         } else {
             worker.terminate();
         }
+    }
+
+    @Override
+    public synchronized void tenantWaiting(String tenantId) {
+        rotation.enqueue(tenantId);
+    }
+
+    /** Which tenant the manager would hand the next freed worker to; for status, and for testing the rotation. */
+    public synchronized String nextWaitingTenant() {
+        return rotation.next();
+    }
+
+    /**
+     * A worker finished: hand its capacity to the fairest tenant waiting, skipping the one just served. One request
+     * per freed worker, so a tenant cannot take several at once by having a long queue.
+     */
+    @Override
+    public synchronized void capacityFreed() {
+        String tenantId = rotation.next();
+        if (tenantId == null) {
+            return;
+        }
+        TenantWorkerPool pool = tenantPools.get(tenantId);
+        if (pool == null) {
+            // Defensive only: a tenant that queued has a pool, so this cannot happen in practice. Nothing can be
+            // served, so the claim is dropped rather than kept forever (the rotation is not a waiting list).
+            rotation.served(tenantId, false);
+            return;
+        }
+        pool.pump();
+        // Still waiting for more, so it goes to the back of the rotation and its next turn comes after everyone else.
+        rotation.served(tenantId, pool.hasPending());
     }
 
     /** How many workers the node is running across every tenant, and what it may run. */

@@ -64,7 +64,7 @@ class TenantWorkerPoolTest {
     @Test
     @DisplayName("A freed worker does not go straight back to the tenant that just had one (D-153)")
     void aTenantWithABacklogDoesNotKeepThePool() {
-        TenantWorkerPool.TenantRotation rotation = new TenantWorkerPool.TenantRotation();
+        TenantRotation rotation = new TenantRotation();
         // One tenant queues a burst; another queues a single request behind it.
         for (int i = 0; i < 10; i++) {
             rotation.enqueue("acme");
@@ -86,7 +86,7 @@ class TenantWorkerPoolTest {
     @Test
     @DisplayName("A tenant waiting alone still gets every worker, so a quiet cluster is not throttled")
     void aLoneTenantIsNotThrottled() {
-        TenantWorkerPool.TenantRotation rotation = new TenantWorkerPool.TenantRotation();
+        TenantRotation rotation = new TenantRotation();
         rotation.enqueue("acme");
 
         assertEquals("acme", rotation.next());
@@ -99,7 +99,7 @@ class TenantWorkerPoolTest {
     @Test
     @DisplayName("The rotation holds each waiting tenant once, however many requests it queued")
     void theRotationCountsTenantsNotRequests() {
-        TenantWorkerPool.TenantRotation rotation = new TenantWorkerPool.TenantRotation();
+        TenantRotation rotation = new TenantRotation();
         for (int i = 0; i < 5; i++) {
             rotation.enqueue("acme");
         }
