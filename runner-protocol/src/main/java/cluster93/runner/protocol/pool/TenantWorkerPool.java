@@ -52,6 +52,8 @@ public class TenantWorkerPool {
     private final String mode;
     private final int minWarm;
     private final int maxTotal;
+    /** How many jobs one worker may run at once (D-155). 1 keeps the old one-job-per-worker behaviour. */
+    private final int maxJobsPerWorker;
     private final int heapMb;
     private final ReusePolicy reusePolicy;
     private final CgroupMemoryLimiter cgroupLimiter;
@@ -97,15 +99,20 @@ public class TenantWorkerPool {
     }
 
     public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer) {
-        this(vertx, binaryPath, mode, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer, null);
+        this(vertx, binaryPath, mode, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer, null, 1);
     }
 
     public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget) {
+        this(vertx, binaryPath, mode, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, 1);
+    }
+
+    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget, int maxJobsPerWorker) {
         this.vertx = Objects.requireNonNull(vertx, "vertx");
         this.binaryPath = binaryPath;
         this.mode = (mode == null || mode.isBlank()) ? "javet" : mode.toLowerCase(Locale.ROOT);
         this.minWarm = Math.max(0, minWarm);
         this.maxTotal = Math.max(1, maxTotal);
+        this.maxJobsPerWorker = Math.max(1, maxJobsPerWorker);
         this.heapMb = Math.max(16, heapMb);
         this.reusePolicy = Objects.requireNonNull(reusePolicy, "reusePolicy");
         this.cgroupLimiter = Objects.requireNonNull(cgroupLimiter, "cgroupLimiter");
@@ -155,7 +162,17 @@ public class TenantWorkerPool {
             return Future.failedFuture(new IllegalStateException("Worker pool is closed"));
         }
 
-        // 1. If reuse is enabled, check if we already have a bound idle worker for this tenant
+        // 1. A worker of this tenant that still has room takes the job, so one process runs several jobs at once
+        //    (D-155). With a one-job worker hasCapacity() is false while it runs, so this changes nothing until
+        //    workers are constructed with a higher limit — which is the config half of this step.
+        for (WorkerProcessHandle active : activeWorkers.values()) {
+            if (tenantId.equals(active.boundTenantId()) && active.isAlive() && active.hasCapacity()) {
+                workerBecameActive(active.pid(), tenantId);
+                return Future.succeededFuture(active);
+            }
+        }
+
+        // 2. If reuse is enabled, check if we already have a bound idle worker for this tenant
         if (reusePolicy == ReusePolicy.REUSE_SAME_TENANT) {
             List<WorkerProcessHandle> list = tenantWarmQueue.get(tenantId);
             if (list != null && !list.isEmpty()) {
@@ -340,6 +357,10 @@ public class TenantWorkerPool {
                 command.add("ipc");
                 command.add("--heap-mb");
                 command.add(String.valueOf(heapMb));
+                // The worker may run this many jobs at once, each in its own context (D-155). WorkerMain defaults
+                // to 2, so this is what actually decides it.
+                command.add("--threads");
+                command.add(String.valueOf(maxJobsPerWorker));
             } else {
                 String javaBin = ProcessHandle.current().info().command()
                         .orElse(System.getProperty("java.home") + File.separator + "bin" + File.separator + "java");
@@ -350,6 +371,10 @@ public class TenantWorkerPool {
                 command.add("ipc");
                 command.add("--heap-mb");
                 command.add(String.valueOf(heapMb));
+                // The worker may run this many jobs at once, each in its own context (D-155). WorkerMain defaults
+                // to 2, so this is what actually decides it.
+                command.add("--threads");
+                command.add(String.valueOf(maxJobsPerWorker));
             }
 
             ProcessBuilder pb = new ProcessBuilder(command);
@@ -372,7 +397,7 @@ public class TenantWorkerPool {
 
             String workerId = "worker-" + pid;
             NodeWorkerChannel channel = new NodeWorkerChannel(workerId, output, input, new cluster93.runner.protocol.flow.CreditManager(), authorizer);
-            WorkerProcessHandle handle = new WorkerProcessHandle(process, channel);
+            WorkerProcessHandle handle = new WorkerProcessHandle(process, channel, maxJobsPerWorker);
 
             // A worker must say hello; if it dies first, or never answers, fail the acquire instead of waiting forever.
             AtomicBoolean settled = new AtomicBoolean(false);
