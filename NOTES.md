@@ -149,3 +149,61 @@ The goal is a `--help` that reads as one story — set up a master, set up a dev
 - Where do the three "install pathways" share code — `c93 node install` (release fetch + layout) is the one implementation today; does the Docker route reuse the same artifacts?
 
 **Related:** Phase 11 consolidation (W1, W5) already removes some of the duplication; this is the bigger follow-up.
+
+---
+
+## Open items after Phase 11 (plan)
+
+*Captured 2026-10-14. Ordered by value, not effort.*
+
+### 1. The engine conformance suite doesn't run (highest value)
+
+`runtime-javet/pom.xml` and `runtime-graaljs/pom.xml` list `c93:cluster93-runtime-js` in
+`<dependenciesToScan>`, but the groupId is `cluster93` (the rebrand renamed it). Surefire therefore
+matches nothing: **`runtime-js`'s ~14 test classes never run on either engine**, and `mvn verify` is
+green without them. Found while verifying D-139, whose test only ran because it was invoked by hand.
+
+- **Fix:** `c93:` → `cluster93:` in both poms (two lines).
+- **Then:** `./mvnw -o -pl runtime-javet,runtime-graaljs test` should run the suite on V8 and GraalJS;
+  expect failures to triage, since it hasn't run for a while.
+- **Guard:** a line in `TESTING.md`, or a check that fails when the scan finds no tests.
+
+### 2. Benchmarks: decide their place
+
+The harness is consolidated (`benchmarks/run.sh cluster|engines|all`), but its numbers are from one
+laptop on 2026-10-07 and are no longer a headline claim. Options:
+
+- **(a) Remove:** delete `benchmarks/` + `docs/benchmarks.md` + the links (loses D-126's engine-comparison evidence and D-059's upload numbers).
+- **(b) De-emphasise (recommended):** keep the harness, stop quoting the numbers in README/ROADMAP, and mark `docs/benchmarks.md` as indicative and dated.
+- **(c) Keep only `engines`:** the engine comparison is the evidence for the engine choice (D-126); drop the cluster harness (Docker, ~10 min, and it regenerates the doc).
+- **(d) Freeze:** leave as is, stop maintaining it.
+
+**Decision needed.**
+
+### 3. A real signed release (so install and update are proven end to end)
+
+`install.sh --node` and `c93 update` are proven against local release hosts only: the published release
+predates the platform assets (`c93.jar`, `worker-*.gz`, `cluster93-cli.jar`) and the workflow is
+`.disabled`. Plan: run `scripts/release-local.sh <version>` with the signing key
+(`C93_RELEASE_PASSPHRASE`) and `C93_GITHUB_TOKEN` to publish a signed release, then prove
+`install.sh --node` and `c93 update --cli|--node` against GitHub.
+
+### 4. `--system` install (root-only, unverified)
+
+`c93 node install --system` creates the `cluster93` user, owns `/var/lib/cluster93`, and writes
+`/etc/cluster93/node.env` as `0640 root:cluster93` — verified only by unit tests, because it needs root.
+Plan: a throwaway container or VM where `sudo c93 node install --system` runs, checking the ownership and
+`systemctl start cluster93` (and that `uninstall` leaves the user in place).
+
+### 5. Flakes
+
+- **Ignite suite cascade:** the server module under `mvn verify` shares one JVM, so a `FileFailoverTest`
+  discovery-join failure cascades into "Ignite instance already started" for the rest of the class. It
+  passes in isolation and under `scripts/test-all.sh` (`-DreuseForks=false`). Plan: either accept the
+  documented flake, or fork per test class.
+- **Transient jar/manifest read:** `CliTest.clusterInitAndNodeInviteMakeOneLineJoins` failed once with
+  `IOException: invalid header field`; it passes in isolation and on re-run. Watch for recurrence.
+
+### 6. `lasttest.txt`
+
+`scripts/test-all.sh` writes it at the repo root and it is untracked. Add it to `.gitignore`.
