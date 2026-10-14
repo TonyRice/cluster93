@@ -20,6 +20,8 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     private final String defaultMode;
     private final int minWarmPerTenant;
     private final int maxTotalPerTenant;
+    /** How many jobs one worker runs at once (D-155), passed to every pool this manager creates. */
+    private final int maxJobsPerWorker;
     /** The node-wide allowance shared by every tenant's pool, so n tenants cannot spawn n × capacity (D-156). */
     private final WorkerBudget nodeBudget;
     /**
@@ -35,7 +37,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     private final Map<String, TenantWorkerPool> tenantPools = new ConcurrentHashMap<>();
 
     public TenantWorkerPoolManager(Vertx vertx, Map<String, String> modeBinaries, String defaultMode) {
-        this(vertx, modeBinaries, defaultMode, 1, 8, 8, 128, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), NodeRpcAuthorizer.ALLOW_ALL);
+        this(vertx, modeBinaries, defaultMode, 1, 8, 8, 4, 128, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), NodeRpcAuthorizer.ALLOW_ALL);
     }
 
     public TenantWorkerPoolManager(Vertx vertx,
@@ -44,6 +46,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
                                    int minWarmPerTenant,
                                    int maxTotalPerTenant,
                                    int nodeWideWorkers,
+                                   int maxJobsPerWorker,
                                    int heapMb,
                                    TenantWorkerPool.ReusePolicy reusePolicy,
                                    CgroupMemoryLimiter cgroupLimiter,
@@ -53,6 +56,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         this.defaultMode = defaultMode != null ? defaultMode : "javet";
         this.minWarmPerTenant = Math.max(0, minWarmPerTenant);
         this.maxTotalPerTenant = Math.max(1, maxTotalPerTenant);
+        this.maxJobsPerWorker = Math.max(1, maxJobsPerWorker);
         // NOT YET BOUNDED. Gating spawns on the shared allowance deadlocks against per-pool warm workers: each
         // tenant's pool holds minWarm against the same budget, so several tenants fill it with idle workers between
         // them and a tenant that then cannot spawn queues forever (PackagesTest hangs). The budget is accounted and
@@ -72,7 +76,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         Objects.requireNonNull(tenantId, "tenantId");
         return tenantPools.computeIfAbsent(tenantId, t -> {
             String binary = resolveModeBinary(defaultMode);
-            return new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget)
+            return new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker)
                     .arbiter(this);
         });
     }
@@ -91,7 +95,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         String poolKey = tenantId + ":" + effectiveMode;
         TenantWorkerPool pool = tenantPools.computeIfAbsent(poolKey, k -> {
             String binary = resolveModeBinary(effectiveMode);
-            return new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget)
+            return new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker)
                     .arbiter(this);
         });
         return pool.acquire(tenantId);

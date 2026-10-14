@@ -376,11 +376,14 @@ public final class Cluster93 {
                     config.workerBinaries(),
                     config.workerDefaultMode(),
                     1,
-                    // Still the pool's *worker* limit: workers are one-job-per-worker until the lifecycle change, so
-                    // passing the per-tenant *job* cap here would halve a tenant's throughput. It moves when a
-                    // worker holds several jobs (work order step 3).
+                    // A tenant's worker allowance. Deriving it from maxJobsPerTenant (ceil(jobsPerTenant /
+                    // jobsPerWorker)) is the design, but it HALVES a tenant's concurrency today — 8 workers became
+                    // 4 — because maxJobsPerTenant defaults to capacity/2 and was never actually enforced while a
+                    // worker ran one job. So the concurrency semantics have to be settled first: is a tenant's
+                    // allowance C93_CAPACITY (what the tests assume) or C93_MAX_JOBS_PER_TENANT (what D-156 says)?
                     config.capacity(),
                     config.capacity(),
+                    config.maxJobsPerWorker(),
                     config.maxHeapMb(),
                     cluster93.runner.protocol.pool.TenantWorkerPool.ReusePolicy.FRESH_PER_JOB,
                     new cluster93.runner.protocol.pool.CgroupMemoryLimiter(),
