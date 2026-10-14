@@ -629,6 +629,102 @@ class NodeCommandTest {
     }
 
     @Test
+    void aContainerInstallLaysOutItsEnvComposeAndTlsBesideItsConfig() {
+        NodeInstall.Layout layout = NodeInstall.containerLayout(io(), false, null);
+
+        assertThat(layout.container()).isTrue();
+        assertThat(layout.unitKind()).isEqualTo(NodeInstall.Layout.Kind.CONTAINER);
+        // The program lives in the image, so programDir is the configuration root (D-141).
+        assertThat(layout.programDir()).isEqualTo(configDir);
+        assertThat(layout.envFile()).isEqualTo(configDir.resolve("node.env"));
+        assertThat(layout.composeFile()).isEqualTo(configDir.resolve("compose.yaml"));
+        assertThat(layout.tlsDir()).isEqualTo(configDir.resolve("tls"));
+        assertThat(layout.dataDir()).isEqualTo(home.resolve(".local/share/cluster93/data"));
+        // No unit: the compose file is its definition, and Docker supervises it.
+        assertThat(layout.unitFile()).isNull();
+        assertThat(NodeInstall.renderUnit(io(), layout, Map.of())).isEmpty();
+    }
+
+    @Test
+    void aContainerNodeIsClusteredSizeOneWithDurableDataAndTls() {
+        Map<String, String> config = NodeInstall.containerConfig("node-1");
+
+        // D-142: durable Ignite from the first start, which needs an explicit data dir and certificates.
+        assertThat(config).containsEntry("C93_CLUSTERED", "true");
+        assertThat(config).containsEntry("C93_CLUSTER_SIZE", "1");
+        assertThat(config).containsEntry("C93_CLUSTER_MEMBERS", "node-1");
+        assertThat(config).containsEntry("C93_CLUSTER_BIND", "node-1");
+        assertThat(config).containsEntry("C93_TLS_DIR", "/tls");
+        assertThat(config).containsEntry("C93_DATA_DIR", "/var/lib/cluster93");
+        // The image ships bin/worker-*, so workers run as processes (D-142).
+        assertThat(config).containsEntry("C93_WORKER_MODE", "process");
+        // The ports in node.env are the container's; the host mapping is compose's job.
+        assertThat(config).containsEntry("C93_HTTP_PORT", "9393");
+        assertThat(config.get("C93_ADMIN_TOKEN")).hasSize(64);
+    }
+
+    @Test
+    void theComposePublishesTheControlPlaneAndExposesOnlyTheInternalEndpoint() {
+        NodeInstall.Layout layout = NodeInstall.containerLayout(io(), false, null);
+        String compose = NodeInstall.renderCompose(layout, NodeInstall.containerConfig("node-1"),
+                "docker", "cluster93-node:2.0.0-local", "0.0.0.0", true);
+
+        assertThat(compose).contains("image: cluster93-node:2.0.0-local");
+        assertThat(compose).contains("container_name: cluster93-node-1");
+        assertThat(compose).contains("hostname: node-1");
+        assertThat(compose).contains("restart: unless-stopped");
+        assertThat(compose).contains("env_file: node.env");
+        // The API, ingress, metrics and cluster ports are published; 9396 is only exposed (S8).
+        assertThat(compose).contains("\"0.0.0.0:9393:9393\"");
+        assertThat(compose).contains("\"0.0.0.0:9394:9394\"");
+        assertThat(compose).contains("\"0.0.0.0:9395:9395\"");
+        assertThat(compose).contains("\"0.0.0.0:5701:5701\"");
+        assertThat(compose).contains("\"0.0.0.0:5801:5801\"");
+        assertThat(compose).contains("expose: [\"9396\"]");
+        assertThat(compose).doesNotContain("9396:9396");
+        // Persistence is the bind mount, and the certificates are read-only (D-142).
+        assertThat(compose).contains(layout.dataDir() + ":/var/lib/cluster93");
+        assertThat(compose).contains(layout.tlsDir() + ":/tls:ro");
+        // Hardening (S4).
+        assertThat(compose).contains("cap_drop: [ALL]");
+        assertThat(compose).contains("no-new-privileges:true");
+        assertThat(compose).contains("read_only: true");
+        assertThat(compose).contains("pids_limit");
+    }
+
+    @Test
+    void theComposeBindAddressAndClusterPortsAreOptional() {
+        NodeInstall.Layout layout = NodeInstall.containerLayout(io(), false, null);
+        String compose = NodeInstall.renderCompose(layout, NodeInstall.containerConfig("node-1"),
+                "docker", "img", "127.0.0.1", false);
+
+        assertThat(compose).contains("\"127.0.0.1:9393:9393\"");
+        // --no-publish-cluster-ports keeps Ignite off the host network.
+        assertThat(compose).doesNotContain("5701:5701");
+        assertThat(compose).doesNotContain("5801:5801");
+    }
+
+    @Test
+    void aContainerInstallRecordsBothDataDirsAndTheEngineInItsMeta() throws Exception {
+        NodeInstall.Layout layout = NodeInstall.containerLayout(io(), false, null);
+        Files.createDirectories(layout.envFile().getParent());
+        Files.writeString(layout.envFile(), "C93_NODE_ID=node-1\n");
+
+        NodeInstall.writeContainerMeta(layout, "docker", false, "cluster93-node:local", "2.0.0-local", "node-1");
+
+        Map<String, String> meta = NodeCommand.loadKeyValues(NodeInstall.metaFile(layout));
+        assertThat(meta).containsEntry("kind", "container");
+        assertThat(meta).containsEntry("engine", "docker");
+        assertThat(meta).containsEntry("engine_rootless", "false");
+        assertThat(meta).containsEntry("image", "cluster93-node:local");
+        assertThat(meta).containsEntry("project", "cluster93-node-1");
+        assertThat(meta).containsEntry("in_container_data_dir", "/var/lib/cluster93");
+        // The host path and the in-container path differ, and --purge depends on knowing both (D-141).
+        assertThat(meta).containsEntry("host_data_dir", layout.dataDir().toString());
+        assertThat(meta).containsEntry("version", "2.0.0-local");
+    }
+
+    @Test
     void aSecondInstallOfTheOtherKindIsRefused(@TempDir Path dir) throws Exception {
         Path otherEnv = Files.writeString(dir.resolve("node.env"), "C93_NODE_ID=other\n");
         NodeInstall.Layout user = NodeInstall.userLayout(io(), dir.resolve("prog"));

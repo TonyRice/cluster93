@@ -235,7 +235,7 @@ public final class Cluster93 {
             } else {
                 request.response().setStatusCode(404).end();
             }
-        }).listen(config.metricsPort()).map(io.vertx.core.http.HttpServer::actualPort);
+        }).listen(config.metricsPort(), config.httpBind()).map(io.vertx.core.http.HttpServer::actualPort);
     }
 
     /**
@@ -464,7 +464,7 @@ public final class Cluster93 {
             cluster93.server.ingress.AppRouter appRouter = new cluster93.server.ingress.AppRouter(stores.apps(), visibleFiles,
                     config.ingressDomain(), config.consoleDomain(),
                     cluster93.server.ingress.CidrMatcher.parse(config.consoleAllowedCidrs()), config.roles());
-            IngressVerticle ingress = ingressRole ? new IngressVerticle(config.ingressPort(), hostRouter, services, jobs, nodes,
+            IngressVerticle ingress = ingressRole ? new IngressVerticle(config.ingressPort(), config.httpBind(), hostRouter, services, jobs, nodes,
                     security.tls() == null ? secret : null, config.ingressIdleTimeout(), config.ingressUpgradedIdleTimeout(), config.maxRequestBytes(),
                     security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls()),
                     appRouter, visibleFiles, () -> api == null ? -1 : api.port()) : null;

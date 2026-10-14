@@ -24,6 +24,19 @@ class ServerConfigTest {
     }
 
     @Test
+    @DisplayName("The API, ingress and metrics bind all interfaces by default, as they always have")
+    void httpBindDefaultsToAllInterfaces() {
+        assertThat(ServerConfig.fromEnv(Map.of()).httpBind()).isEqualTo("0.0.0.0");
+        assertThat(ServerConfig.fromEnv(Map.of("C93_HTTP_BIND", "   ")).httpBind()).isEqualTo("0.0.0.0");
+    }
+
+    @Test
+    @DisplayName("C93_HTTP_BIND restricts the control plane to one address (D-151)")
+    void httpBindIsParsedFromEnv() {
+        assertThat(ServerConfig.fromEnv(Map.of("C93_HTTP_BIND", "127.0.0.1")).httpBind()).isEqualTo("127.0.0.1");
+    }
+
+    @Test
     @DisplayName("Roles default to every persona, so an unconfigured node is a full development node")
     void rolesDefaultToAll() {
         assertThat(ServerConfig.fromEnv(Map.of()).roles()).containsExactlyInAnyOrderElementsOf(ALL_ROLES);

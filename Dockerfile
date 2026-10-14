@@ -46,6 +46,13 @@ FROM runtime AS local-jar
 COPY server/target/c93.jar /opt/cluster93/c93.jar
 USER c93
 
+# A node image ships the native workers as well, so the server can run C93_WORKER_MODE=process (D-142).
+# local-jar deliberately does not, which is why the demo runs embedded. Expect ~500 MB larger.
+FROM runtime AS node
+COPY server/target/c93.jar /opt/cluster93/c93.jar
+COPY bin/worker-javet bin/worker-graaljs /opt/cluster93/bin/
+USER c93
+
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY .mvn .mvn

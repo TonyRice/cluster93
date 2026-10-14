@@ -47,6 +47,7 @@ public final class IngressVerticle extends VerticleBase {
             "proxy-authorization", "proxy-authenticate");
 
     private final int port;
+    private final String bindHost;
     private final HostRouter router;
     private final ServiceStore services;
     private final JobStore jobs;
@@ -73,13 +74,14 @@ public final class IngressVerticle extends VerticleBase {
      * @param files       the VFS, for serving an app's static assets directly
      * @param apiPort     this node's API port, for the same-origin {@code api:} rewrite
      */
-    public IngressVerticle(int port, HostRouter router, ServiceStore services, JobStore jobs, NodeRegistry nodes, String secret,
+    public IngressVerticle(int port, String bindHost, HostRouter router, ServiceStore services, JobStore jobs, NodeRegistry nodes, String secret,
                            Duration idleTimeout, Duration upgradedIdleTimeout, long maxRequestBytes,
                            java.util.function.UnaryOperator<HttpClientOptions> internalTls, AppRouter appRouter, FileStore files,
                            java.util.function.IntSupplier apiPort) {
         this.upgradedIdleTimeout = upgradedIdleTimeout;
         this.internalTls = internalTls;
         this.port = port;
+        this.bindHost = bindHost;
         this.router = router;
         this.services = services;
         this.jobs = jobs;
@@ -103,7 +105,7 @@ public final class IngressVerticle extends VerticleBase {
         apiClient = vertx.createHttpClient(new HttpClientOptions().setKeepAlive(true), new PoolOptions().setHttp1MaxSize(64));
         // Expect: 100-continue is answered at once, as Node's server does without a 'checkContinue' listener (D-123).
         return vertx.createHttpServer(new io.vertx.core.http.HttpServerOptions().setHandle100ContinueAutomatically(true))
-                .requestHandler(this::handle).listen(port).onSuccess(bound -> server = bound);
+                .requestHandler(this::handle).listen(port, bindHost).onSuccess(bound -> server = bound);
     }
 
     private void handle(HttpServerRequest request) {

@@ -61,10 +61,15 @@ final class NodeInstall {
 
     /** Where an installed node's pieces live: resolved from the platform and the flags. */
     record Layout(boolean system, Path programDir, Path envFile, Path dataDir, Path logDir, Path unitFile,
-                  Kind unitKind, String owner) {
+                  Kind unitKind, String owner, Path composeFile, Path tlsDir) {
 
         /** What kind of unit (if any) this layout was installed with. */
-        enum Kind { SYSTEMD_SYSTEM, SYSTEMD_USER, LAUNCHD, NONE }
+        enum Kind { SYSTEMD_SYSTEM, SYSTEMD_USER, LAUNCHD, NONE, CONTAINER }
+
+        /** Whether this node runs as a container rather than as a service unit or a bare process. */
+        boolean container() {
+            return unitKind == Kind.CONTAINER;
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -99,7 +104,21 @@ final class NodeInstall {
     static Layout systemLayout() {
         return new Layout(true, Path.of("/opt/cluster93"), Path.of("/etc/cluster93/node.env"),
                 Path.of("/var/lib/cluster93"), null, Path.of("/etc/systemd/system/cluster93.service"),
-                Layout.Kind.SYSTEMD_SYSTEM, "cluster93");
+                Layout.Kind.SYSTEMD_SYSTEM, "cluster93", null, null);
+    }
+
+    /**
+     * A container node's layout (D-141). There is no program directory on the host — the program lives in the image —
+     * so {@code programDir} is the configuration root, and the compose file and TLS directory sit beside it.
+     */
+    static Layout containerLayout(Io io, boolean system, Path dir) {
+        Path configDir = system ? Path.of("/etc/cluster93") : io.configDir();
+        Path dataDir = dir != null ? dir.toAbsolutePath()
+                : system ? Path.of("/var/lib/cluster93") : dataHome(io).resolve("cluster93").resolve("data");
+        return new Layout(system, configDir, configDir.resolve("node.env"), dataDir,
+                dataDir.resolve("logs"), null, Layout.Kind.CONTAINER,
+                system ? SYSTEM_USER : System.getProperty("user.name", ""),
+                configDir.resolve("compose.yaml"), configDir.resolve("tls"));
     }
 
     /**
@@ -124,7 +143,7 @@ final class NodeInstall {
             unitFile = configHome.resolve("systemd").resolve("user").resolve("cluster93.service");
             kind = Layout.Kind.SYSTEMD_USER;
         }
-        return new Layout(false, programDir, envFile, dataDir, logDir, unitFile, kind, System.getProperty("user.name", ""));
+        return new Layout(false, programDir, envFile, dataDir, logDir, unitFile, kind, System.getProperty("user.name", ""), null, null);
     }
 
     /** The layout of the node that is installed, system when its config exists, else the user's. */
@@ -317,6 +336,128 @@ final class NodeInstall {
         return config;
     }
 
+    // ----------------------------------------------------------------------
+    // container nodes (D-141, D-142)
+    // ----------------------------------------------------------------------
+
+    /**
+     * The environment a container node reads. Clustered size 1 from the first start, so durable Ignite is on
+     * immediately (D-142); TLS under {@code /tls}; data at {@code /var/lib/cluster93}, which compose bind-mounts.
+     * Ports here are the <em>container's</em> ports — the host mapping lives in the compose file.
+     */
+    static Map<String, String> containerConfig(String nodeId) {
+        Map<String, String> config = new LinkedHashMap<>();
+        config.put("C93_NODE_ID", nodeId);
+        config.put("C93_ROLES", "api,ingress,worker,data,console");
+        config.put("C93_CLUSTERED", "true");
+        config.put("C93_CLUSTER_SIZE", "1");
+        config.put("C93_CLUSTER_MEMBERS", nodeId);
+        config.put("C93_CLUSTER_BIND", nodeId);
+        config.put("C93_TLS_DIR", "/tls");
+        config.put("C93_DATA_DIR", "/var/lib/cluster93");
+        config.put("C93_HTTP_PORT", "9393");
+        config.put("C93_INGRESS_PORT", "9394");
+        config.put("C93_METRICS_PORT", "9395");
+        // The image ships bin/worker-*, so a container node runs its workers as processes by default (D-142).
+        config.put("C93_WORKER_MODE", "process");
+        config.put("C93_WORKER_DEFAULT_MODE", "graaljs");
+        config.put("C93_ADMIN_TOKEN", generateToken());
+        config.put("C93_TENANT", "local");
+        return config;
+    }
+
+    /** The invoking user's numeric uid:gid, which a user container runs as so the bind-mounted data dir is writable. */
+    static String currentUidGid() {
+        try {
+            String status = Files.readString(Path.of("/proc/self/status"));
+            String uid = null;
+            String gid = null;
+            for (String line : status.split("\n")) {
+                if (line.startsWith("Uid:")) {
+                    uid = line.trim().split("\\s+")[1];
+                } else if (line.startsWith("Gid:")) {
+                    gid = line.trim().split("\\s+")[1];
+                }
+            }
+            if (uid != null && gid != null) {
+                return uid + ":" + gid;
+            }
+        } catch (IOException | RuntimeException ignored) {
+            // fall through: the image's own user is the safe default
+        }
+        return "10001:10001";
+    }
+
+    /**
+     * The generated compose file: one node, its data bind-mounted so {@code --purge}, backups and paths match a
+     * process install, and its certificates read-only (D-141, D-142). Never hand-edited.
+     *
+     * <p>Ports: 9393/9394/9395 and 5701/5801 are published, so the console, API and peers can reach them; 9396 is
+     * only {@code expose}d, because it is the ingress-proxy endpoint, it is mTLS-protected, and publishing it adds
+     * no capability (D-148, S8).
+     */
+    static String renderCompose(Layout layout, Map<String, String> config, String engine, String image,
+                                String bindAddress, boolean publishCluster) {
+        String nodeId = config.get("C93_NODE_ID");
+        String project = "cluster93-" + nodeId;
+        String user = layout.system() ? "10001:10001" : currentUidGid();
+        StringBuilder compose = new StringBuilder();
+        compose.append("# Generated by `c93 node install --docker`. Edit node.env, not this file.\n");
+        compose.append("# Engine: ").append(engine).append("  Image: ").append(image).append("\n");
+        compose.append("services:\n");
+        compose.append("  node:\n");
+        compose.append("    image: ").append(image).append("\n");
+        compose.append("    container_name: ").append(project).append("\n");
+        compose.append("    hostname: ").append(nodeId).append("\n");
+        compose.append("    restart: unless-stopped\n");
+        compose.append("    user: \"").append(user).append("\"\n");
+        compose.append("    env_file: node.env\n");
+        // Hardening (S4): no capabilities, no setuid escalation, a read-only root, and a bounded process table.
+        compose.append("    cap_drop: [ALL]\n");
+        compose.append("    security_opt: [no-new-privileges:true]\n");
+        compose.append("    read_only: true\n");
+        compose.append("    tmpfs: [/tmp]\n");
+        compose.append("    pids_limit: 2048\n");
+        compose.append("    ports:\n");
+        compose.append("      - \"").append(bindAddress).append(":9393:9393\"\n");
+        compose.append("      - \"").append(bindAddress).append(":9394:9394\"\n");
+        compose.append("      - \"").append(bindAddress).append(":9395:9395\"\n");
+        if (publishCluster) {
+            compose.append("      - \"").append(bindAddress).append(":5701:5701\"\n");
+            compose.append("      - \"").append(bindAddress).append(":5801:5801\"\n");
+        }
+        // 9396 stays cluster-internal: mTLS-protected, and peers reach it over the docker network.
+        compose.append("    expose: [\"9396\"]\n");
+        compose.append("    volumes:\n");
+        compose.append("      - \"").append(layout.dataDir()).append(":/var/lib/cluster93\"\n");
+        compose.append("      - \"").append(layout.tlsDir()).append(":/tls:ro\"\n");
+        compose.append("    healthcheck:\n");
+        compose.append("      test: [\"CMD\", \"bash\", \"-c\", \"exec 3<>/dev/tcp/localhost/9393 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3\"]\n");
+        compose.append("      interval: 5s\n");
+        compose.append("      retries: 12\n");
+        return compose.toString();
+    }
+
+    /** Records a container install: the engine, its rootless-ness, the image, and both data-dir paths. */
+    static void writeContainerMeta(Layout layout, String engine, boolean rootless, String image, String version,
+                                   String nodeId) throws IOException {
+        writeMeta(layout, version);
+        StringBuilder extra = new StringBuilder();
+        extra.append("kind=container\n");
+        extra.append("engine=").append(engine).append('\n');
+        extra.append("engine_rootless=").append(rootless).append('\n');
+        extra.append("image=").append(image).append('\n');
+        extra.append("compose_file=").append(layout.composeFile()).append('\n');
+        extra.append("tls_dir=").append(layout.tlsDir()).append('\n');
+        // The host data dir and the in-container one differ; --purge, backups and the bind mount all depend on it.
+        extra.append("host_data_dir=").append(layout.dataDir()).append('\n');
+        extra.append("in_container_data_dir=/var/lib/cluster93\n");
+        extra.append("project=cluster93-").append(nodeId).append('\n');
+        Path file = metaFile(layout);
+        Files.writeString(file, Files.readString(file) + extra);
+        restrict(file);
+    }
+
     /** A safe node id from the host name, so a fresh install is unique without prompting. */
     static String defaultNodeId() {
         try {
@@ -358,6 +499,8 @@ final class NodeInstall {
             case SYSTEMD_USER -> systemdUnit(io, layout, config, false);
             case LAUNCHD -> launchAgent(io, layout, config);
             case NONE -> "";
+            // A container node has no unit: the compose file is its definition and Docker supervises it (D-141).
+            case CONTAINER -> "";
         };
     }
 

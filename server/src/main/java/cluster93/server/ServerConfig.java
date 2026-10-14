@@ -19,6 +19,9 @@ import java.util.UUID;
  * @param requeueAfter  how long an attempt may sit QUEUED before it is dispatched again
  * @param stopGrace     how long a stopped job or service gets to finish before its isolate is terminated
  * @param maxServicesPerTenant how many enabled services one tenant may have
+ * @param httpBind      the address the API, ingress and metrics endpoints bind, so a node's control plane can be
+ *                      restricted to loopback (D-151); the internal endpoint is deliberately not covered by it,
+ *                      because peers must reach it and it is protected by node certificates
  * @param ingressPort   where services' HTTP traffic arrives (routed by Host)
  * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
  * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
@@ -52,6 +55,7 @@ import java.util.UUID;
 public record ServerConfig(
         String nodeId,
         int httpPort,
+        String httpBind,
         int capacity,
         int maxHeapMb,
         Duration defaultTimeout,
@@ -156,6 +160,8 @@ public record ServerConfig(
         return new ServerConfig(
                 env.getOrDefault("C93_NODE_ID", defaultNodeId()),
                 Integer.parseInt(env.getOrDefault("C93_HTTP_PORT", "9393")),
+                // The API, ingress and metrics bind address (D-151); all interfaces by default, as before.
+                blankToNull(env.get("C93_HTTP_BIND")) == null ? "0.0.0.0" : env.get("C93_HTTP_BIND").trim(),
                 Integer.parseInt(env.getOrDefault("C93_CAPACITY", "8")),
                 Integer.parseInt(env.getOrDefault("C93_MAX_HEAP_MB", "128")),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_DEFAULT_TIMEOUT_MS", "10000"))),

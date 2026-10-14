@@ -214,7 +214,7 @@ public final class ApiVerticle extends VerticleBase {
 
         return vertx.createHttpServer()
                 .requestHandler(router)
-                .listen(config.httpPort())
+                .listen(config.httpPort(), config.httpBind())
                 .onSuccess(bound -> server = bound);
     }
 
