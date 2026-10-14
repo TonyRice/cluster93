@@ -2756,3 +2756,24 @@ A status that is not an integer in `100..599` answers **500**, with the handler'
 
 **Evidence:**
 - `HostBridgeTest.servedResponsesAreNormalised` (runtime-js conformance suite) passes on the V8 engine with the guard, and asserted 500 rather than hanging.
+
+### D-140 — A second install of the other kind (user vs system) is refused
+**Date:** 2026-10-14 · **Status:** Accepted. Extends D-134 (the node layouts) and D-136 (the system account).
+
+**Context:**
+A user node and a system node are separate installs with separate configs, but both default to the same ports (`C93_HTTP_PORT=9393`, `C93_INGRESS_PORT=9394`, …). Installing both would produce two nodes that cannot both start, and `c93 node` would silently drive whichever `installedLayout` prefers.
+
+**Decision:**
+`c93 node install` refuses when the *other* kind is already installed — a user install when `/etc/cluster93/node.env` exists, a system install when `~/.config/cluster93/node.env` does — naming the file and how to remove it. `--force` installs both deliberately; they then need different ports in `node.env`.
+
+**Alternatives considered:**
+- **Let both install and fail at start.** Rejected: the clash surfaces much later, as a bind error in a log.
+- **Auto-assign different ports.** Rejected: it would move a node's ports silently, and the ports are the operator's choice.
+- **Make it a warning.** Rejected: "we don't install both" needs a refusal; `--force` is the deliberate escape.
+
+**Consequences:**
+- One node per machine by default; a second kind needs `--force` and different ports.
+- With both installed, `c93 node <verb>` addresses the system one (`installedLayout` prefers it); addressing the user one needs an explicit override (open — a `--user`/`--system` flag on the lifecycle verbs).
+
+**Evidence:**
+- `NodeCommandTest.aSecondInstallOfTheOtherKindIsRefused` (both directions, the message, `--force`, and the no-op cases).

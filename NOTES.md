@@ -180,7 +180,7 @@ laptop on 2026-10-07 and are no longer a headline claim. Options:
 
 **Decision needed.**
 
-### 3. A real signed release (so install and update are proven end to end)
+### 3. A real signed release (so install and update are proven end to end) — DEFERRED (no real release for now)
 
 `install.sh --node` and `c93 update` are proven against local release hosts only: the published release
 predates the platform assets (`c93.jar`, `worker-*.gz`, `cluster93-cli.jar`) and the workflow is
@@ -207,3 +207,34 @@ Plan: a throwaway container or VM where `sudo c93 node install --system` runs, c
 ### 6. `lasttest.txt`
 
 `scripts/test-all.sh` writes it at the repo root and it is untracked. Add it to `.gitignore`.
+
+### 7. Cross-install detection (done, D-140)
+
+A user node and a system node both default to the same ports (9393/9394), so installing both would leave
+them fighting over them. `c93 node install` now refuses when the *other* kind is already installed —
+either direction — naming the file and how to remove it, with `--force` to install both deliberately
+(and then different ports in `node.env`).
+
+- **Left open:** when both *are* installed (via `--force`), `c93 node <verb>` drives the system one,
+  because `installedLayout` prefers `/etc/cluster93/node.env`; the user one needs an explicit override.
+  A `--user`/`--system` flag on the lifecycle verbs (or on `node` itself) would let both be addressed.
+
+### 8. Docker as an install pathway (design needed)
+
+*"local or system install should be able to support docker too if they wanted, which would require file
+persistence."* Today Docker is only the demo (`docker-compose.yml`), not something `c93 node` installs or
+drives. The idea: `c93 node install --docker` (user or system) lays out a **container** instead of a
+process, with **persistent volumes** for the data dir (Ignite WAL/db) and the config/env, and the
+lifecycle verbs (`start`/`stop`/`status`/`logs`/`env`) drive `docker` (or `podman`).
+
+Open questions:
+- **Engine:** `docker` only, or `podman` too (rootless, a better fit for a system install)?
+- **Orchestration:** one `docker run --restart=always` with named volumes, or generate a compose file the
+  user owns and `c93 node` drives (`docker compose up -d`)?
+- **Layout:** where the container's env and volumes live (user `~/.config/cluster93` / system
+  `/etc/cluster93`); ports must be published, so the same clash rules as item 7 apply.
+- **Persistence:** a named volume (`cluster93-data`) vs a bind mount to the existing data dir — a bind
+  keeps `--purge` and backups simple and matches the process install; a named volume is more portable.
+- **Workers:** the image has no native workers, so `C93_WORKER_MODE=embedded` (as the demo does), unless
+  the image gains the Linux workers.
+- **Relationship:** this is one of the install pathways in the unified `c93 cluster` note above.

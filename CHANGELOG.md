@@ -6,6 +6,10 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **`c93 node install` refuses a second install of the other kind (D-140)**:
+  - A user node and a system node both default to the same ports, so installing both would leave them fighting over 9393/9394. `install` now detects the other kind's `node.env` (either direction) and refuses, naming the file and how to remove it; `--force` installs both deliberately (they then need different ports).
+
+
 - **Benchmarks de-emphasised (they are indicative, not a claim)**:
   - `docs/benchmarks.md` — and the harness that generates it — now open with "Indicative, not a benchmark claim … not maintained", the engine suite's README says the same about its runs, and the README index lists the page as indicative rather than as performance documentation.
   - The harness stays (`benchmarks/run.sh cluster|engines|all`): the numbers are a rough sense of the platform's shape, not a guarantee.

@@ -142,6 +142,21 @@ final class NodeInstall {
         return user;
     }
 
+    /**
+     * Refuses a second install of the other kind (user vs system) unless {@code force}. Both default to the same
+     * ports, so one has to go — or they must be given different ports deliberately (D-140).
+     */
+    static void refuseIfAlsoInstalled(Layout layout, Path otherEnv, boolean force) {
+        if (force || otherEnv == null || !Files.isRegularFile(otherEnv)) {
+            return;
+        }
+        String other = layout.system() ? "user" : "system";
+        String uninstall = layout.system() ? "c93 node uninstall" : "c93 node uninstall --system";
+        throw new CliException("A " + other + " node is already installed (" + otherEnv + "), and both would use "
+                + "the same ports. Uninstall it first (" + uninstall + "), or pass --force to install both "
+                + "deliberately (give them different ports in node.env).");
+    }
+
     /** {@code node.meta}: where an install put its pieces, beside {@code node.env}. */
     static Path metaFile(Layout layout) {
         return layout.envFile().getParent().resolve("node.meta");
@@ -190,6 +205,9 @@ final class NodeInstall {
         if (Files.exists(layout.envFile()) && !force) {
             throw new CliException("A node is already installed (" + layout.envFile() + "); use --force to replace it");
         }
+        // A user node and a system node default to the same ports, so a second install of the other kind would
+        // leave them fighting over 9393/9394 (D-140).
+        refuseIfAlsoInstalled(layout, (system ? userLayout(io, null) : systemLayout()).envFile(), force);
 
         String base = UpgradeCommand.installBase(io, version);
         if (!base.startsWith("https://") && io.env().get("C93_INSTALL_URL") == null) {

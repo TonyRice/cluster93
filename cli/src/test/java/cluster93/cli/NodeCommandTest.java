@@ -26,6 +26,7 @@ import java.util.HexFormat;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
 /**
@@ -625,6 +626,30 @@ class NodeCommandTest {
                 .containsExactly("useradd", "--system", "--user-group", "--home-dir", "/var/lib/cluster93",
                         "--no-create-home", "--shell", "/usr/sbin/nologin", "cluster93");
         assertThat(NodeInstall.nologinShell()).isIn("/usr/sbin/nologin", "/sbin/nologin", "/bin/false");
+    }
+
+    @Test
+    void aSecondInstallOfTheOtherKindIsRefused(@TempDir Path dir) throws Exception {
+        Path otherEnv = Files.writeString(dir.resolve("node.env"), "C93_NODE_ID=other\n");
+        NodeInstall.Layout user = NodeInstall.userLayout(io(), dir.resolve("prog"));
+
+        // A user install that finds a system install: both would use the same ports.
+        assertThatThrownBy(() -> NodeInstall.refuseIfAlsoInstalled(user, otherEnv, false))
+                .isInstanceOf(CliException.class)
+                .hasMessageContaining("A system node is already installed")
+                .hasMessageContaining("(c93 node uninstall --system)")
+                .hasMessageContaining("same ports")
+                .hasMessageContaining("--force");
+
+        // And the system install sees the user's env file the other way round.
+        assertThatThrownBy(() -> NodeInstall.refuseIfAlsoInstalled(NodeInstall.systemLayout(), otherEnv, false))
+                .hasMessageContaining("A user node is already installed")
+                .hasMessageContaining("(c93 node uninstall)");
+
+        // --force installs both deliberately (they then need different ports); no other install is a no-op.
+        NodeInstall.refuseIfAlsoInstalled(user, otherEnv, true);
+        NodeInstall.refuseIfAlsoInstalled(user, dir.resolve("missing.env"), false);
+        NodeInstall.refuseIfAlsoInstalled(user, null, false);
     }
 
     @Test
