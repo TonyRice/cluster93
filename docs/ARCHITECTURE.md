@@ -48,16 +48,16 @@ Cluster93 is organized into decoupled Maven modules with strict architectural bo
 
 | Module | Purpose | Key Package / Entry Points |
 |---|---|---|
-| [`cluster93-core`](../cluster93-core) | Core domain models, scheduling, storage abstractions, host APIs | `cluster93.core.runtime.api.HostApis`, `cluster93.core.host.NodeHostApis`, `cluster93.core.scheduler.NodeVerticle` |
-| [`cluster93-runtime-js`](../cluster93-runtime-js) | Engine-neutral JS SPI, bindings, prelude scripts | `cluster93.runtime.js.JsEngine`, `ScriptRunner`, `HostFunction` |
-| [`cluster93-runtime-javet`](../cluster93-runtime-javet) | V8 engine adapter using Javet | `cluster93.runtime.javet.JavetEngine` |
-| [`cluster93-runtime-graaljs`](../cluster93-runtime-graaljs) | GraalJS polyglot engine adapter | `cluster93.runtime.graaljs.GraalJsEngine` |
-| [`cluster93-runner-protocol`](../cluster93-runner-protocol) | IPC binary frame codec & `RemoteHostApis` | `cluster93.runner.protocol.frame.FrameCodec`, `RemoteHostApis` |
-| [`cluster93-worker`](../cluster93-worker) | Subprocess & native-image isolate runner | `cluster93.worker.WorkerMain` |
-| [`cluster93-cluster-ignite`](../cluster93-cluster-ignite) | Apache Ignite 2.18 persistence & clustering | `cluster93.cluster.ignite.IgniteClusterManager` |
-| [`cluster93-server`](../cluster93-server) | Ingress reverse proxy, REST APIs, WebSocket routing | `cluster93.server.Cluster93`, `IngressVerticle` |
-| [`cluster93-cli`](../cluster93-cli) | Command-line client | `cluster93.cli.CliMain` |
-| [`cluster93-tls`](../cluster93-tls) | TLS helper utilities and certificates | `cluster93.tls.TlsConfig` |
+| [`cluster93-core`](../core) | Core domain models, scheduling, storage abstractions, host APIs | `cluster93.core.runtime.api.HostApis`, `cluster93.core.host.NodeHostApis`, `cluster93.core.scheduler.NodeVerticle` |
+| [`cluster93-runtime-js`](../runtime-js) | Engine-neutral JS SPI, bindings, prelude scripts | `cluster93.runtime.js.JsEngine`, `ScriptRunner`, `HostFunction` |
+| [`cluster93-runtime-javet`](../runtime-javet) | V8 engine adapter using Javet | `cluster93.runtime.javet.JavetEngine` |
+| [`cluster93-runtime-graaljs`](../runtime-graaljs) | GraalJS polyglot engine adapter | `cluster93.runtime.graaljs.GraalJsEngine` |
+| [`cluster93-runner-protocol`](../runner-protocol) | IPC binary frame codec & `RemoteHostApis` | `cluster93.runner.protocol.frame.FrameCodec`, `RemoteHostApis` |
+| [`cluster93-worker`](../worker) | Subprocess & native-image isolate runner | `cluster93.worker.WorkerMain` |
+| [`cluster93-cluster-ignite`](../cluster-ignite) | Apache Ignite 2.18 persistence & clustering | `cluster93.cluster.ignite.IgniteClusterManager` |
+| [`cluster93-server`](../server) | Ingress reverse proxy, REST APIs, WebSocket routing | `cluster93.server.Cluster93`, `IngressVerticle` |
+| [`cluster93-cli`](../cli) | Command-line client | `cluster93.cli.CliMain` |
+| [`cluster93-tls`](../tls) | TLS helper utilities and certificates | `cluster93.tls.TlsConfig` |
 
 ---
 
@@ -88,7 +88,7 @@ HostApis (Interface in cluster93-core)
    - Backed by the cluster stores (`KvStore`, `FileStore`, `ServeRegistry`, `FetchClient`, `FileTree`).
    - Tenant-scoped: the Node resolves the tenant from internal records.
 2. **Worker Remote Proxy:**
-   - [`cluster93.runner.protocol.client.RemoteHostApis`](../cluster93-runner-protocol)
+   - [`cluster93.runner.protocol.client.RemoteHostApis`](../runner-protocol)
    - Dispatches RPC `CALL` frames over binary IPC pipes for authority-requiring operations.
    - Executes `crypto()` and `zlib()` locally in-process without network overhead.
 3. **No-op / Test Fallback:**
@@ -98,7 +98,7 @@ HostApis (Interface in cluster93-core)
 
 ## 3. JavaScript Runtime & Binding Layer
 
-Guest code executed inside Javet or GraalJS interacts with the host via [`cluster93-runtime-js`](../cluster93-runtime-js):
+Guest code executed inside Javet or GraalJS interacts with the host via [`cluster93-runtime-js`](../runtime-js):
 
 1. **Engine SPI:**
    - [`JsEngine`](../runtime-js/src/main/java/cluster93/runtime/js/JsEngine.java): Lifecycle factory for creating contexts.
