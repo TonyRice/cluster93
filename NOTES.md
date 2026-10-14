@@ -156,17 +156,16 @@ The goal is a `--help` that reads as one story — set up a master, set up a dev
 
 *Captured 2026-10-14. Ordered by value, not effort.*
 
-### 1. The engine conformance suite doesn't run (highest value)
+### 1. The engine conformance suite doesn't run — **FIXED**
 
-`runtime-javet/pom.xml` and `runtime-graaljs/pom.xml` list `c93:cluster93-runtime-js` in
-`<dependenciesToScan>`, but the groupId is `cluster93` (the rebrand renamed it). Surefire therefore
-matches nothing: **`runtime-js`'s ~14 test classes never run on either engine**, and `mvn verify` is
-green without them. Found while verifying D-139, whose test only ran because it was invoked by hand.
+`runtime-javet/pom.xml` and `runtime-graaljs/pom.xml` listed `c93:cluster93-runtime-js` in
+`<dependenciesToScan>`, but the groupId is `cluster93` (the rebrand renamed it). Surefire therefore matched
+nothing: `runtime-js`'s tests never ran on either engine, and `mvn verify` was green without them. Found
+while verifying D-139, whose test only ran because it was invoked by hand.
 
-- **Fix:** `c93:` → `cluster93:` in both poms (two lines).
-- **Then:** `./mvnw -o -pl runtime-javet,runtime-graaljs test` should run the suite on V8 and GraalJS;
-  expect failures to triage, since it hasn't run for a while.
-- **Guard:** a line in `TESTING.md`, or a check that fails when the scan finds no tests.
+**Fixed:** `c93:` → `cluster93:` in both poms. The suite runs on V8 and on GraalJS — **137 tests each, 0
+failures**, so nothing had rotted; it simply wasn't running. `TESTING.md` §3.3 now records where it lives,
+the count to expect, and the trap (a wrong groupId in those two poms silently runs nothing).
 
 ### 2. Benchmarks: decide their place
 
@@ -219,22 +218,26 @@ either direction — naming the file and how to remove it, with `--force` to ins
   because `installedLayout` prefers `/etc/cluster93/node.env`; the user one needs an explicit override.
   A `--user`/`--system` flag on the lifecycle verbs (or on `node` itself) would let both be addressed.
 
-### 8. Docker as an install pathway (design needed)
+### 8. Docker as an install pathway (NEXT UP — outline agreed, needs a deeper plan)
 
 *"local or system install should be able to support docker too if they wanted, which would require file
 persistence."* Today Docker is only the demo (`docker-compose.yml`), not something `c93 node` installs or
-drives. The idea: `c93 node install --docker` (user or system) lays out a **container** instead of a
-process, with **persistent volumes** for the data dir (Ignite WAL/db) and the config/env, and the
-lifecycle verbs (`start`/`stop`/`status`/`logs`/`env`) drive `docker` (or `podman`).
+drives.
 
-Open questions:
-- **Engine:** `docker` only, or `podman` too (rootless, a better fit for a system install)?
-- **Orchestration:** one `docker run --restart=always` with named volumes, or generate a compose file the
-  user owns and `c93 node` drives (`docker compose up -d`)?
-- **Layout:** where the container's env and volumes live (user `~/.config/cluster93` / system
-  `/etc/cluster93`); ports must be published, so the same clash rules as item 7 apply.
-- **Persistence:** a named volume (`cluster93-data`) vs a bind mount to the existing data dir — a bind
-  keeps `--purge` and backups simple and matches the process install; a named volume is more portable.
-- **Workers:** the image has no native workers, so `C93_WORKER_MODE=embedded` (as the demo does), unless
-  the image gains the Linux workers.
-- **Relationship:** this is one of the install pathways in the unified `c93 cluster` note above.
+Agreed in outline:
+- **The image ships the native workers** (`bin/worker-*`), so a Docker node can run `C93_WORKER_MODE=process`.
+- **Workers in their own container too.** The runner protocol already carries worker-node IPC, so a worker
+  can be a sibling container rather than a process inside the node's container. This is the piece that needs
+  the most design (the transport across a container boundary).
+- **Image source:** build locally for now (from the fetched release); signed releases later; `--image` so a
+  user can supply their own.
+- **Compose**, driven by `c93 node` (`docker compose up -d` / `down` / `logs`).
+- **Persistence:** bind-mount the container's `C93_DATA_DIR`, so `--purge`, backups and paths match a process
+  install.
+- **Engines:** try both `docker` and `podman`.
+- **Clash check:** a Docker node is a third kind, so D-140's detection must cover it (process-user,
+  process-system, docker).
+
+Shape: `c93 node install --docker [--system] [--dir DIR] [--version TAG] [--image IMAGE] [--no-start]`,
+laying out the config/env and a compose file, with the lifecycle verbs driving the container. **Plan this
+properly before building it.**

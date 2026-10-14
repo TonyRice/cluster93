@@ -6,6 +6,11 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **The engine conformance suite runs again (it silently hadn't been)**:
+  - `runtime-javet` and `runtime-graaljs` scanned `c93:cluster93-runtime-js` in `<dependenciesToScan>`, but the groupId is `cluster93` (the rebrand renamed it), so surefire matched nothing: `runtime-js`'s tests never ran on either engine and `mvn verify` was green without them.
+  - With the groupId corrected the suite runs on both engines — **137 tests each, 0 failures** — so nothing had rotted. `TESTING.md` §3.3 now records where it lives, the count to expect, and the trap.
+
+
 - **`c93 node install` refuses a second install of the other kind (D-140)**:
   - A user node and a system node both default to the same ports, so installing both would leave them fighting over 9393/9394. `install` now detects the other kind's `node.env` (either direction) and refuses, naming the file and how to remove it; `--force` installs both deliberately (they then need different ports).
 

@@ -160,6 +160,23 @@ If module dependencies are not already installed in the local repository, add
 - The UDS tests are skipped automatically on Windows; on Linux and macOS they
   run for real.
 
+### 3.3 The engine conformance suite (`runtime-js` on V8 and GraalJS)
+
+`cluster93-runtime-js` holds the engine-neutral tests — the scripting surface, host APIs, `node:*` stand-ins,
+`ctx.serve`, packages, queues — and **skips its own surefire** (`<skip>true</skip>`): they are packaged as a
+test-jar and run by the engine modules, which scan it.
+
+```bash
+./mvnw -o -pl runtime-javet test      # the suite on V8 (expect 137 tests)
+./mvnw -o -pl runtime-graaljs test    # the suite on GraalJS (expect 137 tests)
+```
+
+`EngineUnderTest` (in the test-jar) is provided by each engine module through `META-INF/services`, and the
+engine module's `<dependenciesToScan>` names that test-jar — so **the scan must use the current groupId**
+(`cluster93:cluster93-runtime-js`, not the pre-rebrand `c93:`). With the wrong groupId the scan matches
+nothing: surefire reports `Tests run: 0` and the build stays green without the suite, which is exactly what
+happened for a while. Check the count when touching those two poms.
+
 ---
 
 ## 4. Server Runtime Testing (`cluster93-server`)
