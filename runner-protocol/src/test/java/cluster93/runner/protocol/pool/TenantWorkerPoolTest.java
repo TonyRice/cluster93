@@ -24,6 +24,44 @@ import static org.junit.jupiter.api.Assertions.*;
 class TenantWorkerPoolTest {
 
     @Test
+    @DisplayName("The node-wide budget is what stops n tenants spawning n × capacity workers (D-156)")
+    void theNodeBudgetBoundsEveryTenantTogether() {
+        // capacity 8, two tenants, and each tenant's own pool would allow all 8: without a shared budget they
+        // could hold 16 workers between them.
+        WorkerBudget node = new WorkerBudget(8);
+
+        assertTrue(node.hasRoom());
+        for (int i = 0; i < 8; i++) {
+            assertTrue(node.tryAcquire(), "worker " + i + " should fit in the node's budget");
+        }
+        // The node is full: a second tenant's pool is refused, whatever its own maxTotal says.
+        assertFalse(node.hasRoom());
+        assertFalse(node.tryAcquire());
+        assertEquals(8, node.used());
+        assertEquals(8, node.limit());
+
+        // A worker finishing gives its share back, and only then is there room again.
+        node.release();
+        assertEquals(7, node.used());
+        assertTrue(node.tryAcquire());
+        assertEquals(8, node.used());
+    }
+
+    @Test
+    @DisplayName("An unbounded budget never refuses, for a pool that is the only one")
+    void anUnboundedBudgetNeverRefuses() {
+        WorkerBudget node = WorkerBudget.unbounded();
+
+        assertFalse(node.bounded());
+        for (int i = 0; i < 1000; i++) {
+            assertTrue(node.tryAcquire());
+        }
+        // release() is a no-op when unbounded, so a mismatched call cannot drive the count negative.
+        node.release();
+        assertEquals(0, node.used());
+    }
+
+    @Test
     @DisplayName("A freed worker does not go straight back to the tenant that just had one (D-153)")
     void aTenantWithABacklogDoesNotKeepThePool() {
         TenantWorkerPool.TenantRotation rotation = new TenantWorkerPool.TenantRotation();

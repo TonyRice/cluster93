@@ -20,6 +20,8 @@ public class TenantWorkerPoolManager {
     private final String defaultMode;
     private final int minWarmPerTenant;
     private final int maxTotalPerTenant;
+    /** The node-wide allowance shared by every tenant's pool, so n tenants cannot spawn n × capacity (D-156). */
+    private final WorkerBudget nodeBudget;
     private final int heapMb;
     private final TenantWorkerPool.ReusePolicy reusePolicy;
     private final CgroupMemoryLimiter cgroupLimiter;
@@ -28,7 +30,7 @@ public class TenantWorkerPoolManager {
     private final Map<String, TenantWorkerPool> tenantPools = new ConcurrentHashMap<>();
 
     public TenantWorkerPoolManager(Vertx vertx, Map<String, String> modeBinaries, String defaultMode) {
-        this(vertx, modeBinaries, defaultMode, 1, 8, 128, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), NodeRpcAuthorizer.ALLOW_ALL);
+        this(vertx, modeBinaries, defaultMode, 1, 8, 8, 128, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), NodeRpcAuthorizer.ALLOW_ALL);
     }
 
     public TenantWorkerPoolManager(Vertx vertx,
@@ -36,6 +38,7 @@ public class TenantWorkerPoolManager {
                                    String defaultMode,
                                    int minWarmPerTenant,
                                    int maxTotalPerTenant,
+                                   int nodeWideWorkers,
                                    int heapMb,
                                    TenantWorkerPool.ReusePolicy reusePolicy,
                                    CgroupMemoryLimiter cgroupLimiter,
@@ -45,6 +48,7 @@ public class TenantWorkerPoolManager {
         this.defaultMode = defaultMode != null ? defaultMode : "javet";
         this.minWarmPerTenant = Math.max(0, minWarmPerTenant);
         this.maxTotalPerTenant = Math.max(1, maxTotalPerTenant);
+        this.nodeBudget = new WorkerBudget(nodeWideWorkers);
         this.heapMb = Math.max(16, heapMb);
         this.reusePolicy = Objects.requireNonNull(reusePolicy, "reusePolicy");
         this.cgroupLimiter = Objects.requireNonNull(cgroupLimiter, "cgroupLimiter");
@@ -58,7 +62,7 @@ public class TenantWorkerPoolManager {
         Objects.requireNonNull(tenantId, "tenantId");
         return tenantPools.computeIfAbsent(tenantId, t -> {
             String binary = resolveModeBinary(defaultMode);
-            return new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer);
+            return new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget);
         });
     }
 
@@ -76,7 +80,7 @@ public class TenantWorkerPoolManager {
         String poolKey = tenantId + ":" + effectiveMode;
         TenantWorkerPool pool = tenantPools.computeIfAbsent(poolKey, k -> {
             String binary = resolveModeBinary(effectiveMode);
-            return new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer);
+            return new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget);
         });
         return pool.acquire(tenantId);
     }
@@ -110,6 +114,11 @@ public class TenantWorkerPoolManager {
         } else {
             worker.terminate();
         }
+    }
+
+    /** How many workers the node is running across every tenant, and what it may run. */
+    public WorkerBudget nodeBudget() {
+        return nodeBudget;
     }
 
     /**

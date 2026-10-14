@@ -58,6 +58,8 @@ public class TenantWorkerPool {
     private final cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer;
     /** How long a freshly spawned worker may take to say hello before it is given up on (D-135). */
     private final long helloTimeoutMs;
+    /** The node-wide allowance every tenant's pool draws from (D-156); null means this pool is the only one. */
+    private final WorkerBudget nodeBudget;
 
     private final Queue<WorkerProcessHandle> warmUnboundQueue = new ArrayDeque<>();
     private final Map<String, List<WorkerProcessHandle>> tenantWarmQueue = new ConcurrentHashMap<>();
@@ -89,6 +91,10 @@ public class TenantWorkerPool {
     }
 
     public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer) {
+        this(vertx, binaryPath, mode, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer, null);
+    }
+
+    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget) {
         this.vertx = Objects.requireNonNull(vertx, "vertx");
         this.binaryPath = binaryPath;
         this.mode = (mode == null || mode.isBlank()) ? "javet" : mode.toLowerCase(Locale.ROOT);
@@ -98,6 +104,7 @@ public class TenantWorkerPool {
         this.reusePolicy = Objects.requireNonNull(reusePolicy, "reusePolicy");
         this.cgroupLimiter = Objects.requireNonNull(cgroupLimiter, "cgroupLimiter");
         this.authorizer = Objects.requireNonNull(authorizer, "authorizer");
+        this.nodeBudget = nodeBudget;
         this.helloTimeoutMs = Math.max(1L, Long.getLong("cluster93.worker.helloTimeoutMs", DEFAULT_HELLO_TIMEOUT_MS));
 
         // Maintain warm unbound pool
@@ -172,8 +179,9 @@ public class TenantWorkerPool {
             }
         }
 
-        // 3. Can we spawn a new worker right now?
-        if (totalWorkers.get() < maxTotal) {
+        // 3. Can we spawn a new worker right now? Both this tenant's pool and the node as a whole must have room,
+        //    or a busy tenant set would each spawn up to their own maxTotal and overrun the node (D-156).
+        if (totalWorkers.get() < maxTotal && (nodeBudget == null || nodeBudget.hasRoom())) {
             Promise<WorkerProcessHandle> promise = Promise.promise();
             spawnWorker().onComplete(ar -> {
                 if (ar.succeeded()) {
@@ -306,7 +314,8 @@ public class TenantWorkerPool {
         if (closed.get()) {
             return;
         }
-        while (warmUnboundQueue.size() < minWarm && totalWorkers.get() < maxTotal) {
+        while (warmUnboundQueue.size() < minWarm && totalWorkers.get() < maxTotal
+                && (nodeBudget == null || nodeBudget.hasRoom())) {
             // spawnWorker counts the attempt against maxTotal and logs its own failure (with the worker's stderr).
             spawnWorker().onComplete(ar -> {
                 if (ar.succeeded()) {
@@ -328,6 +337,12 @@ public class TenantWorkerPool {
         // Counted from the moment the spawn starts, so maxTotal bounds in-flight workers too. Released by
         // recycleWorker on failure, or when the handle is recycled after use (D-135).
         totalWorkers.incrementAndGet();
+        if (nodeBudget != null && !nodeBudget.tryAcquire()) {
+            // Another tenant took the last of the node's allowance between the check and here.
+            totalWorkers.decrementAndGet();
+            promise.fail(new IllegalStateException("The node is at its worker capacity; try again shortly"));
+            return promise.future();
+        }
         try {
             List<String> command = new ArrayList<>();
             String resolvedBinary = (binaryPath != null && !binaryPath.isBlank()) ? resolveBinary(binaryPath, mode) : null;
@@ -398,6 +413,9 @@ public class TenantWorkerPool {
 
         } catch (Exception e) {
             totalWorkers.decrementAndGet();
+            if (nodeBudget != null) {
+                nodeBudget.release();
+            }
             LOG.warn("Worker didn't start: {}", e.getMessage());
             promise.fail(e);
         }
@@ -411,6 +429,9 @@ public class TenantWorkerPool {
             return;
         }
         totalWorkers.decrementAndGet();
+        if (nodeBudget != null) {
+            nodeBudget.release();
+        }
         cgroupLimiter.cleanup(worker.pid());
         inspectExit(worker);
         worker.terminate();

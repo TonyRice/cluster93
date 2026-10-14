@@ -22,6 +22,9 @@ import java.util.UUID;
  * @param httpBind      the address the API, ingress and metrics endpoints bind, so a node's control plane can be
  *                      restricted to loopback (D-151); the internal endpoint is deliberately not covered by it,
  *                      because peers must reach it and it is protected by node certificates
+ * @param maxJobsPerTenant how many jobs one tenant may run at once (D-156). {@code capacity / maxJobsPerTenant}
+ *                      is roughly how many tenants this node serves concurrently; a hard cap, so a quiet node
+ *                      idles by design, and a single-tenant node should set it to {@code capacity}
  * @param ingressPort   where services' HTTP traffic arrives (routed by Host)
  * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
  * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
@@ -57,6 +60,7 @@ public record ServerConfig(
         int httpPort,
         String httpBind,
         int capacity,
+        int maxJobsPerTenant,
         int maxHeapMb,
         Duration defaultTimeout,
         Duration maxTimeout,
@@ -163,6 +167,10 @@ public record ServerConfig(
                 // The API, ingress and metrics bind address (D-151); all interfaces by default, as before.
                 blankToNull(env.get("C93_HTTP_BIND")) == null ? "0.0.0.0" : env.get("C93_HTTP_BIND").trim(),
                 Integer.parseInt(env.getOrDefault("C93_CAPACITY", "8")),
+                // How many jobs one tenant may run at once (D-156). Half the node by default, so two tenants fit;
+                // a single-tenant node should set it to C93_CAPACITY. This is the reservation, not the ordering.
+                Integer.parseInt(env.getOrDefault("C93_MAX_JOBS_PER_TENANT",
+                        String.valueOf(Math.max(1, Integer.parseInt(env.getOrDefault("C93_CAPACITY", "8")) / 2)))),
                 Integer.parseInt(env.getOrDefault("C93_MAX_HEAP_MB", "128")),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_DEFAULT_TIMEOUT_MS", "10000"))),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_MAX_TIMEOUT_MS", "60000"))),

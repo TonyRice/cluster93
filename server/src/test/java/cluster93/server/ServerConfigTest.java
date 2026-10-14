@@ -24,6 +24,20 @@ class ServerConfigTest {
     }
 
     @Test
+    @DisplayName("The per-tenant job cap defaults to half the node, so two tenants fit (D-156)")
+    void maxJobsPerTenantDefaultsToHalfCapacity() {
+        // capacity 8 → 4 each, so two tenants run concurrently. The cap reserves; the rotation orders.
+        assertThat(ServerConfig.fromEnv(Map.of()).maxJobsPerTenant()).isEqualTo(4);
+        assertThat(ServerConfig.fromEnv(Map.of("C93_CAPACITY", "16")).maxJobsPerTenant()).isEqualTo(8);
+        assertThat(ServerConfig.fromEnv(Map.of("C93_MAX_JOBS_PER_TENANT", "2")).maxJobsPerTenant()).isEqualTo(2);
+        // A single-tenant node sets it to the whole node and is not throttled.
+        assertThat(ServerConfig.fromEnv(Map.of("C93_CAPACITY", "8", "C93_MAX_JOBS_PER_TENANT", "8"))
+                .maxJobsPerTenant()).isEqualTo(8);
+        // Never zero, even on the smallest node.
+        assertThat(ServerConfig.fromEnv(Map.of("C93_CAPACITY", "1")).maxJobsPerTenant()).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("The API, ingress and metrics bind all interfaces by default, as they always have")
     void httpBindDefaultsToAllInterfaces() {
         assertThat(ServerConfig.fromEnv(Map.of()).httpBind()).isEqualTo("0.0.0.0");

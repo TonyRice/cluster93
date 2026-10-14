@@ -376,6 +376,7 @@ public final class Cluster93 {
                     config.workerBinaries(),
                     config.workerDefaultMode(),
                     1,
+                    config.maxJobsPerTenant(),
                     config.capacity(),
                     config.maxHeapMb(),
                     cluster93.runner.protocol.pool.TenantWorkerPool.ReusePolicy.FRESH_PER_JOB,
