@@ -1,0 +1,44 @@
+# A Cluster93 node image built from a release.
+#
+# This is the mirror of `NodeInstall.dockerfileNode()`, which is what the CLI actually renders — the same
+# arrangement as install/systemd/ and install/launchd/ (the templates are generated in Java and mirrored here
+# for reference). `c93 node install --docker --version TAG` fetches and verifies the release, writes this file
+# into a temp build context beside the artifacts, and builds `cluster93-node:TAG` from it.
+#
+# It differs from the repo's own Dockerfile on purpose: that one can compile from source, and a released CLI
+# cannot. This one only assembles already-built artifacts.
+#
+#   context/
+#     Dockerfile        this file
+#     c93.jar           the server, verified against the signed SHA256SUMS
+#     worker-javet      gunzipped from worker-javet.gz
+#     worker-graaljs    gunzipped from worker-graaljs.gz
+#
+# Javet ships glibc native libraries, so the base image must not be Alpine/musl.
+FROM eclipse-temurin:21-jre
+RUN useradd --system --uid 10001 c93 \
+ && mkdir -p /var/lib/cluster93 /opt/cluster93/bin && chown -R c93 /var/lib/cluster93 /opt/cluster93
+WORKDIR /opt/cluster93
+# API, ingress, the internal endpoint (cluster-only), Ignite discovery and communication.
+EXPOSE 9393 9394 9396 9395 5701 5801
+# Durable data (Ignite persistence). `c93 node install --docker` bind-mounts the host data dir here.
+VOLUME /var/lib/cluster93
+ENV C93_DATA_DIR=/var/lib/cluster93
+# Heap is kept below half the container so Ignite's off-heap data region and V8 isolates fit beside it.
+ENV JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=40 \
+  --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED \
+  --add-opens=java.base/java.nio=ALL-UNNAMED \
+  --add-opens=java.base/java.io=ALL-UNNAMED \
+  --add-opens=java.base/java.lang=ALL-UNNAMED \
+  --add-opens=java.base/java.lang.invoke=ALL-UNNAMED \
+  --add-opens=java.base/java.util=ALL-UNNAMED \
+  --add-opens=java.base/java.util.concurrent=ALL-UNNAMED \
+  --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED \
+  --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
+  --add-opens=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED"
+COPY c93.jar /opt/cluster93/c93.jar
+# The native workers: without them the node can only run C93_WORKER_MODE=embedded (D-142).
+COPY worker-javet worker-graaljs /opt/cluster93/bin/
+RUN chmod +x /opt/cluster93/bin/worker-javet /opt/cluster93/bin/worker-graaljs
+USER c93
+ENTRYPOINT ["java", "-jar", "/opt/cluster93/c93.jar"]

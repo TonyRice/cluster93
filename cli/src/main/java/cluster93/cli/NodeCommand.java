@@ -547,24 +547,36 @@ final class NodeCommand extends Base {
                         .put("backend", backend)
                         .put("system", layout.system())
                         .put("programDir", layout.programDir().toString())
-                        .put("dataDir", config.getOrDefault("C93_DATA_DIR", layout.dataDir().toString()))
+                        .put("dataDir", layout.container() ? layout.dataDir().toString()
+                                : config.getOrDefault("C93_DATA_DIR", layout.dataDir().toString()))
                         .put("apiUrl", base)
                         .put("workerMode", config.getOrDefault("C93_WORKER_MODE", DEFAULT_WORKER_MODE))
                         .put("running", running)
                         .put("health", health ? "ok" : "unreachable")
                         .put("nodes", nodes);
-                result.put("pid", pid > 0 ? pid : -1);
+                if (layout.container()) {
+                    // A container node has no pid file: the engine owns its state (D-141).
+                    result.put("container", NodeService.project(layout));
+                    result.put("engine", NodeService.engine(layout));
+                } else {
+                    result.put("pid", pid > 0 ? pid : -1);
+                }
                 Output.json(out(), result);
                 return 0;
             }
             out().println("Cluster93 node");
             out().println("  Node ID:        " + nodeId);
             out().println("  Backend:        " + backend);
-            out().println("  Program:        " + layout.programDir());
-            out().println("  Data directory: " + config.getOrDefault("C93_DATA_DIR", layout.dataDir().toString()));
+            out().println(layout.container()
+                    ? "  Compose:        " + layout.composeFile()
+                    : "  Program:        " + layout.programDir());
+            out().println("  Data directory: " + (layout.container() ? layout.dataDir().toString()
+                    : config.getOrDefault("C93_DATA_DIR", layout.dataDir().toString())));
             out().println("  API:            " + base);
             out().println("  Worker mode:    " + config.getOrDefault("C93_WORKER_MODE", DEFAULT_WORKER_MODE));
-            out().println("  PID:            " + (pid > 0 ? pid + (running ? " (running)" : " (not running)") : "(not running)"));
+            out().println(layout.container()
+                    ? "  Container:      " + NodeService.project(layout) + (running ? " (running)" : " (not running)")
+                    : "  PID:            " + (pid > 0 ? pid + (running ? " (running)" : " (not running)") : "(not running)"));
             out().println("  health:         " + (health ? "ok" : "unreachable"));
             out().println("  nodes:          " + nodes);
             return 0;

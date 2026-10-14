@@ -194,6 +194,36 @@ final class NodeService {
         return capture(io, command.toArray(String[]::new)).map(out -> !out.isBlank()).orElse(false);
     }
 
+    /** Validates a container node's generated compose with the engine's own parser, before anything starts (§1.9). */
+    static int validateCompose(Io io, NodeInstall.Layout layout) {
+        List<String> command = composeCommand(io, layout);
+        command.add("config");
+        command.add("-q");
+        return run(io, command.toArray(String[]::new), true);
+    }
+
+    /**
+     * Runs a command with its output shown, for long steps like an image build. The default {@code run} caps at two
+     * minutes, which a first build can exceed.
+     */
+    static int runVisible(Io io, List<String> command, long timeoutSeconds) {
+        try {
+            ProcessBuilder builder = new ProcessBuilder(command);
+            builder.inheritIO();
+            Process process = builder.start();
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return 1;
+            }
+            return process.exitValue();
+        } catch (IOException e) {
+            throw new CliException("Couldn't run " + String.join(" ", command) + ": " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return 1;
+        }
+    }
+
     private static int systemctl(Io io, Target target, boolean user, String verb) {
         String systemctl = executable(io, "systemctl");
         if (systemctl == null) {

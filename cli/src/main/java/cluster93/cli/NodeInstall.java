@@ -47,6 +47,9 @@ final class NodeInstall {
     static final String CLI_JAR = "cluster93-cli.jar";
     static final String WORKER_JAVET = "worker-javet.gz";
     static final String WORKER_GRAALJS = "worker-graaljs.gz";
+    /** The un-gzipped worker names, as they sit in {@code bin/} and in a node image. */
+    static final String WORKER_JAVET_BIN = "worker-javet";
+    static final String WORKER_GRAALJS_BIN = "worker-graaljs";
     static final String SUMS = "SHA256SUMS";
     static final String SIGNATURE = "SHA256SUMS.sig";
 
@@ -583,6 +586,121 @@ final class NodeInstall {
     }
 
     /**
+     * Builds a node image from the checkout, on the repo's own {@code node} stage — which is the stage that ships
+     * {@code bin/worker-*}, so the node can run {@code C93_WORKER_MODE=process}. The jar must already be built; this
+     * never runs Maven.
+     *
+     * <p>The build runs in a temp context, as {@code scripts/demo.sh} does: {@code .dockerignore} excludes
+     * {@code server/target/}, so the repo root as a context cannot see the jar the stage copies.
+     */
+    static String buildCheckoutImage(Io io, Engine engine, String version, boolean quiet) throws IOException {
+        Path jar = checkoutJar();
+        if (jar == null) {
+            throw new CliException("No server/target/" + SERVER_JAR + " to build an image from. Build it first "
+                    + "(./mvnw -q -pl server -am package -DskipTests), or pass --image");
+        }
+        for (String worker : List.of(WORKER_JAVET_BIN, WORKER_GRAALJS_BIN)) {
+            if (!Files.isExecutable(Path.of("bin", worker).toAbsolutePath())) {
+                throw new CliException("No bin/" + worker + " to build an image from. Run scripts/build-workers.sh "
+                        + "first, or pass --image");
+            }
+        }
+        // `cluster93-node:local` for a checkout, `cluster93-node:<version>-local` for a pinned one — never "local-local".
+        String tag = version == null || version.isBlank() ? "cluster93-node:local" : "cluster93-node:" + version + "-local";
+        Path context = Files.createTempDirectory("cluster93-image-");
+        try {
+            Files.copy(Path.of("Dockerfile"), context.resolve("Dockerfile"));
+            Files.createDirectories(context.resolve("server").resolve("target"));
+            Files.copy(jar, context.resolve("server").resolve("target").resolve(SERVER_JAR));
+            Files.createDirectories(context.resolve("bin"));
+            for (String worker : List.of(WORKER_JAVET_BIN, WORKER_GRAALJS_BIN)) {
+                Files.copy(Path.of("bin", worker), context.resolve("bin").resolve(worker));
+            }
+            if (!quiet) {
+                io.out().println("Building " + tag + " from the checkout (this can take a few minutes)");
+            }
+            List<String> command = new ArrayList<>(List.of(engine.cli(), "build", "--target", "node", "-t", tag,
+                    "-f", context.resolve("Dockerfile").toString(), context.toString()));
+            if (NodeService.runVisible(io, command, 3600) != 0) {
+                throw new CliException("Building " + tag + " failed; pass --image to use an image you already have");
+            }
+            return tag;
+        } finally {
+            deleteTree(context);
+        }
+    }
+
+    /**
+     * Builds a node image from a release: the signed {@code c93.jar} and the native workers, assembled in a temp
+     * context from the mirrored {@code Dockerfile.node}. Nothing is fetched without verifying it first.
+     */
+    static String buildReleaseImage(Io io, Engine engine, String version, boolean quiet)
+            throws IOException, InterruptedException {
+        String base = UpgradeCommand.installBase(io, version);
+        if (!base.startsWith("https://") && io.env().get("C93_INSTALL_URL") == null) {
+            throw new CliException("Releases are downloaded over HTTPS only: " + base);
+        }
+        String tag = "cluster93-node:" + version;
+        if (!quiet) {
+            io.out().println("Building " + tag + " from the " + version + " release (this can take a few minutes)");
+        }
+        HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL)
+                .connectTimeout(Duration.ofSeconds(15)).build();
+        byte[] sums = fetch(http, base + "/" + SUMS);
+        verifySignature(io, http, base, sums);
+
+        Path context = Files.createTempDirectory("cluster93-image-");
+        try {
+            Files.writeString(context.resolve("Dockerfile"), dockerfileNode());
+            downloadVerified(http, base, SERVER_JAR, sums, context.resolve(SERVER_JAR), false);
+            downloadGunzipped(http, base, WORKER_JAVET, sums, context.resolve(WORKER_JAVET_BIN));
+            downloadGunzipped(http, base, WORKER_GRAALJS, sums, context.resolve(WORKER_GRAALJS_BIN));
+            List<String> command = new ArrayList<>(List.of(engine.cli(), "build", "-t", tag, context.toString()));
+            if (NodeService.runVisible(io, command, 3600) != 0) {
+                throw new CliException("Building " + tag + " failed");
+            }
+            return tag;
+        } finally {
+            deleteTree(context);
+        }
+    }
+
+    /**
+     * The image a release assembles: the server jar and the native workers on the same JRE the repo's {@code runtime}
+     * stage uses, with the same heap ceiling so Ignite's off-heap region and the V8 isolates fit beside it. Mirrored
+     * for reference at {@code install/docker/Dockerfile.node}.
+     */
+    static String dockerfileNode() {
+        return """
+                # A Cluster93 node image built from a release: c93.jar plus the native workers, so the node can run
+                # C93_WORKER_MODE=process. Javet ships glibc natives, so the base must not be Alpine/musl.
+                FROM eclipse-temurin:21-jre
+                RUN useradd --system --uid 10001 c93 \\
+                 && mkdir -p /var/lib/cluster93 /opt/cluster93/bin && chown -R c93 /var/lib/cluster93 /opt/cluster93
+                WORKDIR /opt/cluster93
+                EXPOSE 9393 9394 9396 9395 5701 5801
+                VOLUME /var/lib/cluster93
+                ENV C93_DATA_DIR=/var/lib/cluster93
+                ENV JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=40 \\
+                  --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED \\
+                  --add-opens=java.base/java.nio=ALL-UNNAMED \\
+                  --add-opens=java.base/java.io=ALL-UNNAMED \\
+                  --add-opens=java.base/java.lang=ALL-UNNAMED \\
+                  --add-opens=java.base/java.lang.invoke=ALL-UNNAMED \\
+                  --add-opens=java.base/java.util=ALL-UNNAMED \\
+                  --add-opens=java.base/java.util.concurrent=ALL-UNNAMED \\
+                  --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED \\
+                  --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \\
+                  --add-opens=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED"
+                COPY c93.jar /opt/cluster93/c93.jar
+                COPY worker-javet worker-graaljs /opt/cluster93/bin/
+                RUN chmod +x /opt/cluster93/bin/worker-javet /opt/cluster93/bin/worker-graaljs
+                USER c93
+                ENTRYPOINT ["java", "-jar", "/opt/cluster93/c93.jar"]
+                """;
+    }
+
+    /**
      * Installs a node as a container (D-141): node.env, the compose file, certificates and node.meta. The image is
      * {@code --image}, or {@code --version} assembled from the release, or the checkout's {@code node} stage.
      */
@@ -605,7 +723,15 @@ final class NodeInstall {
         Engine engine = detectEngine(io, requestedEngine);
         String nodeId = defaultNodeId();
         String version0 = version == null || version.isBlank() ? "local" : version;
-        String imageRef = image != null && !image.isBlank() ? image.trim() : "cluster93-node:" + version0 + "-local";
+        // No --image: build one. A pinned --version assembles from that release; otherwise from the checkout (§1.8).
+        String imageRef;
+        if (image != null && !image.isBlank()) {
+            imageRef = image.trim();
+        } else if (version != null && !version.isBlank()) {
+            imageRef = buildReleaseImage(io, engine, version0, quiet);
+        } else {
+            imageRef = buildCheckoutImage(io, engine, version, quiet);
+        }
 
         Files.createDirectories(layout.envFile().getParent());
         Files.createDirectories(layout.dataDir());
@@ -630,6 +756,11 @@ final class NodeInstall {
 
         Files.writeString(layout.composeFile(),
                 renderCompose(layout, config, engine.name(), imageRef, bindAddress, publishCluster));
+        // Validate the render with the engine's own parser before anything starts, so a bad path or a typo in the
+        // generated YAML fails here with a clear message rather than at `up` (§1.9).
+        if (NodeService.validateCompose(io, layout) != 0) {
+            throw new CliException("The generated compose file didn't validate: " + layout.composeFile());
+        }
         // "unknown" is honest: the daemon didn't answer, so rootless-ness is not established (D-145).
         String rootless = engine.rootless() == null ? "unknown" : engine.rootless().toString();
         writeContainerMeta(layout, engine.name(), rootless, imageRef, version0, nodeId);

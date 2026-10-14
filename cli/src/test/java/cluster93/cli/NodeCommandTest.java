@@ -839,6 +839,52 @@ class NodeCommandTest {
     }
 
     @Test
+    void buildingFromTheCheckoutRefusesClearlyWhenThereIsNothingToBuildFrom() {
+        // The test runs from the cli module, so there is no server/target/c93.jar: the failure must name the fix,
+        // not fail obscurely at `docker build`.
+        NodeInstall.Engine engine = new NodeInstall.Engine("docker", Boolean.TRUE, "/usr/bin/docker");
+
+        assertThatThrownBy(() -> NodeInstall.buildCheckoutImage(io(), engine, "local", true))
+                .isInstanceOf(CliException.class)
+                .hasMessageContaining("server/target/c93.jar")
+                .hasMessageContaining("pass --image");
+    }
+
+    @Test
+    void theReleaseImageDockerfileShipsTheWorkersAndNeedsNoBuildStage() {
+        String dockerfile = NodeInstall.dockerfileNode();
+
+        // Without the workers a node image can only run embedded, which is the demo's limitation (D-142).
+        assertThat(dockerfile).contains("COPY worker-javet worker-graaljs /opt/cluster93/bin/");
+        assertThat(dockerfile).contains("chmod +x /opt/cluster93/bin/worker-javet");
+        // It assembles artifacts, so it must not try to compile anything.
+        assertThat(dockerfile).doesNotContain("mvnw");
+        assertThat(dockerfile).doesNotContain("FROM eclipse-temurin:21-jdk");
+        // Javet's natives are glibc, and the heap ceiling keeps Ignite's off-heap region fitting beside the JVM.
+        assertThat(dockerfile).contains("FROM eclipse-temurin:21-jre");
+        assertThat(dockerfile).contains("MaxRAMPercentage=40");
+        assertThat(dockerfile).contains("USER c93");
+    }
+
+    @Test
+    void aContainerInstallValidatesTheComposeItGenerated() throws Exception {
+        // The fake engine answers `compose config -q` with success, which is what the install path now requires
+        // before it will finish (§1.9).
+        Path bin = Files.createDirectories(work.resolve("bin-validate"));
+        Path script = bin.resolve("docker");
+        Files.writeString(script, "#!/bin/sh\n"
+                + "if [ \"$1\" = \"info\" ]; then echo '[name=rootless]'; exit 0; fi\n"
+                + "if [ \"$1\" = \"compose\" ]; then exit 0; fi\n"
+                + "exit 0\n");
+        script.toFile().setExecutable(true);
+        env.put("PATH", bin.toString());
+
+        NodeInstall.installContainer(io(), false, null, null, "img", null, tlsDir(), "0.0.0.0", true, false, true);
+
+        assertThat(NodeInstall.containerLayout(io(), false, null).composeFile()).exists();
+    }
+
+    @Test
     void aSecondInstallOfTheOtherKindIsRefused(@TempDir Path dir) throws Exception {
         Path otherEnv = Files.writeString(dir.resolve("node.env"), "C93_NODE_ID=other\n");
         NodeInstall.Layout user = NodeInstall.userLayout(io(), dir.resolve("prog"));
