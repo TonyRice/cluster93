@@ -186,24 +186,6 @@ final class NodeInstall {
     }
 
     /**
-     * Refuses a container install that would fight a process install over the same host ports (D-146, extending
-     * D-140 to the third kind).
-     */
-    static void refuseContainerIfAlsoInstalled(Path userEnv, Path systemEnv, boolean force) {
-        if (force) {
-            return;
-        }
-        // An array rather than List.of: either path may legitimately be absent, and List.of rejects nulls.
-        for (Path other : new Path[]{userEnv, systemEnv}) {
-            if (other != null && Files.isRegularFile(other)) {
-                throw new CliException("A node is already installed (" + other + "), and both would use the same "
-                        + "ports. Uninstall it first (c93 node uninstall), or pass --force to install both "
-                        + "deliberately (give them different ports).");
-            }
-        }
-    }
-
-    /**
      * Refuses a second install of the other kind (user vs system) unless {@code force}. Both default to the same
      * ports, so one has to go — or they must be given different ports deliberately (D-140).
      */
@@ -614,8 +596,11 @@ final class NodeInstall {
         if (Files.exists(layout.envFile()) && !force) {
             throw new CliException("A node is already installed (" + layout.envFile() + "); use --force to replace it");
         }
-        // A container node and a process node default to the same host ports, so one has to go (D-146).
-        refuseContainerIfAlsoInstalled(userLayout(io, null).envFile(), systemLayout().envFile(), force);
+        // A container node and a process node default to the same host ports, so one has to go (D-146). A *user*
+        // process install shares this config dir, so the "already installed" check above already covers it; the one
+        // that needs looking up is the system install. A system container install runs as root, whose config dir is
+        // not the invoking user's, so there is nothing to look up from there.
+        refuseIfAlsoInstalled(layout, layout.system() ? null : systemLayout().envFile(), force);
 
         Engine engine = detectEngine(io, requestedEngine);
         String nodeId = defaultNodeId();

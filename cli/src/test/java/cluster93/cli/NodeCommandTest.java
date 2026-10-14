@@ -820,18 +820,22 @@ class NodeCommandTest {
     }
 
     @Test
-    void aContainerInstallRefusesAProcessInstallThatWouldShareItsPorts() throws Exception {
-        Path otherEnv = Files.writeString(work.resolve("other-node.env"), "C93_NODE_ID=other\n");
+    void aContainerInstallRefusesASystemProcessInstallThatWouldShareItsPorts() throws Exception {
+        Path otherEnv = Files.writeString(work.resolve("system-node.env"), "C93_NODE_ID=other\n");
+        NodeInstall.Layout container = NodeInstall.containerLayout(io(), false, null);
 
-        assertThatThrownBy(() -> NodeInstall.refuseContainerIfAlsoInstalled(otherEnv, null, false))
+        // A user container node facing a system process install: the ports would collide (D-146, extending D-140).
+        assertThatThrownBy(() -> NodeInstall.refuseIfAlsoInstalled(container, otherEnv, false))
                 .isInstanceOf(CliException.class)
-                .hasMessageContaining("already installed")
+                .hasMessageContaining("A system node is already installed")
+                .hasMessageContaining("(c93 node uninstall --system)")
                 .hasMessageContaining("same ports")
                 .hasMessageContaining("--force");
 
         // --force installs both deliberately; a missing file is not a clash.
-        NodeInstall.refuseContainerIfAlsoInstalled(otherEnv, null, true);
-        NodeInstall.refuseContainerIfAlsoInstalled(work.resolve("missing.env"), null, false);
+        NodeInstall.refuseIfAlsoInstalled(container, otherEnv, true);
+        NodeInstall.refuseIfAlsoInstalled(container, work.resolve("missing.env"), false);
+        NodeInstall.refuseIfAlsoInstalled(container, null, false);
     }
 
     @Test
