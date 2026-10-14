@@ -59,10 +59,10 @@ panel("API latency (avg / max)", "timeseries", [
     ('sum(rate(vertx_http_server_response_time_seconds_sum{route!=""}[1m])) / sum(rate(vertx_http_server_response_time_seconds_count{route!=""}[1m]))', "avg"),
     ('max(vertx_http_server_response_time_seconds_max{route!=""})', "max")], unit="s")
 panel("Rate limited / s by tenant", "timeseries", [("sum by (tenant) (rate(c93_api_rate_limited_total[1m]))", "{{tenant}}")], unit="reqps")
-panel("Ingress requests / s by status", "timeseries", [('sum by (code) (rate(vertx_http_server_requests_total{route="", local=~".*:8000"}[1m]))', "{{code}}")],
-      unit="reqps", description="Services' public traffic (the ingress port, 8000 in the demo).")
-panel("Ingress bytes / s", "timeseries", [('sum(rate(vertx_http_server_bytes_read_total{local=~".*:8000"}[1m]))', "in"),
-                                          ('sum(rate(vertx_http_server_bytes_written_total{local=~".*:8000"}[1m]))', "out")], unit="Bps")
+panel("Ingress requests / s by status", "timeseries", [('sum by (code) (rate(vertx_http_server_requests_total{route="", local=~".*:9394"}[1m]))', "{{code}}")],
+      unit="reqps", description="Services' public traffic (the ingress port, 9394 in the demo).")
+panel("Ingress bytes / s", "timeseries", [('sum(rate(vertx_http_server_bytes_read_total{local=~".*:9394"}[1m]))', "in"),
+                                          ('sum(rate(vertx_http_server_bytes_written_total{local=~".*:9394"}[1m]))', "out")], unit="Bps")
 panel("Open connections", "timeseries", [("sum by (local) (vertx_http_server_active_connections)", "{{local}}")])
 
 row("Storage")

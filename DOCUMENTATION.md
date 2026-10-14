@@ -14,7 +14,7 @@ This document defines the structure, lifecycle, and authorship rules for all doc
 2. **Single Source of Truth (Zero Redundancy):**
    - Every architectural domain has exactly one canonical home.
    - **Do not duplicate exhaustive tables:** The complete 65-row OpenAPI route index lives in [`docs/api/endpoints.md`](docs/api/endpoints.md), not in `README.md`.
-   - **Contract-first:** The OpenAPI contract [`openapi.yaml`](cluster93-server/src/main/resources/openapi.yaml) is the ultimate source of truth for REST endpoints; API docs must mirror it exactly.
+   - **Contract-first:** The OpenAPI contract [`openapi.yaml`](server/src/main/resources/openapi.yaml) is the ultimate source of truth for REST endpoints; API docs must mirror it exactly.
 
 3. **Immutability of Decision Records (ADRs):**
    - Entries in [`docs/DECISIONS.md`](docs/DECISIONS.md) are **append-only** and never deleted.
@@ -105,7 +105,7 @@ cluster93/
 
 ### Markdown Standards (GFM)
 - Use standard GitHub Flavored Markdown.
-- **Clickable Symbol Links:** Always link file paths and symbols using markdown links (e.g. [`NodeHostApis`](cluster93-core/src/main/java/cluster93/core/host/NodeHostApis.java) or [`openapi.yaml`](cluster93-server/src/main/resources/openapi.yaml)).
+- **Clickable Symbol Links:** Always link file paths and symbols using markdown links (e.g. [`NodeHostApis`](core/src/main/java/cluster93/core/host/NodeHostApis.java) or [`openapi.yaml`](server/src/main/resources/openapi.yaml)).
 - **Mermaid Diagrams:** Use `flowchart TD`, `flowchart LR`, or `sequenceDiagram`. Always quote node labels containing special characters (e.g., `id["Label (Extra Info)"]`).
 
 ### High-Density Javadocs & Agent Context Optimization
@@ -122,15 +122,15 @@ For detailed module layouts, wire framing layouts, and flow control mechanisms, 
 
 | Subsystem | Canonical Contracts & Implementation Classes | Architectural Specification / ADR |
 |---|---|---|
-| **Host APIs (Guest Facing)** | [`HostApis`](cluster93-core/src/main/java/cluster93/core/runtime/api/HostApis.java), [`HostFunction`](cluster93-runtime-js/src/main/java/cluster93/runtime/js/HostFunction.java), [`StateSink`](cluster93-core/src/main/java/cluster93/core/runtime/StateSink.java) | [`docs/scripting/host-apis.md`](docs/scripting/host-apis.md), `D-025` |
-| **Node Authority APIs** | [`NodeHostApis`](cluster93-core/src/main/java/cluster93/core/host/NodeHostApis.java), [`SharedDataKvStore`](cluster93-core/src/main/java/cluster93/core/host/SharedDataKvStore.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4, `D-030` |
-| **Script Runner & Conformance** | [`ScriptRunner`](cluster93-runtime-js/src/main/java/cluster93/runtime/js/ScriptRunner.java), [`JsEngine`](cluster93-runtime-js/src/main/java/cluster93/runtime/js/JsEngine.java) | [`docs/design/engine-neutral-runtime.md`](docs/design/engine-neutral-runtime.md), `D-126`, `D-127` |
-| **Engine Adapters** | [`JavetEngine`](cluster93-runtime-javet/src/main/java/cluster93/runtime/javet/JavetEngine.java) (V8), [`GraalJsEngine`](cluster93-runtime-graaljs/src/main/java/cluster93/runtime/graaljs/GraalJsEngine.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3, `D-126` |
-| **Storage & Blob SPIs** | [`FileStore`](cluster93-core/src/main/java/cluster93/core/files/FileStore.java), [`BlobStore`](cluster93-core/src/main/java/cluster93/core/files/BlobStore.java), [`IgniteFileStore`](cluster93-cluster-ignite/src/main/java/cluster93/cluster/ignite/store/IgniteFileStore.java) | [`docs/design/vfs.md`](docs/design/vfs.md), [`docs/guides/storage.md`](docs/guides/storage.md) |
-| **Egress & Network Gates** | [`EgressGate`](cluster93-core/src/main/java/cluster93/core/host/egress/EgressGate.java), [`AllowlistEgressGate`](cluster93-core/src/main/java/cluster93/core/host/egress/AllowlistEgressGate.java) | [`docs/design/network-reach.md`](docs/design/network-reach.md), [`SECURITY.md`](SECURITY.md) |
-| **Runner Protocol & Channels** | [`FrameCodec`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/frame/FrameCodec.java), [`NodeWorkerChannel`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/server/NodeWorkerChannel.java), [`StreamMultiplexer`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/stream/StreamMultiplexer.java) | [`docs/design/worker-node-protocol.md`](docs/design/worker-node-protocol.md), `D-128`, `D-131`, `D-132` |
-| **Worker Pools & Isolation** | [`TenantWorkerPool`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/pool/TenantWorkerPool.java), [`WorkerProcessRuntime`](cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/runtime/WorkerProcessRuntime.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4, `D-128`, `D-131` |
-| **Job Scheduling & Supervisors** | [`NodeVerticle`](cluster93-core/src/main/java/cluster93/core/scheduler/NodeVerticle.java), [`ServiceSupervisor`](cluster93-core/src/main/java/cluster93/core/service/ServiceSupervisor.java) | [`docs/scripting/job-context.md`](docs/scripting/job-context.md), [`docs/scripting/services.md`](docs/scripting/services.md) |
+| **Host APIs (Guest Facing)** | [`HostApis`](core/src/main/java/cluster93/core/runtime/api/HostApis.java), [`HostFunction`](runtime-js/src/main/java/cluster93/runtime/js/HostFunction.java), [`StateSink`](core/src/main/java/cluster93/core/runtime/StateSink.java) | [`docs/scripting/host-apis.md`](docs/scripting/host-apis.md), `D-025` |
+| **Node Authority APIs** | [`NodeHostApis`](core/src/main/java/cluster93/core/host/NodeHostApis.java), [`SharedDataKvStore`](core/src/main/java/cluster93/core/host/SharedDataKvStore.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4, `D-030` |
+| **Script Runner & Conformance** | [`ScriptRunner`](runtime-js/src/main/java/cluster93/runtime/js/ScriptRunner.java), [`JsEngine`](runtime-js/src/main/java/cluster93/runtime/js/JsEngine.java) | [`docs/design/engine-neutral-runtime.md`](docs/design/engine-neutral-runtime.md), `D-126`, `D-127` |
+| **Engine Adapters** | [`JavetEngine`](runtime-javet/src/main/java/cluster93/runtime/javet/JavetEngine.java) (V8), [`GraalJsEngine`](runtime-graaljs/src/main/java/cluster93/runtime/graaljs/GraalJsEngine.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3, `D-126` |
+| **Storage & Blob SPIs** | [`FileStore`](core/src/main/java/cluster93/core/files/FileStore.java), [`BlobStore`](core/src/main/java/cluster93/core/files/BlobStore.java), [`IgniteFileStore`](cluster-ignite/src/main/java/cluster93/cluster/ignite/store/IgniteFileStore.java) | [`docs/design/vfs.md`](docs/design/vfs.md), [`docs/guides/storage.md`](docs/guides/storage.md) |
+| **Egress & Network Gates** | [`EgressGate`](core/src/main/java/cluster93/core/host/egress/EgressGate.java), [`AllowlistEgressGate`](core/src/main/java/cluster93/core/host/egress/AllowlistEgressGate.java) | [`docs/design/network-reach.md`](docs/design/network-reach.md), [`SECURITY.md`](SECURITY.md) |
+| **Runner Protocol & Channels** | [`FrameCodec`](runner-protocol/src/main/java/cluster93/runner/protocol/frame/FrameCodec.java), [`NodeWorkerChannel`](runner-protocol/src/main/java/cluster93/runner/protocol/server/NodeWorkerChannel.java), [`StreamMultiplexer`](runner-protocol/src/main/java/cluster93/runner/protocol/stream/StreamMultiplexer.java) | [`docs/design/worker-node-protocol.md`](docs/design/worker-node-protocol.md), `D-128`, `D-131`, `D-132` |
+| **Worker Pools & Isolation** | [`TenantWorkerPool`](runner-protocol/src/main/java/cluster93/runner/protocol/pool/TenantWorkerPool.java), [`WorkerProcessRuntime`](runner-protocol/src/main/java/cluster93/runner/protocol/runtime/WorkerProcessRuntime.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4, `D-128`, `D-131` |
+| **Job Scheduling & Supervisors** | [`NodeVerticle`](core/src/main/java/cluster93/core/scheduler/NodeVerticle.java), [`ServiceSupervisor`](core/src/main/java/cluster93/core/service/ServiceSupervisor.java) | [`docs/scripting/job-context.md`](docs/scripting/job-context.md), [`docs/scripting/services.md`](docs/scripting/services.md) |
 
 ---
 
@@ -142,7 +142,7 @@ Whenever modifying or adding an architectural feature:
 2. [ ] **Decision Record:** If a design choice or trade-off was made, record it in [`docs/DECISIONS.md`](docs/DECISIONS.md) (`D-xxx`).
 3. [ ] **Changelog:** Add an entry under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
 4. [ ] **User Documentation:** Update the corresponding guide in `docs/guides/` or `docs/scripting/`.
-5. [ ] **API Reference:** If routes changed, update [`openapi.yaml`](cluster93-server/src/main/resources/openapi.yaml) and [`docs/api/endpoints.md`](docs/api/endpoints.md).
+5. [ ] **API Reference:** If routes changed, update [`openapi.yaml`](server/src/main/resources/openapi.yaml) and [`docs/api/endpoints.md`](docs/api/endpoints.md).
 6. [ ] **README / SECURITY:** If defaults, execution modes, or security boundaries changed, update [`README.md`](README.md) and [`SECURITY.md`](SECURITY.md).
 7. [ ] **Verification:** Verify that all referenced markdown links exist and resolve.
 

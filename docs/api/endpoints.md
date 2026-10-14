@@ -1,6 +1,6 @@
 # Cluster93 API Reference
 
-Cluster93 provides a contract-first REST API and an MCP (Model Context Protocol) endpoint. Every incoming request is strictly validated against the OpenAPI 3.1 contract defined in [`openapi.yaml`](../../cluster93-server/src/main/resources/openapi.yaml).
+Cluster93 provides a contract-first REST API and an MCP (Model Context Protocol) endpoint. Every incoming request is strictly validated against the OpenAPI 3.1 contract defined in [`openapi.yaml`](../../server/src/main/resources/openapi.yaml).
 
 ## Authentication & Authorization
 
@@ -92,7 +92,7 @@ Authorization: Bearer <token>
 | `DELETE` | `/v1/services/{name}` | `services:write` | Stop and delete service (releases custom domains) |
 | `POST` · `GET` | `/v1/services/{name}/domains` | `services:write` | Claim custom domain (returns DNS TXT verification token) |
 | `POST` | `/v1/services/{name}/domains/{domain}/verify` | `services:write` | Check DNS TXT record and enable domain routing |
-| *Ingress* | Port `8000` (Any path) | None / Service Auth | Ingress HTTP/WebSocket traffic routed by Host header to service |
+| *Ingress* | Port `9394` (Any path) | None / Service Auth | Ingress HTTP/WebSocket traffic routed by Host header to service |
 
 ### Messaging, Bus & Durable Queues
 

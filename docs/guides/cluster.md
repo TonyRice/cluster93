@@ -35,6 +35,14 @@ c93 node invite node4 --host 10.0.0.14 --ca ./cluster-tls/ca.key
 ```
 Run that on the new machine: `C93_JOIN=c93_nodebundle_… java -jar c93.jar`, or `--join c93_nodebundle_…`.
 
+On a node installed with [`c93 node install`](node.md), put the line in `node.env` and restart instead —
+it never has to be on the command line (where it would land in your shell history):
+
+```bash
+c93 node env --set C93_JOIN=c93_nodebundle_…
+c93 node restart
+```
+
 **What's in the line:** node4's private key, its certificate and the CA certificate, gzipped and base64-encoded. **It never contains `ca.key`.**
 - **Treat it like a password for node4:** it can't create other nodes or sign anything.
 - **It's bound to node4:** the certificate names node4 and its addresses.
@@ -73,4 +81,4 @@ c93 node revoke node4      # with the admin token
 
 ## What's still yours to do
 - **Keep core nodes on one private network.** Ignite's synchronous replication dislikes latency, so faraway machines should be links, a later phase.
-- **TLS for clients** (the API on 8080, the ingress on 8000) is still terminated at your proxy or load balancer (SECURITY.md).
+- **TLS for clients** (the API on 9393, the ingress on 9394) is still terminated at your proxy or load balancer (SECURITY.md).

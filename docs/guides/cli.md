@@ -1,19 +1,26 @@
 # The `c93` CLI
 
-**Status:** Phase 4, milestone 3 (2026-10-06). Decisions: D-048, D-049, D-053.
+**Status:** Phase 5 node install & lifecycle (2026-10-13). Decisions: D-048, D-049, D-053, D-134.
 
 ## Install
 
-> **Prebuilt native binaries are Linux-only for now.** On macOS and Windows, build
-> from source (below); the CLI also builds as a portable jar that runs anywhere with Java 21+.
+Prebuilt native binaries cover Linux (x64 and arm64) and macOS (Apple silicon and Intel); where one
+isn't published, the portable jar runs anywhere with **Java 21+**.
 
 ```bash
-# Linux (x64 or arm64)
+# Linux and macOS (x64 or arm64)
 curl -fsSL https://github.com/TonyRice/cluster93/releases/latest/download/install.sh | sh
 ```
 
+On Windows, use the PowerShell installer, which sets up the portable jar (`cluster93-cli.jar` + a
+`c93.cmd` shim) and detects Java 21:
+
+```powershell
+irm https://github.com/TonyRice/cluster93/releases/latest/download/install.ps1 | iex
+```
+
 The installer:
-- picks the Linux binary for your CPU (a static x64 build that runs on any distro including Alpine, or arm64)
+- picks the binary for your OS and CPU (a static x64 Linux build that runs on any distro including Alpine, or arm64; macOS arm64/x64)
 - **checks the release's signature** (`SHA256SUMS.sig`, made with the project's release key, which is built into the installer), then the binary's SHA-256 against the signed `SHA256SUMS`. It installs nothing unless both hold (D-069), using `openssl`.
 - installs to `~/.local/bin`, or `/usr/local/bin` as root
 - tells you if that directory isn't on your `PATH`
@@ -26,26 +33,33 @@ The binaries are GraalVM native images: about 50 MB, they start in about 10 ms, 
 |---|---|---|
 | Linux x64 | ✅ native (static) | `install.sh` |
 | Linux arm64 | ✅ native | `install.sh` |
-| macOS (Apple silicon / Intel) | — | build from source, below |
-| Windows x64 | — | build from source, below |
+| macOS (Apple silicon / Intel) | ✅ native | `install.sh` |
+| Windows x64 | — (portable jar) | `install.ps1` (needs Java 21+) |
 
-GraalVM `native-image` can't cross-compile, so macOS and Windows binaries have to be built on those platforms; they'll be published here once the release pipeline covers them.
+GraalVM `native-image` can't cross-compile, so each binary is built on its own platform.
+
+### Run a node
+
+The CLI installs a whole node too — `c93 node install` fetches a signed release, lays out the tree,
+writes `node.env` and a service unit, and starts it. See the [node guide](node.md). The shell installer
+can hand over to it directly: `… | sh -s -- --node [--system]`.
 
 ### Build from source
+
 
 With a JDK 21+ and Maven, on any platform:
 
 ```bash
 git clone https://github.com/TonyRice/cluster93.git && cd cluster93
-./mvnw -pl cluster93-cli -am package -DskipTests
-java -jar cluster93-cli/target/cluster93-cli.jar --version   # portable; needs a JVM
+./mvnw -pl cli -am package -DskipTests
+java -jar cli/target/cluster93-cli.jar --version   # portable; needs a JVM
 ```
 
 With GraalVM on `PATH`, add `-Pnative` for a native binary for the host platform:
 
 ```bash
-./mvnw -Pnative -pl cluster93-cli -am package -Dmaven.test.skip=true
-# -> cluster93-cli/target/c93   (c93.exe on Windows)
+./mvnw -Pnative -pl cli -am package -Dmaven.test.skip=true
+# -> cli/target/c93   (c93.exe on Windows)
 ```
 
 Options, as environment variables:
@@ -114,6 +128,9 @@ The URL and token are saved in `~/.config/cluster93/config.json` (`%APPDATA%\clu
 | `tenants egress TENANT [--allow TO:PORTS …] [--deny TO[:PORTS] …] [--posture public\|allow-list\|inherit] [--none]` | Admin only. A tenant's own rules: `--allow 10.0.5.20/32:5432 --allow db.internal.example:5432,6379`, `--deny *.example.com`, or `--deny 203.0.113.0/24:25`. `TO` can also be `@set` or `*`. `--allow`/`--deny` replace its rules, and `--posture` alone keeps them (D-111) |
 | `mcp` | The MCP stdio bridge for AI agents ([MCP guide](mcp.md)) |
 | `cluster init --nodes a,b,c [--host a=10.0.0.11]` | Operator: create the cluster's CA and a join line per node. `ca.key` stays with you ([cluster guide](cluster.md)) |
+| `node install [--system] [--dir DIR] [--version TAG] [--no-start]` · `node uninstall [--purge]` | Install a node from a signed release (program + `node.env` + a service unit) and start it, or remove it ([node guide](node.md)) |
+| `node start · stop · restart · status · logs [--follow] · mcp · update` | Drive the node: its service unit (systemd/launchd), or the process directly. `c93 local …` is a deprecated alias for one release |
+| `node env [--set K=V] [--edit]` | Show or change the node's `node.env` (`C93_*` settings, short names accepted) |
 | `node invite ID [--host ADDR] [--key PUBLIC_KEY] --ca ca.key` · `node revoke ID` | Operator: a one-line join for a new node (also renews); revoke a node |
 | `version · upgrade` | |
 

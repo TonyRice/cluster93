@@ -347,7 +347,7 @@ export default async (input, ctx) => {
 };
 ```
 
-- **Where it's reachable.** Every service gets `https://<service>--<tenant>.<ingress domain>`, for example `shop--acme.localhost` in development, on the ingress port (8000). Any node's ingress serves any service.
+- **Where it's reachable.** Every service gets `https://<service>--<tenant>.<ingress domain>`, for example `shop--acme.localhost` in development, on the ingress port (9394). Any node's ingress serves any service.
 - **Your own domain.**
   ```http
   POST /v1/services/shop/domains          {"domain": "shop.example.com"}

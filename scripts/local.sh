@@ -37,7 +37,7 @@ META_FILE="${C93_HOME}/node.meta"
 PID_FILE="${C93_HOME}/c93.pid"
 MCP_FILE="${C93_HOME}/mcp.json"
 CONFIG_FILE="${C93_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/cluster93}/config.json"
-SERVER_JAR="${REPO_ROOT}/cluster93-server/target/c93.jar"
+SERVER_JAR="${REPO_ROOT}/server/target/c93.jar"
 JAVET_WORKER="${REPO_ROOT}/bin/worker-javet"
 GRAALJS_WORKER="${REPO_ROOT}/bin/worker-graaljs"
 CLI_BINARY="${REPO_ROOT}/bin/c93"
@@ -50,9 +50,9 @@ DEFAULT_ROLES="api,ingress,worker,data,console"
 # so an Ignite baseline written by development testing can never collide with the master's database.
 DEFAULT_DATA_DIR="${C93_HOME}/master-data"
 DEFAULT_LOG_DIR="${C93_HOME}/logs"
-DEFAULT_HTTP_PORT="8080"
-DEFAULT_INGRESS_PORT="8000"
-DEFAULT_METRICS_PORT="9090"
+DEFAULT_HTTP_PORT="9393"
+DEFAULT_INGRESS_PORT="9394"
+DEFAULT_METRICS_PORT="9395"
 DEFAULT_WORKER_MODE="process"
 DEFAULT_WORKER_ENGINE="graaljs"
 DEFAULT_TENANT="local"
@@ -238,8 +238,8 @@ META
 # --------------------------------------------------------------------------
 ensure_build() {
   if [[ ! -f "$SERVER_JAR" ]]; then
-    echo "== building cluster93-server/target/c93.jar" >&2
-    "$REPO_ROOT/mvnw" -q package -pl cluster93-server -am -DskipTests
+    echo "== building server/target/c93.jar" >&2
+    "$REPO_ROOT/mvnw" -q package -pl server -am -DskipTests
   fi
   if [[ ! -x "$CLI_BINARY" ]]; then
     echo "== building the native c93 CLI" >&2
@@ -537,8 +537,8 @@ deploy_console() {
   local token="$1"
   if [[ -x "$CLI_BINARY" ]]; then
     "$CLI_BINARY" --url "$URL" --token "$token" apps deploy "$REPO_ROOT/console"
-  elif [[ -f "$REPO_ROOT/cluster93-cli/target/cluster93-cli.jar" ]]; then
-    "$(java_bin)" -jar "$REPO_ROOT/cluster93-cli/target/cluster93-cli.jar" \
+  elif [[ -f "$REPO_ROOT/cli/target/cluster93-cli.jar" ]]; then
+    "$(java_bin)" -jar "$REPO_ROOT/cli/target/cluster93-cli.jar" \
       --url "$URL" --token "$token" apps deploy "$REPO_ROOT/console"
   else
     echo "   (no c93 CLI built; skipping the console deploy)" >&2
@@ -780,12 +780,12 @@ MCP
 # --------------------------------------------------------------------------
 # True when a native c93 CLI was built before (installed in the checkout, left in target/, or in ~/.local/bin).
 native_cli_was_built() {
-  [[ -x "$CLI_BINARY" ]] || [[ -e "$REPO_ROOT/cluster93-cli/target/c93" ]] || [[ -e "${HOME}/.local/bin/c93" ]]
+  [[ -x "$CLI_BINARY" ]] || [[ -e "$REPO_ROOT/cli/target/c93" ]] || [[ -e "${HOME}/.local/bin/c93" ]]
 }
 
 cmd_update() {
   echo "== rebuilding from $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" >&2
-  "$REPO_ROOT/mvnw" -q package -pl cluster93-server -am -DskipTests
+  "$REPO_ROOT/mvnw" -q package -pl server -am -DskipTests
   "$REPO_ROOT/scripts/build-workers.sh" all || true
   # Refresh the native CLI binary when it was built before, so its embedded commit tracks the checkout.
   if native_cli_was_built; then

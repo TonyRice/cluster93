@@ -74,7 +74,7 @@ Before committing, run `verify` for every module you touched **and always pass
 installed snapshot:
 
 ```bash
-./mvnw verify -pl cluster93-runner-protocol,cluster93-server -am -DskipITs
+./mvnw verify -pl runner-protocol,server -am -DskipITs
 ```
 
 - `verify` runs the full lifecycle including integration-test hooks; `-DskipITs`
@@ -89,7 +89,7 @@ full docker cluster and is not part of the normal loop. When running a broad
 package pattern, always exclude it:
 
 ```bash
-./mvnw test -pl cluster93-server -am \
+./mvnw test -pl server -am \
   -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
@@ -129,14 +129,14 @@ socket transport.
 Run the whole suite:
 
 ```bash
-./mvnw test -pl cluster93-runner-protocol -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl runner-protocol -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 If module dependencies are not already installed in the local repository, add
 `-am`:
 
 ```bash
-./mvnw test -pl cluster93-runner-protocol -am -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl runner-protocol -am -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 ### 3.1 Coverage breakdown
@@ -180,7 +180,7 @@ with the node over a framed duplex IPC channel with 256 KiB stream flow control 
 Run the full server suite in process mode (excluding `DockerClusterIT`):
 
 ```bash
-C93_WORKER_MODE=process ./mvnw test -pl cluster93-server -am \
+C93_WORKER_MODE=process ./mvnw test -pl server -am \
   -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
@@ -192,7 +192,7 @@ a pre-compiled GraalVM native-image worker (see §5):
 ```bash
 C93_WORKER_MODE=process \
 C93_WORKER_BINARY=bin/worker-javet \
-./mvnw test -pl cluster93-server -am \
+./mvnw test -pl server -am \
   -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
@@ -206,7 +206,7 @@ To verify end-to-end cluster parity across separate machines where Node A proxie
 requests to a worker running on Node B:
 
 ```bash
-./mvnw test -pl cluster93-server -am \
+./mvnw test -pl server -am \
   -Dtest='ProcessModeParityTest' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
@@ -229,7 +229,7 @@ In embedded mode, workers run as in-process Javet or GraalJS isolates inside the
 JVM. Run the embedded suite to ensure zero regressions:
 
 ```bash
-C93_WORKER_MODE=embedded ./mvnw test -pl cluster93-server -am \
+C93_WORKER_MODE=embedded ./mvnw test -pl server -am \
   -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
@@ -269,13 +269,13 @@ scripts/build-workers.sh javet --javet-metadata
 For each engine the script runs (from the repo root):
 
 ```bash
-./mvnw -q -DskipTests -DskipITs -pl cluster93-worker -am install -P<engine>
-./mvnw -q -DskipTests -DskipITs -pl cluster93-worker clean package \
+./mvnw -q -DskipTests -DskipITs -pl worker -am install -P<engine>
+./mvnw -q -DskipTests -DskipITs -pl worker clean package \
   -P<engine>,native \
   -Dnative.builder.heap=<heap> -Dnative.builder.threads=<threads>
 ```
 
-producing `cluster93-worker/target/worker-<engine>`.
+producing `worker/target/worker-<engine>`.
 
 ### 5.3 Outputs
 
@@ -312,30 +312,30 @@ ENGINES="graaljs" ./build.sh    # GraalJS only
 
 ```bash
 # Targeted class iteration
-./mvnw test -pl cluster93-runner-protocol -Dtest=FrameCodecTest -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl runner-protocol -Dtest=FrameCodecTest -Dsurefire.failIfNoSpecifiedTests=false
 
 # Full protocol + engine suite
-./mvnw test -pl cluster93-runner-protocol -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl runner-protocol -Dsurefire.failIfNoSpecifiedTests=false
 
 # Pre-commit verification of touched modules (always -am)
-./mvnw verify -pl cluster93-runner-protocol,cluster93-server -am -DskipITs
+./mvnw verify -pl runner-protocol,server -am -DskipITs
 
 # Server suite, process mode (production default, docker IT excluded)
-C93_WORKER_MODE=process ./mvnw test -pl cluster93-server -am \
+C93_WORKER_MODE=process ./mvnw test -pl server -am \
   -Dtest='cluster93.server.**,!DockerClusterIT' -Dsurefire.failIfNoSpecifiedTests=false
 
 # Full process-mode parity & cluster ingress suite
-C93_WORKER_MODE=process ./mvnw test -pl cluster93-server -am \
+C93_WORKER_MODE=process ./mvnw test -pl server -am \
   -Dtest='ProcessModeParityTest,McpTest,JobsFromScriptsTest,ServicesTest' \
   -Dsurefire.failIfNoSpecifiedTests=false
 
 # Server suite, embedded mode (regression check, docker IT excluded)
-C93_WORKER_MODE=embedded ./mvnw test -pl cluster93-server -am \
+C93_WORKER_MODE=embedded ./mvnw test -pl server -am \
   -Dtest='cluster93.server.**,!DockerClusterIT' -Dsurefire.failIfNoSpecifiedTests=false
 
 # Server suite, process mode against a native worker binary
 C93_WORKER_MODE=process C93_WORKER_BINARY=bin/worker-javet \
-  ./mvnw test -pl cluster93-server -am -Dtest='cluster93.server.**,!DockerClusterIT' \
+  ./mvnw test -pl server -am -Dtest='cluster93.server.**,!DockerClusterIT' \
   -Dsurefire.failIfNoSpecifiedTests=false
 
 # Build native workers

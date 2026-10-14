@@ -25,7 +25,7 @@
 The first version had one generic `HostServices.call(op, argsJson)` and a 475-line JavaScript string that turned it into the APIs. D-060 replaced both:
 - **Core: one Java object per API** (`cluster93.core.runtime.api`: `KvApi`, `BusApi`, `FilesApi`, `FetchApi`, `HttpApi`, gathered in `HostApis`). The node implements them (`NodeKvApi`, … in `cluster93.core.host`), all sharing one `HostScope` (the tenant, the job, the listeners to undo). They take and return plain Java values (JSON, `Buffer`, `Future`) and know nothing about V8, so another language's runtime can bind the same objects.
 - **Javet: one binding per API** (`KvBinding`, `BusBinding`, …), bound under the host object with `bind()`, which exposes only `@V8Function` methods. A binding converts its arguments (`JsValues`, through V8's own `JSON`, captured before the script runs), calls the API, and returns a promise it created in Java. `HostBridge` settles that promise on the isolate's event loop when the future completes, as a real `Error` with `name` and `code` on failure. The loop counts in-flight calls; while any are pending, it waits instead of failing.
-- **JavaScript: small files, only where JavaScript has to be idiomatic** (`cluster93-runtime-js/src/main/resources/cluster93/runtime/js/`; engine-neutral since D-126): freezing the globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, and `ctx`. `Builtins.PRELUDE_FILES` lists them in order; they run in one closure before the job's module.
+- **JavaScript: small files, only where JavaScript has to be idiomatic** (`runtime-js/src/main/resources/cluster93/runtime/js/`; engine-neutral since D-126): freezing the globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, and `ctx`. `Builtins.PRELUDE_FILES` lists them in order; they run in one closure before the job's module.
 - **Subscriptions** (bus, HTTP handlers) are delivered the same way, as posted tasks that call back into JavaScript. Replies go back through a reply id.
 - **Cleanup.** When the run ends, all subscriptions are unregistered and in-flight calls are abandoned. Their results go nowhere, because the isolate is closed.
 - **Fencing.** The node's heartbeat already cancels superseded attempts (D-020). Host writes from a zombie are therefore possible for at most about one heartbeat; that's documented, the same as for outside side effects.
@@ -53,7 +53,7 @@ The first version had one generic `HostServices.call(op, argsJson)` and a 475-li
 
 ## HTTP hosting
 - A service calls `ctx.serve(async (request) => response)` once. Requests then reach that run's isolate.
-- **Ingress.** Every node also listens on `C93_INGRESS_PORT` (default 8000).
+- **Ingress.** Every node also listens on `C93_INGRESS_PORT` (default 9394).
   1. A request's `Host` is looked up in the route table, which gives the tenant and service.
   2. The service's current run gives the node instance.
   3. The request is forwarded over the event bus to that node, which posts it to the isolate.
@@ -85,4 +85,4 @@ Measured on the Javet runtime: a trivial job end to end, including creating and 
 - **The ingress routes by the request authority (D-029).** On HTTP/2 the host arrives as `:authority`, not as a `Host` header. A cleartext HTTP/2 request is now part of HostApisTest.
 - **The fetch size limit is reported as `RangeError`/`limit_exceeded`.** The first version reset the connection before recording the limit, so the script saw a generic network error. A test caught it.
 - **Stored `log` fields:** the job's stored log keeps the line with its fields as JSON; the live SSE event carries `message` and `fields` separately.
-- **Docker.** Containers expose the ingress (8000), and the integration test waits on the API port explicitly. `DockerClusterIT` gained "HTTP traffic moves to a survivor after the serving node is `SIGKILL`ed".
+- **Docker.** Containers expose the ingress (9394), and the integration test waits on the API port explicitly. `DockerClusterIT` gained "HTTP traffic moves to a survivor after the serving node is `SIGKILL`ed".

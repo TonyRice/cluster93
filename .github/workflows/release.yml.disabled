@@ -57,25 +57,25 @@ jobs:
           native-image-musl: ${{ matrix.musl }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build the native binary
-        run: ./mvnw -B -ntp -Pnative -pl cluster93-cli -am package -DskipTests "-Dnative.extra.args=${{ matrix.extra }}"
+        run: ./mvnw -B -ntp -Pnative -pl cli -am package -DskipTests "-Dnative.extra.args=${{ matrix.extra }}"
       - name: Name it for the release
         run: |
-          if [ -f cluster93-cli/target/c93.exe ]; then src=cluster93-cli/target/c93.exe; else src=cluster93-cli/target/c93; fi
+          if [ -f cli/target/c93.exe ]; then src=cli/target/c93.exe; else src=cli/target/c93; fi
           mkdir -p dist && cp "$src" "dist/${{ matrix.asset }}"
       - name: Smoke test
         run: ./dist/${{ matrix.asset }} --version
       - name: Smoke test against a real node (Linux x64)
         if: matrix.asset == 'cluster93-linux-x64'
         run: |
-          ./mvnw -B -ntp -pl cluster93-server -am package -DskipTests -DskipITs
+          ./mvnw -B -ntp -pl server -am package -DskipTests -DskipITs
           export C93_ADMIN_TOKEN=release-smoke-admin-token-0123456789abcdef
-          java $(./mvnw -q help:evaluate -Dexpression=ignite.jvm.args -DforceStdout) -jar cluster93-server/target/c93.jar &
-          for i in $(seq 60); do curl -sf localhost:8080/health && break; sleep 1; done
+          java $(./mvnw -q help:evaluate -Dexpression=ignite.jvm.args -DforceStdout) -jar server/target/c93.jar &
+          for i in $(seq 60); do curl -sf localhost:9393/health && break; sleep 1; done
           cli=./dist/cluster93-linux-x64
-          $cli --url http://localhost:8080 --token "$C93_ADMIN_TOKEN" tenants create smoke
-          token=$($cli --url http://localhost:8080 --token "$C93_ADMIN_TOKEN" tenants token smoke ci --scope '*')
+          $cli --url http://localhost:9393 --token "$C93_ADMIN_TOKEN" tenants create smoke
+          token=$($cli --url http://localhost:9393 --token "$C93_ADMIN_TOKEN" tenants token smoke ci --scope '*')
           echo "export default (input) => ({ hello: input.name })" > hello.js
-          C93_URL=http://localhost:8080 C93_TOKEN="$token" $cli run hello.js --input '{"name":"release"}' | grep release
+          C93_URL=http://localhost:9393 C93_TOKEN="$token" $cli run hello.js --input '{"name":"release"}' | grep release
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}

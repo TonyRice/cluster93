@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Cluster93 node — macOS LaunchAgent.
+
+  The reference for what `c93 node install` renders into ~/Library/LaunchAgents/com.cluster93.node.plist. macOS has
+  a per-user LaunchAgent only: there is no macOS system install. The CLI embeds the node.env values here, because
+  launchd has no EnvironmentFile.
+
+    c93 node install
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.cluster93.node.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cluster93.node</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/java</string>
+    <string>-jar</string>
+    <string>/Users/YOU/.local/share/cluster93/c93.jar</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOU/.local/share/cluster93</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>C93_NODE_ID</key>
+    <string>local-master</string>
+    <key>C93_DATA_DIR</key>
+    <string>/Users/YOU/.local/share/cluster93/data</string>
+    <key>C93_HTTP_PORT</key>
+    <string>8080</string>
+    <key>C93_INGRESS_PORT</key>
+    <string>8000</string>
+    <key>C93_METRICS_PORT</key>
+    <string>9090</string>
+    <key>C93_WORKER_MODE</key>
+    <string>embedded</string>
+  </dict>
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/.local/share/cluster93/data/logs/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/.local/share/cluster93/data/logs/server.log</string>
+</dict>
+</plist>

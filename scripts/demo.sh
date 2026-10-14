@@ -29,10 +29,10 @@ started=$(date +%s)
 elapsed() { echo "$(( $(date +%s) - started ))s"; }
 
 step "Building the server and the CLI"
-./mvnw -q -B -pl cluster93-server,cluster93-cli -am package -DskipTests -DskipITs
+./mvnw -q -B -pl server,cli -am package -DskipTests -DskipITs
 context=$(mktemp -d)
-mkdir -p "$context/cluster93-server/target"
-cp Dockerfile "$context/" && cp cluster93-server/target/c93.jar "$context/cluster93-server/target/"
+mkdir -p "$context/server/target"
+cp Dockerfile "$context/" && cp server/target/c93.jar "$context/server/target/"
 docker build -q --target local-jar -t cluster93-demo:local "$context" >/dev/null
 rm -rf "$context"
 ok "built ($(elapsed))"
@@ -51,7 +51,7 @@ admin="Authorization: Bearer $C93_ADMIN_TOKEN"
 curl -sf -X POST "$API/v1/tenants" -H "$admin" -d '{"name":"demo"}' >/dev/null
 TOKEN=$(curl -sf -X POST "$API/v1/tenants/demo/tokens" -H "$admin" -d '{"name":"agent","scopes":["*"]}' | json "d['token']")
 export C93_TOKEN=$TOKEN
-cli() { C93_URL=$API java -jar cluster93-cli/target/cluster93-cli.jar "$@"; }
+cli() { C93_URL=$API java -jar cli/target/cluster93-cli.jar "$@"; }
 say "$(cli whoami)"
 
 # --- the agent: JSON-RPC over MCP (Streamable HTTP), exactly what an MCP client sends ---

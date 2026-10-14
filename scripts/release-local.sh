@@ -57,7 +57,7 @@ if [ "$build" = 1 ]; then
     printf '== building the native CLI, the portable CLI jar, and the server jar\n'
     # -DskipTests (not -Dmaven.test.skip=true): the reactor's other modules need
     # cluster93-core's tests jar, which is only produced when tests are compiled.
-    ./mvnw -q -B -ntp -Pnative -pl cluster93-cli,cluster93-server -am package -DskipTests \
+    ./mvnw -q -B -ntp -Pnative -pl cli,server -am package -DskipTests \
         "-Dnative.extra.args=-march=compatibility"
     if [ ! -x bin/worker-javet ] || [ ! -x bin/worker-graaljs ]; then
         printf '== building the native workers (first time; a few minutes)\n'
@@ -70,9 +70,9 @@ fi
 # ---- assemble dist/ ---------------------------------------------------------- #
 rm -rf dist
 mkdir -p dist
-cp cluster93-cli/target/c93 dist/cluster93-linux-x64
-cp cluster93-cli/target/cluster93-cli.jar dist/cluster93-cli.jar
-cp cluster93-server/target/c93.jar dist/c93.jar
+cp cli/target/c93 dist/cluster93-linux-x64
+cp cli/target/cluster93-cli.jar dist/cluster93-cli.jar
+cp server/target/c93.jar dist/c93.jar
 chmod +x dist/cluster93-linux-x64
 # The native workers are huge; ship them gzipped.
 gzip -9 -c bin/worker-javet > dist/worker-javet.gz

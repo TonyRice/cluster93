@@ -137,6 +137,27 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 
 ## 5. Recent Key Achievements & Bug Fixes
 
+- **Default ports move to the `9393`–`9396` Cluster93 block (D-137):**
+  - `C93_HTTP_PORT` 8080 → **9393**, `C93_INGRESS_PORT` 8000 → **9394**, `C93_METRICS_PORT` 9090 → **9395** (Prometheus's own port), `C93_INTERNAL_PORT` 8090 → **9396**, applied at `ServerConfig.fromEnv` and everywhere that mirrors it: the CLI (`NodeCommand`, `NodeInstall.defaultConfig`, `NodeService`), `scripts/local.sh`/`dev.sh`, the Docker image and `docker-compose.yml` (host `940x`/`941x`), the OpenAPI `servers` URL, the Prometheus scrape targets, the Grafana dashboard (and its generator), README, and the guides.
+  - Existing nodes keep their ports (a written `node.env`/`local.env` names them), so only fresh installs pick up the new defaults; the old Docker host mappings (`8081-8083`/`8001-8003`) changed, so those client URLs need updating.
+
+- **Worker startup fails fast instead of hanging (D-135, Phase 5):**
+  - `NodeWorkerChannel.onError` now fails `helloPromise` when a worker dies before its handshake (WARN) instead of only failing active runs at debug; a pool `acquire()` no longer waits on a promise that can never complete.
+  - `TenantWorkerPool.spawnWorker` bounds the hello wait (`cluster93.worker.helloTimeoutMs`, default 30 s), logs the failure at WARN with the worker's last stderr lines (a bounded tail is captured by the drain), and fails the acquire; `WorkerProcessRuntime`'s inline spawn gets the same timeout.
+  - `ProcessModeParityTest` pins the engine: it reads the worker build's `META-INF/services/cluster93.worker.WorkerEngine` and aborts (a visible skip, reason printed first, with the rebuild command) only when it registers no engine at all — so a worker build that can't start becomes a ~6 s skip instead of a 30 s-per-job hang.
+  - The child-JVM fallback now carries **both** engines: `cluster93-server` depends on `cluster93-runtime-graaljs` in test scope (production `c93.jar` keeps Javet only; nodes run the native workers). `ProcessModeParityTest` is green whether `cluster93-worker` was compiled `-Pjavet` or `-Pgraaljs`.
+  - `c93 node install --system` now provisions its own `cluster93` service account (idempotent `useradd --system --user-group`), owns `/var/lib/cluster93` by it, and makes `node.env`/`node.meta` `0640 root:cluster93`, so the rendered unit can actually start (D-136). `--dir` installs record their layout in `node.meta` so the lifecycle verbs find them (found by a native-binary smoke test).
+  - `TenantWorkerPool` now counts every worker exactly once (spawn takes a slot, recycle releases it idempotently), so `maxTotal` (= `C93_CAPACITY`) actually bounds warm + active + in-flight workers instead of drifting negative.
+  - Verified: `NodeWorkerChannelEofCrashTest` (EOF before hello), `TenantWorkerPoolTest` (dies-before-hello and never-hello both fail the acquire, leaving `totalWorkers() == 0`); full `./mvnw verify -pl cli,server -am -DskipITs` green (server 206, cli 85, runner-protocol all green), with GraalJS and with Javet.
+
+- **`c93 node` — node install, unified lifecycle, and the installer rewrite (D-134, Phase 5):**
+  - Folded `c93 local …` into `c93 node`: `NodeCommand` now owns `install`/`uninstall`, the lifecycle verbs (`setup`, `start`, `stop`, `restart`, `status`, `logs`, `mcp`, `update`, `env`) and the operator's `invite`/`revoke`. `c93 local` is a hidden, deprecated alias for one release; no behaviour is lost, and the verbs still understand both an installed node (`node.env` + a service unit) and the development master a checkout owns (`$C93_HOME/local.env` + `scripts/local.sh`).
+  - New `NodeInstall` fetches a signed release (reusing `UpgradeCommand.installBase`, `ReleaseSignature` and the CLI-built-in key, D-069), verifies `SHA256SUMS` and every asset, gunzips the native workers into `bin/`, writes `node.env` (`C93_*` settings, so a systemd `EnvironmentFile=` feeds the server directly) and a rendered service unit; user and `--system` (Linux) layouts, plus `--dir`, `--version`, `--no-start`, `--force`.
+  - New `NodeService` detects the backend — a user or system systemd unit, a macOS LaunchAgent, or the process directly (`java -jar c93.jar`, pid file under the data dir) — and drives it; `c93 node status` reports which was found. `c93 node env` shows and changes `node.env` (short names accepted).
+  - Reference unit templates added under `install/systemd/` (system and user) and `install/launchd/`; `install.sh` is now a CLI bootstrap whose `--node`/`--system` delegate to `c93 node install`, and `install.ps1` installs the portable CLI jar with `c93.cmd` and Java 21 detection (no Windows node).
+  - Docs: new `docs/guides/node.md`; README install + run-a-node (and the macOS/Windows wording fixed); `cli.md` and `cluster.md` updated.
+  - Verified: `NodeCommandTest` (28 tests) against a local release host — layout, `node.env`, the rendered unit, `--no-start`, checksum/signature refusal, unsigned releases, a stub `systemctl` driving `start`/`stop`, the direct-process fallback, uninstall with `--purge`, and the `c93 local` alias; `InstallScriptTest`, `CliTest`, `MainHelpTest`, `VersionCommandTest` all green.
+
 - **Rebrand: Automately → Cluster93 (`c93`):**
   - Repo-wide mechanical rename (711 path renames, 712 files rewritten, 0 residue) driven by `tools/refactor-rename.sh` from a reviewable map (`tools/rename-map.tsv`) and allowlist (`tools/rename-keep.txt`); historical/lineage text preserved.
   - Modules `automately-*` → `cluster93-*`; packages `automately.*` → `cluster93.*`; Maven groupId/artifactId `cluster93`; env `AUTOMATELY_*` → `C93_*`; home `~/.automately` → `~/.cluster93`; config `~/.config/automately` → `~/.config/cluster93`; app manifest `cluster93.json`; built-in imports `c93:*`; CLI/server jar `c93` (`c93.jar`, `c93.pid`); wire IDs `X-Cluster93-*` / `Cluster93-Signature` / `Server: c93`; Ignite SQL schema `CLUSTER93` and data region `cluster93`.
@@ -172,7 +193,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
   - **Core Scrypt Password Hashing:** Extended `Identity` with `CREDENTIALS` record kind, random 16-byte cryptographic salts, and `Kdf.scrypt` hashing with constant-time `MessageDigest.isEqual` comparison.
   - **Public Login Endpoint:** Added `POST /v1/auth/login` to `openapi.yaml`, `RouteScopes.java`, and `IdentityRoutes.java`. Validates user credentials and mints a 30-day personal session token (`c93_...`).
   - **Web Console Dual-Mode Login:** Redesigned `LoginView.tsx` with Username & Password + optional Tenant as the primary interface, retaining an expandable "Sign in with API token" fallback for CLI and token power users.
-  - **Full Pre-commit Verification:** Passed `IdentityTest`, `AuthTest`, `ContractTest`, `./mvnw verify -pl cluster93-core,cluster93-server -am -DskipITs`, and `npm test` (26/26 passed) with 0 regressions.
+  - **Full Pre-commit Verification:** Passed `IdentityTest`, `AuthTest`, `ContractTest`, `./mvnw verify -pl core,server -am -DskipITs`, and `npm test` (26/26 passed) with 0 regressions.
 
 - **Admin Tenant Visibility, Worker Concurrency Metrics & VFS File Explorer (Phase 6):**
   - **Operator Cross-Tenant Context Routing:** Evolved `ApiVerticle` authorization to allow cluster operators and the admin token (`principal.admin() == true`) to inspect and administer any tenant's workloads (jobs, services, apps, files) by passing `X-Cluster93-Tenant` or `?tenant=<name>`. Replaced rigid D-044/D-070 rejection strings with helpful guidance.
@@ -207,7 +228,7 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
   - Added end-to-end app and deployment persistence verification to `FullRestartTest`.
 
 - **CLI Versioning, Git Metadata & Update Detection (Phase 6.5):**
-  - Added `<git.commit>` and `<build.time>` build-time metadata properties in `cluster93-cli/pom.xml` and resource filtering into `cluster93-cli.properties`.
+  - Added `<git.commit>` and `<build.time>` build-time metadata properties in `cli/pom.xml` and resource filtering into `cluster93-cli.properties`.
   - Added accessor methods `Main.commit()`, `Main.builtAt()`, and `Main.shortCommit()`.
   - Updated `VersionCommand` to support `--json`, display git commit and build timestamp, and auto-detect the local repository root (using `LocalCommand.findRepoRoot()`). When a repo is present, it inspects `HEAD` to indicate whether the CLI is up to date or has an update available (`run 'c93 local update' or 'scripts/build-cli.sh' to recompile`).
   - Updated `LocalCommand.status` to display the active CLI commit and update status alongside the cluster status.

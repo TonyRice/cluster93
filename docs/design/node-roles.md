@@ -112,7 +112,7 @@ node satisfies is rejected, naming the requirement, rather than dispatched to a 
                       ┌──────────────────────────────────────────┐
                       │              Edge tier                    │
                       │        C93_ROLES=api,ingress       │
-                      │   :8080 REST+MCP, :8000 ingress, :9090    │
+                      │   :9393 REST+MCP, :9394 ingress, :9395    │
                       │        Capacity 0 — no guest code         │
                       └────────────────────┬─────────────────────┘
                                             │ private VPC
@@ -137,9 +137,9 @@ that joining the cluster is itself an authenticated act.
 # Edge node: REST API + ingress, no guest code.
 C93_ROLES=api,ingress
 C93_CAPACITY=0
-C93_HTTP_PORT=8080
-C93_INGRESS_PORT=8000
-C93_METRICS_PORT=9090
+C93_HTTP_PORT=9393
+C93_INGRESS_PORT=9394
+C93_METRICS_PORT=9395
 
 # Compute node: sandboxed execution only, private subnet.
 C93_ROLES=worker

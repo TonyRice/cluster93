@@ -115,9 +115,9 @@ Cluster93 runs other people's code. This page describes who is trusted, what eac
 - **Nodes authenticate each other with certificates (D-066, D-067).** Ignite discovery and communication, the clustered event bus and the internal endpoint use TLS 1.3 with **a node certificate required on both sides**, signed by the cluster's own CA, whose private key stays on the operator's machine. A machine without such a certificate can't join or read traffic. Nodes are added with one-line join bundles, and removed with `c93 node revoke`, which every node enforces and which forces the node out ([docs/guides/cluster.md](docs/guides/cluster.md)).
   - **The event bus:** it trusts the CA but doesn't consult the revocation list. Vert.x copies its TLS options in a way that loses custom trust managers. A revoked node can't rejoin Ignite discovery, which does check, and is forced out when revoked, so its event bus connections go with it.
   - **`C93_CLUSTER_TLS=off`** turns all of this off. It's for development only and logs a warning at every start.
-  - **Still keep node ports private** (5701, 5801, the event bus, 8090, 9090), and bind Ignite to the private address (`C93_CLUSTER_BIND`). Certificates stop strangers joining; a private network stops them trying.
+  - **Still keep node ports private** (5701, 5801, the event bus, 9396, 9395), and bind Ignite to the private address (`C93_CLUSTER_BIND`). Certificates stop strangers joining; a private network stops them trying.
 - **Ignite's own client and REST ports are off (D-065).** Ignite opens a thin-client/JDBC/ODBC connector (10800) and a REST command protocol (11211) by default, unauthenticated, on every interface. Cluster93 uses neither, so both are disabled, and a test fails if a node listens anywhere unexpected. Before this fix (2026-10-07), anything that could reach 10800 could query every table.
-- **TLS is yours to add.** Nodes speak plain HTTP. Terminate TLS in front of the API (8080) and the ingress (8000) with a reverse proxy or load balancer, and keep the internal (8090) and metrics (9090) ports private.
+- **TLS is yours to add.** Nodes speak plain HTTP. Terminate TLS in front of the API (9393) and the ingress (9394) with a reverse proxy or load balancer, and keep the internal (9396) and metrics (9395) ports private.
 - **Operators can read logs.** Scripts' console output is stored with their jobs (the last 1,000 lines, at most 1 MiB, each line cut at about 16 KiB; D-107), so tenants shouldn't log secrets. Secrets declared in a job's `env` are masked (D-096); values a script fetches some other way aren't.
 - **Services serve the public.** Anything a service exposes through the ingress is public; services authenticate their own users.
 - **Disk providers rely on the shared storage's own security and redundancy** (NFS, Ceph) for the folder under `C93_DISK_ROOT`.
@@ -126,9 +126,9 @@ Cluster93 runs other people's code. This page describes who is trusted, what eac
 ## Deployment checklist
 
 - [ ] `C93_ADMIN_TOKEN` is set and stored securely, or the generated one was saved and rotated.
-- [ ] Ignite ports (5701, 5801), the internal port (8090) and the metrics port (9090) are reachable only between nodes, and by Prometheus. `C93_CLUSTER_BIND` is the node's private address.
+- [ ] Ignite ports (5701, 5801), the internal port (9396) and the metrics port (9395) are reachable only between nodes, and by Prometheus. `C93_CLUSTER_BIND` is the node's private address.
 - [ ] The cluster's certificates come from `c93 cluster init` on your own machine, not the compose file's development `tls-init`. `ca.key` is kept off the servers and backed up. `C93_CLUSTER_TLS` isn't `off`.
-- [ ] TLS terminates in front of 8080 and 8000.
+- [ ] TLS terminates in front of 9393 and 9394.
 - [ ] `C93_SECRETS_KEY` is set (at least 32 random characters) if tenants will use secrets or bring their own storage, and backed up.
 - [ ] `C93_EGRESS_ALLOW_PRIVATE` is left off in production.
 - [ ] If the nodes' resolver answers internal names (split-horizon DNS), `C93_EGRESS_DNS` points scripts at a public resolver, and `C93_EGRESS_INTERNAL_DOMAINS` lists your internal zones.

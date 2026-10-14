@@ -178,7 +178,7 @@ entries = [{"type": n, "jniAccessible": True, "allDeclaredConstructors": True, "
             "allDeclaredMethods": True, "allPublicMethods": True, "allDeclaredFields": True, "allPublicFields": True}
            for n in names]
 json.dump({"reflection": entries}, open(sys.argv[1], "w"), indent=1)' \
-    cluster93-worker/src/javet/resources/META-INF/native-image/cluster93/javet/reachability-metadata.json
+    worker/src/javet/resources/META-INF/native-image/cluster93/javet/reachability-metadata.json
 }
 
 # --------------------------------------------------------------------------
@@ -187,11 +187,11 @@ json.dump({"reflection": entries}, open(sys.argv[1], "w"), indent=1)' \
 build_engine() {
   local engine=$1
   echo "== building worker-$engine (memory cap $CAP, heap $HEAP, threads $THREADS)" >&2
-  sandboxed ./mvnw -q -DskipTests -DskipITs -pl cluster93-worker -am install "-P$engine"
-  sandboxed ./mvnw -q -DskipTests -DskipITs -pl cluster93-worker clean package "-P$engine,native" \
+  sandboxed ./mvnw -q -DskipTests -DskipITs -pl worker -am install "-P$engine"
+  sandboxed ./mvnw -q -DskipTests -DskipITs -pl worker clean package "-P$engine,native" \
     -Dnative.builder.heap="$HEAP" -Dnative.builder.threads="$THREADS"
 
-  local src="cluster93-worker/target/worker-$engine"
+  local src="worker/target/worker-$engine"
   if [[ ! -f "$src" ]]; then
     echo "Error: native image $src was not produced" >&2
     exit 1

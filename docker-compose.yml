@@ -1,9 +1,9 @@
-# A three-node cluster. Each node serves the API (808x) and services' HTTP (800x); jobs run on whichever
-# node is least loaded.
+# A three-node cluster. Each node serves the API (940x → :9393) and services' HTTP (941x → :9394); jobs run on
+# whichever node is least loaded.
 #   export C93_ADMIN_TOKEN=$(openssl rand -hex 32)   # or leave it unset: node1 then logs a generated one
 #   docker compose up --build
-#   curl -s -H "Authorization: Bearer $C93_ADMIN_TOKEN" localhost:8081/v1/nodes
-#   curl -s -H 'Host: <service>--<tenant>.localhost' localhost:8001/
+#   curl -s -H "Authorization: Bearer $C93_ADMIN_TOKEN" localhost:9401/v1/nodes
+#   curl -s -H 'Host: <service>--<tenant>.localhost' localhost:9411/
 x-node: &node
   build: .
   depends_on:
@@ -17,7 +17,7 @@ x-node: &node
     C93_CLUSTER_SIZE: "3"
     C93_ADMIN_TOKEN: ${C93_ADMIN_TOKEN:-}
   healthcheck:
-    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/9393 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
     interval: 5s
     retries: 12
 
@@ -36,19 +36,19 @@ services:
     <<: *node
     hostname: node1
     environment: { <<: *env, C93_NODE_ID: node1, C93_CLUSTER_BIND: node1, C93_TLS_DIR: /tls/node1 }
-    ports: ["8081:8080", "8001:8000"]
+    ports: ["9401:9393", "9411:9394"]
     volumes: ["node1-data:/var/lib/cluster93", "cluster-tls:/tls:ro"]
   node2:
     <<: *node
     hostname: node2
     environment: { <<: *env, C93_NODE_ID: node2, C93_CLUSTER_BIND: node2, C93_TLS_DIR: /tls/node2 }
-    ports: ["8082:8080", "8002:8000"]
+    ports: ["9402:9393", "9412:9394"]
     volumes: ["node2-data:/var/lib/cluster93", "cluster-tls:/tls:ro"]
   node3:
     <<: *node
     hostname: node3
     environment: { <<: *env, C93_NODE_ID: node3, C93_CLUSTER_BIND: node3, C93_TLS_DIR: /tls/node3 }
-    ports: ["8083:8080", "8003:8000"]
+    ports: ["9403:9393", "9413:9394"]
     volumes: ["node3-data:/var/lib/cluster93", "cluster-tls:/tls:ro"]
 
   # docker compose --profile observability up: Prometheus scrapes the nodes, Grafana shows the Cluster93 dashboard

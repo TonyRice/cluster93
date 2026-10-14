@@ -11,10 +11,10 @@ compose() { docker compose -p "$PROJECT" -f docker-compose.yml -f benchmarks/com
 json() { python3 -I -c "import json,sys; print(json.load(sys.stdin)$1)"; }
 
 echo "== building"
-./mvnw -q -B -pl cluster93-server -am package -DskipTests -DskipITs
+./mvnw -q -B -pl server -am package -DskipTests -DskipITs
 ctx=$(mktemp -d)
-mkdir -p "$ctx/cluster93-server/target"
-cp Dockerfile "$ctx/" && cp cluster93-server/target/c93.jar "$ctx/cluster93-server/target/"
+mkdir -p "$ctx/server/target"
+cp Dockerfile "$ctx/" && cp server/target/c93.jar "$ctx/server/target/"
 docker build -q --target local-jar -t cluster93-bench:local "$ctx" >/dev/null
 rm -rf "$ctx"
 

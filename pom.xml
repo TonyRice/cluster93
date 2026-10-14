@@ -32,16 +32,16 @@
     </licenses>
 
     <modules>
-        <module>cluster93-tls</module>
-        <module>cluster93-core</module>
-        <module>cluster93-runtime-js</module>
-        <module>cluster93-runtime-javet</module>
-        <module>cluster93-runtime-graaljs</module>
-        <module>cluster93-runner-protocol</module>
-        <module>cluster93-worker</module>
-        <module>cluster93-cluster-ignite</module>
-        <module>cluster93-server</module>
-        <module>cluster93-cli</module>
+        <module>tls</module>
+        <module>core</module>
+        <module>runtime-js</module>
+        <module>runtime-javet</module>
+        <module>runtime-graaljs</module>
+        <module>runner-protocol</module>
+        <module>worker</module>
+        <module>cluster-ignite</module>
+        <module>server</module>
+        <module>cli</module>
     </modules>
 
     <properties>

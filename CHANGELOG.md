@@ -6,6 +6,16 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **Module directories lose the `cluster93-` prefix**:
+  - `cluster93-{tls,core,runtime-js,runtime-javet,runtime-graaljs,runner-protocol,worker,cluster-ignite,server,cli}` are now `{tls,core,runtime-js,runtime-javet,runtime-graaljs,runner-protocol,worker,cluster-ignite,server,cli}` at the repo root. **ArtifactIds, Maven coordinates and Java packages are unchanged** (`cluster93-core`, `cluster93.*`), so `c93.jar`, `cluster93-cli.jar` and every dependency declaration are untouched.
+  - Every path reference was updated: the root `pom.xml` `<module>` entries, `Dockerfile`, `scripts/*.sh` (`-pl`, `*/target/…`), `.github/workflows/release.yml.disabled`, `.gitleaks.toml`, `benchmarks/`, the README module table, `TESTING.md`/`ROADMAP.md`/`CLAUDE.md`, and the docs — plus two runtime lookups in main code (`TenantWorkerPool`'s worker-target discovery and the CLI's dev-master `server/target/c93.jar`).
+  - **Why:** the prefix added nothing at the repo root and made every path longer; keeping the artifactId prefix preserves the published coordinates.
+
+- **New default ports: the `9393`–`9396` Cluster93 block (D-137)**:
+  - `C93_HTTP_PORT` now defaults to **9393** (was 8080), `C93_INGRESS_PORT` to **9394** (was 8000), `C93_METRICS_PORT` to **9395** (was 9090) and `C93_INTERNAL_PORT` to **9396** (was 8090). The change runs through the server defaults, the CLI (`c93 node install` writes them into `node.env`), `scripts/local.sh`/`scripts/dev.sh`, the Docker image and `docker-compose.yml` (host ports `940x`/`941x`), the OpenAPI `servers` URL, and the Prometheus/Grafana stack.
+  - **Why:** 8080 and 8000 collide with the usual local development servers, and 9090 is Prometheus's own port; one memorable block avoids all three clashes.
+  - **Compatibility:** an existing node keeps its ports — a written `node.env`/`local.env` names them explicitly — so only fresh installs and unset environments pick up the new defaults. Anyone depending on the old defaults, or on the old Docker host ports (`8081`–`8083` / `8001`–`8003`), must set them explicitly or update their mappings (D-137).
+
 ## [2.0.0-alpha.2] - 2026-10-13
 
 - **Initial Admin Setup Wizard**:

@@ -63,7 +63,7 @@ Cluster93 is organized into decoupled Maven modules with strict architectural bo
 
 ## 2. Host APIs (`HostApis`) Location & Mechanics
 
-The primary interface defining what sandboxed JavaScript code can invoke is [`cluster93.core.runtime.api.HostApis`](../cluster93-core/src/main/java/cluster93/core/runtime/api/HostApis.java).
+The primary interface defining what sandboxed JavaScript code can invoke is [`cluster93.core.runtime.api.HostApis`](../core/src/main/java/cluster93/core/runtime/api/HostApis.java).
 
 ```
 HostApis (Interface in cluster93-core)
@@ -84,7 +84,7 @@ HostApis (Interface in cluster93-core)
 
 ### Implementations:
 1. **Node Authority Implementation:**
-   - [`cluster93.core.host.NodeHostApis`](../cluster93-core/src/main/java/cluster93/core/host/NodeHostApis.java)
+   - [`cluster93.core.host.NodeHostApis`](../core/src/main/java/cluster93/core/host/NodeHostApis.java)
    - Backed by the cluster stores (`KvStore`, `FileStore`, `ServeRegistry`, `FetchClient`, `FileTree`).
    - Tenant-scoped: the Node resolves the tenant from internal records.
 2. **Worker Remote Proxy:**
@@ -92,7 +92,7 @@ HostApis (Interface in cluster93-core)
    - Dispatches RPC `CALL` frames over binary IPC pipes for authority-requiring operations.
    - Executes `crypto()` and `zlib()` locally in-process without network overhead.
 3. **No-op / Test Fallback:**
-   - [`cluster93.core.runtime.api.Unavailable`](../cluster93-core/src/main/java/cluster93/core/runtime/api/Unavailable.java) (`HostApis.NONE`).
+   - [`cluster93.core.runtime.api.Unavailable`](../core/src/main/java/cluster93/core/runtime/api/Unavailable.java) (`HostApis.NONE`).
 
 ---
 
@@ -101,9 +101,9 @@ HostApis (Interface in cluster93-core)
 Guest code executed inside Javet or GraalJS interacts with the host via [`cluster93-runtime-js`](../cluster93-runtime-js):
 
 1. **Engine SPI:**
-   - [`JsEngine`](../cluster93-runtime-js/src/main/java/cluster93/runtime/js/JsEngine.java): Lifecycle factory for creating contexts.
-   - [`JsContext`](../cluster93-runtime-js/src/main/java/cluster93/runtime/js/JsContext.java): Represents one sandboxed isolate.
-   - [`ScriptRunner`](../cluster93-runtime-js/src/main/java/cluster93/runtime/js/ScriptRunner.java): Coordinates the event loop, execution timeouts, cancellation tokens, and log/state sinks.
+   - [`JsEngine`](../runtime-js/src/main/java/cluster93/runtime/js/JsEngine.java): Lifecycle factory for creating contexts.
+   - [`JsContext`](../runtime-js/src/main/java/cluster93/runtime/js/JsContext.java): Represents one sandboxed isolate.
+   - [`ScriptRunner`](../runtime-js/src/main/java/cluster93/runtime/js/ScriptRunner.java): Coordinates the event loop, execution timeouts, cancellation tokens, and log/state sinks.
 2. **Host Bindings:**
    - Methods annotated with `@HostFunction` exposed directly to the isolate:
      - `KvBinding`, `BusBinding`, `QueueBinding`, `JobsBinding`, `FilesBinding`, `FsBinding`
@@ -146,13 +146,13 @@ Frame Header (12 Bytes)
 
 ### Multiplexing & Flow Control (`StreamMultiplexer`)
 - Streaming channels (file downloads/uploads, HTTP streaming request/response bodies, TCP/TLS sockets) multiplex over the shared framed connection via `0x30 OPEN`, `0x31 DATA`, `0x32 END`, `0x33 RESET`, and `0x34 CREDIT`.
-- Governed by HTTP/2-style flow control windows via [`CreditManager`](../cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/flow/CreditManager.java): 256 KiB initial stream window, 4 MiB global connection limit.
+- Governed by HTTP/2-style flow control windows via [`CreditManager`](../runner-protocol/src/main/java/cluster93/runner/protocol/flow/CreditManager.java): 256 KiB initial stream window, 4 MiB global connection limit.
 - Senders slice writes into 64 KiB chunks and pause on window depletion. Receivers automatically emit `CREDIT` replenishment frames once 16 KiB or more of data has been consumed.
 
 ### Warm Worker Pool & Memory Isolation (`TenantWorkerPool`)
-- [`TenantWorkerPool`](../cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/pool/TenantWorkerPool.java) maintains a pool of pre-spawned worker processes in `UNBOUND` state, eliminating the 40–800 ms process startup latency for incoming jobs.
+- [`TenantWorkerPool`](../runner-protocol/src/main/java/cluster93/runner/protocol/pool/TenantWorkerPool.java) maintains a pool of pre-spawned worker processes in `UNBOUND` state, eliminating the 40–800 ms process startup latency for incoming jobs.
 - Binds workers to tenants on demand via `BIND` (`UNBOUND` -> `BOUND` -> `BUSY` -> `BOUND` -> `TERMINATED`).
-- Enforces Linux cgroups v2 memory bounds ([`CgroupMemoryLimiter`](../cluster93-runner-protocol/src/main/java/cluster93/runner/protocol/pool/CgroupMemoryLimiter.java)) by assigning worker PIDs to `/sys/fs/cgroup/cluster93/worker-<pid>` with `memory.max` and `memory.high` caps, and detecting kernel OOM kills via `memory.events`. Gracefully falls back to heap options in unprivileged environments.
+- Enforces Linux cgroups v2 memory bounds ([`CgroupMemoryLimiter`](../runner-protocol/src/main/java/cluster93/runner/protocol/pool/CgroupMemoryLimiter.java)) by assigning worker PIDs to `/sys/fs/cgroup/cluster93/worker-<pid>` with `memory.max` and `memory.high` caps, and detecting kernel OOM kills via `memory.events`. Gracefully falls back to heap options in unprivileged environments.
 
 ### Non-Blocking Domain Socket Transport (`UdsServerTransport`, `UdsClientTransport`)
 - Supports high-throughput Unix Domain Sockets over filesystem `.sock` nodes via Netty domain socket transport (`SocketAddress.domainSocketAddress`).
@@ -165,7 +165,7 @@ Frame Header (12 Bytes)
 - **Database Engine:** Embedded Apache Ignite 2.18 (`cluster93-cluster-ignite`).
 - **Data Region:** Off-heap pages with WAL (write-ahead log) persisted under `C93_DATA_DIR`.
 - **Tables:** Replicated across cluster nodes with Calcite SQL querying.
-- **Blob Storage:** [`BlobStore`](../cluster93-core/src/main/java/cluster93/core/files/BlobStore.java) implementations for chunked disk storage, S3 object storage, or in-memory testing.
+- **Blob Storage:** [`BlobStore`](../core/src/main/java/cluster93/core/files/BlobStore.java) implementations for chunked disk storage, S3 object storage, or in-memory testing.
 
 ---
 
@@ -177,7 +177,7 @@ Frame Header (12 Bytes)
   ```
 - **Run targeted tests:**
   ```bash
-  ./mvnw test -pl cluster93-runtime-javet -Dtest=ScriptRuntimeTest -Dsurefire.failIfNoSpecifiedTests=false
+  ./mvnw test -pl runtime-javet -Dtest=ScriptRuntimeTest -Dsurefire.failIfNoSpecifiedTests=false
   ```
 - **Generate full aggregate Javadocs:**
   ```bash

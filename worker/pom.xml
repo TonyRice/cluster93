@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cluster93</groupId>
+        <artifactId>cluster93-parent</artifactId>
+        <version>2.0.0-alpha.2</version>
+    </parent>
+
+    <artifactId>cluster93-worker</artifactId>
+    <name>Cluster93 Worker</name>
+    <description>
+        The seed of the tenant worker (D-126): one engine, built as a GraalVM native image, running scripts with
+        in-process host APIs for now. Used to compare the engines; the worker-node protocol comes once one is chosen.
+        Choose the engine with a profile, -Pjavet or -Pgraaljs; add -Pnative to build worker-javet or worker-graaljs.
+    </description>
+
+    <properties>
+        <native.maven.plugin.version>0.10.6</native.maven.plugin.version>
+        <worker.engine>none</worker.engine>
+        <!-- GraalVM's native-image builder, which the worker images are built with (its own version numbering). -->
+        <svm.version>25.0.4.1.1</svm.version>
+        <!-- The native-image builder's heap and threads: building GraalJS into an image takes several GB. -->
+        <native.builder.heap>7g</native.builder.heap>
+        <native.builder.threads>2</native.builder.threads>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>cluster93</groupId>
+            <artifactId>cluster93-runtime-js</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>cluster93</groupId>
+            <artifactId>cluster93-runner-protocol</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+    </dependencies>
+
+    <profiles>
+        <!-- V8, through Javet. -->
+        <profile>
+            <id>javet</id>
+            <properties>
+                <worker.engine>javet</worker.engine>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>cluster93</groupId>
+                    <artifactId>cluster93-runtime-javet</artifactId>
+                </dependency>
+                <!-- The native-image substitution for Javet's class loader; only native-image reads it. -->
+                <dependency>
+                    <groupId>org.graalvm.nativeimage</groupId>
+                    <artifactId>svm</artifactId>
+                    <version>${svm.version}</version>
+                    <scope>provided</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.0</version>
+                        <executions>
+                            <execution>
+                                <id>javet-sources</id>
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>add-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>src/javet/java</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>javet-resources</id>
+                                <phase>generate-resources</phase>
+                                <goals>
+                                    <goal>add-resource</goal>
+                                </goals>
+                                <configuration>
+                                    <resources>
+                                        <resource>
+                                            <directory>src/javet/resources</directory>
+                                        </resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <!-- Embedded GraalJS. -->
+        <profile>
+            <id>graaljs</id>
+            <properties>
+                <worker.engine>graaljs</worker.engine>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>cluster93</groupId>
+                    <artifactId>cluster93-runtime-graaljs</artifactId>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.0</version>
+                        <executions>
+                            <execution>
+                                <id>graaljs-sources</id>
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>add-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>src/graaljs/java</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>graaljs-resources</id>
+                                <phase>generate-resources</phase>
+                                <goals>
+                                    <goal>add-resource</goal>
+                                </goals>
+                                <configuration>
+                                    <resources>
+                                        <resource>
+                                            <directory>src/graaljs/resources</directory>
+                                        </resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <!--
+          ./mvnw -Pjavet,native -pl worker -am package (or -Pgraaljs,native), with GraalVM as JAVA_HOME or in
+          GRAALVM_HOME: builds target/worker-<engine>.
+        -->
+        <profile>
+            <id>native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                        <version>${native.maven.plugin.version}</version>
+                        <extensions>true</extensions>
+                        <executions>
+                            <execution>
+                                <id>build-native</id>
+                                <goals>
+                                    <goal>compile-no-fork</goal>
+                                </goals>
+                                <phase>package</phase>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <imageName>worker-${worker.engine}</imageName>
+                            <mainClass>cluster93.worker.WorkerMain</mainClass>
+                            <buildArgs>
+                                <buildArg>--no-fallback</buildArg>
+                                <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+                                <buildArg>-J-Xmx${native.builder.heap}</buildArg>
+                                <buildArg>--parallelism=${native.builder.threads}</buildArg>
+                            </buildArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

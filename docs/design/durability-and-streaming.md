@@ -30,7 +30,7 @@
 
 ## Milestone 2: streaming
 - **Direct proxying.**
-  - Every node runs an internal HTTP endpoint (`C93_INTERNAL_PORT`, default 8090) and advertises its address in the node registry.
+  - Every node runs an internal HTTP endpoint (`C93_INTERNAL_PORT`, default 9396) and advertises its address in the node registry.
   - The ingress forwards a request **as a stream** to the serving node: the request body is piped with backpressure and the response is streamed back. The event bus is no longer in the data path.
   - Internal requests carry a cluster secret that's generated once and stored in the cluster, so the internal port can't be called from outside even if it's reachable.
 - **Streaming in scripts.**

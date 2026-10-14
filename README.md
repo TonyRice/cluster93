@@ -21,15 +21,42 @@ You submit code to any node. The cluster schedules it on the least-loaded worker
 
 ## Install the CLI
 
-Prebuilt native binaries are **Linux-only for now** (x64 and arm64):
+Prebuilt native binaries cover **Linux** (x64 and arm64) and **macOS** (Apple silicon and Intel):
 
 ```bash
 curl -fsSL https://github.com/TonyRice/cluster93/releases/latest/download/install.sh | sh
 ```
 
-On macOS and Windows, build the CLI from source — GraalVM `native-image` can't cross-compile, so those binaries have to be built on their own platforms. See the [CLI guide](docs/guides/cli.md#build-from-source).
+On **Windows**, the PowerShell installer sets up the portable CLI jar (`cluster93-cli.jar` + a
+`c93.cmd` shim, with Java 21 detection):
+
+```powershell
+irm https://github.com/TonyRice/cluster93/releases/latest/download/install.ps1 | iex
+```
+
+GraalVM `native-image` can't cross-compile, so a native binary has to be built on its own platform;
+where one isn't published, the portable jar runs anywhere with **Java 21+** — see the
+[CLI guide](docs/guides/cli.md#build-from-source).
 
 Native binaries compile via GraalVM with zero JVM requirements on the client. See the [CLI guide](docs/guides/cli.md). To connect AI agents via MCP, see the [MCP guide](docs/guides/mcp.md).
+
+---
+
+## Run a node
+
+`c93` installs and runs a node too. It fetches a signed release, lays out the tree, writes `node.env`
+and a service unit, and starts it — no checkout needed (a node needs **Java 21+**):
+
+```bash
+c93 node install                 # a per-user node (systemd --user, or a LaunchAgent on macOS)
+sudo c93 node install --system   # a system-wide node (Linux): /opt/cluster93, a cluster93 user, a system unit
+c93 node status                  # backend, PID, /health, /v1/nodes
+c93 node logs --follow
+c93 node env --set HTTP_PORT=9494 && c93 node restart
+```
+
+The one-line installer can do it in one go: `… | sh -s -- --node` (add `--system` for a system node).
+A node is Docker or WSL2 on Windows. Full details in the [node guide](docs/guides/node.md).
 
 ---
 
@@ -117,18 +144,20 @@ State is written where you'd expect:
 Every operation is also available from the CLI, so you never need to remember the script's paths:
 
 ```bash
-c93 local status         # PID, /health, /v1/nodes, and an update check
-c93 local start
-c93 local stop
-c93 local restart
-c93 local logs --follow
-c93 local mcp            # Claude Code, Cursor, Antigravity, and the stdio bridge
+c93 node status         # PID, /health, /v1/nodes, and an update check
+c93 node start
+c93 node stop
+c93 node restart
+c93 node logs --follow
+c93 node mcp            # Claude Code, Cursor, Antigravity, and the stdio bridge
 ```
+
+(`c93 local …` still works as a deprecated alias of `c93 node …` for one release.)
 
 `status` compares the commit the running build came from against the checkout's `git HEAD` and flags any drift, so a stale node is never a mystery:
 
 ```text
-⚠️  Update Available! Running build: 666cefa9…, Current repo HEAD: 8d4b1c02…. Run 'scripts/local.sh update' or 'c93 local update'.
+⚠️  Update Available! Running build: 666cefa9…, Current repo HEAD: 8d4b1c02…. Run 'scripts/local.sh update' or 'c93 node update'.
 ```
 
 `scripts/local.sh update` rebuilds the server jar and worker from the current checkout, rewrites the provenance in `node.meta`, and restarts the node if it was running.
@@ -141,12 +170,12 @@ c93 local mcp            # Claude Code, Cursor, Antigravity, and the stdio bridg
 
 ```bash
 export C93_ADMIN_TOKEN=$(openssl rand -hex 32)
-docker compose up --build -d        # Starts three nodes on :8081, :8082, :8083
+docker compose up --build -d        # Starts three nodes on :9401, :9402, :9403
 ADMIN="Authorization: Bearer $C93_ADMIN_TOKEN"
 
 # Create a tenant and mint a scoped bearer token
-curl -s -X POST localhost:8081/v1/tenants -H "$ADMIN" -d '{"name": "demo"}'
-TOKEN=$(curl -s -X POST localhost:8081/v1/tenants/demo/tokens -H "$ADMIN" \
+curl -s -X POST localhost:9401/v1/tenants -H "$ADMIN" -d '{"name": "demo"}'
+TOKEN=$(curl -s -X POST localhost:9401/v1/tenants/demo/tokens -H "$ADMIN" \
   -d '{"name": "dev", "scopes": ["*"]}' | jq -r .token)
 AUTH="Authorization: Bearer $TOKEN"
 ```
@@ -156,7 +185,7 @@ AUTH="Authorization: Bearer $TOKEN"
 Jobs are ES modules receiving input and a execution context (`ctx`). Steps wrapped in `ctx.step()` execute with idempotency keys and are never repeated if an attempt resumes on another node:
 
 ```bash
-curl -s -X POST localhost:8081/v1/jobs -H "$AUTH" \
+curl -s -X POST localhost:9401/v1/jobs -H "$AUTH" \
   -d '{
     "script": "export default async (input, ctx) => {\n  const res = await ctx.step(\"fetch-data\", () => ({ count: input.count * 2 }));\n  await ctx.saveCheckpoint({ processed: true });\n  return { ok: true, result: res };\n}",
     "input": {"count": 21}
@@ -165,7 +194,7 @@ curl -s -X POST localhost:8081/v1/jobs -H "$AUTH" \
 
 Stream logs and execution events in real time from any node via Server-Sent Events (SSE) or the CLI:
 ```bash
-curl -N localhost:8083/v1/jobs/<id>/events -H "$AUTH"
+curl -N localhost:9403/v1/jobs/<id>/events -H "$AUTH"
 c93 jobs logs <id>                               # Live stream via CLI
 ```
 
@@ -179,21 +208,21 @@ c93 run job.js --input '{"count": 21}'           # Streams stderr logs live, std
 Services run continuously under cluster supervision with health monitoring, automatic restart backoff, and host-based routing:
 
 ```bash
-curl -s -X PUT localhost:8081/v1/services/web -H "$AUTH" \
+curl -s -X PUT localhost:9401/v1/services/web -H "$AUTH" \
   -d '{
     "script": "import http from \"node:http\";\nconst server = http.createServer((req, res) => res.end(JSON.stringify({ status: \"healthy\" })));\nserver.listen(8080);",
     "enabled": true
   }'
 ```
 
-Once running, requests arriving at the ingress port (`:8000`) matching `<service>--<tenant>.<domain>` route directly to the serving node:
+Once running, requests arriving at the ingress port (`:9411`) matching `<service>--<tenant>.<domain>` route directly to the serving node:
 ```bash
-curl -H "Host: web--demo.localhost" http://localhost:8000/
+curl -H "Host: web--demo.localhost" http://localhost:9411/
 ```
 
 Or deploy and stream logs live via the CLI:
 ```bash
-c93 login http://localhost:8081 --token "$TOKEN"
+c93 login http://localhost:9401 --token "$TOKEN"
 c93 services deploy web server.js
 c93 services logs web                           # Follow live console output
 ```
@@ -202,7 +231,7 @@ c93 services logs web                           # Follow live console output
 
 ## REST API & Contract
 
-Cluster93 uses a **contract-first architecture**: [`openapi.yaml`](cluster93-server/src/main/resources/openapi.yaml) is the single source of truth. Every request is validated against the specification before reaching application handlers.
+Cluster93 uses a **contract-first architecture**: [`openapi.yaml`](server/src/main/resources/openapi.yaml) is the single source of truth. Every request is validated against the specification before reaching application handlers.
 
 All `/v1` endpoints require an HTTP Bearer token:
 - **Admin Token:** Manages tenants, operators, and storage policies. Admin tokens cannot read or manipulate tenant data (D-044).
@@ -216,7 +245,7 @@ For complete schema details and parameter documentation, refer to the [API Endpo
 ## Architecture & Execution Model
 
 ```
-       Public API :8080 · Ingress :8000 (Any Node)
+       Public API :9393 · Ingress :9394 (Any Node)
                          │
                   ┌──────▼──────┐
                   │ ApiVerticle │
@@ -269,16 +298,16 @@ For complete schema details and parameter documentation, refer to the [API Endpo
 
 | Module | Responsibility | Key Classes |
 |---|---|---|
-| [`cluster93-core`](cluster93-core) | Job lifecycle, state transitions, scheduling, storage SPIs, services supervisor. Depends only on `vertx-core`. | `NodeVerticle`, `JobScheduler`, `ServiceSupervisor`, `NodeHostApis` |
-| [`cluster93-runtime-js`](cluster93-runtime-js) | Engine-neutral JS SPI, polyfills (`node:*`, web standards), event loop orchestration, and conformance test harness. | `JsEngine`, `JsContext`, `ScriptRunner`, `HostFunction` |
-| [`cluster93-runtime-javet`](cluster93-runtime-javet) | V8 engine adapter using Javet. Optimized for throughput and JSON manipulation. | `JavetEngine` |
-| [`cluster93-runtime-graaljs`](cluster93-runtime-graaljs) | GraalJS engine adapter. Memory-safe polyglot sandbox isolating host memory. | `GraalJsEngine` |
-| [`cluster93-runner-protocol`](cluster93-runner-protocol) | IPC binary framing codec, credit-based flow control, UDS transport, and warm tenant worker pool supervisor. | `FrameCodec`, `StreamMultiplexer`, `TenantWorkerPool`, `RemoteHostApis` |
-| [`cluster93-worker`](cluster93-worker) | Standalone native runner daemon for out-of-process execution. | `WorkerMain` |
-| [`cluster93-cluster-ignite`](cluster93-cluster-ignite) | Embedded Apache Ignite 2.18 persistence, WAL, replicated caches, and cluster manager. | `IgniteClusterManager`, `IgniteJobStore` |
-| [`cluster93-server`](cluster93-server) | REST API endpoints, OpenAPI validation, ingress proxy, WebSocket tunnels, and MCP server. | `Cluster93`, `ApiVerticle`, `IngressVerticle` |
-| [`cluster93-cli`](cluster93-cli) | Single-binary CLI client compiled with GraalVM Native Image. | `CliMain` |
-| [`cluster93-tls`](cluster93-tls) | Mutual TLS utilities, node join tokens, and cluster certificates. | `TlsConfig` |
+| [`cluster93-core`](core) | Job lifecycle, state transitions, scheduling, storage SPIs, services supervisor. Depends only on `vertx-core`. | `NodeVerticle`, `JobScheduler`, `ServiceSupervisor`, `NodeHostApis` |
+| [`cluster93-runtime-js`](runtime-js) | Engine-neutral JS SPI, polyfills (`node:*`, web standards), event loop orchestration, and conformance test harness. | `JsEngine`, `JsContext`, `ScriptRunner`, `HostFunction` |
+| [`cluster93-runtime-javet`](runtime-javet) | V8 engine adapter using Javet. Optimized for throughput and JSON manipulation. | `JavetEngine` |
+| [`cluster93-runtime-graaljs`](runtime-graaljs) | GraalJS engine adapter. Memory-safe polyglot sandbox isolating host memory. | `GraalJsEngine` |
+| [`cluster93-runner-protocol`](runner-protocol) | IPC binary framing codec, credit-based flow control, UDS transport, and warm tenant worker pool supervisor. | `FrameCodec`, `StreamMultiplexer`, `TenantWorkerPool`, `RemoteHostApis` |
+| [`cluster93-worker`](worker) | Standalone native runner daemon for out-of-process execution. | `WorkerMain` |
+| [`cluster93-cluster-ignite`](cluster-ignite) | Embedded Apache Ignite 2.18 persistence, WAL, replicated caches, and cluster manager. | `IgniteClusterManager`, `IgniteJobStore` |
+| [`cluster93-server`](server) | REST API endpoints, OpenAPI validation, ingress proxy, WebSocket tunnels, and MCP server. | `Cluster93`, `ApiVerticle`, `IngressVerticle` |
+| [`cluster93-cli`](cli) | Single-binary CLI client compiled with GraalVM Native Image. | `CliMain` |
+| [`cluster93-tls`](tls) | Mutual TLS utilities, node join tokens, and cluster certificates. | `TlsConfig` |
 
 For an in-depth component guide, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -313,8 +342,8 @@ Cluster93 is configured via environment variables:
 | `C93_NODE_ID` | `$(hostname)` | Unique identifier for this cluster node |
 | `C93_ADMIN_TOKEN` | *(Auto-generated)* | Cluster administrative token (at least 32 characters) |
 | `C93_RATE_LIMIT_PER_MINUTE` | `1200` | Allowed requests per tenant per minute across the cluster |
-| `C93_HTTP_PORT` | `8080` | REST API and MCP HTTP port (`0` = random) |
-| `C93_INGRESS_PORT` | `8000` | Ingress reverse proxy port for hosted services |
+| `C93_HTTP_PORT` | `9393` | REST API and MCP HTTP port (`0` = random) |
+| `C93_INGRESS_PORT` | `9394` | Ingress reverse proxy port for hosted services |
 | `C93_INGRESS_DOMAIN` | `localhost` | Base domain for service hostnames (`<service>--<tenant>.<domain>`) |
 | `C93_WORKER_MODE` | `process` | Execution mode: `process` (out-of-process worker pool with cgroups) or `embedded` (in-process isolate) |
 | `C93_WORKER_ENGINE` | `javet` | Runtime engine: `javet` (V8) or `graaljs` |
@@ -330,7 +359,7 @@ Cluster93 is configured via environment variables:
 | `C93_DATA_DIR` | *(In-memory)* | Local directory for durable Ignite database and WAL storage |
 | `C93_DATA_BACKUPS` | `1` | Copies of replicated partition data across nodes |
 | `C93_FILES_BACKEND` | `cluster` | Storage backend for VFS: `cluster` (replicated Ignite cache), `disk`, or `s3` |
-| `C93_METRICS_PORT` | `9090` | Prometheus `/metrics` endpoint |
+| `C93_METRICS_PORT` | `9395` | Prometheus `/metrics` endpoint |
 
 ---
 
@@ -341,7 +370,7 @@ Cluster93 is configured via environment variables:
 ./mvnw verify -DskipITs
 
 # Run targeted engine tests
-./mvnw test -pl cluster93-runtime-javet -Dtest=ScriptRuntimeTest -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw test -pl runtime-javet -Dtest=ScriptRuntimeTest -Dsurefire.failIfNoSpecifiedTests=false
 
 # Full verification including multi-container Docker cluster chaos tests
 ./mvnw verify
@@ -371,6 +400,7 @@ For the master implementation roadmap, active milestones, and upcoming work, see
 - [VERSIONING.md](VERSIONING.md): SemVer scheme, pre-release channels, and the version line
 - [docs/benchmarks.md](docs/benchmarks.md): Performance benchmarks and reproduction instructions
 - [docs/guides/cli.md](docs/guides/cli.md): CLI installation and usage guide
+- [docs/guides/node.md](docs/guides/node.md): installing and running a node (`c93 node`)
 - [docs/guides/mcp.md](docs/guides/mcp.md): Connecting AI agents via Model Context Protocol
 - [docs/guides/storage.md](docs/guides/storage.md): Storage providers, quotas, and VFS mounts
 - [docs/guides/packages.md](docs/guides/packages.md): Publishing and importing versioned packages

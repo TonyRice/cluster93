@@ -74,23 +74,23 @@ case "$TARGET" in
     ;;
   server)
     echo "Running cluster93-server tests (excluding DockerClusterIT)..."
-    run_mvn test -pl cluster93-server $MAVEN_FLAGS -Dtest='cluster93.server.**,!DockerClusterIT' || TEST_STATUS=$?
+    run_mvn test -pl server $MAVEN_FLAGS -Dtest='cluster93.server.**,!DockerClusterIT' || TEST_STATUS=$?
     ;;
   protocol)
     echo "Running cluster93-runner-protocol tests..."
-    run_mvn test -pl cluster93-runner-protocol $MAVEN_FLAGS || TEST_STATUS=$?
+    run_mvn test -pl runner-protocol $MAVEN_FLAGS || TEST_STATUS=$?
     ;;
   runtime)
     echo "Running cluster93-runtime tests (Javet & GraalJS)..."
-    run_mvn test -pl cluster93-runtime-javet,cluster93-runtime-graaljs $MAVEN_FLAGS || TEST_STATUS=$?
+    run_mvn test -pl runtime-javet,runtime-graaljs $MAVEN_FLAGS || TEST_STATUS=$?
     ;;
   docker)
     echo "Running DockerClusterIT (Docker e2e multi-node cluster)..."
-    run_mvn test -pl cluster93-server $MAVEN_FLAGS -Dtest='DockerClusterIT' || TEST_STATUS=$?
+    run_mvn test -pl server $MAVEN_FLAGS -Dtest='DockerClusterIT' || TEST_STATUS=$?
     ;;
   *)
     echo "Running targeted test: ${TARGET}..."
-    run_mvn test -pl cluster93-server $MAVEN_FLAGS -Dtest="${TARGET}" || TEST_STATUS=$?
+    run_mvn test -pl server $MAVEN_FLAGS -Dtest="${TARGET}" || TEST_STATUS=$?
     ;;
 esac
 

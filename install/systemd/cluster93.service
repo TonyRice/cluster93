@@ -1,0 +1,31 @@
+# Cluster93 node — system unit (Linux, root).
+#
+# The reference for what `c93 node install --system` renders: the CLI writes the resolved paths into
+# /etc/systemd/system/cluster93.service rather than shipping absolute ones, so `--dir` works. Keep the two in step.
+#
+#   sudo c93 node install --system     # writes /opt/cluster93, /etc/cluster93/node.env and this unit
+#   sudo systemctl enable --now cluster93
+#
+[Unit]
+Description=Cluster93 node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cluster93
+WorkingDirectory=/opt/cluster93
+EnvironmentFile=/etc/cluster93/node.env
+# Apache Ignite 2.18 on JDK 21 needs these module opens (pom.xml's ignite.jvm.args).
+Environment="JDK_JAVA_OPTIONS=--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.management/com.sun.jmx.mbeanserver=ALL-UNNAMED --add-opens=jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED --add-opens=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED --add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.math=ALL-UNNAMED --add-opens=java.sql/java.sql=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.time=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.management/sun.management=ALL-UNNAMED --add-opens=java.desktop/java.awt.font=ALL-UNNAMED"
+ExecStart=/usr/bin/java -jar /opt/cluster93/c93.jar
+Restart=on-failure
+# Worker cgroups v2 and the sandbox: the node delegates a cgroup subtree and runs with a hardened filesystem.
+Delegate=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/cluster93
+
+[Install]
+WantedBy=multi-user.target

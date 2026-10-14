@@ -4,7 +4,7 @@
 **Why:** Weak spot #8 from the [revival plan](revival-plan.md): the 2017 code had its own logger and no metrics, so nothing could be measured or watched. Phase 5 also finishes the project as a portfolio piece: numbers in the README come from real measurements, the security model is written down, and a demo shows it working end to end.
 
 ## Milestone 1: metrics, health and logs
-- **Prometheus metrics with Micrometer**, on a separate management port (`C93_METRICS_PORT`, default 9090; `0` turns it off). They're scraped on a private network, like the internal port, and not exposed with the API.
+- **Prometheus metrics with Micrometer**, on a separate management port (`C93_METRICS_PORT`, default 9395; `0` turns it off). They're scraped on a private network, like the internal port, and not exposed with the API.
   - **jobs:** submitted, started and finished by status; queue depth; time from queued to started; run time
   - **isolates:** live count, cold-start time, and kills by reason (timeout, heap, cancelled)
   - **services:** running and desired counts, restarts

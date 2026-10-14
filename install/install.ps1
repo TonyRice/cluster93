@@ -1,5 +1,8 @@
-# Installs the c93 CLI on Windows (D-049):
+# Installs the c93 CLI on Windows (D-049), as a portable jar (D-121):
 #   irm https://github.com/TonyRice/cluster93/releases/latest/download/install.ps1 | iex
+#
+# There is no Windows node: a node is Docker or WSL2. This installs the CLI only — the portable
+# `cluster93-cli.jar` plus a `c93.cmd` shim — and needs Java 21+, which it detects and points you at if missing.
 #
 # Environment: C93_VERSION (a tag, default latest), C93_INSTALL_DIR
 # (default %LOCALAPPDATA%\Programs\cluster93), C93_RELEASES (owner/repo), C93_INSTALL_URL,
@@ -58,6 +61,33 @@ function Confirm-Cluster93Signature([string]$Sums, [string]$Signature) {
     if (-not $signed) { throw "SHA256SUMS isn't signed by the c93 release key. Nothing was installed." }
 }
 
+# Java 21+ if it can be found: on the PATH (checked by asking it its version), else the JavaSoft registry.
+function Get-Cluster93Java {
+    $java = Get-Command java -ErrorAction SilentlyContinue
+    if ($java) {
+        try {
+            $version = (& $java.Source -version 2>&1 | Out-String)
+            if ($version -match 'version "(\d+)') {
+                if ([int]$Matches[1] -ge 21) { return $java.Source }
+            }
+        }
+        catch { }
+    }
+    foreach ($key in 'HKLM:\SOFTWARE\JavaSoft\JDK', 'HKLM:\SOFTWARE\JavaSoft\Java Development Kit', 'HKLM:\SOFTWARE\JavaSoft\Java Runtime Environment') {
+        if (Test-Path $key) {
+            $home = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).JavaHome
+            if ($home -and (Test-Path (Join-Path $home 'bin\java.exe'))) { return (Join-Path $home 'bin\java.exe') }
+        }
+    }
+    return $null
+}
+
+function Show-Cluster93JavaHelp {
+    Write-Warning 'c93 needs Java 21+. Install it, then run c93 again:'
+    Write-Host '  winget install EclipseAdoptium.Temurin.21.JDK'
+    Write-Host '  or download it from https://adoptium.net'
+}
+
 function Install-Cluster93 {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
@@ -67,9 +97,7 @@ function Install-Cluster93 {
     elseif ($env:C93_VERSION) { $base = "https://github.com/$repo/releases/download/$($env:C93_VERSION)" }
     else { $base = "https://github.com/$repo/releases/latest/download" }
 
-    $arch = $env:PROCESSOR_ARCHITECTURE
-    if ($arch -ne 'AMD64') { throw "No c93 build for $arch Windows yet; builds exist for x64." }
-    $asset = 'cluster93-windows-x64.exe'
+    $asset = 'cluster93-cli.jar'
 
     $dir = if ($env:C93_INSTALL_DIR) { $env:C93_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\cluster93' }
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("cluster93-" + [guid]::NewGuid())
@@ -77,9 +105,7 @@ function Install-Cluster93 {
     try {
         Write-Host "Downloading $asset from $base"
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        # Prebuilt native binaries are Linux-only for now (see docs/guides/cli.md).
-        try { Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile (Join-Path $tmp $asset) }
-        catch { throw "Prebuilt c93 binaries are Linux-only for now. Build the CLI on Windows from source: https://github.com/$repo/blob/main/docs/guides/cli.md#build-from-source" }
+        Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile (Join-Path $tmp $asset)
         Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile (Join-Path $tmp 'SHA256SUMS')
         if ($env:C93_INSECURE_SKIP_SIGNATURE -eq '1') {
             Write-Warning "Not checking the release's signature (C93_INSECURE_SKIP_SIGNATURE=1)"
@@ -97,19 +123,28 @@ function Install-Cluster93 {
         if ($expected -ne $actual) { throw "Checksum mismatch for ${asset}: expected $expected, got $actual. Nothing was installed." }
 
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        $target = Join-Path $dir 'c93.exe'
-        # A running c93.exe can't be overwritten, but it can be renamed out of the way.
-        if (Test-Path $target) { Move-Item -Force $target "$target.old" }
-        Move-Item -Force (Join-Path $tmp $asset) $target
-        Remove-Item -Force "$target.old" -ErrorAction SilentlyContinue
+        Move-Item -Force (Join-Path $tmp $asset) (Join-Path $dir $asset)
+
+        # A `c93.cmd` shim so `c93` works from any terminal once the directory is on the PATH.
+        $shim = "@java -jar `"%~dp0$asset`" %*`r`n"
+        Set-Content -Path (Join-Path $dir 'c93.cmd') -Value $shim -Encoding ASCII -NoNewline
 
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
         if (-not (($userPath -split ';') -contains $dir)) {
             [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $dir).TrimStart(';'), 'User')
             Write-Host "Added $dir to your PATH; open a new terminal to use it."
         }
-        Write-Host "Installed $(& $target --version) to $target"
-        Write-Host "Get started: c93 login https://your-cluster"
+        Write-Host "Installed the c93 CLI to $dir"
+
+        $java = Get-Cluster93Java
+        if ($java) {
+            Write-Host "Using Java: $java"
+            Write-Host "Get started: c93 --version"
+            Write-Host "The c93 CLI talks to a cluster. To run a node on Windows, use Docker or WSL2 (see docs/guides/node.md)."
+        }
+        else {
+            Show-Cluster93JavaHelp
+        }
     }
     finally {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

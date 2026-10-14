@@ -2,7 +2,7 @@
 # Builds the native `c93` CLI with GraalVM Native Image and installs it.
 #
 # The CLI is deliberately small (picocli, Jackson's tree model, the JDK's HTTP client), so
-# native-image needs no tuning; see cluster93-cli/pom.xml's `native` profile (D-048, D-049).
+# native-image needs no tuning; see cli/pom.xml's `native` profile (D-048, D-049).
 #
 # Usage:
 #   scripts/build-cli.sh
@@ -25,11 +25,11 @@ source "$REPO_ROOT/scripts/detect-graalvm.sh"
 
 echo "== building the native c93 CLI with GraalVM at $GRAALVM_HOME" >&2
 env JAVA_HOME="$GRAALVM_HOME" GRAALVM_HOME="$GRAALVM_HOME" \
-  ./mvnw -q -DskipTests -DskipITs -pl cluster93-cli -am package -Pnative \
+  ./mvnw -q -DskipTests -DskipITs -pl cli -am package -Pnative \
   -Dgit.commit="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo dev)" \
   -Dbuild.time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-SOURCE="$REPO_ROOT/cluster93-cli/target/c93"
+SOURCE="$REPO_ROOT/cli/target/c93"
 if [[ ! -f "$SOURCE" ]]; then
   echo "Error: native image $SOURCE was not produced" >&2
   exit 1

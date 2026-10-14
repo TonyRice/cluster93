@@ -23,7 +23,7 @@
 - **Tests:** scope enforcement on every route (a test that walks the route table, so a new route without a scope fails), revocation taking effect immediately, expiry, a tenant unable to see another's tokens or data, the admin token unable to read tenant data, and the checksum format. Every existing test moves to tokens.
 
 ## Milestone 2: the OpenAPI contract, validation and rate limits
-- **Spec:** `cluster93-server/src/main/resources/openapi.yaml` (OpenAPI 3.1), served at `GET /v1/openapi.json`. It covers every route, the error envelope (`{"error": {"code", "message"}}`), the scopes as a security scheme, and pagination (`limit` and `cursor` everywhere).
+- **Spec:** `server/src/main/resources/openapi.yaml` (OpenAPI 3.1), served at `GET /v1/openapi.json`. It covers every route, the error envelope (`{"error": {"code", "message"}}`), the scopes as a security scheme, and pagination (`limit` and `cursor` everywhere).
 - **Validation:** requests are validated against the spec with `vertx-openapi`, before handlers run, and bad input gets 400 with the schema path. Streamed bodies (file uploads, SSE) are validated on headers and parameters only, never buffered.
 - **Contract tests:** a test fails if the router has a route the spec lacks, or the other way round. Integration tests validate real **responses** against the spec, so the docs can't drift.
 - **Rate limits per tenant:** a token bucket (`C93_RATE_LIMIT_PER_MINUTE`, default 600, burst 2× that), applied on each node with its share of the tenant's budget (budget ÷ live nodes), so no cluster round-trip per request. Over it, **429** with `Retry-After` and the IETF `RateLimit-Policy`/`RateLimit` headers. Admin calls aren't limited.

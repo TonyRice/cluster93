@@ -3,7 +3,7 @@
 // Deploy it as a service (a plain job may not serve HTTP):
 //   c93 services deploy echo examples/07-microservice.js
 //
-// It is then reachable at http://echo--dev.localhost:8000/ on the ingress port. The handler receives a
+// It is then reachable at http://echo--dev.localhost:9394/ on the ingress port. The handler receives a
 // request and returns the response: a string, bytes, an object (sent as JSON), or {status, headers, body}.
 // See docs/scripting/services.md.
 export default async (input, ctx) => {

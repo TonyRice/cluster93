@@ -35,9 +35,9 @@ DEFAULT_DATA_DIR="${C93_HOME}/dev-data"
 PID_FILE="${C93_HOME}/c93.pid"
 LOG_FILE="${C93_HOME}/server.log"
 CONFIG_FILE="${HOME}/.config/cluster93/config.json"
-SERVER_JAR="${REPO_ROOT}/cluster93-server/target/c93.jar"
+SERVER_JAR="${REPO_ROOT}/server/target/c93.jar"
 ADMIN_TOKEN="dev-admin-token-1234567890abcdef"
-URL="http://localhost:8080"
+URL="http://localhost:9393"
 MCP_URL="${URL}/mcp"
 # The developer workspace tenant seeded alongside system; override with TENANT=... in the environment.
 TENANT="${TENANT:-dev}"
@@ -179,7 +179,7 @@ print_setup_banner() {
 ================================================================
   Cluster93 development stack is ready
 ================================================================
-  Web Console URL: http://localhost:8000
+  Web Console URL: http://localhost:9394
   API URL:         ${URL}
   Operator User:   admin
   Token:           ${token}
@@ -192,8 +192,8 @@ BANNER
 # build
 # --------------------------------------------------------------------------
 cmd_build() {
-  echo "== building cluster93-server/target/c93.jar" >&2
-  ./mvnw -q package -pl cluster93-server -am -DskipTests
+  echo "== building server/target/c93.jar" >&2
+  ./mvnw -q package -pl server -am -DskipTests
   if [[ ! -f "$SERVER_JAR" ]]; then
     echo "Error: $SERVER_JAR was not produced" >&2
     exit 1
@@ -254,9 +254,9 @@ cmd_start() {
     C93_ADMIN_TOKEN="$ADMIN_TOKEN" \
     C93_DATA_DIR="$data_dir" \
     C93_EGRESS_ALLOW_PRIVATE=true \
-    C93_HTTP_PORT=8080 \
-    C93_INGRESS_PORT=8000 \
-    C93_METRICS_PORT=9090 \
+    C93_HTTP_PORT=9393 \
+    C93_INGRESS_PORT=9394 \
+    C93_METRICS_PORT=9395 \
     C93_WORKER_MODE=process \
     nohup "$(java_bin)" -jar "$SERVER_JAR" </dev/null >"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
@@ -345,8 +345,8 @@ ensure_console() {
   [[ -f "$REPO_ROOT/console/out/index.html" ]] || return 0
 
   # Skip the redeploy when the console is already being served.
-  if curl -fsS -m 2 "http://localhost:8000" 2>/dev/null | grep -q "Cluster93" 2>/dev/null; then
-    echo "== console already active at http://localhost:8000" >&2
+  if curl -fsS -m 2 "http://localhost:9394" 2>/dev/null | grep -q "Cluster93" 2>/dev/null; then
+    echo "== console already active at http://localhost:9394" >&2
     return 0
   fi
 
@@ -365,7 +365,7 @@ ensure_console() {
   system_token=$(mint_token "$system_minted")
   if [[ -n "$system_token" ]]; then
     "$cli" --url "$URL" --token "$system_token" apps deploy "$REPO_ROOT/console"
-    echo "== console app deployed to system/console: http://localhost:8000" >&2
+    echo "== console app deployed to system/console: http://localhost:9394" >&2
   fi
 }
 

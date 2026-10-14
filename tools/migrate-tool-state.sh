@@ -10,7 +10,7 @@
 #   Name-keyed (always) — stale references to the old module names:
 #     - ~/.gemini/  config + cache JSON (settings, mcp_config, keybindings, cache/*)
 #       permission allow-list commands ("find automately-runtime-js/src …" ->
-#       "find cluster93-runtime-js/src …"), MCP server keys / "command" strings
+#       "find runtime-js/src …"), MCP server keys / "command" strings
 #     - ~/.claude.json  the automately project's allowedTools / mcpServers
 #     - ~/.cursor/mcp.json  MCP server keys / "command" strings
 #

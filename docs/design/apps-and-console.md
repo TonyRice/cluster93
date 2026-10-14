@@ -26,7 +26,7 @@ This specification unifies two major platform primitives:
 An **App** in Cluster93 is an atomic, immutable bundle containing static client assets and an optional backend service.
 
 ```
-                              Public Ingress (:8000)
+                              Public Ingress (:9394)
                                         │
                       Host: shop--tenant.example.com
                                         │

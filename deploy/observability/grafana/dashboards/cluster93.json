@@ -603,7 +603,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (code) (rate(vertx_http_server_requests_total{route=\"\", local=~\".*:8000\"}[1m]))",
+          "expr": "sum by (code) (rate(vertx_http_server_requests_total{route=\"\", local=~\".*:9394\"}[1m]))",
           "legendFormat": "{{code}}",
           "datasource": {
             "type": "prometheus",
@@ -618,7 +618,7 @@
         "overrides": []
       },
       "options": {},
-      "description": "Services' public traffic (the ingress port, 8000 in the demo)."
+      "description": "Services' public traffic (the ingress port, 9394 in the demo)."
     },
     {
       "type": "timeseries",
@@ -636,7 +636,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(vertx_http_server_bytes_read_total{local=~\".*:8000\"}[1m]))",
+          "expr": "sum(rate(vertx_http_server_bytes_read_total{local=~\".*:9394\"}[1m]))",
           "legendFormat": "in",
           "datasource": {
             "type": "prometheus",
@@ -645,7 +645,7 @@
         },
         {
           "refId": "B",
-          "expr": "sum(rate(vertx_http_server_bytes_written_total{local=~\".*:8000\"}[1m]))",
+          "expr": "sum(rate(vertx_http_server_bytes_written_total{local=~\".*:9394\"}[1m]))",
           "legendFormat": "out",
           "datasource": {
             "type": "prometheus",

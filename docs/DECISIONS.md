@@ -535,7 +535,7 @@ The acquired product was renamed **Executory** after the acquisition. Tony was g
   - **What `bind()` exposes:** only `@V8Function` methods, never `getClass` or reflection. Javet's proxy converter, which would expose Java objects, is not used.
   - **Promises:** a binding returns a promise created in Java (`createV8ValuePromise`). `HostBridge` settles it on the isolate's event loop when the future completes; a failure becomes a real `Error` with `name` and `code`.
   - **Value conversion:** `JsValues`, through V8's own `JSON`, whose functions are captured before the script runs, so a script replacing `JSON.parse` only affects itself.
-- **JavaScript:** 13 small files in `cluster93-runtime-javet/src/main/resources/cluster93/runtime/javet/js/`, only for what has to be idiomatic JavaScript: freezing globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, `ctx`. `JavetScriptRuntime.PRELUDE_FILES` lists them in order, and they run in one closure.
+- **JavaScript:** 13 small files in `runtime-javet/src/main/resources/cluster93/runtime/javet/js/`, only for what has to be idiomatic JavaScript: freezing globals, kv namespaces, `fetch`'s Response, streams as async iterators, serving, `ctx`. `JavetScriptRuntime.PRELUDE_FILES` lists them in order, and they run in one closure.
 
 **Why not bind Java objects with no JavaScript at all:** some things can only be built in the isolate, such as async iterators, frozen objects and a `Response` with methods. The remaining JavaScript is glue, without logic or limits.
 
@@ -1414,7 +1414,7 @@ Spikes measure runner latency, rootless Podman with gVisor and `sharp`, and arti
 ### D-093 — Real npm libraries are the measure of the isolate's Node compatibility; ICU, `process`, globals and `require` fixed
 **Date:** 2026-10-08 · **Status:** Accepted (Tony asked for tests with real modules)
 
-- **The test:** `cluster93-cli/src/test/resources/realnpm` pins 24 npm packages (and esbuild) in a lockfile. `RealNpmPackagesTest` installs them with `npm ci --ignore-scripts` (so nothing native is built), publishes a package exporting one small module per library, runs each as a job, and requires the output to equal what the same module prints under real Node.
+- **The test:** `cli/src/test/resources/realnpm` pins 24 npm packages (and esbuild) in a lockfile. `RealNpmPackagesTest` installs them with `npm ci --ignore-scripts` (so nothing native is built), publishes a package exporting one small module per library, runs each as a job, and requires the output to equal what the same module prints under real Node.
   - **It also checks refusals:** libraries needing Node's `crypto` or `stream` are refused at publish with that reason, native ones with the Node runtime named, and one needing Web Crypto fails clearly at run time.
   - **Gated on `C93_TEST_REAL_NPM`** (a work folder that keeps `node_modules`), since it needs node, npm and the network once.
 - **What it found and what changed:**
@@ -2517,7 +2517,7 @@ It's written for people, because the console will show the same response as a "N
 
 **Evidence:**
 - `cluster93-runner-protocol` passes all 13 unit and integration tests covering frame chunking, boundary fragmentation, 1 MiB max frame enforcement, credit depletion backpressure, and bidirectional `RemoteHostApis` ↔ `NodeHostApis` RPC execution.
-- Multi-module pre-commit verification (`./mvnw verify -pl cluster93-runner-protocol,cluster93-worker -am -DskipITs`) builds and tests cleanly in 55 s with 0 JVM crashes.
+- Multi-module pre-commit verification (`./mvnw verify -pl runner-protocol,worker -am -DskipITs`) builds and tests cleanly in 55 s with 0 JVM crashes.
 
 ### D-129 — Stream Multiplexing, Warm Tenant Worker Pool Supervisor, and Unix Domain Socket (UDS) Transport
 **Date:** 2026-10-10 · **Status:** Accepted. Implements Step 5 in `cluster93-runner-protocol`. Specification: [worker-node-protocol.md](design/worker-node-protocol.md).
@@ -2604,3 +2604,107 @@ D-131 made `C93_WORKER_MODE=process` the default, but out-of-process execution w
 
 
 
+
+### D-134 — `c93 node` as the node control plane: install from a release, and one lifecycle across systemd, launchd and a bare process
+**Date:** 2026-10-13 · **Status:** Accepted. Folds `c93 local` into `c93 node`; builds on D-049, D-069.
+
+**Context:**
+A node could only be built from source (`scripts/local.sh`) or run under Docker. The release already ships the whole platform (`c93.jar`, `worker-*.gz`, `cluster93-cli.jar`, `cluster93-linux-x64`), but nothing installed a node from it: the shell installer only placed the CLI. Separately, the `c93 local …` verbs and the operator's `c93 node invite`/`revoke` were two unrelated command groups for the same machine.
+
+**Decision:**
+1. **One group, `c93 node`.** The `c93 local …` verbs move into `NodeCommand` beside `invite`/`revoke`; `c93 local` stays a hidden, deprecated alias for one release. No behaviour is lost: the verbs still understand both an *installed* node (`node.env` + a service unit) and the *development master* a checkout owns (`$C93_HOME/local.env` + `scripts/local.sh`).
+2. **`c93 node install` is the one install implementation.** It fetches the release assets, verifies `SHA256SUMS` against its signature with the key built into the CLI (D-069) and each file against `SHA256SUMS`, gunzips the native workers into `bin/`, writes `node.env` and a service unit, and starts the node (unless `--no-start`). The shell installer's `--node` only bootstraps the CLI and delegates, so the node logic lives in exactly one place. `--system` (Linux, root) is a distinct layout: `/opt/cluster93`, `/etc/cluster93`, `/var/lib/cluster93`, and a system unit under a dedicated `cluster93` user.
+3. **One lifecycle, detected backend.** `start`/`stop`/`restart`/`status`/`logs` drive the node's systemd unit (`--user` or system), a macOS LaunchAgent, or the process directly (`java -jar c93.jar`, pid file under the data dir) when no service manager is present — a container, WSL, or a plain shell. `status` reports the backend it found.
+4. **`node.env` is `C93_*`.** Settings are `C93_`-prefixed environment variables, so a systemd `EnvironmentFile=` feeds the server directly; `c93 node env` shows and changes them and accepts the short names (`HTTP_PORT` ≡ `C93_HTTP_PORT`).
+5. **No Windows node.** The CLI installs on Windows as the portable jar plus a `c93.cmd` shim (Java 21 detected); a node there is Docker or WSL2. macOS gets a per-user LaunchAgent only, and non-Linux nodes run `C93_WORKER_MODE=embedded` (native workers can't cross-compile).
+
+**Alternatives considered:**
+- **Put the node logic in the shell installer.** Rejected: it can't run as a native binary, and it duplicates signing, checksums and layout next to the CLI's own `upgrade`.
+- **Keep `c93 local` and add `c93 node install` separately.** Rejected: two names for one machine's node; a single group is what operators type.
+- **Always run under a service unit.** Rejected: containers and WSL have none, so the direct-process path must exist and be indistinguishable in behaviour.
+- **Reuse the non-prefixed `node.env` names.** Rejected: the server reads `C93_*`, and a systemd `EnvironmentFile` exports names verbatim; the short names are accepted as CLI sugar instead.
+
+**Consequences:**
+- A node is installable from a signed release with one command, on Linux and macOS, user- or system-wide, with the same verbs driving it.
+- `c93 local …` is deprecated and will be removed after this release.
+- `install.sh` becomes a bootstrap for the CLI; the installer tests keep exercising its CLI path, and `NodeCommandTest` covers install, verification failures, backend dispatch (a stub `systemctl`), and uninstall against a local release host.
+
+**Evidence:**
+- `NodeCommandTest` (28 tests): layout, `node.env`, rendered unit, `--no-start`, checksum and signature refusal, unsigned-release handling, a stub `systemctl` driving `start`/`stop`, the direct-process fallback, uninstall with and without `--purge`, and the deprecated `c93 local` alias.
+- `InstallScriptTest`, `CliTest`, `MainHelpTest`, `VersionCommandTest` pass with the moved verbs.
+
+### D-135 — A worker that fails before its hello fails fast, and the child-JVM fallback carries both engines
+**Date:** 2026-10-13 · **Status:** Accepted. Hardens D-128/D-132 (worker lifecycle and EOF handling).
+
+**Context:**
+`ProcessModeParityTest` hung for its full 30 s poll window on every job — the worker never ran, and nothing was logged. The child-JVM worker died during startup with `NoClassDefFoundError: cluster93/runtime/graaljs/GraalJsScriptRuntime`, because the worker build registered `GraalJsWorkerEngine` while the classpath it inherits (the server's, via `TenantWorkerPool.resolveWorkerClasspath()`) carried only `cluster93-runtime-javet`. Three things made this un-diagnosable rather than a plain error:
+
+1. `NodeWorkerChannel.onError` failed only *active runs*; when a worker died during startup (`activeRuns` empty) it merely logged at debug and never failed `helloPromise`. A pool `acquire()` then waited on a promise that could never complete.
+2. `TenantWorkerPool.spawnWorker` had **no timeout** on `awaitHello()`, and `drainStderr` logged worker stderr at **debug** — so a worker that died before hello produced no visible output and an unbounded wait.
+3. The child-JVM fallback's classpath only ever had the Javet engine, while `worker`'s engine is chosen by a profile (`-Pjavet`/`-Pgraaljs`); `ProcessModeParityTest` silently depended on whichever one was last built, and `-pl server -am` never rebuilds the worker (it is not a server dependency).
+
+**Decision:**
+1. **Fail the handshake on pre-hello death.** `NodeWorkerChannel.onError` fails `helloPromise` (with "Worker failed before handshake: …") when the channel breaks before hello, and logs at WARN; once hello has arrived it is a no-op, and a post-handshake connection close stays debug (or error with active runs).
+2. **Bound the hello wait and surface the reason.** `TenantWorkerPool.spawnWorker` waits at most `cluster93.worker.helloTimeoutMs` (default 30 s) for hello; on failure or timeout it logs at WARN including the worker's last stderr lines (a small bounded tail is captured by the stderr drain) and fails the `acquire()`. `WorkerProcessRuntime`'s inline spawn gets the same timeout.
+3. **Count every worker exactly once.** `spawnWorker` takes a `totalWorkers` slot when the spawn starts and `recycleWorker` releases it (idempotently, via the handle's `TERMINATED` state); a failed bind releases too. Previously only warm spawns were counted while every recycle decremented, so the count drifted negative and `maxTotal` stopped limiting the pool.
+4. **Carry both engines in the fallback.** `cluster93-server` depends on `cluster93-runtime-graaljs` in **test scope** (production `c93.jar` still ships Javet only; real nodes run the native workers from `bin/`, where the engine is baked in). The child-JVM fallback now runs whichever engine the worker build registered. `ProcessModeParityTest` reads the worker build's `META-INF/services/cluster93.worker.WorkerEngine` and aborts (a visible skip, with the rebuild command printed first) only when it registers no engine at all.
+
+**Alternatives considered:**
+- **Add `cluster93-runtime-graaljs` to `cluster93-server` in compile scope.** Rejected: it would bloat the production shaded jar and change what the node ships, for a path (the child-JVM fallback) that production does not use — native workers are the production route. Test scope gives the fallback both engines without shipping them.
+- **Fail the run when the engine doesn't match.** Rejected: `scripts/build-workers.sh all` compiles GraalJS last, so a routine `verify` would go red for a build-ordering condition; an abort with the fix is visible without breaking routine runs.
+- **Have `resolveWorkerClasspath` add the sibling engine module's classes.** Rejected: for GraalJS the engine's polyglot jars would still be absent, so it would half-fix and still fail.
+
+**Consequences:**
+- A worker that crashes at startup now fails its job (and its `acquire`) immediately, with the worker's stderr attached, instead of hanging silently.
+- `ProcessModeParityTest` runs whether `cluster93-worker` was compiled `-Pjavet` or `-Pgraaljs`, and skips (with instructions) only when it was compiled for neither.
+- The pool's `maxTotal` (= `C93_CAPACITY`) now actually bounds warm + active + in-flight workers.
+- `cluster93.worker.helloTimeoutMs` overrides the 30 s wait, for tests.
+
+**Evidence:**
+- `NodeWorkerChannelEofCrashTest` (EOF before hello fails `awaitHello`), `TenantWorkerPoolTest` (a worker that dies before hello, and one that never says hello, both fail `acquire` within the timeout, leaving `totalWorkers() == 0`).
+- `ProcessModeParityTest` 7/7 with the worker built `-Pjavet` **and** 7/7 with it built `-Pgraaljs`; with the engine registration removed it aborts in ~6 s with the rebuild instruction instead of hanging.
+
+### D-136 — A `--system` install provisions its own `cluster93` service account
+**Date:** 2026-10-13 · **Status:** Accepted. Completes D-134's system layout (the `Owner` row: "a dedicated `cluster93` system user").
+
+**Context:**
+`c93 node install --system` renders `/etc/systemd/system/cluster93.service` with `User=cluster93` and `ReadWritePaths=/var/lib/cluster93`, but nothing created that account or gave it the data directory, so the rendered unit could not start. The work order called for "a dedicated `cluster93` system user", so the installer must make the system consistent rather than leaving a unit that fails.
+
+**Decision:**
+1. **The installer creates the account, idempotently.** On a `--system` install (which already requires Linux + root), `c93 node install` checks `/etc/passwd` for the exact name and, if absent, runs `useradd --system --user-group --home-dir /var/lib/cluster93 --no-create-home --shell <nologin> cluster93` (worst case: fail with that exact command if `useradd` isn't available). `--user-group` guarantees a `cluster93` group for the data directory.
+2. **Ownership follows the account.** The data directory (and its `logs/`) is chowned to `cluster93:cluster93`; the program directory stays root-owned (read-only to the service, which is what `ProtectSystem=strict` wants). `node.env` and `node.meta` become `0640 root:cluster93` so the service can read its own config, while never being world-readable (they hold the admin token).
+3. **Uninstall leaves the account.** Removing a system user is invasive (its UID may own other files) and not what "remove the program and unit" means; `--purge` deletes the data, not the user (D-134).
+
+**Alternatives considered:**
+- **`DynamicUser=yes` + `StateDirectory=cluster93`.** Smaller and needs no privileged account, but it *changes* the locked "dedicated `cluster93` system user" decision and the unit's `User=`, so it was not taken without that change being asked for.
+- **Leave it to the admin (fail fast if the user is missing).** Rejected: it turns `--system` into a two-step manual install for something the installer can do safely as root.
+- **Remove the user on uninstall/`--purge`.** Rejected: destroying an account is not symmetric with creating it, and is easy to regret.
+
+**Consequences:**
+- A real `sudo c93 node install --system` yields a startable unit: account, data ownership and unit all agree.
+- The account is never removed automatically; `userdel -r cluster93` is the admin's call.
+- Verified by unit tests for the parts reachable without root (the `useradd` invocation, `/etc/passwd` matching, the nologin shell, and the non-root refusal); the ownership change itself is root-only and was not run in this environment (no `sudo`).
+
+### D-137 — Default ports move to the `9393`–`9396` Cluster93 block
+**Date:** 2026-10-13 · **Status:** Accepted. Supersedes the default *values* of D-029 (ingress), the internal-endpoint decision, and the metrics-port note; those records keep their text.
+
+**Context:**
+The defaults were `C93_HTTP_PORT=8080`, `C93_INGRESS_PORT=8000`, `C93_METRICS_PORT=9090` and `C93_INTERNAL_PORT=8090`. 8080 and 8000 are the two most contended ports on a developer machine (proxies, dev servers), and 9090 is Prometheus's own listening port, so running a node next to the tools it is meant to be scraped by invited collisions.
+
+**Decision:**
+1. **One memorable block:** API **9393**, ingress **9394**, metrics **9395**, internal **9396** (the cluster/event-bus ports stay 5701/5801). Applied at the single source of truth (`ServerConfig.fromEnv`) and everywhere that mirrors it: `NodeCommand`'s development-master defaults, `NodeInstall.defaultConfig` (what `node.env` is written with), `NodeService.httpBase`, `scripts/local.sh`/`scripts/dev.sh`, `Dockerfile`/`docker-compose.yml`, `openapi.yaml`'s `servers` URL, and the Prometheus/Grafana stack.
+2. **Docker host ports follow the block:** the three-node demo maps `9401-9403 → 9393` (API) and `9411-9413 → 9394` (ingress), replacing `8081-8083`/`8001-8003`. Prometheus's own `9090` and Grafana's `3000` are untouched.
+3. **Existing installs do not move.** A written `node.env`/`local.env` names its ports explicitly, so only fresh installs and unset environments take the new defaults. The change is still breaking for anyone relying on the old defaults, hence the changelog note.
+
+**Alternatives considered:**
+- **Keep 8080/8000 and only move metrics.** Rejected: 8080/8000 were the actual collisions the user hit.
+- **Move only the two public ports, leaving metrics/internal.** Rejected: 9090 is Prometheus's port, so the metrics default is the *more* dangerous one; a single block is also easier to remember and document.
+- **A non-themed pair (e.g. 8787/8788).** Rejected: the `939x` block ties to the project name and leaves room for metrics/internal.
+
+**Consequences:**
+- A fresh node is unlikely to collide with local tooling; the whole set is one block to remember.
+- Historical design docs and decision records that state the old numbers are left as written (D-029 and friends); the living docs — README, `docs/guides/*`, `docs/api`, `docs/scripting`, SECURITY, and the normative `docs/design/*` specs — were updated.
+- The Docker host mappings changed, so an existing `docker compose` setup needs the new ports in its client URLs.
+
+**Evidence:**
+- `ServerConfigTest` and the full `verify -pl cli,server -am -DskipITs` suite pass with the new defaults; `NodeCommandTest` asserts `node.env` is written with `C93_HTTP_PORT=9393`; the native `c93 node install` smoke test writes and reports the new ports.

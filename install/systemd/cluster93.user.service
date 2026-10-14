@@ -1,0 +1,30 @@
+# Cluster93 node — per-user unit (Linux).
+#
+# The reference for what `c93 node install` renders into ~/.config/systemd/user/cluster93.service, with the invoking
+# user's paths. `%h` stands for the home directory; the CLI writes the resolved paths instead, so `--dir` works.
+#
+#   c93 node install                   # writes ~/.local/share/cluster93, ~/.config/cluster93/node.env and this unit
+#   systemctl --user enable --now cluster93
+#   loginctl enable-linger "$USER"     # so the node keeps running after you log out
+#
+[Unit]
+Description=Cluster93 node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/cluster93
+EnvironmentFile=%h/.config/cluster93/node.env
+# Apache Ignite 2.18 on JDK 21 needs these module opens (pom.xml's ignite.jvm.args).
+Environment="JDK_JAVA_OPTIONS=--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.management/com.sun.jmx.mbeanserver=ALL-UNNAMED --add-opens=jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED --add-opens=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED --add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.math=ALL-UNNAMED --add-opens=java.sql/java.sql=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.time=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.management/sun.management=ALL-UNNAMED --add-opens=java.desktop/java.awt.font=ALL-UNNAMED"
+ExecStart=/usr/bin/java -jar %h/.local/share/cluster93/c93.jar
+Restart=on-failure
+Delegate=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=%h/.local/share/cluster93/data
+
+[Install]
+WantedBy=default.target

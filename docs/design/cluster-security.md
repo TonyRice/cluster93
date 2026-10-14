@@ -18,7 +18,7 @@ Cluster93's tenant-facing surfaces are hardened: tokens, scopes, the OpenAPI con
 | 5701… | Ignite discovery | **no** | **no** | yes |
 | 5801… | Ignite communication (data, replication) | **no** | **no** | yes |
 | (dynamic) | Vert.x clustered event bus | **no** | **no** | yes |
-| 8090 | internal endpoint (ingress → serving node) | shared secret (D-036) | **no** | yes |
+| 9396 | internal endpoint (ingress → serving node) | shared secret (D-036) | **no** | yes |
 | **10800** | **Ignite thin client / JDBC / ODBC** | **no** | **no** | **no; an Ignite default** |
 | **11211** | **Ignite binary REST command protocol** | **no** | **no** | **no; an Ignite default** |
 
@@ -52,8 +52,8 @@ Small, and worth doing right away, separately from the rest:
 |---|---|
 | Ignite discovery and communication | `IgniteConfiguration.setSslContextFactory(...)`: a context built from the node's key and certificate, trusting only the cluster CA, **client authentication required**, TLS 1.3 |
 | Vert.x clustered event bus | `EventBusOptions.setSsl(true)`, the node's PEM key and certificate, CA trust, `ClientAuth.REQUIRED` |
-| Internal endpoint (8090) | HTTPS with mutual TLS. The ingress client presents its node certificate. **The D-036 shared secret is retired** (Tony). |
-| Metrics (9090) | optional TLS; stays on the private network for Prometheus |
+| Internal endpoint (9396) | HTTPS with mutual TLS. The ingress client presents its node certificate. **The D-036 shared secret is retired** (Tony). |
+| Metrics (9395) | optional TLS; stays on the private network for Prometheus |
 
 **Modes:**
 - **`C93_CLUSTER_TLS=required`** is the default when clustered. A node without certificates **refuses to start**, with an error naming `c93 cluster init` and `node join`.

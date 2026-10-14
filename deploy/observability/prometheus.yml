@@ -6,4 +6,4 @@ scrape_configs:
   - job_name: c93
     metrics_path: /metrics
     static_configs:
-      - targets: ['node1:9090', 'node2:9090', 'node3:9090']
+      - targets: ['node1:9395', 'node2:9395', 'node3:9395']

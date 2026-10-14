@@ -1,6 +1,6 @@
 # Vendored streams
 
-Node's own `stream` (from [`readable-stream`](https://github.com/nodejs/readable-stream)) and `string_decoder`, bundled into ES modules for the isolate (D-095, D-100), and the WHATWG streams (from [`web-streams-polyfill`](https://github.com/MattiasBuelens/web-streams-polyfill), which ships only a minified build) as a script the prelude loads on first use (D-124). The output is committed in `cluster93-runtime-js/src/main/resources/cluster93/runtime/js/node/`, so building Cluster93 never needs Node.
+Node's own `stream` (from [`readable-stream`](https://github.com/nodejs/readable-stream)) and `string_decoder`, bundled into ES modules for the isolate (D-095, D-100), and the WHATWG streams (from [`web-streams-polyfill`](https://github.com/MattiasBuelens/web-streams-polyfill), which ships only a minified build) as a script the prelude loads on first use (D-124). The output is committed in `runtime-js/src/main/resources/cluster93/runtime/js/node/`, so building Cluster93 never needs Node.
 
 To update: change the versions in `package.json`, then
 ```bash
