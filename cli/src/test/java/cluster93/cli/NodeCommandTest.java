@@ -710,7 +710,7 @@ class NodeCommandTest {
         Files.createDirectories(layout.envFile().getParent());
         Files.writeString(layout.envFile(), "C93_NODE_ID=node-1\n");
 
-        NodeInstall.writeContainerMeta(layout, "docker", false, "cluster93-node:local", "2.0.0-local", "node-1");
+        NodeInstall.writeContainerMeta(layout, "docker", "false", "cluster93-node:local", "2.0.0-local", "node-1");
 
         Map<String, String> meta = NodeCommand.loadKeyValues(NodeInstall.metaFile(layout));
         assertThat(meta).containsEntry("kind", "container");
@@ -768,6 +768,20 @@ class NodeCommandTest {
         // And a rootless one, which is what --worker-containers requires (D-145).
         fakeEngine("docker", "[name=rootless name=seccomp,profile=builtin]");
         assertThat(NodeInstall.detectEngine(io(), null).rootless()).isTrue();
+    }
+
+    @Test
+    void detectEngineReportsUnknownRootlessWhenTheDaemonDoesNotAnswer() throws IOException {
+        // The CLI is present but `info` says nothing: an install may still proceed without a daemon (§1.9).
+        Path bin = Files.createDirectories(work.resolve("bin-silent"));
+        Path script = bin.resolve("docker");
+        Files.writeString(script, "#!/bin/sh\nexit 0\n");
+        script.toFile().setExecutable(true);
+        env.put("PATH", bin.toString());
+
+        NodeInstall.Engine engine = NodeInstall.detectEngine(io(), null);
+        assertThat(engine.name()).isEqualTo("docker");
+        assertThat(engine.rootless()).isNull();
     }
 
     @Test

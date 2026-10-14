@@ -498,7 +498,7 @@ final class NodeInstall {
     }
 
     /** Records a container install: the engine, its rootless-ness, the image, and both data-dir paths. */
-    static void writeContainerMeta(Layout layout, String engine, boolean rootless, String image, String version,
+    static void writeContainerMeta(Layout layout, String engine, String rootless, String image, String version,
                                    String nodeId) throws IOException {
         writeMeta(layout, version);
         StringBuilder extra = new StringBuilder();
@@ -517,14 +517,17 @@ final class NodeInstall {
         restrict(file);
     }
 
-    /** How a container node's engine is running: its name, whether the daemon is rootless, and its CLI path. */
-    record Engine(String name, boolean rootless, String cli) {
+    /**
+     * How a container node's engine is running: its name, whether the daemon is rootless, and its CLI path.
+     * {@code rootless} is null when the daemon didn't answer — an install may proceed without one (S1.9), and only
+     * the things that need it (starting, and {@code --worker-containers}) insist (D-145).
+     */
+    record Engine(String name, Boolean rootless, String cli) {
     }
 
     /**
-     * Detects the container engine and whether it runs rootless. The engine's CLI must be on the PATH and its daemon
-     * must answer, because rootless-ness is what decides whether the node may spawn worker containers at all
-     * (D-145, D-152) — so this is load-bearing, not incidental.
+     * Detects the container engine, and asks its daemon whether it runs rootless. The CLI must be on the PATH; the
+     * daemon may be absent, in which case rootless-ness is simply unknown.
      */
     static Engine detectEngine(Io io, String requested) {
         List<String> candidates = requested != null && !requested.isBlank()
@@ -543,9 +546,8 @@ final class NodeInstall {
             Optional<String> info = podman
                     ? NodeService.capture(io, cli, "info", "--format", "{{.Host.Security.Rootless}}")
                     : NodeService.capture(io, cli, "info", "--format", "{{.SecurityOptions}}");
-            if (info.isEmpty()) {
-                tried.add(name + ": installed, but its daemon didn't answer");
-                continue;
+            if (info.isEmpty() || info.get().isBlank()) {
+                return new Engine(name, null, cli);
             }
             boolean rootless = podman
                     ? info.get().strip().toLowerCase(Locale.ROOT).startsWith("true")
@@ -643,13 +645,15 @@ final class NodeInstall {
 
         Files.writeString(layout.composeFile(),
                 renderCompose(layout, config, engine.name(), imageRef, bindAddress, publishCluster));
-        writeContainerMeta(layout, engine.name(), engine.rootless(), imageRef, version0, nodeId);
+        // "unknown" is honest: the daemon didn't answer, so rootless-ness is not established (D-145).
+        String rootless = engine.rootless() == null ? "unknown" : engine.rootless().toString();
+        writeContainerMeta(layout, engine.name(), rootless, imageRef, version0, nodeId);
         if (system) {
             provisionSystemUser(io, layout);
         }
 
         if (!quiet) {
-            io.out().println("Installed a " + engine.name() + " node (" + (engine.rootless() ? "rootless" : "rootful") + ")");
+            io.out().println("Installed a " + engine.name() + " node (" + rootless + ")");
             io.out().println("Wrote " + layout.envFile() + " and " + layout.composeFile());
             if (caHome != null) {
                 io.out().println("Keep " + caHome.resolve("ca.key") + " safe: it signs this cluster's nodes, and it is "
