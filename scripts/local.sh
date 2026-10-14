@@ -949,19 +949,54 @@ cmd_update() {
 # test-examples (dev)
 # --------------------------------------------------------------------------
 cmd_test_examples() {
+  profile_state
   local cli
   cli=$(cli_bin)
   if [[ -z "$cli" ]]; then
     echo "Error: no c93 CLI found. Run: scripts/local.sh dev build" >&2
     exit 1
   fi
-  local example
-  for example in 01-hello-job 02-resilient-steps 03-kv-storage 04-event-bus 05-durable-queues 06-vfs-files; do
-    echo "== running examples/${example}.js" >&2
-    "$cli" run "examples/${example}.js"
-    echo "== ${example}: OK" >&2
+  local dir="$REPO_ROOT/examples/js"
+  if ! compgen -G "$dir/*.js" >/dev/null; then
+    echo "Error: no examples at $dir" >&2
+    exit 1
+  fi
+  # Directory-driven: adding an example needs no edit here. A file marked `// c93: service` serves
+  # HTTP, so it is deployed (and removed) rather than run — `c93 run` on it would block forever.
+  local f name
+  for f in "$dir"/*.js; do
+    name="$(basename "$f")"
+    if grep -q '^// c93: service' "$f"; then
+      run_example_service "$cli" "$name" "$f"
+    else
+      echo "== running examples/js/${name}" >&2
+      "$cli" run "examples/js/${name}"
+      echo "== ${name}: OK" >&2
+    fi
   done
   echo "== all examples passed" >&2
+}
+
+# Deploys a service example, waits for it to answer on the ingress, then removes it.
+run_example_service() {
+  local cli="$1" name="$2" file="$3"
+  local service="${name%.js}"
+  echo "== deploying examples/js/${name} as service '${service}'" >&2
+  "$cli" services deploy "$service" "$file"
+  local attempt served=false
+  for attempt in $(seq 1 30); do
+    if curl -fsS -m 2 -H "Host: ${service}--${TENANT}.localhost" "http://localhost:${INGRESS_PORT}/" >/dev/null 2>&1; then
+      served=true
+      break
+    fi
+    sleep 1
+  done
+  "$cli" services rm "$service" >/dev/null 2>&1 || true
+  if [[ "$served" != "true" ]]; then
+    echo "Error: service '${service}' never answered on the ingress" >&2
+    exit 1
+  fi
+  echo "== ${name}: OK (served on the ingress, then removed)" >&2
 }
 
 # --------------------------------------------------------------------------

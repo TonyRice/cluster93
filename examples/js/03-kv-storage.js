@@ -1,7 +1,7 @@
 // 03 — Key-value storage.
 //
 // Run it:
-//   c93 run examples/03-kv-storage.js
+//   c93 run examples/js/03-kv-storage.js
 //
 // kv is the tenant's JSON key-value store: replicated, durable, and shared with every node. See
 // docs/scripting/host-apis.md.

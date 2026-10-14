@@ -1,7 +1,7 @@
 // 04 — The event bus: request/reply and pub/sub.
 //
 // Run it:
-//   c93 run examples/04-event-bus.js
+//   c93 run examples/js/04-event-bus.js
 //
 // bus.handle answers requests; bus.subscribe listens to published messages. Both are tenant-scoped and
 // at-most-once. See docs/scripting/host-apis.md.

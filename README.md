@@ -119,7 +119,7 @@ scripts/local.sh dev start
 scripts/local.sh dev seed
 
 # 4. Run any JavaScript ES-module job via the native CLI
-c93 run examples/01-hello-job.js
+c93 run examples/js/01-hello-job.js
 
 # 5. Run the full curated test suite covering jobs, steps, KV, event bus, queues, and VFS
 scripts/local.sh dev test-examples

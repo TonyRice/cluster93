@@ -6,6 +6,12 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **`examples/js/` by language, with a runner that also exercises the service example**:
+  - The seven examples move to `examples/js/` (their header paths updated); new `examples/README.md` indexes them by language and notes Python is planned (Phase 9).
+  - `scripts/local.sh dev test-examples` is now directory-driven (`examples/js/*.js`), so adding an example needs no script edit; a file marked `// c93: service` is deployed as a service (waited for on the ingress, then removed) instead of being run as a job.
+  - **Fixed:** `07-microservice.js` was broken and had never been caught because the runner skipped it — it returned `{ body, status: 'ok', … }`, so `toResponse` computed `Number('ok')` = `NaN` and the request hung. It now returns `{ status: 200, body: {…} }`, the `{status, headers, body}` shape the docs describe.
+
+
 - **Docs reconciled with reality**:
   - README: the status block no longer claims "Phase 10 Complete" (there is no Phase 10); it now reads Phases 1–5 complete, Phase 6 in progress, Phase 11 active. The roadmap bullets match `ROADMAP.md`, the broken links into the git-excluded `ideas/` were repointed at tracked design docs, and the install section gained the platform matrix (Linux/macOS native, Windows portable jar, workers Linux-only).
   - `ROADMAP.md`: the diagram no longer marks Phase 5 ACTIVE (complete; Phase 6 is in progress) and a Phase 11 (Consolidation & Release Readiness) section records W1/W5 done and W2/W3/W4/W6 pending.
