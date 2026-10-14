@@ -55,9 +55,9 @@ class ServicesTest {
 
     @AfterAll
     static void stopCluster() throws Exception {
-        await(clientVertx.close());
-        await(nodeB.stop());
-        await(nodeA.stop());
+        if (clientVertx != null) { await(clientVertx.close()); }
+        if (nodeB != null) { await(nodeB.stop()); }
+        if (nodeA != null) { await(nodeA.stop()); }
     }
 
     @AfterEach

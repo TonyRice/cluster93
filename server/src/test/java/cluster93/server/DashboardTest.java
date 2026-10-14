@@ -101,8 +101,8 @@ class DashboardTest {
 
             assertThat(missing).as("metrics the dashboard queries that the node doesn't export").isEmpty();
         } finally {
-            await(clientVertx.close());
-            await(node.stop());
+            if (clientVertx != null) { await(clientVertx.close()); }
+            if (node != null) { await(node.stop()); }
         }
     }
 

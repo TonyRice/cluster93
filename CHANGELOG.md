@@ -6,6 +6,12 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A failed cluster start no longer cascades through the server suite**:
+  - The server module shares one JVM under `mvn verify`; when a node couldn't join, the teardown NPE'd on a null client Vertx **before** stopping the nodes, so their Ignite instances stayed registered and every later class failed with "Ignite instance already started" (the documented `FileFailoverTest` cascade).
+  - Teardowns now guard the client Vertx and each node stop (73 guards across 30 suites), so a failed start still tears down what did start. `mvn verify` keeps one JVM (per-class forks cost ~3.5 min more); `scripts/test-all.sh` still forks per class.
+  - `lasttest.txt` (written by `scripts/test-all.sh`) is now git-ignored.
+
+
 - **The engine conformance suite runs again (it silently hadn't been)**:
   - `runtime-javet` and `runtime-graaljs` scanned `c93:cluster93-runtime-js` in `<dependenciesToScan>`, but the groupId is `cluster93` (the rebrand renamed it), so surefire matched nothing: `runtime-js`'s tests never ran on either engine and `mvn verify` was green without them.
   - With the groupId corrected the suite runs on both engines — **137 tests each, 0 failures** — so nothing had rotted. `TESTING.md` §3.3 now records where it lives, the count to expect, and the trap.

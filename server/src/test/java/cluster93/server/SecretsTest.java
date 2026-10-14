@@ -58,8 +58,8 @@ class SecretsTest {
 
     @AfterAll
     static void stop() throws Exception {
-        await(clientVertx.close());
-        await(node.stop());
+        if (clientVertx != null) { await(clientVertx.close()); }
+        if (node != null) { await(node.stop()); }
     }
 
     @Test
@@ -192,7 +192,7 @@ class SecretsTest {
             assertThat(refused.statusCode()).isEqualTo(409);
             assertThat(refused.bodyAsJsonObject().getJsonObject("error").getString("code")).isEqualTo("secrets_unavailable");
         } finally {
-            await(keyless.stop());
+            if (keyless != null) { await(keyless.stop()); }
             TestAuth.use(node);
         }
     }

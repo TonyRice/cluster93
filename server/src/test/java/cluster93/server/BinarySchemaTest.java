@@ -67,13 +67,13 @@ class BinarySchemaTest {
             await(client.post(nodeB.httpPort(), "localhost", "/v1/services/echo/stop").putHeader("Authorization", TestAuth.bearer(TENANT)).send());
             awaitJson(client, nodeB, "/v1/services/echo", s -> "STOPPED".equals(s.getString("status")));
 
-            await(nodeB.stop());
+            if (nodeB != null) { await(nodeB.stop()); }
             Thread.sleep(500);
 
             assertThat(nodeA.cluster().binarySchemas()).as("binary schemas first seen after startup").isEqualTo(atStart);
         } finally {
-            await(clientVertx.close());
-            await(nodeA.stop());
+            if (clientVertx != null) { await(clientVertx.close()); }
+            if (nodeA != null) { await(nodeA.stop()); }
         }
     }
 

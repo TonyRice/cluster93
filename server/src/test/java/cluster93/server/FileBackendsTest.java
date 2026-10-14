@@ -50,7 +50,7 @@ class FileBackendsTest {
 
     @AfterEach
     void closeClient() throws Exception {
-        await(clientVertx.close());
+        if (clientVertx != null) { await(clientVertx.close()); }
     }
 
     private static Map<String, String> config(String nodeId, boolean clustered, Map<String, String> files) {
@@ -119,8 +119,8 @@ class FileBackendsTest {
             assertThat(served.statusCode()).isEqualTo(206);
             assertThat(served.body().getBytes()).isEqualTo(Arrays.copyOfRange(video, 100, 200));
         } finally {
-            await(nodeB.stop());
-            await(nodeA.stop());
+            if (nodeB != null) { await(nodeB.stop()); }
+            if (nodeA != null) { await(nodeA.stop()); }
         }
     }
 
@@ -142,7 +142,7 @@ class FileBackendsTest {
                 assertThat(walk.filter(Files::isRegularFile).filter(p -> !p.getFileName().toString().startsWith(".")).toList()).hasSize(1);
             }
         } finally {
-            await(node.stop());
+            if (node != null) { await(node.stop()); }
         }
     }
 

@@ -42,12 +42,12 @@ class SharedDiskRootTest {
 
     @AfterEach
     void stop() throws Exception {
-        await(clientVertx.close());
+        if (clientVertx != null) { await(clientVertx.close()); }
         if (nodeB != null) {
-            await(nodeB.stop());
+            if (nodeB != null) { await(nodeB.stop()); }
         }
         if (nodeA != null) {
-            await(nodeA.stop());
+            if (nodeA != null) { await(nodeA.stop()); }
         }
     }
 

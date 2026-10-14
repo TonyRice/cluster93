@@ -196,10 +196,12 @@ Plan: a throwaway container or VM where `sudo c93 node install --system` runs, c
 
 ### 5. Flakes
 
-- **Ignite suite cascade:** the server module under `mvn verify` shares one JVM, so a `FileFailoverTest`
-  discovery-join failure cascades into "Ignite instance already started" for the rest of the class. It
-  passes in isolation and under `scripts/test-all.sh` (`-DreuseForks=false`). Plan: either accept the
-  documented flake, or fork per test class.
+- **Ignite suite cascade — FIXED.** The server module shares one JVM under `mvn verify`, and a failed
+  `@BeforeAll` (a node that couldn't join) left `clientVertx`/a node field null, so the `@AfterAll` NPE'd
+  **before** stopping the nodes: their Ignite instances stayed registered and every later class failed with
+  "Ignite instance already started". Teardowns now guard the client Vertx and each node stop (73 guards
+  across 30 suites), so a failed start still tears down what did start. `mvn verify` keeps one JVM (fast —
+  per-class forks cost ~3.5 min more); `scripts/test-all.sh` still forks per class.
 - **Transient jar/manifest read:** `CliTest.clusterInitAndNodeInviteMakeOneLineJoins` failed once with
   `IOException: invalid header field`; it passes in isolation and on re-run. Watch for recurrence.
 

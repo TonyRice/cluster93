@@ -68,8 +68,8 @@ class StorageProvidersTest {
     @AfterAll
     static void stop() throws Exception {
         if (node != null) {
-            await(clientVertx.close());
-            await(node.stop());
+            if (clientVertx != null) { await(clientVertx.close()); }
+            if (node != null) { await(node.stop()); }
         }
     }
 

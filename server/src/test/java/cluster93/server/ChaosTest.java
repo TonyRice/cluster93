@@ -79,7 +79,7 @@ class ChaosTest {
 
     @AfterEach
     void stopCluster() throws Exception {
-        await(clientVertx.close());
+        if (clientVertx != null) { await(clientVertx.close()); }
         for (RunningNode node : nodes) {
             node.stop().toCompletionStage().toCompletableFuture().handle((v, e) -> null).get(30, TimeUnit.SECONDS);
         }

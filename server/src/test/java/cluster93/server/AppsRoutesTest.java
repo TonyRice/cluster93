@@ -51,8 +51,8 @@ class AppsRoutesTest {
 
     @AfterAll
     static void stop() throws Exception {
-        await(clientVertx.close());
-        await(node.stop());
+        if (clientVertx != null) { await(clientVertx.close()); }
+        if (node != null) { await(node.stop()); }
     }
 
     @Test

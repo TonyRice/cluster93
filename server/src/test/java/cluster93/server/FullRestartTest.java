@@ -43,7 +43,7 @@ class FullRestartTest {
     void stopAll() throws Exception {
         stopNodes();
         if (clientVertx != null) {
-            await(clientVertx.close());
+            if (clientVertx != null) { await(clientVertx.close()); }
         }
     }
 

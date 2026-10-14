@@ -67,10 +67,10 @@ class IngressAuthIntegrationTest {
     @AfterAll
     static void stop() throws Exception {
         if (clientVertx != null) {
-            await(clientVertx.close());
+            if (clientVertx != null) { await(clientVertx.close()); }
         }
         if (node != null) {
-            await(node.stop());
+            if (node != null) { await(node.stop()); }
         }
     }
 

@@ -28,3 +28,6 @@ package-lock.json
 
 # Benchmark runs are local; the canonical numbers live in docs/benchmarks.md.
 benchmarks/engines/results/
+
+# The test runner writes its log here (scripts/test-all.sh).
+lasttest.txt

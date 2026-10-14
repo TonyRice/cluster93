@@ -47,7 +47,7 @@ class SingleNodeRestartRecoveryTest {
         }
         nodes.clear();
         if (clientVertx != null) {
-            await(clientVertx.close());
+            if (clientVertx != null) { await(clientVertx.close()); }
         }
     }
 
@@ -117,7 +117,7 @@ class SingleNodeRestartRecoveryTest {
         assertThat(firstRun.getString("currentJobId")).isNotNull();
 
         // Crash: the node stops without recording its running attempts as finished.
-        await(node1.stop());
+        if (node1 != null) { await(node1.stop()); }
         nodes.remove(node1);
 
         RunningNode node2 = start();

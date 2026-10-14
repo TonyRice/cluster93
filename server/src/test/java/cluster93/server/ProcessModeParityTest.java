@@ -71,7 +71,7 @@ class ProcessModeParityTest {
     @AfterAll
     static void stopCluster() throws Exception {
         if (clientVertx != null) {
-            await(clientVertx.close());
+            if (clientVertx != null) { await(clientVertx.close()); }
         }
         if (nodeB != null) {
             nodeB.stop().toCompletionStage().toCompletableFuture().handle((v, e) -> null).get(30, TimeUnit.SECONDS);
@@ -233,7 +233,7 @@ class ProcessModeParityTest {
         String victimId = running.getString("node");
         RunningNode victim = victimId.equals(nodeA.nodeId()) ? nodeA : nodeB;
         RunningNode survivor = victim == nodeA ? nodeB : nodeA;
-        await(victim.stop());
+        if (victim != null) { await(victim.stop()); }
 
         JsonObject done = awaitTerminal(survivor, id);
         assertThat(done.getString("status")).as(done.encodePrettily()).isEqualTo("SUCCEEDED");

@@ -85,7 +85,7 @@ class ClusterSecurityTest {
             // The internal endpoint only speaks TLS with a node certificate: plain HTTP gets no HTTP answer.
             assertThat(plainHttp(node.internalPort())).doesNotStartWith("HTTP/");
         } finally {
-            await(node.stop());
+            if (node != null) { await(node.stop()); }
         }
     }
 
@@ -112,7 +112,7 @@ class ClusterSecurityTest {
             second.put("C93_TLS_DIR", secondDir.toString());
             RunningNode member = await(Cluster93.start(ServerConfig.fromEnv(second)));
             awaitNodes(client, first, List.of("first", "second"));
-            await(member.stop());
+            if (member != null) { await(member.stop()); }
             awaitNodes(client, first, List.of("first"));
 
             // Revoked while it's away (revoking a node that's in the cluster forces it out and halts its process, which the
@@ -130,10 +130,10 @@ class ClusterSecurityTest {
             reinvited.put("C93_TLS_DIR", TestTls.directoryFor("second", TestTls.CA).toString());
             RunningNode back = await(Cluster93.start(ServerConfig.fromEnv(reinvited)));
             awaitNodes(client, first, List.of("first", "second"));
-            await(back.stop());
+            if (back != null) { await(back.stop()); }
         } finally {
-            await(clientVertx.close());
-            await(first.stop());
+            if (clientVertx != null) { await(clientVertx.close()); }
+            if (first != null) { await(first.stop()); }
             org.apache.ignite.Ignition.allGrids().stream().filter(g -> !g.name().equals("cluster93-first"))
                     .forEach(g -> org.apache.ignite.Ignition.stop(g.name(), true));
         }
@@ -144,7 +144,7 @@ class ClusterSecurityTest {
         CompletableFuture<RunningNode> started = Cluster93.start(ServerConfig.fromEnv(env)).toCompletionStage().toCompletableFuture();
         try {
             RunningNode alone = started.get(45, TimeUnit.SECONDS);
-            await(alone.stop());
+            if (alone != null) { await(alone.stop()); }
         } catch (Exception e) {
             // Refused or still trying: either way it isn't a member.
         }

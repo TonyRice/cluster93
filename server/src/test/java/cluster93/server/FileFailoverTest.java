@@ -58,9 +58,9 @@ class FileFailoverTest {
 
     @AfterEach
     void stopCluster() throws Exception {
-        await(clientVertx.close());
+        if (clientVertx != null) { await(clientVertx.close()); }
         for (RunningNode node : nodes) {
-            await(node.stop());
+            if (node != null) { await(node.stop()); }
         }
     }
 
@@ -183,7 +183,7 @@ class FileFailoverTest {
 
     private void kill(RunningNode victim) throws Exception {
         nodes.remove(victim);
-        await(victim.stop());
+        if (victim != null) { await(victim.stop()); }
         awaitLiveNodes(nodes.getFirst(), nodes.size());
     }
 
