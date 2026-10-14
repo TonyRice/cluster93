@@ -1,1 +1,0 @@
-{"machine":"Linux 7.0.0-1015-oem x86_64","cpu":"11th Gen Intel(R) Core(TM) i7-1185G7 @ 3.00GHz","turbo":"off","powerProfile":"performance","graalEdition":"Oracle GraalVM","graalVersion":"native-image 25.0.4.1.1 2026-08-18","cpus":8,"memGb":30,"date":"2026-10-10T15:28:45-05:00","warmupMs":20000,"warmupMin":200,"measured":50}

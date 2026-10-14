@@ -35,6 +35,9 @@ benchmarks/engines/
 └── summarize.py           # Summarizes results.jsonl into comparative markdown tables
 ```
 
+From the repo root, `benchmarks/run.sh engines` runs this suite (and `benchmarks/run.sh` lists every
+target); the commands below assume you are already in `benchmarks/engines/`.
+
 ---
 
 ## 3. Workloads & Attack Suite

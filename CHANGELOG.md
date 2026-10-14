@@ -6,6 +6,11 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **One benchmark entrypoint: `benchmarks/run.sh [cluster|engines|all]`**:
+  - The three-node Docker harness moves to `benchmarks/cluster/` (and follows the new host ports); `benchmarks/engines/` stays self-contained; the new dispatcher runs either or both.
+  - The four committed runs under `benchmarks/engines/results/` are untracked and the directory is git-ignored (the canonical numbers live in `docs/benchmarks.md`), and the local `__pycache__/` and `bin/` residue is gone.
+
+
 - **One update surface: `c93 update [--cli|--node]` (D-138)**:
   - `c93 update` is the front door: `--cli` replaces the CLI (the native binary, or — on the JVM — the `cluster93-cli.jar` it was launched from), `--node` updates the node (an installed node is re-fetched from the signed release and restarted; a checkout rebuilds from source), and **with neither flag it does both**. `--version TAG` pins a release; `--to FILE` names a CLI target.
   - `c93 upgrade` and `c93 node update` stay as **hidden aliases**, so existing scripts and docs keep working; the CLI's update hints now say `c93 update --node`.

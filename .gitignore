@@ -25,3 +25,6 @@ package-lock.json
 # (scripts/build-workers.sh), and release artifacts (scripts/release-local.sh).
 /bin/
 /dist/
+
+# Benchmark runs are local; the canonical numbers live in docs/benchmarks.md.
+benchmarks/engines/results/
