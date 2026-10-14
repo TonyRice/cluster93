@@ -6,11 +6,19 @@
 #   curl -s -H 'Host: <service>--<tenant>.localhost' localhost:9411/
 x-node: &node
   build: .
+  # A fixed image name, so scripts/demo.sh can pre-build it once (`--target local-jar`) and have every
+  # node reuse it instead of building per node; `docker compose up --build` still builds and tags it.
+  image: cluster93-demo:local
+  pull_policy: never
   depends_on:
     tls-init: { condition: service_completed_successfully }
   environment: &env
     C93_CLUSTERED: "true"
     C93_CLUSTER_MEMBERS: node1,node2,node3
+    # The image ships no native workers and the shaded jar has no WorkerMain, so process mode cannot
+    # spawn one here: run isolates in-process. (A node installed with `c93 node install` ships
+    # bin/worker-* and uses process mode.)
+    C93_WORKER_MODE: "embedded"
     C93_CAPACITY: "4"
     C93_MAX_HEAP_MB: "128"
     C93_DATA_BACKUPS: "1"
@@ -27,6 +35,8 @@ services:
   # In production, run `c93 cluster init` on your own machine and keep ca.key there (docs/guides/cluster.md).
   tls-init:
     build: .
+    image: cluster93-demo:local
+    pull_policy: never
     user: root
     entrypoint: ["sh", "-c", "java -cp /opt/cluster93/c93.jar cluster93.tls.ClusterInit /tls node1 node2 node3 && chown -R c93 /tls"]
     volumes: ["cluster-tls:/tls"]

@@ -94,32 +94,32 @@ The automated demo spins up a 3-node cluster and demonstrates live failover:
 
 ### Local Development (Zero Docker, Single Command)
 
-To run a persistent local single-node cluster directly on your machine without Docker:
+To run a throwaway local single-node cluster directly on your machine without Docker (the `dev` profile of the checkout orchestrator):
 
 ```bash
-# 1. Build the server, GraalVM native CLI, and worker isolate
-scripts/dev.sh build
+# 1. Build the server, GraalVM native CLI, and worker isolates
+scripts/local.sh dev build
 
-# 2. Start the local cluster in the background (persists to ~/.cluster93/data)
-scripts/dev.sh start
+# 2. Start the dev cluster in the background (persists to ~/.cluster93/dev-data)
+scripts/local.sh dev start
 
 # 3. Create the 'dev' tenant, mint a full-access token, configure ~/.config/cluster93/config.json, and print MCP config
-scripts/dev.sh seed
+scripts/local.sh dev seed
 
 # 4. Run any JavaScript ES-module job via the native CLI
 c93 run examples/01-hello-job.js
 
 # 5. Run the full curated test suite covering jobs, steps, KV, event bus, queues, and VFS
-scripts/dev.sh test-examples
+scripts/local.sh dev test-examples
 
 # Check cluster health and status
-scripts/dev.sh status
+scripts/local.sh dev status
 
 # Stop the local server
-scripts/dev.sh stop
+scripts/local.sh dev stop
 ```
 
-Data is stored persistently at `$HOME/.cluster93/data` (customizable via `scripts/dev.sh start --data-dir <path>`). The native `c93` binary is installed directly into `~/.local/bin/c93` (and `bin/c93`).
+Data is stored persistently at `$HOME/.cluster93/dev-data` (customizable via `scripts/local.sh dev start --data-dir <path>`). The native `c93` binary is installed directly into `~/.local/bin/c93` (and `bin/c93`).
 
 ---
 

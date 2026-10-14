@@ -1,26 +1,41 @@
 #!/usr/bin/env bash
-# Dedicated local master node installer and onboarding orchestrator for Cluster93.
+# Cluster93 checkout orchestrator: the permanent master node, or a throwaway dev stack.
 #
-# Runs a single permanent node on this machine: the API, ingress, worker, data and console roles
-# in one process, with durable Apache Ignite persistence, a seeded tenant, a provisioned `admin`
-# operator and its saved login, so `c93` works straight afterwards. It also tracks the git
-# commit it was built from and tells you when the repository has moved ahead of the running build.
+# One implementation, two profiles:
+#   master (default)  A single permanent node on this machine: the API, ingress, worker, data and
+#                     console roles in one process, with durable Apache Ignite persistence, a
+#                     seeded tenant, a provisioned `admin` operator and its saved login, so `c93`
+#                     works straight afterwards. Tracks the git commit it was built from and tells
+#                     you when the repository has moved ahead of the running build.
+#   dev               A throwaway local stack for development: its own store (dev-data), the `dev`
+#                     tenant and a fixed admin token, so it never shares an Ignite baseline with
+#                     the master node.
 #
 # Usage:
-#   scripts/local.sh setup [--yes|-y]    Guided onboarding; writes ~/.cluster93/local.env,
-#                                        builds what's missing, starts the node, seeds the
-#                                        tenant, provisions the `admin` operator, saves its
-#                                        login and prints the MCP config.
-#   scripts/local.sh start               Start the configured node in the background.
-#   scripts/local.sh run                 Run the configured node in the foreground.
-#   scripts/local.sh seed                Ensure system/dev tenants, deploy console and admin operator.
-#   scripts/local.sh stop                Stop it (SIGTERM, then SIGKILL after 30s).
-#   scripts/local.sh restart             stop, then start.
-#   scripts/local.sh status              PID, /health, /v1/nodes, and update detection.
-#   scripts/local.sh logs [-f] [-n N]    Tail the server log (`-f` follows).
-#   scripts/local.sh mcp                 Print MCP configurations for common agents.
-#   scripts/local.sh update              Rebuild from the current checkout and restart.
-#   scripts/local.sh help                This text.
+#   scripts/local.sh [master|dev] <verb>       (a bare verb means the master profile)
+#
+#   master:
+#     setup [--yes|-y]   Guided onboarding; writes ~/.cluster93/local.env, builds what's missing,
+#                        starts the node, seeds the tenant, provisions the `admin` operator, saves
+#                        its login and prints the MCP config.
+#     start              Start the configured node in the background.
+#     run                Run the configured node in the foreground.
+#     seed               Ensure the tenants, deploy the console and provision the `admin` operator.
+#     stop               Stop it (SIGTERM, then SIGKILL after 30s).
+#     restart            stop, then start.
+#     status             PID, /health, /v1/nodes, and update detection.
+#     logs [-f] [-n N]   Tail the server log (`-f` follows).
+#     mcp                Print MCP configurations for common agents.
+#     update             Rebuild from the current checkout and restart.
+#
+#   dev:
+#     build              Build the server jar, native CLI and the workers (if missing).
+#     start [--data-dir DIR]  Start the dev server in the background (default: ~/.cluster93/dev-data).
+#     seed               Ensure the `system` and `dev` tenants, deploy the console, provision `admin`.
+#     test-examples      Run the examples against the running dev server.
+#     stop | restart | status | logs | mcp
+#
+#   help                 This text.
 #
 # Environment:
 #   C93_HOME        where state lives (default: $HOME/.cluster93)
@@ -31,11 +46,18 @@ set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO_ROOT"
 
+# ---------------------------------------------------------------------------
+# profile: `master` (the permanent node, the default) or `dev` (a throwaway stack)
+# ---------------------------------------------------------------------------
+PROFILE="master"
+case "${1:-}" in
+  dev|master)
+    PROFILE="$1"
+    shift
+    ;;
+esac
+
 C93_HOME="${C93_HOME:-${HOME}/.cluster93}"
-ENV_FILE="${C93_HOME}/local.env"
-META_FILE="${C93_HOME}/node.meta"
-PID_FILE="${C93_HOME}/c93.pid"
-MCP_FILE="${C93_HOME}/mcp.json"
 CONFIG_FILE="${C93_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/cluster93}/config.json"
 SERVER_JAR="${REPO_ROOT}/server/target/c93.jar"
 JAVET_WORKER="${REPO_ROOT}/bin/worker-javet"
@@ -43,19 +65,38 @@ GRAALJS_WORKER="${REPO_ROOT}/bin/worker-graaljs"
 CLI_BINARY="${REPO_ROOT}/bin/c93"
 START_TIMEOUT_SECONDS="${START_TIMEOUT_SECONDS:-60}"
 
-# Defaults the onboarding wizard offers.
-DEFAULT_NODE_ID="local-master"
+# The state file, store and tenant differ per profile; everything else is shared.
+if [[ "$PROFILE" == "dev" ]]; then
+  ENV_FILE=""
+  META_FILE=""
+  DEFAULT_NODE_ID="local-dev"
+  DEFAULT_DATA_DIR="${C93_HOME}/dev-data"
+  DEFAULT_LOG_DIR="${C93_HOME}"
+  DEFAULT_TENANT="dev"
+  BANNER_TITLE="Cluster93 development stack is ready"
+else
+  ENV_FILE="${C93_HOME}/local.env"
+  META_FILE="${C93_HOME}/node.meta"
+  DEFAULT_NODE_ID="local-master"
+  # The permanent master keeps its own store, separate from the ephemeral directory the dev profile
+  # uses, so an Ignite baseline written by development testing can never collide with the master's.
+  DEFAULT_DATA_DIR="${C93_HOME}/master-data"
+  DEFAULT_LOG_DIR="${C93_HOME}/logs"
+  DEFAULT_TENANT="local"
+  BANNER_TITLE="Cluster93 local master is ready"
+fi
+PID_FILE="${C93_HOME}/c93.pid"
+MCP_FILE="${C93_HOME}/mcp.json"
+
+# Defaults the onboarding wizard offers (shared by both profiles).
 DEFAULT_ROLES="api,ingress,worker,data,console"
-# The permanent master keeps its own store, separate from the ephemeral directory scripts/dev.sh uses,
-# so an Ignite baseline written by development testing can never collide with the master's database.
-DEFAULT_DATA_DIR="${C93_HOME}/master-data"
-DEFAULT_LOG_DIR="${C93_HOME}/logs"
 DEFAULT_HTTP_PORT="9393"
 DEFAULT_INGRESS_PORT="9394"
 DEFAULT_METRICS_PORT="9395"
 DEFAULT_WORKER_MODE="process"
 DEFAULT_WORKER_ENGINE="graaljs"
-DEFAULT_TENANT="local"
+# The dev stack's fixed admin token; override with ADMIN_TOKEN in the environment.
+DEV_ADMIN_TOKEN="dev-admin-token-1234567890abcdef"
 
 # Apache Ignite 2.18 on JDK 21 needs these module opens (pom.xml's ignite.jvm.args, the
 # Dockerfile's JDK_JAVA_OPTIONS). Without them the server fails at startup with
@@ -95,6 +136,17 @@ java_bin() {
     echo "$JAVA_HOME/bin/java"
   else
     command -v java
+  fi
+}
+
+# The c93 CLI: the checkout's native binary, then ~/.local/bin, then whatever is on PATH.
+cli_bin() {
+  if [[ -x "$CLI_BINARY" ]]; then
+    echo "$CLI_BINARY"
+  elif [[ -x "${HOME}/.local/bin/c93" ]]; then
+    echo "${HOME}/.local/bin/c93"
+  else
+    command -v c93
   fi
 }
 
@@ -184,6 +236,33 @@ load_env_file() {
   LOG_FILE="${LOG_DIR}/server.log"
 }
 
+# The dev profile is a throwaway stack: constants, not an env file. TENANT, ADMIN_TOKEN and the ports
+# can still be overridden from the environment.
+load_dev() {
+  NODE_ID="${NODE_ID:-$DEFAULT_NODE_ID}"
+  ROLES="${ROLES:-$DEFAULT_ROLES}"
+  DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"
+  LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
+  HTTP_PORT="${HTTP_PORT:-$DEFAULT_HTTP_PORT}"
+  INGRESS_PORT="${INGRESS_PORT:-$DEFAULT_INGRESS_PORT}"
+  METRICS_PORT="${METRICS_PORT:-$DEFAULT_METRICS_PORT}"
+  WORKER_MODE="${WORKER_MODE:-$DEFAULT_WORKER_MODE}"
+  WORKER_ENGINE="${WORKER_ENGINE:-$DEFAULT_WORKER_ENGINE}"
+  ADMIN_TOKEN="${ADMIN_TOKEN:-$DEV_ADMIN_TOKEN}"
+  TENANT="${TENANT:-$DEFAULT_TENANT}"
+  URL="http://localhost:${HTTP_PORT}"
+  LOG_FILE="${LOG_DIR}/server.log"
+}
+
+# Fills the state every command reads, from whichever source this profile uses.
+profile_state() {
+  if [[ "$PROFILE" == "dev" ]]; then
+    load_dev
+  else
+    load_env_file
+  fi
+}
+
 write_env_file() {
   mkdir -p "$C93_HOME"
   umask 077
@@ -244,7 +323,7 @@ ensure_build() {
   if [[ ! -x "$CLI_BINARY" ]]; then
     echo "== building the native c93 CLI" >&2
     if ! "$REPO_ROOT/scripts/build-cli.sh"; then
-      echo "   (native CLI build skipped; 'c93 local' works from the jar too)" >&2
+      echo "   (native CLI build skipped; 'c93 node' works from the jar too)" >&2
     fi
   fi
   if [[ ! -x "$JAVET_WORKER" || ! -x "$GRAALJS_WORKER" ]]; then
@@ -257,6 +336,24 @@ ensure_build() {
     echo "Error: $SERVER_JAR was not produced" >&2
     exit 1
   fi
+}
+
+# The dev profile's `build`: build the server jar and CLI unconditionally (they change often), and
+# the workers only when missing (they are slow to build).
+cmd_build() {
+  echo "== building server/target/c93.jar" >&2
+  "$REPO_ROOT/mvnw" -q package -pl server -am -DskipTests
+  if [[ ! -f "$SERVER_JAR" ]]; then
+    echo "Error: $SERVER_JAR was not produced" >&2
+    exit 1
+  fi
+  echo "== building the native c93 CLI" >&2
+  "$REPO_ROOT/scripts/build-cli.sh"
+  if [[ ! -x "$JAVET_WORKER" || ! -x "$GRAALJS_WORKER" ]]; then
+    echo "== one or both worker binaries are missing; building them" >&2
+    "$REPO_ROOT/scripts/build-workers.sh" all
+  fi
+  echo "== build complete" >&2
 }
 
 # --------------------------------------------------------------------------
@@ -351,9 +448,29 @@ PY
 # start
 # --------------------------------------------------------------------------
 cmd_start() {
-  load_env_file
+  local data_dir=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --data-dir)
+        if [[ -z "${2:-}" ]]; then
+          echo "Error: --data-dir needs a path" >&2
+          exit 2
+        fi
+        data_dir="$2"
+        shift 2
+        ;;
+      *)
+        echo "Error: unknown argument '$1'" >&2
+        exit 2
+        ;;
+    esac
+  done
+  profile_state
+  if [[ -n "$data_dir" ]]; then
+    DATA_DIR="$data_dir"
+  fi
   if [[ ! -f "$SERVER_JAR" ]]; then
-    echo "Error: $SERVER_JAR is missing. Run: scripts/local.sh setup" >&2
+    echo "Error: $SERVER_JAR is missing. Run: scripts/local.sh $PROFILE build" >&2
     exit 1
   fi
   if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -362,7 +479,7 @@ cmd_start() {
   fi
 
   mkdir -p "$C93_HOME" "$DATA_DIR" "$LOG_DIR"
-  echo "== starting the local master node (data: $DATA_DIR)" >&2
+  echo "== starting the $PROFILE node (data: $DATA_DIR)" >&2
   setsid env \
     JDK_JAVA_OPTIONS="$IGNITE_JVM_ARGS" \
     C93_NODE_ID="$NODE_ID" \
@@ -472,24 +589,29 @@ redeem_token() {
   printf '%s' "$token"
 }
 
-# Provisions the default 'admin' operator: an operator invite minted with the admin token, redeemed as 'admin'
-# with a console password. Prints the operator personal token; reuses the saved one if 'admin' already exists.
+# Provisions the default 'admin' operator: an operator invite minted with the admin token, redeemed as 'admin'.
+# Prints the operator personal token; reuses the saved one if 'admin' already exists. `$1` is the invite note and
+# `$2` an optional console password (empty leaves the account without one, as the dev profile does).
 provision_admin() {
+  local note="$1" admin_password="$2"
   echo "== provisioning the 'admin' operator" >&2
-  local invited code redeemed token admin_password body
+  local invited code redeemed token body
   invited=$(curl -sS -m 10 -X POST "${URL}/v1/admin/invites" \
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d '{"note":"local master operator"}')
+    -d "{\"note\":$(json_escape "$note")}")
   code=$(json_string "$invited" code)
   if [[ -z "$code" ]]; then
     echo "   (no operator invite: ${invited})" >&2
     saved_operator_token
     return 0
   fi
-  admin_password=$(ask_password "Admin password for console")
-  body=$(printf '{"code":%s,"name":"admin","tokenName":"operator","password":%s}' \
-    "$(json_escape "$code")" "$(json_escape "$admin_password")")
+  if [[ -n "$admin_password" ]]; then
+    body=$(printf '{"code":%s,"name":"admin","tokenName":"operator","password":%s}' \
+      "$(json_escape "$code")" "$(json_escape "$admin_password")")
+  else
+    body=$(printf '{"code":%s,"name":"admin","tokenName":"operator"}' "$(json_escape "$code")")
+  fi
   redeemed=$(curl -sS -m 10 -X POST "${URL}/v1/invites/redeem" \
     -H "Content-Type: application/json" \
     -d "$body")
@@ -521,10 +643,10 @@ print_setup_banner() {
   cat >&2 <<BANNER
 
 ================================================================
-  Cluster93 local master is ready
+  ${BANNER_TITLE}
 ================================================================
   Web Console URL: http://localhost:${INGRESS_PORT}
-  API URL:         http://localhost:${HTTP_PORT}
+  API URL:         ${URL}
   Operator User:   admin
   Token:           ${token}
 ================================================================
@@ -582,13 +704,18 @@ ensure_console() {
 }
 
 cmd_seed() {
-  load_env_file
+  profile_state
 
   ensure_console
 
   # The CLI's default identity is the operator personal token; it is what the console and MCP also use.
-  local operator_token
-  operator_token=$(provision_admin)
+  # The master's operator gets a console password; the dev stack's stays password-less.
+  local operator_token password="" note="dev operator"
+  if [[ "$PROFILE" != "dev" ]]; then
+    note="local master operator"
+    password=$(ask_password "Admin password for console")
+  fi
+  operator_token=$(provision_admin "$note" "$password")
   if [[ -z "$operator_token" ]]; then
     echo "Error: couldn't provision the 'admin' operator (is the admin token right?)" >&2
     exit 1
@@ -605,7 +732,8 @@ cmd_seed() {
   cat >"$CONFIG_FILE" <<JSON
 {
   "url": "${URL}",
-  "token": "${operator_token}"
+  "token": "${operator_token}",
+  "tenant": "${TENANT}"
 }
 JSON
   chmod 600 "$CONFIG_FILE"
@@ -664,6 +792,16 @@ update_notice() {
 }
 
 cmd_status() {
+  if [[ "$PROFILE" == "dev" ]]; then
+    load_dev
+    echo "-- health ($URL/health)"
+    curl -sS -m 5 "${URL}/health" || echo "(unreachable)"
+    echo
+    echo "-- nodes ($URL/v1/nodes)"
+    curl -sS -m 5 -H "Authorization: Bearer ${ADMIN_TOKEN}" "${URL}/v1/nodes" || echo "(unreachable)"
+    echo
+    return 0
+  fi
   if [[ ! -f "$ENV_FILE" ]]; then
     echo "No local master node is set up."
     echo "Run: scripts/local.sh setup"
@@ -712,7 +850,7 @@ cmd_status() {
 # logs
 # --------------------------------------------------------------------------
 cmd_logs() {
-  load_env_file
+  profile_state
   local lines=50 follow=false
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -738,11 +876,11 @@ cmd_logs() {
 # mcp
 # --------------------------------------------------------------------------
 cmd_mcp() {
-  if [[ -f "$MCP_FILE" ]]; then
+  if [[ "$PROFILE" != "dev" && -f "$MCP_FILE" ]]; then
     cat "$MCP_FILE"
     return 0
   fi
-  load_env_file
+  profile_state
   local token="" url="$URL"
   local saved
   saved=$(saved_url_and_token || true)
@@ -808,23 +946,66 @@ cmd_update() {
 }
 
 # --------------------------------------------------------------------------
-# dispatch
+# test-examples (dev)
 # --------------------------------------------------------------------------
-case "${1:-}" in
-  setup) shift; cmd_setup "$@" ;;
-  start) cmd_start ;;
-  run) cmd_run ;;
-  seed) cmd_seed ;;
-  stop) cmd_stop ;;
-  restart) cmd_stop; cmd_start ;;
-  status) cmd_status ;;
-  logs) shift; cmd_logs "$@" ;;
-  mcp) cmd_mcp ;;
-  update) cmd_update ;;
-  -h|--help|help|"") usage ;;
-  *)
-    echo "Error: unknown command '$1'" >&2
-    usage >&2
-    exit 2
+cmd_test_examples() {
+  local cli
+  cli=$(cli_bin)
+  if [[ -z "$cli" ]]; then
+    echo "Error: no c93 CLI found. Run: scripts/local.sh dev build" >&2
+    exit 1
+  fi
+  local example
+  for example in 01-hello-job 02-resilient-steps 03-kv-storage 04-event-bus 05-durable-queues 06-vfs-files; do
+    echo "== running examples/${example}.js" >&2
+    "$cli" run "examples/${example}.js"
+    echo "== ${example}: OK" >&2
+  done
+  echo "== all examples passed" >&2
+}
+
+# --------------------------------------------------------------------------
+# dispatch: `scripts/local.sh [master|dev] <verb>` (a bare verb means master)
+# --------------------------------------------------------------------------
+verb="${1:-}"
+case "$PROFILE" in
+  master)
+    case "$verb" in
+      setup) shift; cmd_setup "$@" ;;
+      start) shift; cmd_start "$@" ;;
+      run) cmd_run ;;
+      seed) cmd_seed ;;
+      stop) cmd_stop ;;
+      restart) cmd_stop; cmd_start ;;
+      status) cmd_status ;;
+      logs) shift; cmd_logs "$@" ;;
+      mcp) cmd_mcp ;;
+      update) cmd_update ;;
+      -h|--help|help|"") usage ;;
+      *)
+        echo "Error: unknown command '$verb' for the master profile" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  dev)
+    case "$verb" in
+      build) cmd_build ;;
+      start) shift; cmd_start "$@" ;;
+      seed) cmd_seed; cmd_mcp ;;
+      stop) cmd_stop ;;
+      restart) cmd_stop; cmd_start ;;
+      status) cmd_status ;;
+      logs) shift; cmd_logs "$@" ;;
+      mcp) cmd_mcp ;;
+      test-examples) cmd_test_examples ;;
+      -h|--help|help|"") usage ;;
+      *)
+        echo "Error: unknown command '$verb' for the dev profile" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
     ;;
 esac

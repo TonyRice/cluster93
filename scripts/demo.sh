@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 
 PROJECT=cluster93-demo
 ORDERS=${ORDERS:-120}
-compose() { docker compose -p "$PROJECT" -f docker-compose.yml -f scripts/compose-demo.yml --profile observability "$@"; }
+compose() { docker compose -p "$PROJECT" -f docker-compose.yml --profile observability "$@"; }
 
 if [[ "${1:-}" == "down" ]]; then
     compose down -v
@@ -40,13 +40,13 @@ ok "built ($(elapsed))"
 step "Starting three nodes, Prometheus and Grafana"
 export C93_ADMIN_TOKEN="demo-admin-$(date +%s)-0123456789abcdef0123456789"
 compose up -d >/dev/null 2>&1
-for port in 8081 8082 8083; do
+for port in 9401 9402 9403; do
     for _ in $(seq 120); do curl -sf "localhost:$port/ready" >/dev/null && break; sleep 1; done
 done
-ok "cluster ready ($(elapsed)): $(curl -sf -H "Authorization: Bearer $C93_ADMIN_TOKEN" localhost:8081/v1/nodes | json "', '.join(n['id'] for n in d['nodes'])")"
+ok "cluster ready ($(elapsed)): $(curl -sf -H "Authorization: Bearer $C93_ADMIN_TOKEN" localhost:9401/v1/nodes | json "', '.join(n['id'] for n in d['nodes'])")"
 
 step "An operator creates a tenant and gives the agent a token"
-API=http://localhost:8081
+API=http://localhost:9401
 admin="Authorization: Bearer $C93_ADMIN_TOKEN"
 curl -sf -X POST "$API/v1/tenants" -H "$admin" -d '{"name":"demo"}' >/dev/null
 TOKEN=$(curl -sf -X POST "$API/v1/tenants/demo/tokens" -H "$admin" -d '{"name":"agent","scopes":["*"]}' | json "d['token']")
@@ -101,7 +101,7 @@ service_node() {
     [[ -n "$job" ]] && curl -sf "$API/v1/jobs/$job" -H "Authorization: Bearer $TOKEN" | json "d.get('node') or ''" || true
 }
 ingress() {
-    for port in 8001 8002 8003; do
+    for port in 9411 9412 9413; do
         curl -sf -m 2 -H 'Host: orders--demo.localhost' "localhost:$port/" 2>/dev/null && return 0
     done
     echo '{"node":"(no answer)","handled":null}'
@@ -127,7 +127,7 @@ step "Chaos: SIGKILL the node running the service ($NODE)"
 compose kill -s SIGKILL "$NODE" >/dev/null 2>&1
 killed_at=$(date +%s)
 printf '   %s✘ %s killed%s\n' "$red" "$NODE" "$reset"
-case "$NODE" in node1) API=http://localhost:8082 ;; *) API=http://localhost:8081 ;; esac
+case "$NODE" in node1) API=http://localhost:9402 ;; *) API=http://localhost:9401 ;; esac
 say "the API and the ingress keep answering on the other nodes ($API)"
 
 step "Recovery"

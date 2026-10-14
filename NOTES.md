@@ -129,13 +129,13 @@ The CLI's cluster-facing surface is fragmented across three commands that overla
 - `c93 local` — the local master node; a deprecated alias of `c93 node` as of D-134, kept for one release.
 - `c93 node` — install/run/manage a node, plus the operator's `invite`/`revoke`.
 
-Standing up a cluster means knowing which of the three to reach for, and the *ways to get a node* are spread across the CLI (systemd/launchd/direct, `c93 node install`), the shell orchestrators (`scripts/local.sh`, `scripts/dev.sh`), and Docker (`docker-compose.yml`, `scripts/demo.sh`) with no shared story.
+Standing up a cluster means knowing which of the three to reach for, and the *ways to get a node* are spread across the CLI (systemd/launchd/direct, `c93 node install`), the shell orchestrator (`scripts/local.sh`), and Docker (`docker-compose.yml`, `scripts/demo.sh`) with no shared story.
 
 ### The idea
 One unified **`c93 cluster …`** pathway for standing up and managing Cluster93, with explicit, first-class routes:
 
 - **Master node** — the permanent node a machine (or a checkout) owns. Today: `c93 node install` / `scripts/local.sh setup`.
-- **Dev node** — a throwaway local stack for development. Today: `scripts/dev.sh` (W1 folds it into `scripts/local.sh <profile>`).
+- **Dev node** — a throwaway local stack for development. Today: `scripts/local.sh dev` (W1 folded `dev.sh` into the profile-aware orchestrator).
 - **Docker node** — run a node as a container, driven from the CLI rather than hand-edited Compose. Today: `docker-compose.yml` + `scripts/demo.sh` only.
 - **Cluster** — the multi-node story: `cluster init` (CA + one-line joins), then each node joins; `invite`/`revoke` belong to the same group instead of a separate `node` group.
 
