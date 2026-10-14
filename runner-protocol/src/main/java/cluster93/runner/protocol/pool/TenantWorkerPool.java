@@ -73,6 +73,12 @@ public class TenantWorkerPool {
     private final Map<String, Deque<PendingAcquire>> pendingByTenant = new LinkedHashMap<>();
     /** How many workers each tenant is currently running, for reporting how the pool is shared out. */
     private final Map<String, Integer> activeByTenant = new HashMap<>();
+    /**
+     * Jobs in flight per worker. Owned by the pool, not the handle: the handle's own count is decremented when its
+     * run future completes, which races {@link #release}, so it cannot answer "does this worker still have work".
+     * A worker leaves {@link #activeWorkers} when this reaches zero, and not before (D-155).
+     */
+    private final Map<Long, Integer> jobsInFlight = new HashMap<>();
     private final AtomicInteger totalWorkers = new AtomicInteger(0);
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -156,7 +162,7 @@ public class TenantWorkerPool {
                 WorkerProcessHandle worker = list.remove(list.size() - 1);
                 if (worker.isAlive()) {
                     activeWorkers.put(worker.pid(), worker);
-                    countActive(tenantId, 1);
+                    workerBecameActive(worker.pid(), tenantId);
                     return Future.succeededFuture(worker);
                 } else {
                     recycleWorker(worker);
@@ -169,7 +175,7 @@ public class TenantWorkerPool {
             WorkerProcessHandle warm = warmUnboundQueue.poll();
             if (warm.isAlive()) {
                 activeWorkers.put(warm.pid(), warm);
-                countActive(tenantId, 1);
+                workerBecameActive(warm.pid(), tenantId);
                 ensureWarmPool();
                 return warm.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
                         .map(v -> warm)
@@ -187,7 +193,7 @@ public class TenantWorkerPool {
                     WorkerProcessHandle spawned = ar.result();
                     synchronized (TenantWorkerPool.this) {
                         activeWorkers.put(spawned.pid(), spawned);
-                        countActive(tenantId, 1);
+                        workerBecameActive(spawned.pid(), tenantId);
                     }
                     spawned.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
                             .onSuccess(v -> promise.complete(spawned))
@@ -212,14 +218,27 @@ public class TenantWorkerPool {
     }
 
     /**
-     * Releases a worker back to the supervisor upon job completion.
+     * Releases a worker after one of its jobs finishes.
+     *
+     * <p>A worker holds several jobs at once (D-155), so a job finishing is not the worker finishing: while it has
+     * others, it stays active and its tenant still counts it, and nothing is freed for the arbiter to hand out.
      */
     public synchronized void release(WorkerProcessHandle worker, boolean errorOrOom) {
+        boolean unhealthy = errorOrOom || !worker.isAlive() || cgroupLimiter.checkOomKilled(worker.pid());
+        if (unhealthy) {
+            // A poisoned worker goes even with jobs still on it: they are already lost.
+            jobsInFlight.remove(worker.pid());
+        } else {
+            int remaining = jobsInFlight.merge(worker.pid(), -1, Integer::sum);
+            if (remaining > 0) {
+                return;
+            }
+            jobsInFlight.remove(worker.pid());
+        }
         activeWorkers.remove(worker.pid());
         countActive(worker.boundTenantId(), -1);
 
-        boolean oomKilled = cgroupLimiter.checkOomKilled(worker.pid());
-        if (errorOrOom || oomKilled || !worker.isAlive() || reusePolicy == ReusePolicy.FRESH_PER_JOB) {
+        if (unhealthy || reusePolicy == ReusePolicy.FRESH_PER_JOB) {
             recycleWorker(worker);
         } else {
             // Keep warm for same tenant
@@ -259,6 +278,13 @@ public class TenantWorkerPool {
         });
     }
 
+
+    /** Records a job starting on a worker, counting the worker itself once however many jobs it holds (D-155). */
+    private void workerBecameActive(long pid, String tenantId) {
+        if (jobsInFlight.merge(pid, 1, Integer::sum) == 1) {
+            countActive(tenantId, 1);
+        }
+    }
 
     /** Tracks how many workers a tenant is running, for reporting how the pool is shared out. */
     private void countActive(String tenantId, int delta) {
@@ -495,6 +521,7 @@ public class TenantWorkerPool {
                 recycleWorker(active);
             }
             activeWorkers.clear();
+            jobsInFlight.clear();
 
             for (Deque<PendingAcquire> queue : pendingByTenant.values()) {
                 for (PendingAcquire pending : queue) {
