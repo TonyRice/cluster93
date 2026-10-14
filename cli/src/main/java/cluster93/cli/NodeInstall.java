@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.zip.GZIPInputStream;
 
 /**
@@ -61,7 +62,7 @@ final class NodeInstall {
 
     /** Where an installed node's pieces live: resolved from the platform and the flags. */
     record Layout(boolean system, Path programDir, Path envFile, Path dataDir, Path logDir, Path unitFile,
-                  Kind unitKind, String owner, Path composeFile, Path tlsDir) {
+                  Kind unitKind, String owner) {
 
         /** What kind of unit (if any) this layout was installed with. */
         enum Kind { SYSTEMD_SYSTEM, SYSTEMD_USER, LAUNCHD, NONE, CONTAINER }
@@ -69,6 +70,19 @@ final class NodeInstall {
         /** Whether this node runs as a container rather than as a service unit or a bare process. */
         boolean container() {
             return unitKind == Kind.CONTAINER;
+        }
+
+        /**
+         * A container node's compose file, beside {@code node.env}; null for every other kind. Derived rather than
+         * stored, so a new layout factory cannot forget to fill it in.
+         */
+        Path composeFile() {
+            return container() ? envFile.getParent().resolve("compose.yaml") : null;
+        }
+
+        /** A container node's certificates, beside {@code node.env}; null for every other kind. */
+        Path tlsDir() {
+            return container() ? envFile.getParent().resolve("tls") : null;
         }
     }
 
@@ -104,12 +118,12 @@ final class NodeInstall {
     static Layout systemLayout() {
         return new Layout(true, Path.of("/opt/cluster93"), Path.of("/etc/cluster93/node.env"),
                 Path.of("/var/lib/cluster93"), null, Path.of("/etc/systemd/system/cluster93.service"),
-                Layout.Kind.SYSTEMD_SYSTEM, "cluster93", null, null);
+                Layout.Kind.SYSTEMD_SYSTEM, "cluster93");
     }
 
     /**
      * A container node's layout (D-141). There is no program directory on the host — the program lives in the image —
-     * so {@code programDir} is the configuration root, and the compose file and TLS directory sit beside it.
+     * so {@code programDir} is the configuration root; the compose file and TLS directory derive from it.
      */
     static Layout containerLayout(Io io, boolean system, Path dir) {
         Path configDir = system ? Path.of("/etc/cluster93") : io.configDir();
@@ -117,8 +131,7 @@ final class NodeInstall {
                 : system ? Path.of("/var/lib/cluster93") : dataHome(io).resolve("cluster93").resolve("data");
         return new Layout(system, configDir, configDir.resolve("node.env"), dataDir,
                 dataDir.resolve("logs"), null, Layout.Kind.CONTAINER,
-                system ? SYSTEM_USER : System.getProperty("user.name", ""),
-                configDir.resolve("compose.yaml"), configDir.resolve("tls"));
+                system ? SYSTEM_USER : System.getProperty("user.name", ""));
     }
 
     /**
@@ -143,22 +156,51 @@ final class NodeInstall {
             unitFile = configHome.resolve("systemd").resolve("user").resolve("cluster93.service");
             kind = Layout.Kind.SYSTEMD_USER;
         }
-        return new Layout(false, programDir, envFile, dataDir, logDir, unitFile, kind, System.getProperty("user.name", ""), null, null);
+        return new Layout(false, programDir, envFile, dataDir, logDir, unitFile, kind, System.getProperty("user.name", ""));
     }
 
     /** The layout of the node that is installed, system when its config exists, else the user's. */
     static Layout installedLayout(Io io) {
         if (Files.isRegularFile(systemLayout().envFile())) {
-            return systemLayout();
+            Map<String, String> meta = NodeCommand.loadKeyValues(metaFile(systemLayout()));
+            return "container".equals(meta.get("kind")) ? containerLayout(io, true, dataDirOf(meta)) : systemLayout();
         }
         Layout user = userLayout(io, null);
         // `--dir` isn't derivable from the config path, so `install` records where it put the node; read it back.
         Map<String, String> meta = NodeCommand.loadKeyValues(metaFile(user));
+        // A container install is rebuilt from its kind and host data dir, so the verbs find the compose file (D-141).
+        if ("container".equals(meta.get("kind"))) {
+            return containerLayout(io, false, dataDirOf(meta));
+        }
         String programDir = meta.get("program_dir");
         if (programDir != null && !programDir.isBlank()) {
             return userLayout(io, Path.of(programDir));
         }
         return user;
+    }
+
+    /** The host data dir a container install recorded, so its layout round-trips. */
+    private static Path dataDirOf(Map<String, String> meta) {
+        String dir = meta.get("host_data_dir");
+        return dir == null || dir.isBlank() ? null : Path.of(dir);
+    }
+
+    /**
+     * Refuses a container install that would fight a process install over the same host ports (D-146, extending
+     * D-140 to the third kind).
+     */
+    static void refuseContainerIfAlsoInstalled(Path userEnv, Path systemEnv, boolean force) {
+        if (force) {
+            return;
+        }
+        // An array rather than List.of: either path may legitimately be absent, and List.of rejects nulls.
+        for (Path other : new Path[]{userEnv, systemEnv}) {
+            if (other != null && Files.isRegularFile(other)) {
+                throw new CliException("A node is already installed (" + other + "), and both would use the same "
+                        + "ports. Uninstall it first (c93 node uninstall), or pass --force to install both "
+                        + "deliberately (give them different ports).");
+            }
+        }
     }
 
     /**
@@ -293,6 +335,11 @@ final class NodeInstall {
     /** Removes a node's program files and unit; {@code purge} also removes its data. */
     static void uninstall(Io io, boolean system, boolean purge, Path dir) {
         Layout layout = system ? systemLayout() : userLayout(io, dir);
+        // A container install is rebuilt from node.meta, so its compose file and certificates are found (D-141).
+        Layout installed = installedLayout(io);
+        if (installed.container()) {
+            layout = installed;
+        }
         if (NodeService.isInstalled(io, layout) && NodeService.running(io, NodeService.target(io, layout))) {
             // Stop only a node that is actually up: stopping an unloaded unit is noise, not a failure.
             NodeService.stop(io, NodeService.target(io, layout), false);
@@ -307,6 +354,18 @@ final class NodeInstall {
             // not empty (data lives here on a default install)
         }
         delete(layout.unitFile());
+        if (layout.container()) {
+            delete(layout.composeFile());
+            deleteTree(layout.tlsDir());
+            Path caDir = layout.envFile().getParent().resolve("ca");
+            // ca.key signs every node in this cluster: --purge removes it, but never silently (S5).
+            if (purge) {
+                deleteTree(caDir);
+            } else if (Files.isRegularFile(caDir.resolve("ca.key"))) {
+                io.out().println("Kept " + caDir.resolve("ca.key") + " — it signs this cluster's nodes. Remove it "
+                        + "yourself once no node needs it, or re-run with --purge.");
+            }
+        }
         delete(layout.envFile());
         delete(metaFile(layout));
         if (purge) {
@@ -456,6 +515,156 @@ final class NodeInstall {
         Path file = metaFile(layout);
         Files.writeString(file, Files.readString(file) + extra);
         restrict(file);
+    }
+
+    /** How a container node's engine is running: its name, whether the daemon is rootless, and its CLI path. */
+    record Engine(String name, boolean rootless, String cli) {
+    }
+
+    /**
+     * Detects the container engine and whether it runs rootless. The engine's CLI must be on the PATH and its daemon
+     * must answer, because rootless-ness is what decides whether the node may spawn worker containers at all
+     * (D-145, D-152) — so this is load-bearing, not incidental.
+     */
+    static Engine detectEngine(Io io, String requested) {
+        List<String> candidates = requested != null && !requested.isBlank()
+                ? List.of(requested.trim())
+                : List.of("docker", "podman");
+        List<String> tried = new ArrayList<>();
+        for (String name : candidates) {
+            String cli = NodeService.executable(io, name);
+            if (cli == null) {
+                tried.add(name + ": not on the PATH");
+                continue;
+            }
+            boolean podman = "podman".equals(name);
+            // Ask the daemon rather than guessing from the socket path: a rootful daemon's socket can be chowned to a
+            // user and is still root-equivalent (S6).
+            Optional<String> info = podman
+                    ? NodeService.capture(io, cli, "info", "--format", "{{.Host.Security.Rootless}}")
+                    : NodeService.capture(io, cli, "info", "--format", "{{.SecurityOptions}}");
+            if (info.isEmpty()) {
+                tried.add(name + ": installed, but its daemon didn't answer");
+                continue;
+            }
+            boolean rootless = podman
+                    ? info.get().strip().toLowerCase(Locale.ROOT).startsWith("true")
+                    : info.get().contains("rootless");
+            return new Engine(name, rootless, cli);
+        }
+        throw new CliException("No usable container engine (tried " + String.join("; ", tried)
+                + "). Install one, or pass --engine");
+    }
+
+    /** Copies a cluster's certificates into a container install's TLS dir, which compose mounts read-only. */
+    static void copyCertificates(Path from, Path to) throws IOException {
+        for (String name : List.of("node.crt", "node.key", "ca.crt")) {
+            Path source = from.resolve(name);
+            if (!Files.isRegularFile(source)) {
+                throw new CliException("No " + name + " in " + from + "; a node needs node.crt, node.key and ca.crt");
+            }
+            Files.copy(source, to.resolve(name), StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /**
+     * Generates a size-1 cluster's certificates with {@code cluster93.tls.ClusterInit}. Only {@code node.crt},
+     * {@code node.key} and {@code ca.crt} stay in the node's TLS dir — {@code ca.key} is the cluster's signing key
+     * and must not sit on the node (S5).
+     *
+     * @return the directory holding {@code ca.key}, for the operator to keep
+     */
+    static Path generateCertificates(Io io, Layout layout, String nodeId, Path jar) throws IOException {
+        Path caHome = layout.envFile().getParent().resolve("ca");
+        Files.createDirectories(caHome);
+        Files.createDirectories(layout.tlsDir());
+        List<String> command = new ArrayList<>();
+        command.add(NodeCommand.javaBinary(io));
+        command.add("-cp");
+        command.add(jar.toString());
+        command.add("cluster93.tls.ClusterInit");
+        command.add(caHome.toString());
+        command.add(nodeId);
+        if (NodeService.capture(io, command.toArray(String[]::new)).isEmpty()) {
+            throw new CliException("Couldn't generate the node's certificates; pass --tls-dir to use an existing cluster's");
+        }
+        copyCertificates(caHome.resolve(nodeId), layout.tlsDir());
+        return caHome;
+    }
+
+    /** The checkout's server jar, when this is a source install; null otherwise. */
+    static Path checkoutJar() {
+        Path jar = Path.of("server", "target", SERVER_JAR).toAbsolutePath();
+        return Files.isRegularFile(jar) ? jar : null;
+    }
+
+    /**
+     * Installs a node as a container (D-141): node.env, the compose file, certificates and node.meta. The image is
+     * {@code --image}, or {@code --version} assembled from the release, or the checkout's {@code node} stage.
+     */
+    static ObjectNode installContainer(Io io, boolean system, Path dir, String requestedEngine, String image,
+                                       String version, Path tlsDir, String bindAddress, boolean publishCluster,
+                                       boolean force, boolean quiet) throws IOException, InterruptedException {
+        if (system && !NodeService.isRoot()) {
+            throw new CliException("A --system install must run as root (try: sudo c93 node install --docker --system)", 2);
+        }
+        Layout layout = containerLayout(io, system, dir);
+        if (Files.exists(layout.envFile()) && !force) {
+            throw new CliException("A node is already installed (" + layout.envFile() + "); use --force to replace it");
+        }
+        // A container node and a process node default to the same host ports, so one has to go (D-146).
+        refuseContainerIfAlsoInstalled(userLayout(io, null).envFile(), systemLayout().envFile(), force);
+
+        Engine engine = detectEngine(io, requestedEngine);
+        String nodeId = defaultNodeId();
+        String version0 = version == null || version.isBlank() ? "local" : version;
+        String imageRef = image != null && !image.isBlank() ? image.trim() : "cluster93-node:" + version0 + "-local";
+
+        Files.createDirectories(layout.envFile().getParent());
+        Files.createDirectories(layout.dataDir());
+        if (layout.logDir() != null) {
+            Files.createDirectories(layout.logDir());
+        }
+        Map<String, String> config = containerConfig(nodeId);
+        writeEnv(layout, config);
+
+        Path caHome = null;
+        if (tlsDir != null) {
+            Files.createDirectories(layout.tlsDir());
+            copyCertificates(tlsDir, layout.tlsDir());
+        } else {
+            Path jar = checkoutJar();
+            if (jar == null) {
+                throw new CliException("Generating certificates needs the server jar; build it, or pass --tls-dir "
+                        + "with an existing cluster's node.crt, node.key and ca.crt");
+            }
+            caHome = generateCertificates(io, layout, nodeId, jar);
+        }
+
+        Files.writeString(layout.composeFile(),
+                renderCompose(layout, config, engine.name(), imageRef, bindAddress, publishCluster));
+        writeContainerMeta(layout, engine.name(), engine.rootless(), imageRef, version0, nodeId);
+        if (system) {
+            provisionSystemUser(io, layout);
+        }
+
+        if (!quiet) {
+            io.out().println("Installed a " + engine.name() + " node (" + (engine.rootless() ? "rootless" : "rootful") + ")");
+            io.out().println("Wrote " + layout.envFile() + " and " + layout.composeFile());
+            if (caHome != null) {
+                io.out().println("Keep " + caHome.resolve("ca.key") + " safe: it signs this cluster's nodes, and it is "
+                        + "not mounted into the container.");
+            }
+        }
+        return Json.object()
+                .put("container", true)
+                .put("engine", engine.name())
+                .put("engineRootless", engine.rootless())
+                .put("image", imageRef)
+                .put("envFile", layout.envFile().toString())
+                .put("composeFile", layout.composeFile().toString())
+                .put("dataDir", layout.dataDir().toString())
+                .put("system", system);
     }
 
     /** A safe node id from the host name, so a fresh install is unique without prompting. */

@@ -345,11 +345,56 @@ final class NodeCommand extends Base {
         @Option(names = "--force", description = "Replace an existing install.")
         boolean force;
 
+        @Option(names = "--docker", description = "Install the node as a container: a compose file and an image, instead of a service unit (D-141).")
+        boolean docker;
+
+        @Option(names = "--engine", paramLabel = "NAME", description = "The container engine to use: docker (the default) or podman.")
+        String engine;
+
+        @Option(names = "--image", paramLabel = "IMAGE", description = "The node image to run, instead of one built from the checkout.")
+        String image;
+
+        @Option(names = "--tls-dir", paramLabel = "DIR", description = "Certificates from an existing cluster (node.crt, node.key, ca.crt), instead of generating a size-1 cluster's.")
+        Path tlsDir;
+
+        @Option(names = "--publish-address", paramLabel = "ADDR", description = "The host address published ports bind (default: 0.0.0.0).")
+        String publishAddress = "0.0.0.0";
+
+        @Option(names = "--no-publish-cluster-ports", description = "Keep the cluster ports (5701/5801) off the host network.")
+        boolean noPublishClusterPorts;
+
         @Override
         int execute() throws Exception {
             Io io = io();
+            if (docker) {
+                return container(io);
+            }
             ObjectNode result = NodeInstall.install(io, system, dir, version, force, json());
             NodeInstall.Layout layout = system ? NodeInstall.systemLayout() : NodeInstall.userLayout(io, dir);
+            if (!noStart) {
+                int code = NodeService.start(io, NodeService.target(io, layout), !json());
+                result.put("started", code == 0);
+                if (code != 0) {
+                    err().println("The node was installed but didn't start; see `c93 node logs`.");
+                }
+            } else {
+                result.put("started", false);
+            }
+            if (json()) {
+                Output.json(out(), result);
+                return 0;
+            }
+            out().println(noStart
+                    ? "Start it with: c93 node start"
+                    : "Manage it with: c93 node status | c93 node logs --follow");
+            return 0;
+        }
+
+        /** The container pathway: lay out the compose node, then start it unless {@code --no-start} (D-141). */
+        private int container(Io io) throws Exception {
+            ObjectNode result = NodeInstall.installContainer(io, system, dir, engine, image, version, tlsDir,
+                    publishAddress, !noPublishClusterPorts, force, json());
+            NodeInstall.Layout layout = NodeInstall.containerLayout(io, system, dir);
             if (!noStart) {
                 int code = NodeService.start(io, NodeService.target(io, layout), !json());
                 result.put("started", code == 0);
@@ -633,6 +678,7 @@ final class NodeCommand extends Base {
             case SYSTEMD_SYSTEM -> "systemd (system)";
             case LAUNCHD -> "launchd";
             case DIRECT -> "direct process";
+            case CONTAINER -> "container";
         };
     }
 
@@ -817,6 +863,10 @@ final class NodeCommand extends Base {
         int execute() throws IOException {
             Io io = io();
             boolean installed = NodeInstall.isInstalled(io);
+            // A container node's log is the engine's: `c93 node logs` works the same way everywhere (D-141).
+            if (installed && NodeInstall.installedLayout(io).container()) {
+                return NodeService.logs(io, NodeService.target(io, NodeInstall.installedLayout(io)), lines, follow);
+            }
             Path file = installed ? logFile(io) : logFile(io);
             if (!Files.isRegularFile(file)) {
                 if (installed) {

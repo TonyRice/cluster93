@@ -724,6 +724,102 @@ class NodeCommandTest {
         assertThat(meta).containsEntry("version", "2.0.0-local");
     }
 
+    /** A stand-in container engine: answers `info` with the given security options, and does nothing else. */
+    private Path fakeEngine(String name, String securityOptions) throws IOException {
+        Path bin = Files.createDirectories(work.resolve("bin-" + name + "-" + securityOptions.hashCode()));
+        Path script = bin.resolve(name);
+        Files.writeString(script, "#!/bin/sh\n"
+                + "if [ \"$1\" = \"info\" ]; then echo '" + securityOptions + "'; exit 0; fi\n"
+                + "exit 0\n");
+        script.toFile().setExecutable(true);
+        env.put("PATH", bin.toString());
+        return script;
+    }
+
+    /** A TLS directory with the three files a container node needs. */
+    private Path tlsDir() throws IOException {
+        Path dir = Files.createDirectories(work.resolve("tls"));
+        for (String name : new String[]{"node.crt", "node.key", "ca.crt"}) {
+            Files.writeString(dir.resolve(name), name + "\n");
+        }
+        return dir;
+    }
+
+    @Test
+    void detectEngineRefusesClearlyWhenNoEngineIsOnThePath() throws IOException {
+        Path empty = Files.createDirectories(work.resolve("empty-bin"));
+        env.put("PATH", empty.toString());
+
+        assertThatThrownBy(() -> NodeInstall.detectEngine(io(), null))
+                .isInstanceOf(CliException.class)
+                .hasMessageContaining("docker")
+                .hasMessageContaining("podman")
+                .hasMessageContaining("not on the PATH");
+    }
+
+    @Test
+    void detectEngineAsksTheDaemonWhetherItIsRootless() throws IOException {
+        // A rootful daemon: the socket may still be reachable by the user, but it is root-equivalent (S6).
+        fakeEngine("docker", "[name=apparmor,profile=default name=seccomp,profile=builtin name=cgroupns]");
+        NodeInstall.Engine rootful = NodeInstall.detectEngine(io(), null);
+        assertThat(rootful.name()).isEqualTo("docker");
+        assertThat(rootful.rootless()).isFalse();
+
+        // And a rootless one, which is what --worker-containers requires (D-145).
+        fakeEngine("docker", "[name=rootless name=seccomp,profile=builtin]");
+        assertThat(NodeInstall.detectEngine(io(), null).rootless()).isTrue();
+    }
+
+    @Test
+    void aContainerInstallWritesEnvComposeMetaAndCertificates() throws Exception {
+        fakeEngine("docker", "[name=rootless name=seccomp]");
+
+        NodeInstall.installContainer(io(), false, null, null, "cluster93-node:test", null, tlsDir(),
+                "0.0.0.0", true, false, true);
+
+        NodeInstall.Layout layout = NodeInstall.containerLayout(io(), false, null);
+        assertThat(layout.envFile()).exists();
+        assertThat(layout.composeFile()).exists();
+        assertThat(layout.tlsDir().resolve("node.crt")).exists();
+        assertThat(layout.tlsDir().resolve("node.key")).exists();
+        // ca.key is the cluster's signing key and must never land on the node (S5).
+        assertThat(layout.tlsDir().resolve("ca.key")).doesNotExist();
+        assertThat(layout.composeFile()).content().contains("image: cluster93-node:test");
+
+        Map<String, String> meta = NodeCommand.loadKeyValues(NodeInstall.metaFile(layout));
+        assertThat(meta).containsEntry("engine", "docker");
+        assertThat(meta).containsEntry("engine_rootless", "true");
+        assertThat(meta).containsEntry("image", "cluster93-node:test");
+    }
+
+    @Test
+    void anInstalledContainerNodeIsFoundAgainWithItsComposeFile() throws Exception {
+        fakeEngine("docker", "[name=rootless name=seccomp]");
+        NodeInstall.installContainer(io(), false, null, null, "img", null, tlsDir(), "0.0.0.0", true, false, true);
+
+        // installedLayout must round-trip the container kind, or the lifecycle verbs look for a service unit.
+        NodeInstall.Layout found = NodeInstall.installedLayout(io());
+        assertThat(found.container()).isTrue();
+        assertThat(found.composeFile()).isEqualTo(NodeInstall.containerLayout(io(), false, null).composeFile());
+        assertThat(found.dataDir()).isEqualTo(NodeInstall.containerLayout(io(), false, null).dataDir());
+        assertThat(NodeService.detect(io(), found)).isEqualTo(NodeService.Backend.CONTAINER);
+    }
+
+    @Test
+    void aContainerInstallRefusesAProcessInstallThatWouldShareItsPorts() throws Exception {
+        Path otherEnv = Files.writeString(work.resolve("other-node.env"), "C93_NODE_ID=other\n");
+
+        assertThatThrownBy(() -> NodeInstall.refuseContainerIfAlsoInstalled(otherEnv, null, false))
+                .isInstanceOf(CliException.class)
+                .hasMessageContaining("already installed")
+                .hasMessageContaining("same ports")
+                .hasMessageContaining("--force");
+
+        // --force installs both deliberately; a missing file is not a clash.
+        NodeInstall.refuseContainerIfAlsoInstalled(otherEnv, null, true);
+        NodeInstall.refuseContainerIfAlsoInstalled(work.resolve("missing.env"), null, false);
+    }
+
     @Test
     void aSecondInstallOfTheOtherKindIsRefused(@TempDir Path dir) throws Exception {
         Path otherEnv = Files.writeString(dir.resolve("node.env"), "C93_NODE_ID=other\n");

@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit;
 final class NodeService {
 
     /** How a node is run on this machine. */
-    enum Backend { SYSTEMD_USER, SYSTEMD_SYSTEM, LAUNCHD, DIRECT }
+    enum Backend { SYSTEMD_USER, SYSTEMD_SYSTEM, LAUNCHD, DIRECT, CONTAINER }
 
     /** A node to drive: its backend, layout, and the {@code node.env} it reads. */
     record Target(Backend backend, NodeInstall.Layout layout, Map<String, String> config) {
@@ -41,6 +41,10 @@ final class NodeService {
 
     /** The backend, in preference order: a system unit, a user unit, a LaunchAgent, else the process itself. */
     static Backend detect(Io io, NodeInstall.Layout layout) {
+        // A container node is defined by its compose file, whatever the host's service manager is (D-141).
+        if (layout.container()) {
+            return Backend.CONTAINER;
+        }
         if (layout.unitKind() == NodeInstall.Layout.Kind.LAUNCHD) {
             if (layout.unitFile() != null && Files.isRegularFile(layout.unitFile()) && executable(io, "launchctl") != null) {
                 return Backend.LAUNCHD;
@@ -64,6 +68,7 @@ final class NodeService {
             case SYSTEMD_SYSTEM -> systemctl(io, target, false, "start");
             case LAUNCHD -> launchctl(io, "kickstart", "-k", launchTarget());
             case DIRECT -> directStart(io, target, print);
+            case CONTAINER -> compose(io, target, "up", "-d");
         };
     }
 
@@ -73,6 +78,7 @@ final class NodeService {
             case SYSTEMD_SYSTEM -> systemctl(io, target, false, "stop");
             case LAUNCHD -> launchctl(io, "bootout", "gui/" + uid() + "/" + NodeInstall.LAUNCHD_LABEL);
             case DIRECT -> directStop(io, target, print);
+            case CONTAINER -> compose(io, target, "stop");
         };
     }
 
@@ -85,6 +91,7 @@ final class NodeService {
                 directStop(io, target, false);
                 yield directStart(io, target, true);
             }
+            case CONTAINER -> compose(io, target, "up", "-d", "--force-recreate");
         };
     }
 
@@ -94,6 +101,8 @@ final class NodeService {
             case SYSTEMD_SYSTEM -> run(io, executable(io, "systemctl"), false, "is-active", "--quiet", UNIT) == 0;
             case LAUNCHD -> run(io, executable(io, "launchctl"), true, "print", launchTarget()) == 0;
             case DIRECT -> pidOf(io, target) > 0;
+            // `ps -q` prints a container id only while the service is running, so empty output means down.
+            case CONTAINER -> containerRunning(io, target);
         };
     }
 
@@ -118,6 +127,72 @@ final class NodeService {
     // ----------------------------------------------------------------------
     // backends
     // ----------------------------------------------------------------------
+
+    // ----------------------------------------------------------------------
+    // container backend (D-141)
+    // ----------------------------------------------------------------------
+
+    /** The engine a container node runs under, from {@code node.meta}; docker when it isn't recorded. */
+    static String engine(NodeInstall.Layout layout) {
+        String engine = NodeCommand.loadKeyValues(NodeInstall.metaFile(layout)).get("engine");
+        return engine == null || engine.isBlank() ? "docker" : engine;
+    }
+
+    /** The compose project a container node belongs to, from {@code node.meta}. */
+    static String project(NodeInstall.Layout layout) {
+        String project = NodeCommand.loadKeyValues(NodeInstall.metaFile(layout)).get("project");
+        return project == null || project.isBlank() ? "cluster93" : project;
+    }
+
+    /** The engine's CLI for this layout, refusing clearly when it isn't installed. */
+    private static String engineCli(Io io, NodeInstall.Layout layout) {
+        String engine = engine(layout);
+        String cli = executable(io, engine);
+        if (cli == null) {
+            throw new CliException("`" + engine + "` isn't on the PATH, so this node's container can't be driven here");
+        }
+        return cli;
+    }
+
+    /** Runs {@code <engine> compose -p <project> -f <compose> …} for a container node. */
+    private static int compose(Io io, Target target, String... args) {
+        List<String> command = composeCommand(io, target.layout());
+        command.addAll(List.of(args));
+        return run(io, command.toArray(String[]::new), false);
+    }
+
+    /** The container's log through the engine, so `c93 node logs` works the same way everywhere. */
+    static int logs(Io io, Target target, int tail, boolean follow) {
+        return follow
+                ? compose(io, target, "logs", "--tail", String.valueOf(tail), "--follow")
+                : compose(io, target, "logs", "--tail", String.valueOf(tail));
+    }
+
+    /** The compose command prefix, shared by the verbs and the state check. */
+    private static List<String> composeCommand(Io io, NodeInstall.Layout layout) {
+        List<String> command = new ArrayList<>();
+        command.add(engineCli(io, layout));
+        command.add("compose");
+        command.add("-p");
+        command.add(project(layout));
+        command.add("-f");
+        command.add(layout.composeFile().toString());
+        return command;
+    }
+
+    /** Whether the node's container is up: {@code compose ps -q} prints an id only while it runs. */
+    private static boolean containerRunning(Io io, Target target) {
+        String cli = executable(io, engine(target.layout()));
+        if (cli == null) {
+            return false;
+        }
+        List<String> command = composeCommand(io, target.layout());
+        command.add("ps");
+        command.add("--status");
+        command.add("running");
+        command.add("-q");
+        return capture(io, command.toArray(String[]::new)).map(out -> !out.isBlank()).orElse(false);
+    }
 
     private static int systemctl(Io io, Target target, boolean user, String verb) {
         String systemctl = executable(io, "systemctl");
