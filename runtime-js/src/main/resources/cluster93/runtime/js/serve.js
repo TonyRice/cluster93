@@ -13,7 +13,10 @@ const toResponse = (value) => {
     body = JSON.stringify(body);
     headers['content-type'] ??= 'application/json';
   }
-  return { status: Number(value.status ?? 200), headers, body };
+  // A status that isn't a number in range is a server bug: answer 500 rather than passing it through, which
+  // would leave the exchange unanswered (a guest writing `status: 'ok'` used to hang the request).
+  const status = value.status === undefined || value.status === null ? 200 : Number(value.status);
+  return { status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : 500, headers, body };
 };
 const respond = async (exchangeId, value) => {
   const ref = value?.[FILE] ?? value?.body?.[FILE];

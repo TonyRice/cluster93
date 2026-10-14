@@ -6,6 +6,11 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **`ctx.serve` answers 500 for an invalid status instead of hanging (D-139)**:
+  - `serve.js` mapped a handler's `{status, headers, body}` with `Number(value.status ?? 200)`, so a guest writing `{status: 'ok', …}` produced `NaN` and the exchange never completed — the client waited until it timed out, with nothing logged. A status that isn't an integer in `100..599` now answers **500** with the handler's body and headers still sent; only an absent status defaults to 200.
+  - Found while fixing `examples/js/07-microservice.js`, which had exactly that mistake and had never been caught (the example runner skipped it). Covered by `HostBridgeTest.servedResponsesAreNormalised` (`/bad-status`).
+
+
 - **One benchmark entrypoint: `benchmarks/run.sh [cluster|engines|all]`**:
   - The three-node Docker harness moves to `benchmarks/cluster/` (and follows the new host ports); `benchmarks/engines/` stays self-contained; the new dispatcher runs either or both.
   - The four committed runs under `benchmarks/engines/results/` are untracked and the directory is git-ignored (the canonical numbers live in `docs/benchmarks.md`), and the local `__pycache__/` and `bin/` residue is gone.

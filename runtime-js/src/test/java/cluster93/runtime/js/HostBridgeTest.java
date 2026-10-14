@@ -435,6 +435,7 @@ class HostBridgeTest {
                   if (req.path === '/text') return 'plain';
                   if (req.path === '/json') return { status: 201, headers: { 'X-Test': 'yes' }, body: { echo: await req.json() } };
                   if (req.path === '/empty') return undefined;
+                  if (req.path === '/bad-status') return { status: 'ok', body: 'still answered' };
                   throw new Error('nope');
                 }
                 """, host);
@@ -442,10 +443,12 @@ class HostBridgeTest {
         FakeExchange text = send(host, new FakeExchange("GET", "/text", List.of()));
         FakeExchange json = send(host, new FakeExchange("POST", "/json", List.of("{\"a\"", ":1}")));
         FakeExchange empty = send(host, new FakeExchange("GET", "/empty", List.of()));
+        FakeExchange badStatus = send(host, new FakeExchange("GET", "/bad-status", List.of()));
         FakeExchange broken = send(host, new FakeExchange("GET", "/boom", List.of()));
         text.ended.get(5, TimeUnit.SECONDS);
         json.ended.get(5, TimeUnit.SECONDS);
         empty.ended.get(5, TimeUnit.SECONDS);
+        badStatus.ended.get(5, TimeUnit.SECONDS);
 
         assertThat(text.status).isEqualTo(200);
         assertThat(text.headers.getString("content-type")).isEqualTo("text/plain; charset=utf-8");
@@ -455,6 +458,8 @@ class HostBridgeTest {
         assertThat(json.headers.getString("content-type")).isEqualTo("application/json");
         assertThat(new JsonObject(json.text())).isEqualTo(new JsonObject().put("echo", new JsonObject().put("a", 1)));
         assertThat(empty.status).isEqualTo(204);
+        assertThat(badStatus.status).as("a non-numeric status answers 500 instead of hanging").isEqualTo(500);
+        assertThat(badStatus.text()).isEqualTo("still answered");
         assertThat(broken.ended).failsWithin(Duration.ofSeconds(5)).withThrowableThat().withMessageContaining("500 nope");
         running.stop("done", Duration.ofSeconds(2));
         await(running);

@@ -2735,3 +2735,24 @@ Installing had one path (`c93 node install`), but updating had three names and t
 **Evidence:**
 - `UpdateCommandTest`: `--cli` replaces a jar after the signature/checksum check; neither flag updates both; `--node` leaves the CLI alone; the `c93 node update` alias still works; a tampered jar is refused; `--help` lists `update` but not the hidden `upgrade`.
 - `UpgradeTest` and the rest of the CLI suite unchanged and green; `scripts/release-local.sh --build-only` assembles a bundle with the CLI, the server, the workers and both installers.
+
+### D-139 — A guest's invalid HTTP status answers 500 instead of hanging the request
+**Date:** 2026-10-14 · **Status:** Accepted. Hardens the `ctx.serve` response contract.
+
+**Context:**
+`ctx.serve`'s handler returns a string, or `{status, headers, body}`. `serve.js` mapped that with `Number(value.status ?? 200)`, so a guest writing `{ status: 'ok', … }` — treating `status` as a payload field, as `examples/js/07-microservice.js` did — produced `NaN`. The exchange then never completed: the client waited until it timed out. Nothing failed, nothing was logged; the request simply hung.
+
+**Decision:**
+A status that is not an integer in `100..599` answers **500**, with the handler's body and headers still sent. Only an absent status defaults to 200. A guest's mistake is a server error, and the client gets an answer it can act on.
+
+**Alternatives considered:**
+- **Coerce with `Number(...)` and pass it on.** Rejected: that is the bug — `NaN` reached the host and left the exchange unanswered.
+- **Throw in the isolate.** Rejected: the handler's other work (and its body) would be lost, and the failure would surface as a job error rather than a response the caller can see.
+- **Clamp to the nearest valid status.** Rejected: guessing hides the bug; 500 is the honest answer for a server-side mistake.
+
+**Consequences:**
+- A bad status is a visible 500 with the body, not a hang.
+- The conformance test `HostBridgeTest.servedResponsesAreNormalised` covers it (a `/bad-status` handler asserting 500 and the body).
+
+**Evidence:**
+- `HostBridgeTest.servedResponsesAreNormalised` (runtime-js conformance suite) passes on the V8 engine with the guard, and asserted 500 rather than hanging.
