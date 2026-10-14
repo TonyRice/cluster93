@@ -68,18 +68,21 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-Phases 1–6 are the platform; **Phase 11 (Consolidation & Release Readiness) is the active focus** — see §3.
+Phases 1–6 are the platform; **Phase 11 (Consolidation & Release Readiness) is delivered** — see §3.
 
 ---
 
 ## 3. Active Work & Current Focus
 
-### Phase 11: Consolidation & Release Readiness (ACTIVE)
-Umbrella: one install path, one update surface, one checkout orchestrator, one benchmark entrypoint, prefix-less module directories, and docs that match reality. Tracked as work orders in `.agents/workorders/phase-11-consolidation.md` (W1–W6).
-- **W1 — Checkout tooling consolidation (DONE):** `scripts/dev.sh` folded into `scripts/local.sh` as the `dev` profile (`master` is the default); `scripts/compose-demo.yml` folded into the root `docker-compose.yml`; the `tools/` rename one-offs deleted.
-- **W5 — Module directories drop the `cluster93-` prefix (DONE):** `tls`, `core`, `runtime-js`, `runtime-javet`, `runtime-graaljs`, `runner-protocol`, `worker`, `cluster-ignite`, `server`, `cli`; artifactIds and Java packages unchanged.
-- **Pending:** W2 (`examples/js/` by language), W3 (`c93 update --cli|--node`, multi-arch), W4 (benchmarks entrypoint), W6 (docs/phase-plan consolidation).
-- **Follow-up captured in `NOTES.md`:** one unified `c93 cluster …` pathway (master/dev/Docker node setup and cluster setup).
+### Phase 11: Consolidation & Release Readiness (COMPLETE)
+Umbrella: one install path, one update surface, one checkout orchestrator, one benchmark entrypoint, prefix-less module directories, and docs that match reality. Tracked as work orders in `.agents/workorders/phase-11-consolidation.md` (W1–W6), all delivered.
+- **W1 — Checkout tooling consolidation:** `scripts/dev.sh` folded into `scripts/local.sh` as the `dev` profile (`master` is the default); `scripts/compose-demo.yml` folded into the root `docker-compose.yml`; the `tools/` rename one-offs deleted.
+- **W2 — `examples/js/` by language:** a directory-driven `dev test-examples` that also deploys the service example; `07-microservice.js` fixed (it had a broken response shape, never caught because the runner skipped it).
+- **W3 — One update surface (D-138):** `c93 update [--cli|--node]`; `c93 upgrade` and `c93 node update` are hidden aliases; the release bundle ships the CLI beside the server and `docs/guides/releasing.md` carries the platform matrix.
+- **W4 — One benchmark entrypoint:** `benchmarks/run.sh [cluster|engines|all]`; committed runs untracked and git-ignored.
+- **W5 — Module directories drop the `cluster93-` prefix (D-134):** `tls`, `core`, `runtime-js`, `runtime-javet`, `runtime-graaljs`, `runner-protocol`, `worker`, `cluster-ignite`, `server`, `cli`; artifactIds and Java packages unchanged.
+- **W6 — Docs reconciled:** README/ROADMAP status, the four phase plans archived under `docs/design/history/`, and `DOCUMENTATION.md`'s taxonomy refreshed.
+- **Next focus:** Phase 6's browser session layer (§4). **Follow-up captured in `NOTES.md`:** one unified `c93 cluster …` pathway (master/dev/Docker node setup and cluster setup).
 
 ### Phase 5: Architecture Documentation & Javadoc Aggregation (COMPLETE)
 - **Task 5.1 — Master Documentation (`DOCUMENTATION.md`):**
@@ -145,6 +148,8 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 ---
 
 ## 5. Recent Key Achievements & Bug Fixes
+
+- **Phase 11 — Consolidation & Release Readiness delivered (W1–W6):** one checkout orchestrator (`scripts/local.sh master|dev`, no `dev.sh`), `examples/js/` by language with a runner that also exercises the service example, one update surface (`c93 update [--cli|--node]`, D-138), one benchmark entrypoint (`benchmarks/run.sh cluster|engines|all`), prefix-less module directories (D-134), and docs reconciled with reality — the detail is in §3.
 
 - **Default ports move to the `9393`–`9396` Cluster93 block (D-137):**
   - `C93_HTTP_PORT` 8080 → **9393**, `C93_INGRESS_PORT` 8000 → **9394**, `C93_METRICS_PORT` 9090 → **9395** (Prometheus's own port), `C93_INTERNAL_PORT` 8090 → **9396**, applied at `ServerConfig.fromEnv` and everywhere that mirrors it: the CLI (`NodeCommand`, `NodeInstall.defaultConfig`, `NodeService`), `scripts/local.sh`/`dev.sh`, the Docker image and `docker-compose.yml` (host `940x`/`941x`), the OpenAPI `servers` URL, the Prometheus scrape targets, the Grafana dashboard (and its generator), README, and the guides.
