@@ -8,10 +8,10 @@
 >
 > | Phase | State | Where |
 > |---|---|---|
-> | 1. Spike | ✅ Done | [CHANGELOG](../../CHANGELOG.md) · D-001 to D-006 |
-> | 2. Scheduler port | ✅ Done, narrowed to orphaned jobs, attempts, steps and checkpoints | [phase-2-plan.md](phase-2-plan.md) · [orphaned-jobs.md](orphaned-jobs.md) · D-007, D-009 to D-014 |
-> | 2b. Long-running services | ✅ Done | [services.md](services.md) · D-019 to D-023 |
-> | 3. Sandboxed runtime and host API | ✅ Done | [host-apis.md](host-apis.md) · D-024 to D-029; pooling measured and declined |
+> | 1. Spike | ✅ Done | [CHANGELOG](../../../CHANGELOG.md) · D-001 to D-006 |
+> | 2. Scheduler port | ✅ Done, narrowed to orphaned jobs, attempts, steps and checkpoints | [phase-2-plan.md](phase-2-plan.md) · [orphaned-jobs.md](../orphaned-jobs.md) · D-007, D-009 to D-014 |
+> | 2b. Long-running services | ✅ Done | [services.md](../services.md) · D-019 to D-023 |
+> | 3. Sandboxed runtime and host API | ✅ Done | [host-apis.md](../host-apis.md) · D-024 to D-029; pooling measured and declined |
 > | 4. API, auth, CLI and MCP | Planned | |
 > | 5. Observability and polish | Planned | |
 >
@@ -21,7 +21,7 @@
 > - Decided: the KV backend starts on the cluster map and the build uses the Maven wrapper.
 > - Moved: the heap limit came forward from phase 3 into the spike.
 > - Testcontainers: added in phase 2 as `DockerClusterIT` (3 containers, real `SIGKILL`).
-> - Added: a remote-workers and browser idea parked in [NOTES.md](../../NOTES.md).
+> - Added: a remote-workers and browser idea parked in [NOTES.md](../../../NOTES.md).
 
 # Cluster93 Core: what it was, what it could become, and a Vert.x 5 revival plan
 

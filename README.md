@@ -4,7 +4,7 @@ A self-hostable, clustered, distributed backend platform for resilient backgroun
 
 You submit code to any node. The cluster schedules it on the least-loaded worker inside an isolated sandbox, streams execution live, and handles state, messaging, and storage out of the box.
 
-> **Status: Phase 10 Complete**
+> **Status: Phases 1–5 complete · Phase 6 (web console & identity) in progress · Phase 11 (consolidation & release readiness) active**
 >
 > - **Dual Execution Engines:** Choose between high-throughput **V8 isolates** (via Javet) and memory-safe **GraalJS**, running against a shared runtime conformance suite.
 > - **Process & Kernel Isolation:** Run as lightweight in-process isolates (`embedded`) or out-of-process warm tenant worker pools with **Linux cgroups v2** memory enforcement (`process`).
@@ -37,6 +37,18 @@ irm https://github.com/TonyRice/cluster93/releases/latest/download/install.ps1 |
 GraalVM `native-image` can't cross-compile, so a native binary has to be built on its own platform;
 where one isn't published, the portable jar runs anywhere with **Java 21+** — see the
 [CLI guide](docs/guides/cli.md#build-from-source).
+
+| Platform | Asset | How |
+|---|---|---|
+| Linux x64 (static, any distro incl. Alpine) | `cluster93-linux-x64` | `install.sh` |
+| Linux arm64 | `cluster93-linux-arm64` | `install.sh` |
+| macOS (Apple silicon / Intel) | `cluster93-macos-arm64` / `-x64` | `install.sh` |
+| Windows x64 | portable jar + `c93.cmd` | `install.ps1` (Java 21+) |
+| anywhere else | portable jar | build from source, or `java -jar cluster93-cli.jar` |
+
+The native **workers** the server spawns are Linux-only (`bin/worker-*`, x64 and arm64). A node
+elsewhere runs `C93_WORKER_MODE=embedded`, and on Windows a node is Docker or WSL2 — see the
+[node guide](docs/guides/node.md).
 
 Native binaries compile via GraalVM with zero JVM requirements on the client. See the [CLI guide](docs/guides/cli.md). To connect AI agents via MCP, see the [MCP guide](docs/guides/mcp.md).
 
@@ -383,10 +395,11 @@ Cluster93 is configured via environment variables:
 For the master implementation roadmap, active milestones, and upcoming work, see **[`ROADMAP.md`](ROADMAP.md)**:
 
 - **Phases 1–4 (Complete):** Core cluster, dual engines (V8/GraalJS), VFS storage, and out-of-process isolation with Linux cgroups.
-- **Phase 5 (Complete):** Architecture guide, aggregate Javadoc verification under JDK 21, and process-mode stability.
-- **Phase 6 (Active / Next):** Web Management Console with WebAuthn Passkeys & browser identity sessions ([`ideas/console.md`](ideas/console.md)).
-- **Phase 7 (Upcoming):** Official Node runtime in rootless Podman + gVisor ([`docs/design/node-runtime.md`](docs/design/node-runtime.md)).
-- **Phases 8 & 9 (Future):** Differentiated node roles ([`ideas/node-roles.md`](ideas/node-roles.md)) & polyglot Python compute ([`ideas/python.md`](ideas/python.md)).
+- **Phase 5 (Complete):** Architecture guide, aggregate Javadoc under JDK 21, and process-mode stability.
+- **Phase 6 (In progress):** Web management console and browser identity sessions — the console app ships today ([apps & console design](docs/design/apps-and-console.md), [identity design](docs/design/identity.md)); the browser session layer remains.
+- **Phase 7 (Upcoming):** Official Node runtime in rootless Podman + gVisor ([design](docs/design/node-runtime.md)).
+- **Phases 8 & 9 (Future):** Differentiated node roles ([design](docs/design/node-roles.md)) and polyglot Python compute.
+- **Phase 11 (Active):** Consolidation & release readiness — one install path, one update surface (`c93 update --cli|--node`), prefix-less module directories, and docs that match reality.
 
 ---
 

@@ -1,6 +1,6 @@
 # Design: orphaned jobs, retries and resuming without repeating work
 
-**Status:** Accepted. `fail` is confirmed as the default (2026-10-06). Implementation plan: [phase-2-plan.md](phase-2-plan.md). Script API: [../scripting/job-context.md](../scripting/job-context.md).
+**Status:** Accepted. `fail` is confirmed as the default (2026-10-06). Implementation plan: [phase-2-plan.md](history/phase-2-plan.md). Script API: [../scripting/job-context.md](../scripting/job-context.md).
 
 ## Problem
 When a node dies mid-job, its jobs are left `RUNNING` forever. The spike reproduced this by killing a container. The obvious fix is to restart them on another node, but that's dangerous: a job that already sent half its emails, charged a card, or got halfway through a browser session would **do that work again**.

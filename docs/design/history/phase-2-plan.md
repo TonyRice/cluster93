@@ -1,7 +1,7 @@
 # Phase 2 plan: orphaned jobs, attempts, steps and checkpoints
 
 **Status:** ✅ Done (2026-10-06). 76 tests pass in three consecutive full builds; the chaos test passed 12 of 12 runs; verified in Docker with `docker kill`. See "What changed during implementation" at the end.
-**Specs:** [orphaned-jobs.md](orphaned-jobs.md) (design) · [../scripting/job-context.md](../scripting/job-context.md) (script API)
+**Specs:** [orphaned-jobs.md](../orphaned-jobs.md) (design) · [../scripting/job-context.md](../../scripting/job-context.md) (script API)
 
 ## Goal
 When a node dies mid-job, the job is never re-run silently. By default (`fail`) it ends as `ORPHANED`. A job that opted in is retried or resumed on another node without repeating completed steps. A node that only *looked* dead can't overwrite the work of the attempt that replaced it.

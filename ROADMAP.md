@@ -44,14 +44,14 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
 ┌───────────────────────────────────▼────────────────────────────────────┐
-│ Phase 5: Documentation, Javadoc Aggregation & Hardening (ACTIVE)       │
+│ Phase 5: Documentation, Javadoc Aggregation & Hardening (COMPLETED)    │
 │ • Architecture Guide & DOCUMENTATION.md                                │
 │ • Clean JDK 21 aggregate Javadoc (./mvnw javadoc:aggregate)            │
 │ • 100% test-pass stability across all modules in process mode          │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
 ┌───────────────────────────────────▼────────────────────────────────────┐
-│ Phase 6: Web Management Console & Identity Sessions (NEXT)             │
+│ Phase 6: Web Management Console & Identity Sessions (IN PROGRESS)      │
 │ • Target Spec: ideas/console.md (D-070 to D-074 identity foundation)   │
 │ • WebAuthn Passkeys, OIDC PKCE flow, and __Host- session cookies       │
 │ • Vite + React + TanStack Router SPA bundled in cluster93-server      │
@@ -68,11 +68,20 @@ To prevent context drift, loss of momentum, and misalignment across sessions or 
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
+Phases 1–6 are the platform; **Phase 11 (Consolidation & Release Readiness) is the active focus** — see §3.
+
 ---
 
 ## 3. Active Work & Current Focus
 
-### Phase 5: Architecture Documentation & Maven Javadoc Aggregation
+### Phase 11: Consolidation & Release Readiness (ACTIVE)
+Umbrella: one install path, one update surface, one checkout orchestrator, one benchmark entrypoint, prefix-less module directories, and docs that match reality. Tracked as work orders in `.agents/workorders/phase-11-consolidation.md` (W1–W6).
+- **W1 — Checkout tooling consolidation (DONE):** `scripts/dev.sh` folded into `scripts/local.sh` as the `dev` profile (`master` is the default); `scripts/compose-demo.yml` folded into the root `docker-compose.yml`; the `tools/` rename one-offs deleted.
+- **W5 — Module directories drop the `cluster93-` prefix (DONE):** `tls`, `core`, `runtime-js`, `runtime-javet`, `runtime-graaljs`, `runner-protocol`, `worker`, `cluster-ignite`, `server`, `cli`; artifactIds and Java packages unchanged.
+- **Pending:** W2 (`examples/js/` by language), W3 (`c93 update --cli|--node`, multi-arch), W4 (benchmarks entrypoint), W6 (docs/phase-plan consolidation).
+- **Follow-up captured in `NOTES.md`:** one unified `c93 cluster …` pathway (master/dev/Docker node setup and cluster setup).
+
+### Phase 5: Architecture Documentation & Javadoc Aggregation (COMPLETE)
 - **Task 5.1 — Master Documentation (`DOCUMENTATION.md`):**
   - Documented core architectural subsystems: `HostApis`, `NodeHostApis`, `ScriptRunner`, engine adapters, storage SPIs, network gates, and `cluster93-runner-protocol`.
   - Maintained canonical cross-references and links to `docs/ARCHITECTURE.md` and `docs/DECISIONS.md`.

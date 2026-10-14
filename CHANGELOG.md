@@ -6,6 +6,12 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **Docs reconciled with reality**:
+  - README: the status block no longer claims "Phase 10 Complete" (there is no Phase 10); it now reads Phases 1–5 complete, Phase 6 in progress, Phase 11 active. The roadmap bullets match `ROADMAP.md`, the broken links into the git-excluded `ideas/` were repointed at tracked design docs, and the install section gained the platform matrix (Linux/macOS native, Windows portable jar, workers Linux-only).
+  - `ROADMAP.md`: the diagram no longer marks Phase 5 ACTIVE (complete; Phase 6 is in progress) and a Phase 11 (Consolidation & Release Readiness) section records W1/W5 done and W2/W3/W4/W6 pending.
+  - `docs/design/{revival,phase-2,phase-4,phase-5}-plan.md` moved to `docs/design/history/`, with every relative and inbound link fixed; `DOCUMENTATION.md`'s taxonomy now covers `console/`, `benchmarks/`, `examples/`, `install/`, `scripts/`, `docs/guides/node.md`, and the history location.
+
+
 - **One checkout orchestrator: `scripts/local.sh [master|dev] <verb>`**:
   - `scripts/dev.sh` is gone: its verbs (`build`, `test-examples`, `start --data-dir`, `seed`, `stop`, `restart`, `status`) are the `dev` profile of `scripts/local.sh`, sharing one implementation of `cmd_start`/`cmd_stop`/`cmd_seed`/`ensure_console`/`provision_admin`/`print_setup_banner`/`json_string`/`mint_token`/`redeem_token`/`saved_operator_token`/`java_bin` with the `master` profile. A bare verb still means `master`, so `c93 node …` and the docs keep working.
   - The `master` profile keeps its `local.env` + `master-data`; the `dev` profile its constants + `dev-data`, so the two never share an Ignite baseline.

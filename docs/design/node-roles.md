@@ -97,7 +97,7 @@ The first candidate is offered the attempt; a node that refuses (it filled up si
 is skipped and the next is tried. If no node qualifies, the attempt fails with a message naming every
 live node and its load, and the reaper re-dispatches it later.
 
-When the Python ([python](../ideas/python.md)) and Node ([node-runtime](node-runtime.md)) runtimes land,
+When the Python and Node ([node-runtime](node-runtime.md)) runtimes land,
 a job or service will carry required capability tags, and step 1 gains a third filter: a candidate's
 `capabilities` must contain every required tag. A node that advertises no capabilities matches
 everything, so an operator only has to tag the nodes that are special. A job whose requirement no live

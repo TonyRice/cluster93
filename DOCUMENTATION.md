@@ -34,6 +34,11 @@ cluster93/
 ├── CHANGELOG.md                   # Keep-a-Changelog format grouped by release, referencing ADRs
 ├── TESTING.md                     # Verification guide: unit, contract, chaos, and integration suites
 ├── DOCUMENTATION.md               # This meta-standard
+├── console/                       # The web console SPA (Next.js static export), shipped as the `console` app
+├── examples/                      # Runnable example scripts (01-hello-job … 07-microservice)
+├── benchmarks/                    # Performance harnesses: cluster/ (Bench.java, run.sh, compose) and engines/
+├── install/                       # The shell installers, the release public key, and the service-unit templates
+├── scripts/                       # Checkout orchestration (local.sh), build, release, and test runners
 ├── docs/
 │   ├── ARCHITECTURE.md            # Subsystem navigation map, module boundaries, code flow
 │   ├── DECISIONS.md               # Architectural Decision Records (ADRs D-001 through D-N)
@@ -46,12 +51,18 @@ cluster93/
 │   │   ├── node-runtime.md
 │   │   ├── packages.md
 │   │   ├── vfs.md
-│   │   └── worker-node-protocol.md
+│   │   ├── worker-node-protocol.md
+│   │   └── history/               # Superseded phase plans (revival, phase-2, phase-4, phase-5), kept for context
 │   ├── guides/                    # Operator and developer operational guides
 │   │   ├── cli.md                 # Native CLI installation and usage
-│   │   ├── mcp.md                 # Connecting AI agents via Model Context Protocol
+│   │   ├── node.md                # Installing, running and managing a node (`c93 node`)
 │   │   ├── cluster.md             # Cluster certificates, mutual TLS, and node joins
+│   │   ├── releasing.md           # Cutting, signing and publishing a release
+│   │   ├── mcp.md                 # Connecting AI agents via Model Context Protocol
+│   │   ├── packages.md            # Publishing and importing versioned packages
 │   │   ├── storage.md             # S3 backends, local disk mounts, quotas
+│   │   ├── secrets.md             # Tenant secrets and how scripts read them
+│   │   ├── callbacks.md           # Signed completion callbacks
 │   │   ├── users.md               # RBAC, invites, roles, groups, audit log
 │   │   └── agent-context-and-javadocs.md # High-density token optimization & Javadoc guide
 │   └── scripting/                 # Guest JavaScript runtime reference
@@ -82,6 +93,7 @@ cluster93/
 
 ### B. Architectural Specifications (`docs/design/`)
 - A design document is created when an idea from `ideas/` is accepted for implementation.
+- **Superseded plans move to `docs/design/history/`** rather than being deleted, so the reasoning stays with the code; live specs stay in `docs/design/` and inbound links point at the new location.
 - Must include:
   1. **Status & Decision References:** Date accepted, associated ADR numbers (`D-xxx`).
   2. **Problem Statement & Motivation:** Why this capability is needed.
@@ -127,7 +139,7 @@ For detailed module layouts, wire framing layouts, and flow control mechanisms, 
 | **Script Runner & Conformance** | [`ScriptRunner`](runtime-js/src/main/java/cluster93/runtime/js/ScriptRunner.java), [`JsEngine`](runtime-js/src/main/java/cluster93/runtime/js/JsEngine.java) | [`docs/design/engine-neutral-runtime.md`](docs/design/engine-neutral-runtime.md), `D-126`, `D-127` |
 | **Engine Adapters** | [`JavetEngine`](runtime-javet/src/main/java/cluster93/runtime/javet/JavetEngine.java) (V8), [`GraalJsEngine`](runtime-graaljs/src/main/java/cluster93/runtime/graaljs/GraalJsEngine.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3, `D-126` |
 | **Storage & Blob SPIs** | [`FileStore`](core/src/main/java/cluster93/core/files/FileStore.java), [`BlobStore`](core/src/main/java/cluster93/core/files/BlobStore.java), [`IgniteFileStore`](cluster-ignite/src/main/java/cluster93/cluster/ignite/store/IgniteFileStore.java) | [`docs/design/vfs.md`](docs/design/vfs.md), [`docs/guides/storage.md`](docs/guides/storage.md) |
-| **Egress & Network Gates** | [`EgressGate`](core/src/main/java/cluster93/core/host/egress/EgressGate.java), [`AllowlistEgressGate`](core/src/main/java/cluster93/core/host/egress/AllowlistEgressGate.java) | [`docs/design/network-reach.md`](docs/design/network-reach.md), [`SECURITY.md`](SECURITY.md) |
+| **Egress & Network Gates** | [`Egress`](core/src/main/java/cluster93/core/host/egress/Egress.java), [`ClusterEgress`](core/src/main/java/cluster93/core/host/egress/ClusterEgress.java) | [`docs/design/network-reach.md`](docs/design/network-reach.md), [`SECURITY.md`](SECURITY.md) |
 | **Runner Protocol & Channels** | [`FrameCodec`](runner-protocol/src/main/java/cluster93/runner/protocol/frame/FrameCodec.java), [`NodeWorkerChannel`](runner-protocol/src/main/java/cluster93/runner/protocol/server/NodeWorkerChannel.java), [`StreamMultiplexer`](runner-protocol/src/main/java/cluster93/runner/protocol/stream/StreamMultiplexer.java) | [`docs/design/worker-node-protocol.md`](docs/design/worker-node-protocol.md), `D-128`, `D-131`, `D-132` |
 | **Worker Pools & Isolation** | [`TenantWorkerPool`](runner-protocol/src/main/java/cluster93/runner/protocol/pool/TenantWorkerPool.java), [`WorkerProcessRuntime`](runner-protocol/src/main/java/cluster93/runner/protocol/runtime/WorkerProcessRuntime.java) | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4, `D-128`, `D-131` |
 | **Job Scheduling & Supervisors** | [`NodeVerticle`](core/src/main/java/cluster93/core/scheduler/NodeVerticle.java), [`ServiceSupervisor`](core/src/main/java/cluster93/core/service/ServiceSupervisor.java) | [`docs/scripting/job-context.md`](docs/scripting/job-context.md), [`docs/scripting/services.md`](docs/scripting/services.md) |
