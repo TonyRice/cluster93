@@ -167,7 +167,7 @@ while verifying D-139, whose test only ran because it was invoked by hand.
 failures**, so nothing had rotted; it simply wasn't running. `TESTING.md` §3.3 now records where it lives,
 the count to expect, and the trap (a wrong groupId in those two poms silently runs nothing).
 
-### 2. Benchmarks: decide their place
+### 2. Benchmarks: de-emphasised (option b) — DONE
 
 The harness is consolidated (`benchmarks/run.sh cluster|engines|all`), but its numbers are from one
 laptop on 2026-10-07 and are no longer a headline claim. Options:
@@ -194,7 +194,7 @@ predates the platform assets (`c93.jar`, `worker-*.gz`, `cluster93-cli.jar`) and
 Plan: a throwaway container or VM where `sudo c93 node install --system` runs, checking the ownership and
 `systemctl start cluster93` (and that `uninstall` leaves the user in place).
 
-### 5. Flakes
+### 5. Flakes — the cascade is FIXED; the rest is watched
 
 - **Ignite suite cascade — FIXED.** The server module shares one JVM under `mvn verify`, and a failed
   `@BeforeAll` (a node that couldn't join) left `clientVertx`/a node field null, so the `@AfterAll` NPE'd
@@ -204,8 +204,12 @@ Plan: a throwaway container or VM where `sudo c93 node install --system` runs, c
   per-class forks cost ~3.5 min more); `scripts/test-all.sh` still forks per class.
 - **Transient jar/manifest read:** `CliTest.clusterInitAndNodeInviteMakeOneLineJoins` failed once with
   `IOException: invalid header field`; it passes in isolation and on re-run. Watch for recurrence.
+- **`FileFailoverTest` TLS keystore flake:** under load, `Cluster93.start` occasionally fails with
+  `UnrecoverableKeyException: Get Key failed: Given final block not properly padded` (a keystore read with the
+  wrong key/password); it passes on re-run, and it reproduces on the pre-rename tag. Pre-existing and now
+  *contained*: the guards above mean it costs one test instead of the whole suite.
 
-### 6. `lasttest.txt`
+### 6. `lasttest.txt` — DONE (git-ignored)
 
 `scripts/test-all.sh` writes it at the repo root and it is untracked. Add it to `.gitignore`.
 
