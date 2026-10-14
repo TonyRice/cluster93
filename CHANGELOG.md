@@ -6,6 +6,22 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **Docker becomes a third install kind** (D-141–D-152), groundwork:
+  - A `node` image stage ships `bin/worker-*`. **No stage did**, so no node image could run `C93_WORKER_MODE=process` — which is why the demo ran embedded.
+  - `c93 node install --docker` lays out `node.env`, a generated `compose.yaml`, certificates and `node.meta`; the lifecycle verbs drive the container; a container node is clustered size 1 with its data bind-mounted, so persistence is the mount (D-142).
+  - It **builds its own image** (`--image` wins; `--version` assembles from a verified release; otherwise the checkout's `node` stage). Running it for real found that `.dockerignore` excludes `server/target/`, so the build runs in a temp context, as `scripts/demo.sh` does.
+  - `c93 node install` now **binds-tests the ports the node would take** and refuses, naming them, instead of failing at `up`. This catches what no install kind could see: a dev master at `~/.cluster93/local.env`.
+  - `C93_HTTP_BIND` restricts a process node's control plane; the internal endpoint (9396) is deliberately excluded, because peers must reach it and it is mTLS-protected (D-151).
+  - The generated compose carries the hardening set (`cap_drop: [ALL]`, `no-new-privileges`, read-only root + `/tmp` tmpfs, pids limit) and publishes 9393–9395/5701/5801 while only `expose`ing 9396 (D-148).
+
+- **Workers are bounded and shared fairly** (D-153–D-161):
+  - **Every tenant already had its own worker pool, and each pool's limit was the whole node**, so *n* tenants could spawn `n × capacity` workers — five tenants at capacity 8 is up to 40 processes and ~5 GB of heaps on a node advertising 8. A shared `WorkerBudget` now bounds the node (D-156).
+  - Tenant fairness was installed in a per-tenant pool, where it could **never see a second tenant**, so it could never fire. It moves to the manager, the only place more than one tenant is visible (D-161).
+  - A freed worker is never handed straight back to the tenant just served — the rule that stops a tenant's backlog starving another (D-153).
+  - `C93_MAX_JOBS_PER_TENANT` (default `capacity/2`) caps a tenant; a single-tenant node sets it to `capacity`.
+  - A spike proved **native GraalJS enforces per-context memory**, and found that **Javet's engine limit does not count external memory** (`ArrayBuffer` backing stores), so for Javet the cgroup is the tenant budget (D-157).
+
+
 - **A failed cluster start no longer cascades through the server suite**:
   - The server module shares one JVM under `mvn verify`; when a node couldn't join, the teardown NPE'd on a null client Vertx **before** stopping the nodes, so their Ignite instances stayed registered and every later class failed with "Ignite instance already started" (the documented `FileFailoverTest` cascade).
   - Teardowns now guard the client Vertx and each node stop (73 guards across 30 suites), so a failed start still tears down what did start. `mvn verify` keeps one JVM (per-class forks cost ~3.5 min more); `scripts/test-all.sh` still forks per class.

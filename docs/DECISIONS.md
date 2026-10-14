@@ -2777,3 +2777,334 @@ A user node and a system node are separate installs with separate configs, but b
 
 **Evidence:**
 - `NodeCommandTest.aSecondInstallOfTheOtherKindIsRefused` (both directions, the message, `--force`, and the no-op cases).
+
+### D-141 — A Docker node is a third install kind
+**Date:** 2026-10-14 · **Status:** Accepted. Extends D-134 (node layouts) and D-140 (cross-install refusal).
+
+**Context:**
+Docker was only the demo (`docker-compose.yml`), never something `c93 node` installed or drove. A node could be a user process, a system process, or a container — and the third had no layout, no lifecycle and no clash detection.
+
+**Decision:**
+`c93 node install --docker` lays out `node.env`, a generated `compose.yaml`, certificates and `node.meta`, and the existing lifecycle verbs drive the container. `Layout.Kind.CONTAINER` plus `NodeService.Backend.CONTAINER`; the engine (`docker`/`podman`) and the image are recorded in `node.meta`. There is no systemd unit: Docker's `restart: unless-stopped` supervises.
+
+**Alternatives considered:**
+- **A unit that runs `docker compose up`.** Rejected: two supervisors for one node, and the unit's lifecycle then races Docker's.
+- **Treat a container as a process install with a wrapper.** Rejected: the layout differs (the program is in the image, not on the host), and `status` has no pid to report.
+
+**Consequences:**
+- `programDir` is the configuration root for this kind, since the program lives in the image.
+- `installedLayout` must round-trip the kind from `node.meta`, or the lifecycle verbs look for a service unit and find nothing.
+
+**Evidence:**
+- `NodeCommandTest.aContainerInstallLaysOutItsEnvComposeAndTlsBesideItsConfig`, `anInstalledContainerNodeIsFoundAgainWithItsComposeFile`.
+
+### D-142 — A container node is clustered size 1, with its data bind-mounted
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+`C93_CLUSTERED` defaults to false, and a non-clustered node keeps its stores in memory. A container node that lost its data on recreation would not be a node.
+
+**Decision:**
+A container install is clustered size 1 from the first start (`C93_CLUSTERED=true`, `C93_CLUSTER_SIZE=1`), so durable Ignite is on immediately; it generates its own certificates (or mounts `--tls-dir`); and the host data dir is bind-mounted to `/var/lib/cluster93`. The bind mount **is** the persistence.
+
+**Alternatives considered:**
+- **Standalone (in-memory) by default.** Rejected: a node whose data vanishes on `docker compose down` is a demo, not an install.
+- **A named Docker volume.** Rejected: `--purge`, backups and paths would then not match a process install, and the operator could not see the data.
+
+**Consequences:**
+- The host data dir and the in-container data dir differ, so `node.meta` records **both**: `--purge` and backups depend on the distinction.
+- Clustered requires an explicit data dir, which this always sets.
+
+**Evidence:**
+- `NodeCommandTest.aContainerNodeIsClusteredSizeOneWithDurableDataAndTls`, `aContainerInstallRecordsBothDataDirsAndTheEngineInItsMeta`.
+
+### D-143 — The node image comes from the checkout, the release, or `--image`
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+No image stage shipped `bin/worker-*`, so no node image could run `C93_WORKER_MODE=process` — which is why the demo ran `embedded`.
+
+**Decision:**
+`--image` always wins; `--version TAG` assembles an image from that release (signature and checksums verified first) using a mirrored `install/docker/Dockerfile.node`; otherwise the checkout is built on the repo's new `node` stage, tagged `cluster93-node:local` (or `:<version>-local`).
+
+**Alternatives considered:**
+- **Build from the repo root as the context.** Rejected: `.dockerignore` excludes `server/target/`, so the stage's own `COPY` cannot see the jar. The build runs in a temp context, as `scripts/demo.sh` does.
+- **A published image only.** Rejected: there is no real release yet, and `--image` covers the operator who has one.
+
+**Consequences:**
+- A node image is ~500 MB larger than the demo's (the native workers), which is the point.
+- `--image` skips the release checks and is operator-trusted by definition.
+
+**Evidence:**
+- `NodeCommandTest.buildingFromTheCheckoutRefusesClearlyWhenThereIsNothingToBuildFrom`, `theReleaseImageDockerfileShipsTheWorkersAndNeedsNoBuildStage`; a real build verified the workers run inside the image.
+
+### D-144 — Engine workers can run as sibling containers over the UDS transport
+**Date:** 2026-10-14 · **Status:** Accepted. Uses D-127's transport; superseded in shape by D-160.
+
+**Context:**
+The worker↔node protocol is transport-agnostic and the UDS transport already existed (D-127), with `worker ipc --socket` implemented and tested — but the server always spawned stdio pipes and never constructed a UDS listener.
+
+**Decision:**
+`C93_WORKER_TRANSPORT=uds` spawns engine workers as sibling containers over a mounted socket, with container handles (inspect/`rm -f`/`-m` in place of `Process`/cgroup), engine-labelled orphans, and a container memory budget counted separately from isolate slots.
+
+**Consequences:**
+- The node needs the engine socket, which is its largest privilege (D-145, D-152).
+- The unit of a worker container changes from per-job to per-tenant (D-160).
+
+**Evidence:**
+- `UdsTransportTest`, `WorkerEngineIntegrationTest` (the transport); the spawn path is unbuilt.
+
+### D-145 — `--worker-containers` requires a rootless engine
+**Date:** 2026-10-14 · **Status:** Accepted. Refined by D-152.
+
+**Context:**
+To spawn worker containers the node must be given an engine socket. A rootful engine's socket is a root credential: anything holding it can `docker run -v /:/host`.
+
+**Decision:**
+The guard keys on whether the socket is **root-equivalent**, not on the engine's name. Rootful docker and rootful podman both require `--force`; rootless docker and rootless podman are allowed. Rootless-ness is asked of the daemon (`docker info` SecurityOptions, `podman info` Host.Security.Rootless), with socket ownership only as a fallback — a rootful daemon's socket can be chowned to a user and is still root-equivalent.
+
+**Consequences:**
+- The daemon probe is load-bearing: it is required for `--worker-containers`, not incidental.
+- An absent daemon leaves rootless-ness **unknown** rather than failing the install, since `--no-start` needs no daemon.
+
+**Evidence:**
+- `NodeCommandTest.detectEngineAsksTheDaemonWhetherItIsRootless`, `detectEngineReportsUnknownRootlessWhenTheDaemonDoesNotAnswer`.
+
+### D-146 — A Docker node refuses a process install that would share its ports
+**Date:** 2026-10-14 · **Status:** Accepted. Extends D-140 to the third kind.
+
+**Context:**
+D-140 refused a second install of the *other* kind. A container node is a third kind, and all three default to the same host ports.
+
+**Decision:**
+A container install refuses when a process install occupies the same ports, unless `--force`. It reuses `refuseIfAlsoInstalled` rather than a second checker: that message already derives the other kind from the layout, and the user-process case is already covered by the "already installed" check, since a user container install shares the config dir. For a system container install there is nothing to look up, because it runs as root, whose config dir is not the invoking user's.
+
+**Alternatives considered:**
+- **A separate `refuseContainerIfAlsoInstalled` taking both paths.** Written, then deleted: its user-env argument could never match, and it duplicated the message logic.
+
+**Evidence:**
+- `NodeCommandTest.aContainerInstallRefusesASystemProcessInstallThatWouldShareItsPorts`.
+
+### D-147 — The worker channel carries a per-spawn secret in `HELLO`
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+stdio binds a channel to a specific child process for free — the pipe *is* the worker. A socket binds it to "whoever connected to slot N", so a naive swap makes the node↔worker binding weaker, not merely different.
+
+**Decision:**
+Each spawn generates 32 random bytes, passes them to the worker container, and the worker presents them in `HELLO`; the node validates against the pending spawn and rejects a mismatch. `HelloMessage` is `(engine, version, pid)`, so this is an added optional field.
+
+**Consequences:**
+- Restores the binding stdio gave for free, and is the per-attempt secret Phase 7 needs.
+- Not implemented yet (Stage 2 is unbuilt).
+
+### D-148 — Container hardening, and published ports that match a process install
+**Date:** 2026-10-14 · **Status:** Accepted. See also D-151.
+
+**Context:**
+The server binds every interface (`.listen(port)` with no host), so every install today exposes its API. A docker-only loopback default would be *stricter than the platform*, and would not protect the process node beside it.
+
+**Decision:**
+Node and worker containers run with `cap_drop: [ALL]`, `no-new-privileges`, a read-only root plus a `/tmp` tmpfs, and a pids limit. Ports publish on all interfaces by default, matching a process install; `--publish-address` restricts per install. **9396 is only `expose`d** — it is the ingress-proxy endpoint, mTLS-protected (D-066), and publishing it adds no capability.
+
+**Consequences:**
+- Publishing everything means one node per host unless ports are offset.
+- `ca.key` is never mounted into the node (see D-150's neighbours in `S5`): the node needs its own cert and the CA cert, nothing more.
+
+**Evidence:**
+- `NodeCommandTest.theComposePublishesTheControlPlaneAndExposesOnlyTheInternalEndpoint`, `theComposeBindAddressAndClusterPortsAreOptional`.
+
+### D-149 — A worker container presents the node's own host identity
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+A worker must reach a `0700`/`0600` socket. A process inside a rootless container maps to a subuid, not the host uid, so the permissions that secure the socket are also what block it.
+
+**Decision:**
+Make the worker present the node's identity: `--userns=keep-id` for rootless podman (the image's non-root uid maps to the invoking user); container uid 0 for rootless docker (in the userns, uid 0 *is* the invoking user, so it is unprivileged on the host); `--user <uid>:<gid>` for a rootful engine. The socket stays `0700`/`0600`.
+
+**Alternatives considered:**
+- **A shared group at `0750`/`0660`.** Opt-in fallback only. **`0666` is never acceptable.**
+- **A permissive socket.** Rejected: it would make the boundary meaningless to avoid a mapping problem.
+
+**Consequences:**
+- "Non-root" has to mean non-root **on the host**: under a rootless engine, container root is the safe configuration.
+- All three cases must be verified on real hardware; they differ per engine.
+
+### D-150 — The `NodeRpcAuthorizer` is implemented, not deferred
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+`NodeRpcAuthorizer` is a `@FunctionalInterface` whose only implementation in the repo is `ALLOW_ALL`, and `Cluster93` passes it. With stdio that is latent; with a socket that tenant code can reach, it stops being latent.
+
+**Decision:**
+Implement it where the pool is built, so it can consult the stores: the worker's `boundTenantId` must match the tenant of the run it claims; the run must be the current attempt (the container transport's share of D-009…D-012's fencing); and the method must be in the documented allow-list. Refusals are logged with worker, tenant, run and method, and answered as an error frame rather than a silent drop.
+
+**Consequences:**
+- This is what makes handing an untrusted container a socket safe, so it is a Phase 7 precondition — but it lands with the transport, not after it.
+- The pool's existing tests keep `ALLOW_ALL`; the strict authorizer is what the server passes.
+
+### D-151 — `C93_HTTP_BIND` lets a process node restrict its control plane
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+Every listener took only a port, so no install could restrict its control plane. A container can be restricted by its published address, but a process node could not.
+
+**Decision:**
+`C93_HTTP_BIND` (default `0.0.0.0`, so behaviour is unchanged) sets the bind host for the API, ingress and metrics endpoints. **The internal endpoint (9396) is deliberately excluded**: peers must reach it, it is mTLS-protected, and letting it follow a loopback bind would silently break clustering.
+
+**Consequences:**
+- Two layers, documented separately: `C93_HTTP_BIND` is what the *server* binds; `--publish-address` is where a *container's* port is published.
+
+**Evidence:**
+- `ServerConfigTest.httpBindDefaultsToAllInterfaces`, `httpBindIsParsedFromEnv`.
+
+### D-152 — Engine privilege ranking, and what rootless does not protect
+**Date:** 2026-10-14 · **Status:** Accepted. Refines D-145.
+
+**Decision:**
+Rootless is the default and strongest against the **host**; rootful with user-namespace remapping (`--userns-remap`) is the supported middle ground; plain rootful is last and requires `--force`. The axis is privilege, not engine: rootful *podman* is as dangerous as rootful docker, and rootless *docker* is as safe as rootless podman.
+
+**Context and consequences:**
+- **Rootless protects the host, not the cluster.** A rootless escape lands as the invoking user, who owns the data dir, the TLS dir and the socket dir. The crown jewels stay the crown jewels, which is why D-149 and the `ca.key` rule matter.
+- User namespaces **widen** the kernel attack surface, so rootless is not a free lunch.
+
+### D-153 — A freed worker is never handed straight back to the tenant just served
+**Date:** 2026-10-14 · **Status:** Accepted, but **inert as installed** — superseded in placement by D-161.
+
+**Context:**
+Waiters were queued in a single global FIFO, so a tenant that queued ten requests was served all ten before a tenant that queued one: starvation.
+
+**Decision:**
+Dispatch is a round-robin over the tenants waiting, and the rule that matters is skipping the tenant just served. With *n* tenants competing each gets roughly `capacity/n`; a tenant that is the only one waiting still gets everything, so a quiet cluster is not throttled.
+
+**Alternatives considered:**
+- **A hard per-tenant cap alone.** Rejected as the *ordering* mechanism: a cap reserves, it does not order.
+- **"Fewest active workers wins".** Written first, then replaced: when a tenant releases the only worker its count drops to zero too, so it ties and wins again. Fairness needs to know who was **just served**.
+
+**Consequences:**
+- The rule is a small class (`TenantRotation`), testable without spawning a worker.
+- **Installed in `TenantWorkerPool`, where it could never fire** — every tenant has its own pool. D-161 moves it.
+
+**Evidence:**
+- `TenantWorkerPoolTest.aTenantWithABacklogDoesNotKeepThePool`, `aLoneTenantIsNotThrottled`, `theRotationCountsTenantsNotRequests`.
+
+### D-154 — `worker` means process, `job` means isolate
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+`worker` meant "process", and one worker ran one job, so "worker count" and "job count" happened to coincide. Once a worker runs several jobs they do not, and every config key would be ambiguous.
+
+**Decision:**
+`C93_CAPACITY` keeps its meaning — **concurrent jobs node-wide**. The per-tenant knob is `C93_MAX_JOBS_PER_TENANT`. A worker is a process; a job is one isolate/context.
+
+**Consequences:**
+- Keeping `C93_CAPACITY`'s meaning stable matters: operators have it set.
+
+### D-155 — One worker per tenant, several jobs each
+**Date:** 2026-10-14 · **Status:** Accepted. Shapes D-160.
+
+**Context:**
+`ScriptRunner` already runs `isolateThreads` contexts at once and gives every job a fresh `JsContext` closed afterwards — so several jobs per process is not a new execution model. The pool never passed `--threads`, so every worker fell back to `WorkerMain`'s default of **2**.
+
+**Decision:**
+A worker is spawned per tenant and kept while it has work, running up to `C93_MAX_JOBS_PER_TENANT` jobs at once, each in a fresh context. A worker is **never shared between tenants**: the tenant binding is what the node authorises every host-API call against, and it is the crash and memory boundary.
+
+**Consequences:**
+- Nothing leaks between a tenant's jobs (fresh context); only compiled prelude/module caches persist, which is the win.
+- Per-*job* memory isolation inside a tenant is lost — see D-157.
+
+### D-156 — Two caps: one for the node, one for the tenant
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+Every tenant already has its own pool, and each pool's `maxTotal` was the node's capacity. So *n* active tenants could spawn `n × capacity` workers: five tenants at capacity 8 is up to 40 processes and ~5 GB of worker heaps on a node advertising 8. There was **no node-wide limit at all** — the opposite of the problem first assumed.
+
+**Decision:**
+A `WorkerBudget` is one counter every tenant's pool draws from, reserved exactly where `totalWorkers` is incremented and released exactly where it is decremented, so the two cannot drift. `C93_MAX_JOBS_PER_TENANT` (default `capacity/2`, never 0) re-points each tenant's own cap off the whole node.
+
+**Alternatives considered:**
+- **Dividing capacity by the number of tenants.** Rejected: pools are created lazily per tenant, so the tenant count is unknown when a pool is made.
+
+**Consequences:**
+- A hard cap means a quiet node idles by design: capacity 8 with cap 2 leaves 6 slots unused for a single tenant. A single-tenant node should set it to `capacity`.
+- A budget leak would silently stop the node spawning workers, which is why the pairing lives in exactly two methods.
+
+**Evidence:**
+- `TenantWorkerPoolTest.theNodeBudgetBoundsEveryTenantTogether`, `anUnboundedBudgetNeverRefuses`; `ServerConfigTest.maxJobsPerTenantDefaultsToHalfCapacity`.
+
+### D-157 — The tenant budget names its enforcement layer, per engine
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+A spike ran the **native** workers with `--heap-mb 128` and asked them to allocate past it:
+
+| | Heap objects | External memory (`Uint8Array`) |
+|---|---|---|
+| Javet (native) | stopped ✓ | **not counted — ran on** |
+| GraalJS (native) | stopped ✓ | stopped ✓ |
+
+**Decision:**
+The budget a tenant is shown names the layer that enforces it. GraalJS enforces per context in-process (`sandbox.MaxHeapMemory` under `engine.MaxIsolateMemory`, with `engine.SpawnIsolate` verified to take effect in the native worker). Javet's engine limit is **porous for external memory** — `ArrayBuffer` backing stores are not V8-heap objects — so **for Javet the cgroup is the tenant budget**, with the engine limit as a fast-fail for heap objects.
+
+**Consequences:**
+- Reporting one number for both engines would be reporting something that is not the whole truth.
+- The spike becomes a test: over-limit heap allocation must be stopped, and Javet's external-memory gap is asserted as **known**, not silent.
+
+### D-158 — CPU limits per tenant
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+`CgroupMemoryLimiter` writes only `memory.max`/`memory.high`; there is **no CPU limiting anywhere** in the codebase.
+
+**Decision:**
+cgroup v2 `cpu.max` for process workers, `--cpus` for container workers, so one tenant's busy loop cannot starve another. A node refuses to start with a clear message when the controller is unavailable, rather than silently not limiting.
+
+**Consequences:**
+- The cpu controller is available at the root but **not enabled in the node's cgroup** on the development box; delegation has to be verified on a real systemd unit before this can be claimed to work.
+
+### D-159 — Crash attribution: tenant and job, not just a pid
+**Date:** 2026-10-14 · **Status:** Accepted.
+
+**Context:**
+D-135 already captures a worker's stderr tail and `inspectExit` already decodes 137 (OOM) and 139 (SIGSEGV) — but the result is a log line with a pid.
+
+**Decision:**
+Record a worker's exit and its stderr tail against the **tenant and job** and surface it where the tenant can see it, as a job/service failure such as "killed: memory limit exceeded".
+
+**Consequences:**
+- Mostly plumbing existing evidence into a tenant-visible place.
+- Becomes more important with D-155: a crash now ends a tenant's other concurrent jobs too.
+
+### D-160 — Stage 2 is container-per-tenant, not per-job
+**Date:** 2026-10-14 · **Status:** Accepted. Supersedes D-144's shape.
+
+**Context:**
+A container per job is far too expensive to be the plan, and it would have to be rewritten the moment D-155 landed.
+
+**Decision:**
+When the container worker path is built, it is **one container per tenant** carrying that tenant's jobs, with `--memory` and `--cpus` per tenant and one socket each. It is not built until D-155–D-158 land, or it would be built twice.
+
+**Consequences:**
+- Fewer containers, and it lines up with Phase 7's "a container per tenant workload".
+- Crash and resource boundaries become tenant-shaped, which is what D-158 and D-159 want.
+
+### D-161 — Tenant fairness is arbitrated by the manager
+**Date:** 2026-10-14 · **Status:** Accepted. Fixes D-153's placement.
+
+**Context:**
+D-153's rotation was installed in `TenantWorkerPool`, but every tenant has its own pool and `acquire` only ever passes that pool's own tenant: the rotation could never see a second one. Fairness was dead code.
+
+**Decision:**
+The arbitration moves to `TenantWorkerPoolManager`, the only place more than one tenant is visible. A pool reports that its tenant is waiting and reports when it frees capacity; the manager hands the freed capacity to the fairest tenant, skipping the one just served. A released worker is no longer served back to its own tenant's queue first — that was the starvation.
+
+**Alternatives considered:**
+- **Leave it in the pool and accept it never fires.** Rejected: fairness that cannot fire is worse than none, because it looks solved.
+- **Keep the claim when a pool is missing (defensive).** Tried, then rejected: it makes the rotation a waiting list that never clears. A tenant that queued has a pool, so that branch is defensive only.
+
+**Consequences:**
+- A single tenant's pool is plain FIFO; ordering *between* tenants is the manager's job.
+- `TenantRotation` is lifted out of the pool, since two classes use it.
+
+**Evidence:**
+- `TenantWorkerPoolManagerTest.theManagerRotatesBetweenWaitingTenants`, `nothingWaitingMeansNothingServed`.
