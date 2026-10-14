@@ -179,9 +179,8 @@ public class TenantWorkerPool {
             }
         }
 
-        // 3. Can we spawn a new worker right now? Both this tenant's pool and the node as a whole must have room,
-        //    or a busy tenant set would each spawn up to their own maxTotal and overrun the node (D-156).
-        if (totalWorkers.get() < maxTotal && (nodeBudget == null || nodeBudget.hasRoom())) {
+        // 3. Can we spawn a new worker right now?
+        if (totalWorkers.get() < maxTotal) {
             Promise<WorkerProcessHandle> promise = Promise.promise();
             spawnWorker().onComplete(ar -> {
                 if (ar.succeeded()) {
@@ -228,8 +227,11 @@ public class TenantWorkerPool {
         }
 
         if (arbiter != null) {
-            // Do not serve our own queue first: that is what starves the other tenants. The arbiter decides.
-            arbiter.capacityFreed();
+            // The arbiter orders tenants between pools; this pool still serves its own queue, so a tenant that is
+            // not in the rotation cannot strand a request here. Replacing this with the arbiter alone needs the
+            // per-tenant worker (work order step 2), or a waiting request can go unserved.
+            arbiter.tenantWaiting(worker.boundTenantId());
+            processNextPending();
         } else {
             processNextPending();
         }
@@ -273,8 +275,7 @@ public class TenantWorkerPool {
         if (closed.get()) {
             return;
         }
-        while (warmUnboundQueue.size() < minWarm && totalWorkers.get() < maxTotal
-                && (nodeBudget == null || nodeBudget.hasRoom())) {
+        while (warmUnboundQueue.size() < minWarm && totalWorkers.get() < maxTotal) {
             // spawnWorker counts the attempt against maxTotal and logs its own failure (with the worker's stderr).
             spawnWorker().onComplete(ar -> {
                 if (ar.succeeded()) {

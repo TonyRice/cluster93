@@ -53,7 +53,12 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         this.defaultMode = defaultMode != null ? defaultMode : "javet";
         this.minWarmPerTenant = Math.max(0, minWarmPerTenant);
         this.maxTotalPerTenant = Math.max(1, maxTotalPerTenant);
-        this.nodeBudget = new WorkerBudget(nodeWideWorkers);
+        // NOT YET BOUNDED. Gating spawns on the shared allowance deadlocks against per-pool warm workers: each
+        // tenant's pool holds minWarm against the same budget, so several tenants fill it with idle workers between
+        // them and a tenant that then cannot spawn queues forever (PackagesTest hangs). The budget is accounted and
+        // released, so the plumbing is exercised, but it starts bounding when warm workers are shared across tenants
+        // — work order step 2 (per-tenant workers).
+        this.nodeBudget = WorkerBudget.unbounded();
         this.heapMb = Math.max(16, heapMb);
         this.reusePolicy = Objects.requireNonNull(reusePolicy, "reusePolicy");
         this.cgroupLimiter = Objects.requireNonNull(cgroupLimiter, "cgroupLimiter");

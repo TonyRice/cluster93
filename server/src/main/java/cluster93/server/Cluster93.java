@@ -376,7 +376,10 @@ public final class Cluster93 {
                     config.workerBinaries(),
                     config.workerDefaultMode(),
                     1,
-                    config.maxJobsPerTenant(),
+                    // Still the pool's *worker* limit: workers are one-job-per-worker until the lifecycle change, so
+                    // passing the per-tenant *job* cap here would halve a tenant's throughput. It moves when a
+                    // worker holds several jobs (work order step 3).
+                    config.capacity(),
                     config.capacity(),
                     config.maxHeapMb(),
                     cluster93.runner.protocol.pool.TenantWorkerPool.ReusePolicy.FRESH_PER_JOB,
