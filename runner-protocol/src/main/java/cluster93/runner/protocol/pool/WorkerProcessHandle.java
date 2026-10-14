@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -27,7 +28,6 @@ public class WorkerProcessHandle {
     public enum State {
         UNBOUND,
         BOUND,
-        BUSY,
         TERMINATED
     }
 
@@ -40,14 +40,23 @@ public class WorkerProcessHandle {
     private final AtomicReference<State> state = new AtomicReference<>(State.UNBOUND);
 
     private String boundTenantId;
+    /** How many jobs this worker may run at once (D-155): a count, not a flag, since a worker now holds several. */
+    private final int maxJobs;
+    private final AtomicInteger runningJobs = new AtomicInteger();
 
+    /** A worker that runs one job at a time, as it always did. */
     public WorkerProcessHandle(Process process, NodeWorkerChannel channel) {
+        this(process, channel, 1);
+    }
+
+    public WorkerProcessHandle(Process process, NodeWorkerChannel channel, int maxJobs) {
         this.process = Objects.requireNonNull(process, "process");
         this.channel = Objects.requireNonNull(channel, "channel");
         this.pid = process.pid();
         this.workerId = channel.workerId();
         this.createdAt = Instant.now();
         this.lastUsedAt = createdAt;
+        this.maxJobs = Math.max(1, maxJobs);
     }
 
     public Process process() {
@@ -82,8 +91,49 @@ public class WorkerProcessHandle {
         return boundTenantId;
     }
 
+    /** How many jobs this worker may run at once. */
+    public int maxJobs() {
+        return maxJobs;
+    }
+
+    /** How many jobs it is running right now. */
+    public int runningJobs() {
+        return runningJobs.get();
+    }
+
+    /** Whether this worker is bound and has room for another job (D-155). */
+    public boolean hasCapacity() {
+        return state.get() == State.BOUND && runningJobs.get() < maxJobs;
+    }
+
     public boolean isAlive() {
         return process.isAlive() && state.get() != State.TERMINATED;
+    }
+
+    /**
+     * Takes one of this worker's job slots, or reports that it has none free (D-155). A count rather than a flag,
+     * because a worker runs several jobs at once; refused outright when it is not bound or has been terminated.
+     *
+     * <p>Separate from {@link #run} so the admission rule can be tested without a channel round-trip.
+     */
+    boolean admitJob() {
+        if (state.get() != State.BOUND) {
+            return false;
+        }
+        while (true) {
+            int current = runningJobs.get();
+            if (current >= maxJobs) {
+                return false;
+            }
+            if (runningJobs.compareAndSet(current, current + 1)) {
+                return true;
+            }
+        }
+    }
+
+    /** Gives a job slot back, when a job finishes. */
+    void jobFinished() {
+        runningJobs.decrementAndGet();
     }
 
     /**
@@ -99,17 +149,20 @@ public class WorkerProcessHandle {
     }
 
     /**
-     * Executes a job on the worker. Transitions state from BOUND to BUSY and back to BOUND on completion.
+     * Executes a job on the worker, alongside any others it is already running — each job gets its own context on
+     * the worker, so admission is a count rather than a flag (D-155). Refused when the worker is at its job limit.
      */
     public Future<ExecutionResult> run(int channelId, Execution execution, HostApis hostApis, LogSink logs, StateSink stateSink) {
-        if (!state.compareAndSet(State.BOUND, State.BUSY)) {
-            return Future.failedFuture(new IllegalStateException("Worker " + workerId + " cannot run: state is " + state.get()));
+        if (!admitJob()) {
+            return Future.failedFuture(new IllegalStateException(state.get() != State.BOUND
+                    ? "Worker " + workerId + " cannot run: state is " + state.get()
+                    : "Worker " + workerId + " is at its job limit (" + maxJobs + ")"));
         }
         this.lastUsedAt = Instant.now();
         return channel.run(channelId, execution, hostApis, logs, stateSink)
                 .onComplete(ar -> {
                     this.lastUsedAt = Instant.now();
-                    this.state.compareAndSet(State.BUSY, State.BOUND);
+                    jobFinished();
                 });
     }
 

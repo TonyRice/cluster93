@@ -137,7 +137,7 @@ class TenantWorkerPoolTest {
     }
 
     @Test
-    @DisplayName("WorkerProcessHandle transitions state UNBOUND -> BOUND -> BUSY and enforces invariants")
+    @DisplayName("WorkerProcessHandle transitions UNBOUND -> BOUND and enforces its invariants")
     void testWorkerProcessHandleStateTransitions() {
         FakeProcess fakeProcess = new FakeProcess(9999L);
         FakeStream fakeStream = new FakeStream();
@@ -149,11 +149,14 @@ class TenantWorkerPoolTest {
         assertEquals(9999L, handle.pid());
         assertEquals("worker-9999", handle.workerId());
         assertTrue(handle.isAlive());
+        // A worker that has not been bound cannot take a job, and has no capacity to offer.
+        assertFalse(handle.hasCapacity());
 
         // Bind to tenant "acme"
         handle.bind("acme", new JsonObject(), new JsonObject());
         assertEquals(WorkerProcessHandle.State.BOUND, handle.state());
         assertEquals("acme", handle.boundTenantId());
+        assertTrue(handle.hasCapacity());
 
         // Binding again must fail with IllegalStateException
         var ex = assertThrows(Exception.class, () -> handle.bind("other", new JsonObject(), new JsonObject()).toCompletionStage().toCompletableFuture().join());
@@ -163,6 +166,40 @@ class TenantWorkerPoolTest {
         handle.terminate();
         assertEquals(WorkerProcessHandle.State.TERMINATED, handle.state());
         assertFalse(handle.isAlive());
+    }
+
+    @Test
+    @DisplayName("A worker admits several jobs at once, and refuses the one past its limit (D-155)")
+    void aWorkerAdmitsSeveralJobsAtOnce() {
+        FakeProcess fakeProcess = new FakeProcess(4242L);
+        FakeStream fakeStream = new FakeStream();
+        NodeWorkerChannel channel = new NodeWorkerChannel("worker-4242", fakeStream, fakeStream);
+        // Four jobs at once, as a worker per tenant would run (D-155).
+        WorkerProcessHandle handle = new WorkerProcessHandle(fakeProcess, channel, 4);
+        handle.bind("acme", new JsonObject(), new JsonObject());
+
+        assertEquals(4, handle.maxJobs());
+        assertEquals(0, handle.runningJobs());
+
+        // It is a count, not a flag: the first job no longer makes the worker unusable.
+        assertTrue(handle.admitJob());
+        assertEquals(1, handle.runningJobs());
+        assertTrue(handle.hasCapacity(), "a worker with 1 of 4 jobs still has room");
+        assertTrue(handle.admitJob());
+        assertTrue(handle.admitJob());
+        assertTrue(handle.admitJob());
+        assertEquals(4, handle.runningJobs());
+
+        // The fifth is refused rather than overrunning the worker's heap and contexts.
+        assertFalse(handle.hasCapacity());
+        assertFalse(handle.admitJob());
+        assertEquals(4, handle.runningJobs(), "a refused job must not be counted");
+
+        // A job finishing frees exactly one slot, and the worker takes work again.
+        handle.jobFinished();
+        assertEquals(3, handle.runningJobs());
+        assertTrue(handle.admitJob());
+        assertEquals(4, handle.runningJobs());
     }
 
     @Test
