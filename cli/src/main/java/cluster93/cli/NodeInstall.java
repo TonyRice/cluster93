@@ -59,6 +59,8 @@ final class NodeInstall {
     static final String SYSTEM_USER = "cluster93";
     /** The key {@code C93_INSECURE_SKIP_SIGNATURE} that turns off the signature check, as in the installers. */
     static final String SKIP_SIGNATURE = "C93_INSECURE_SKIP_SIGNATURE";
+    /** The key {@code C93_SKIP_PORT_CHECK} that turns off the port check, for tests and CI on a busy host. */
+    static final String SKIP_PORT_CHECK = "C93_SKIP_PORT_CHECK";
 
     private NodeInstall() {
     }
@@ -290,6 +292,8 @@ final class NodeInstall {
         }
 
         Map<String, String> config = defaultConfig(io, layout);
+        // A node that would fight one already running on this host is refused here, naming the ports (D-146).
+        refuseIfPortsHeld(io, hostPorts(config), force);
         writeEnv(layout, config);
         if (layout.unitFile() != null) {
             Files.createDirectories(layout.unitFile().getParent());
@@ -720,8 +724,13 @@ final class NodeInstall {
         // not the invoking user's, so there is nothing to look up from there.
         refuseIfAlsoInstalled(layout, layout.system() ? null : systemLayout().envFile(), force);
 
-        Engine engine = detectEngine(io, requestedEngine);
         String nodeId = defaultNodeId();
+        Map<String, String> config = containerConfig(nodeId);
+        // Check the ports before building an image: a clash with a running node (a dev master, say, which no install
+        // kind knows about) should fail in a second, not after a multi-hundred-megabyte build.
+        refuseIfPortsHeld(io, hostPorts(config), force);
+
+        Engine engine = detectEngine(io, requestedEngine);
         String version0 = version == null || version.isBlank() ? "local" : version;
         // No --image: build one. A pinned --version assembles from that release; otherwise from the checkout (§1.8).
         String imageRef;
@@ -738,7 +747,6 @@ final class NodeInstall {
         if (layout.logDir() != null) {
             Files.createDirectories(layout.logDir());
         }
-        Map<String, String> config = containerConfig(nodeId);
         writeEnv(layout, config);
 
         Path caHome = null;
@@ -785,6 +793,64 @@ final class NodeInstall {
                 .put("composeFile", layout.composeFile().toString())
                 .put("dataDir", layout.dataDir().toString())
                 .put("system", system);
+    }
+
+    /** The host ports a node's config will bind: API, ingress, metrics, and — when clustered — Ignite's two. */
+    static List<Integer> hostPorts(Map<String, String> config) {
+        List<Integer> ports = new ArrayList<>();
+        for (String key : List.of("C93_HTTP_PORT", "C93_INGRESS_PORT", "C93_METRICS_PORT")) {
+            String value = config.get(key);
+            if (value != null && !value.isBlank()) {
+                ports.add(Integer.parseInt(value.trim()));
+            }
+        }
+        if (Boolean.parseBoolean(config.getOrDefault("C93_CLUSTERED", "false"))) {
+            int cluster = Integer.parseInt(config.getOrDefault("C93_CLUSTER_PORT", "5701"));
+            // Ignite's discovery port and its communication port, which is 100 above it by default.
+            ports.add(cluster);
+            ports.add(cluster + 100);
+        }
+        return ports;
+    }
+
+    /** The ports something else already holds. */
+    static List<Integer> portsInUse(List<Integer> ports) {
+        List<Integer> inUse = new ArrayList<>();
+        for (int port : ports) {
+            if (portHeld(port)) {
+                inUse.add(port);
+            }
+        }
+        return inUse;
+    }
+
+    /** Whether something is already listening on this port. */
+    private static boolean portHeld(int port) {
+        try (java.net.ServerSocket socket = new java.net.ServerSocket()) {
+            // Bind the way a node would: a port only sitting in TIME_WAIT is not held.
+            socket.bind(new java.net.InetSocketAddress("0.0.0.0", port));
+            return false;
+        } catch (IOException e) {
+            return true;
+        }
+    }
+
+    /**
+     * Refuses an install whose ports are already held, naming them (D-146's other half). A node that would fight a
+     * running one — a dev master, a process install, or another container — is refused here rather than failing to
+     * bind later, where the reason is much harder to see.
+     */
+    static void refuseIfPortsHeld(Io io, List<Integer> ports, boolean force) {
+        if (force || io.env().get(SKIP_PORT_CHECK) != null) {
+            return;
+        }
+        List<Integer> held = portsInUse(ports);
+        if (!held.isEmpty()) {
+            throw new CliException("These ports are already in use: "
+                    + held.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", "))
+                    + ". Stop whatever holds them (scripts/local.sh stop, or c93 node stop), or pass --force to "
+                    + "install anyway.");
+        }
     }
 
     /** A safe node id from the host name, so a fresh install is unique without prompting. */

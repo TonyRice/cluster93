@@ -58,6 +58,9 @@ class NodeCommandTest {
         env = new HashMap<>();
         env.put("HOME", home.toString());
         env.put("C93_CONFIG_DIR", configDir.toString());
+        // The install tests must not depend on whether this host has a node running: the port check has its own
+        // tests below, which clear this key.
+        env.put("C93_SKIP_PORT_CHECK", "1");
         env.put("C93_HOME", home.resolve("master").toString());
         Files.createDirectories(Path.of(env.get("C93_HOME")));
     }
@@ -882,6 +885,64 @@ class NodeCommandTest {
         NodeInstall.installContainer(io(), false, null, null, "img", null, tlsDir(), "0.0.0.0", true, false, true);
 
         assertThat(NodeInstall.containerLayout(io(), false, null).composeFile()).exists();
+    }
+
+    @Test
+    void anInstallIsRefusedWhenAPortItNeedsIsAlreadyHeld() throws Exception {
+        // Hold a port the way a running node would, then try to install over it.
+        try (java.net.ServerSocket held = new java.net.ServerSocket()) {
+            held.bind(new java.net.InetSocketAddress("0.0.0.0", 0));
+            int port = held.getLocalPort();
+            env.remove("C93_SKIP_PORT_CHECK");
+
+            assertThat(NodeInstall.portsInUse(java.util.List.of(port))).containsExactly(port);
+            assertThatThrownBy(() -> NodeInstall.refuseIfPortsHeld(io(), java.util.List.of(port), false))
+                    .isInstanceOf(CliException.class)
+                    .hasMessageContaining(String.valueOf(port))
+                    .hasMessageContaining("already in use")
+                    .hasMessageContaining("--force");
+
+            // --force installs anyway, and a free port is never a clash.
+            NodeInstall.refuseIfPortsHeld(io(), java.util.List.of(port), true);
+            NodeInstall.refuseIfPortsHeld(io(), java.util.List.of(), false);
+        }
+    }
+
+    @Test
+    void thePortCheckNamesEveryPortTheNodeWouldBind() {
+        Map<String, String> container = NodeInstall.containerConfig("node-1");
+        // The API, ingress and metrics, plus both of Ignite's ports when the node is clustered (D-142).
+        assertThat(NodeInstall.hostPorts(container)).containsExactly(9393, 9394, 9395, 5701, 5801);
+
+        Map<String, String> standalone = new java.util.HashMap<>(container);
+        standalone.put("C93_CLUSTERED", "false");
+        assertThat(NodeInstall.hostPorts(standalone)).containsExactly(9393, 9394, 9395);
+    }
+
+    @Test
+    void aContainerInstallRefusesWhenItsPortsAreHeld() throws Exception {
+        fakeEngine("docker", "[name=rootless name=seccomp]");
+        env.remove("C93_SKIP_PORT_CHECK");
+        // If this host already holds 9395 there is nothing left to prove here — that is the condition the check
+        // catches, so skip rather than fail (a developer with a node running would otherwise see a red test).
+        assumeThat(canBind(9395)).isTrue();
+        try (java.net.ServerSocket held = new java.net.ServerSocket()) {
+            held.bind(new java.net.InetSocketAddress("0.0.0.0", 9395));
+            assertThatThrownBy(() -> NodeInstall.installContainer(io(), false, null, null, "img", null, tlsDir(),
+                    "0.0.0.0", true, false, true))
+                    .isInstanceOf(CliException.class)
+                    .hasMessageContaining("9395");
+        }
+    }
+
+    /** Whether a port can be bound here, so a test that needs to hold one can skip on a busy host. */
+    private static boolean canBind(int port) {
+        try (java.net.ServerSocket socket = new java.net.ServerSocket()) {
+            socket.bind(new java.net.InetSocketAddress("0.0.0.0", port));
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     @Test
