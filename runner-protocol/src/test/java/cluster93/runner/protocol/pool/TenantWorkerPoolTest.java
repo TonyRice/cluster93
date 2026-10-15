@@ -381,17 +381,29 @@ class TenantWorkerPoolTest {
 
     static class FakeProcess extends Process {
         private final long pid;
-        private boolean alive = true;
+        private volatile int exitCode;
+        private volatile boolean alive = true;
 
         FakeProcess(long pid) {
+            this(pid, 0);
+        }
+
+        FakeProcess(long pid, int exitCode) {
             this.pid = pid;
+            this.exitCode = exitCode;
         }
 
         @Override public OutputStream getOutputStream() { return new ByteArrayOutputStream(); }
         @Override public InputStream getInputStream() { return new ByteArrayInputStream(new byte[0]); }
         @Override public InputStream getErrorStream() { return new ByteArrayInputStream(new byte[0]); }
-        @Override public int waitFor() { return 0; }
-        @Override public int exitValue() { return 0; }
+        @Override public int waitFor() { return exitCode; }
+        /** Like a real process: there is no exit code until it has exited. */
+        @Override public int exitValue() {
+            if (alive) {
+                throw new IllegalThreadStateException("process has not exited");
+            }
+            return exitCode;
+        }
         @Override public void destroy() { alive = false; }
         @Override public boolean isAlive() { return alive; }
         @Override public long pid() { return pid; }

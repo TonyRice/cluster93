@@ -201,7 +201,8 @@ class ProcessModeParityTest {
 
         JsonObject done = awaitTerminal(nodeA, id);
         assertThat(done.getString("status")).as(done.encodePrettily()).isEqualTo("FAILED");
-        assertThat(done.getString("error")).contains("Worker process died");
+        // The kill is attributed to the worker, not just reported as a broken pipe (D-159).
+        assertThat(done.getString("error")).contains("killed");
     }
 
     // --- resumed job step memoization (orphan policy) ---

@@ -1,5 +1,6 @@
 package cluster93.runner.protocol.runtime;
 
+import cluster93.core.job.JobStatus;
 import cluster93.core.runtime.Execution;
 import cluster93.core.runtime.ExecutionResult;
 import cluster93.core.runtime.LogSink;
@@ -9,9 +10,11 @@ import cluster93.core.runtime.StateSink;
 import cluster93.core.runtime.api.HostApis;
 import cluster93.runner.protocol.pool.TenantWorkerPool;
 import cluster93.runner.protocol.pool.TenantWorkerPoolManager;
+import cluster93.runner.protocol.pool.WorkerExit;
 import cluster93.runner.protocol.pool.WorkerProcessHandle;
 import cluster93.runner.protocol.server.NodeWorkerChannel;
 import cluster93.runner.protocol.transport.StreamBridge;
+import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
@@ -97,17 +100,16 @@ public class WorkerProcessRuntime implements ScriptRuntime {
                             // A run that produced a result is a run-level event, whatever its status: a failed,
                             // timed-out or cancelled job frees only its own slot and leaves a shared worker alive.
                             // Only a run that never produced a result — the usual sign of a dead worker or a broken
-                            // channel — retires the worker itself (D-162).
-                            if (runRes.failed()) {
-                                poolManager.poison(execution.tenant(), null, handle, "run failed: "
-                                        + (runRes.cause() == null ? "worker error" : runRes.cause().getMessage()));
-                            } else {
-                                poolManager.release(execution.tenant(), null, handle);
-                            }
+                            // channel — retires the worker itself (D-162). Either way the failure is re-labelled
+                            // with the worker's exit cause when the process is gone, so the tenant is told why
+                            // (D-159) rather than that the pipe ended.
                             if (runRes.succeeded()) {
-                                promise.complete(runRes.result());
+                                poolManager.release(execution.tenant(), null, handle);
+                                completeRun(handle, runRes.result(), promise);
                             } else {
-                                promise.complete(ExecutionResult.failed("Worker error: " + runRes.cause().getMessage()));
+                                String death = WorkerExit.runFailure(handle.process(), runRes.cause());
+                                poolManager.poison(execution.tenant(), null, handle, "run failed: " + death);
+                                completeRun(handle, ExecutionResult.failed(death), promise);
                             }
                         });
             });
@@ -155,17 +157,15 @@ public class WorkerProcessRuntime implements ScriptRuntime {
                 handle.run(channelId, execution, host, logs, state)
                         .onComplete(runRes -> {
                             // See the poolManager branch: a job's outcome is a run-level event; only a run that never
-                            // produced a result retires the worker (D-162).
-                            if (runRes.failed()) {
-                                pool.poison(handle, "run failed: "
-                                        + (runRes.cause() == null ? "worker error" : runRes.cause().getMessage()));
-                            } else {
-                                pool.release(handle);
-                            }
+                            // produced a result retires the worker (D-162), and a failure names the worker's exit
+                            // cause when the process is gone (D-159).
                             if (runRes.succeeded()) {
-                                promise.complete(runRes.result());
+                                pool.release(handle);
+                                completeRun(handle, runRes.result(), promise);
                             } else {
-                                promise.complete(ExecutionResult.failed("Worker error: " + runRes.cause().getMessage()));
+                                String death = WorkerExit.runFailure(handle.process(), runRes.cause());
+                                pool.poison(handle, "run failed: " + death);
+                                completeRun(handle, ExecutionResult.failed(death), promise);
                             }
                         });
             });
@@ -229,13 +229,13 @@ public class WorkerProcessRuntime implements ScriptRuntime {
                     if (settled.compareAndSet(false, true)) {
                         vertx.cancelTimer(timerId);
                     }
+                    // Decide the outcome while the process is still observable: cleanupProcess destroys it just below,
+                    // and a process we destroyed ourselves must not be read as a worker that crashed (D-159).
+                    ExecutionResult result = ar.succeeded()
+                            ? attributeWorkerDeath(process, ar.result())
+                            : ExecutionResult.failed(WorkerExit.runFailure(process, ar.cause()));
                     cleanupProcess(process);
-                    if (ar.succeeded()) {
-                        promise.complete(ar.result());
-                    } else {
-                        promise.complete(ExecutionResult.failed("Worker process error: "
-                                + (ar.cause() == null ? "worker failed" : ar.cause().getMessage())));
-                    }
+                    promise.complete(result);
                 });
 
         return new RunningExecution() {
@@ -301,6 +301,67 @@ public class WorkerProcessRuntime implements ScriptRuntime {
             } catch (Exception ignored) {
             }
         });
+    }
+
+    /**
+     * Attributes a failed run to its worker's exit cause when the process is gone (D-159). A script that merely threw
+     * keeps its own error: only a run whose status is {@code FAILED} <em>and</em> whose worker has died is re-labelled,
+     * and then the worker's exit code is what names it ("killed: …", "crashed: …"). Package-private so the rule can be
+     * tested without spawning a process.
+     */
+    static ExecutionResult attributeWorkerDeath(Process process, ExecutionResult result) {
+        if (result.status() != JobStatus.FAILED) {
+            return result;
+        }
+        String exit = WorkerExit.describe(process);
+        return exit == null ? result : ExecutionResult.failed("Worker " + exit);
+    }
+
+    /** How long to wait for a dead worker's exit status before falling back to the run's own cause (D-159). */
+    static final long WORKER_EXIT_WAIT_MS = 2_000L;
+
+    /**
+     * Completes a run. A failure on a worker whose channel has died is attributed to the worker's exit cause (D-159);
+     * anything else — a success, or a script that failed on a live worker — completes at once with its own outcome.
+     */
+    private void completeRun(WorkerProcessHandle handle, ExecutionResult result, Promise<ExecutionResult> promise) {
+        if (result.status() == JobStatus.FAILED && handle.channel().isBroken()) {
+            awaitWorkerExitAndComplete(handle.process(), result, promise);
+        } else {
+            promise.complete(result);
+        }
+    }
+
+    /**
+     * Completes the run once the worker has really exited, naming its exit cause. The status is read from the process
+     * reaper, not the instant the pipe ends: the EOF and the process exit are observed on different threads, so
+     * reading {@code exitValue()} the moment the channel reports the death is exactly how the cause gets lost. A
+     * worker whose pipe has closed is already exiting, so this is prompt; the timer is only a guard, so a broken
+     * channel on a process that somehow lives cannot hang the job.
+     */
+    private void awaitWorkerExitAndComplete(Process process, ExecutionResult failure, Promise<ExecutionResult> promise) {
+        Context context = Vertx.currentContext();
+        AtomicBoolean settled = new AtomicBoolean(false);
+        long timerId = vertx.setTimer(WORKER_EXIT_WAIT_MS, id -> {
+            if (settled.compareAndSet(false, true)) {
+                completeOn(context, promise, failure);
+            }
+        });
+        process.onExit().whenComplete((exited, error) -> {
+            if (settled.compareAndSet(false, true)) {
+                vertx.cancelTimer(timerId);
+                completeOn(context, promise, attributeWorkerDeath(exited, failure));
+            }
+        });
+    }
+
+    /** Completes on the run's own Vert.x context when there is one, so the caller is not resumed on the reaper thread. */
+    private static void completeOn(Context context, Promise<ExecutionResult> promise, ExecutionResult result) {
+        if (context != null && Vertx.currentContext() != context) {
+            context.runOnContext(v -> promise.tryComplete(result));
+        } else {
+            promise.tryComplete(result);
+        }
     }
 
     private void cleanupProcess(Process process) {

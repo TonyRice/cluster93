@@ -240,8 +240,9 @@ process mode and verifies:
    TCP sockets (`net.connect`) through the node's egress security gate.
 3. **Dynamic Packages:** A job imports a dynamically published package (`parity-strings`).
 4. **Inter-Service Bus RPC:** A worker process answers `bus.request()` via `bus.handle()`.
-5. **Worker Crash Resilience:** Segfaults / SIGKILL are caught immediately, and in-flight
-   promises fail without hanging.
+5. **Worker Crash Resilience:** Segfaults / SIGKILL are caught immediately, the run fails without hanging, and the
+   failure names the worker's **exit cause** — "killed: out of memory or force-killed (SIGKILL)" for a kill, not
+   just that the pipe ended (D-159).
 
 ### 4.3 Embedded mode (in-process isolate regression testing)
 

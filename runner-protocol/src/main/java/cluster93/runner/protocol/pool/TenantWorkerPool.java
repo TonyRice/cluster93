@@ -324,8 +324,8 @@ public class TenantWorkerPool {
         }
         boolean recycle = poisoned || reusePolicy == ReusePolicy.FRESH_PER_JOB;
         if (poisoned) {
-            LOG.warn("Recycling worker {} (pid {}): {} ({} job(s) were still on it)",
-                    worker.workerId(), worker.pid(), reason, held == null ? 0 : held);
+            LOG.warn("Recycling worker {} (pid {}, tenant {}): {} ({} job(s) were still on it)",
+                    worker.workerId(), worker.pid(), tenantOf(worker), reason, held == null ? 0 : held);
         } else if (recycle) {
             LOG.debug("Recycling worker {} (pid {}): {} (reuse policy {})",
                     worker.workerId(), worker.pid(), reason, reusePolicy);
@@ -524,10 +524,12 @@ public class TenantWorkerPool {
                     if (ar.succeeded()) {
                         promise.complete(handle);
                     } else {
-                        LOG.warn("Worker {} (pid {}) failed to start: {}{}", workerId, pid,
-                                ar.cause() == null ? "unknown error" : ar.cause().getMessage(), stderrTail.render());
+                        // Name the death, not just the pipe: the worker is gone, so its exit status says why (D-159).
+                        // Read it before recycleWorker, which destroys the process and takes the exit code with it.
+                        String reason = WorkerExit.runFailure(handle.process(), ar.cause());
+                        LOG.warn("Worker {} (pid {}) failed to start: {}{}", workerId, pid, reason, stderrTail.render());
                         recycleWorker(handle);
-                        promise.fail(ar.cause() == null ? new IllegalStateException("Worker " + workerId + " failed to start") : ar.cause());
+                        promise.fail(new IllegalStateException(reason));
                     }
                 }
             });
@@ -583,7 +585,7 @@ public class TenantWorkerPool {
         StderrTail tail = stderrByPid.remove(worker.pid());
         String rendered = tail == null ? "" : tail.render();
         if (!rendered.isEmpty()) {
-            LOG.warn("Worker {} (pid {}) stderr tail:{}", worker.workerId(), worker.pid(), rendered);
+            LOG.warn("Worker {} (pid {}, tenant {}) stderr tail:{}", worker.workerId(), worker.pid(), tenantOf(worker), rendered);
         }
         worker.terminate();
     }
@@ -593,17 +595,24 @@ public class TenantWorkerPool {
         try {
             if (!worker.process().isAlive()) {
                 int code = worker.process().exitValue();
+                String tenant = tenantOf(worker);
                 if (code == 137) {
-                    LOG.error("Worker {} (pid {}) was killed (exit 137): likely OOM or cgroup memory limit", worker.workerId(), worker.pid());
+                    LOG.error("Worker {} (pid {}, tenant {}) was killed (exit 137): likely OOM or cgroup memory limit", worker.workerId(), worker.pid(), tenant);
                 } else if (code == 139) {
-                    LOG.error("Worker {} (pid {}) crashed with SIGSEGV (exit 139)", worker.workerId(), worker.pid());
+                    LOG.error("Worker {} (pid {}, tenant {}) crashed with SIGSEGV (exit 139)", worker.workerId(), worker.pid(), tenant);
                 } else if (code != 0) {
-                    LOG.warn("Worker {} (pid {}) exited with code {}", worker.workerId(), worker.pid(), code);
+                    LOG.warn("Worker {} (pid {}, tenant {}) exited with code {}", worker.workerId(), worker.pid(), tenant, code);
                 }
             }
         } catch (IllegalThreadStateException ignored) {
             // still alive when we looked
         }
+    }
+
+    /** The tenant a worker is bound to, or "unbound" for one that never took a job. */
+    private static String tenantOf(WorkerProcessHandle worker) {
+        String tenant = worker.boundTenantId();
+        return tenant == null ? "unbound" : tenant;
     }
 
     private static void drainStderr(long pid, java.io.InputStream stderr, StderrTail tail) {

@@ -199,6 +199,15 @@ public class NodeWorkerChannel {
         return boundTenantId;
     }
 
+    /**
+     * Whether the worker's connection has ended (a pipe EOF or a transport error). Once true, the runs this channel
+     * carried are failing, and the worker process is gone or going — which is what lets a failure be attributed to
+     * the worker's exit rather than to a script (D-159).
+     */
+    public boolean isBroken() {
+        return broken.get();
+    }
+
     public StreamMultiplexer streamMultiplexer() {
         return streamMultiplexer;
     }

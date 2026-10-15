@@ -3068,7 +3068,7 @@ cgroup v2 `cpu.max` for process workers, `--cpus` for container workers, so one 
 - The cpu controller is available at the root but **not enabled in the node's cgroup** on the development box; delegation has to be verified on a real systemd unit before this can be claimed to work.
 
 ### D-159 — Crash attribution: tenant and job, not just a pid
-**Date:** 2026-10-14 · **Status:** Accepted.
+**Date:** 2026-10-14 · **Status:** Accepted — built 2026-10-15.
 
 **Context:**
 D-135 already captures a worker's stderr tail and `inspectExit` already decodes 137 (OOM) and 139 (SIGSEGV) — but the result is a log line with a pid.
@@ -3079,6 +3079,12 @@ Record a worker's exit and its stderr tail against the **tenant and job** and su
 **Consequences:**
 - Mostly plumbing existing evidence into a tenant-visible place.
 - Becomes more important with D-155: a crash now ends a tenant's other concurrent jobs too.
+
+**Evidence:**
+- `WorkerExit` names the cause from the exit code: 137 → "killed: out of memory or force-killed (SIGKILL)" (the cgroup OOM killer and a plain `kill -9` are indistinguishable from the code alone, so the phrase names both rather than guessing), 139 → "crashed: segmentation fault (SIGSEGV)", another non-zero code → "exited with code N", 0 → nothing (a clean exit is not a crash).
+- `WorkerProcessRuntime` attributes a `FAILED` run when its worker's channel is broken, and reads the code from the process **reaper** (`Process.onExit()`), not the instant the pipe EOFs: the EOF and the process exit are observed on different threads, so reading `exitValue()` too early is exactly how the cause is lost (seen as a flake in `ProcessModeParityTest`). A bounded fallback keeps a broken channel on a process that somehow lives from hanging the job.
+- The pool's `spawnWorker` attributes a worker that dies **before** its handshake too, so the same kill reaches the tenant whichever side of the handshake it lands on; `recycleWorker`/`inspectExit` now name the **tenant** in the crash and stderr-tail logs.
+- Tests: `WorkerExitTest`, `WorkerProcessRuntimeTest`, `ProcessModeParityTest.detectsAWorkerProcessKill` (a real `kill -9`).
 
 ### D-160 — Stage 2 is container-per-tenant, not per-job
 **Date:** 2026-10-14 · **Status:** Accepted. Supersedes D-144's shape.

@@ -6,6 +6,21 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A worker's death is attributed to the job that was running on it, not just to a pid** (D-159):
+  - When a worker dies mid-run the channel could only report that the pipe ended — "Worker process connection
+    closed unexpectedly (EOF)". The tenant is now told **why**: a `FAILED` run on a worker whose channel is gone is
+    re-labelled from the exit code — "killed: out of memory or force-killed (SIGKILL)" (137; the cgroup OOM killer
+    and a plain `kill -9` look the same), "crashed: segmentation fault (SIGSEGV)" (139), or "exited with code N". A
+    script that merely threw keeps its own error.
+  - The cause is read from the process **reaper** (`Process.onExit()`), not the instant the pipe EOFs: the EOF and
+    the process exit are observed on different threads, so reading `exitValue()` too early loses the very code being
+    reported. A worker that dies **before** its handshake is attributed the same way, so the reason reaches the
+    tenant whichever side of the handshake the kill lands on.
+  - The pool's crash and stderr-tail log lines now name the **tenant** as well as the pid, so a crash is recorded
+    against its tenant rather than being anonymous.
+  - Tests: `WorkerExitTest`, `WorkerProcessRuntimeTest`, and `ProcessModeParityTest.detectsAWorkerProcessKill`
+    (a real `kill -9`).
+
 - **A guard on the worker's classpath (D-030):**
   - `WorkerClasspathIsolationTest` (in `worker/`) asserts Apache Ignite, the Vert.x `IgniteClusterManager`,
     `cluster93-cluster-ignite` and Hazelcast are **not** on the worker's classpath — and proves it is looking at the
