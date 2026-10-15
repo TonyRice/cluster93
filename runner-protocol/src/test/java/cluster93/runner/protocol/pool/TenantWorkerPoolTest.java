@@ -366,8 +366,32 @@ class TenantWorkerPoolTest {
             assertThat(usage.workers()).isEqualTo(1);
             assertThat(usage.jobs()).isEqualTo(2);
             assertThat(usage.pending()).isZero();
+            // newPool builds a one-job-per-worker pool: (64 MB × 1 job + 128 MB overhead).
+            assertThat(usage.memoryBytes()).isEqualTo((64L * 1 + 128L) * 1024L * 1024L);
             // newPool builds a javet pool, whose budget the cgroup enforces (D-157).
             assertThat(usage.budgetEnforcement()).isEqualTo("cgroup");
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    @Test
+    @DisplayName("A worker is refused when the node's memory ceiling cannot hold it (D-163)")
+    void theNodeMemoryCeilingRefusesASecondWorker() {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        // A ceiling that holds one worker's 384 MB but not two.
+        WorkerMemoryBudget memory = new WorkerMemoryBudget(400L * 1024 * 1024);
+        TenantWorkerPool pool = new TenantWorkerPool(vertx, null, "javet", 0, 8, 64,
+                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(),
+                cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL, null, 4, memory);
+        try {
+            long workerBytes = (64L * 4 + 128L) * 1024L * 1024L;
+
+            // The first worker always fits; the second would exceed the ceiling and takes nothing with it.
+            assertThat(pool.acquireNodeAllowance(workerBytes)).isTrue();
+            assertThat(memory.usedBytes()).isEqualTo(workerBytes);
+            assertThat(pool.acquireNodeAllowance(workerBytes)).isFalse();
+            assertThat(memory.usedBytes()).isEqualTo(workerBytes);
         } finally {
             closeQuietly(vertx, pool);
         }

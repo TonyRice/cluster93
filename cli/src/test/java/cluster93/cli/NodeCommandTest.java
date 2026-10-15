@@ -168,6 +168,8 @@ class NodeCommandTest {
                     c93_workers_limit{node="local-master"} 8.0
                     c93_workers_warm{node="local-master"} 1.0
                     c93_tenants_active{node="local-master"} 2.0
+                    c93_workers_memory_used_bytes{node="local-master"} 1342177280.0
+                    c93_workers_memory_limit_bytes{node="local-master"} 5368709120.0
                     c93_tenant_workers{node="local-master",tenant="acme"} 2.0
                     c93_tenant_workers{node="local-master",tenant="globex"} 1.0
                     """.getBytes(StandardCharsets.UTF_8);
@@ -188,12 +190,14 @@ class NodeCommandTest {
                     .contains("workers:")
                     .contains("3 running / 8")
                     .contains("2 tenant(s) active")
+                    .contains("1280 MB / 5120 MB memory")
                     .contains("acme: 2");
 
             Result json = run("--json", "node", "status");
             com.fasterxml.jackson.databind.JsonNode node = Json.parse(json.out());
             assertThat(node.path("workers").path("running").asInt()).isEqualTo(3);
             assertThat(node.path("workers").path("limit").asInt()).isEqualTo(8);
+            assertThat(node.path("workers").path("memoryUsedBytes").asLong()).isEqualTo(1342177280L);
             assertThat(node.path("tenants").size()).isEqualTo(2);
         } finally {
             metrics.stop(0);

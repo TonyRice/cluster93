@@ -28,6 +28,10 @@ import java.util.UUID;
  * @param maxJobsPerWorker how many jobs one worker runs at the same time, each in its own context (D-155). This is
  *                      the knob that matters: a tenant gets more workers only when it needs more concurrency than
  *                      one worker can carry, so {@code maxJobsPerTenant / maxJobsPerWorker} workers per tenant
+ * @param maxWorkerMemoryMb the node-wide ceiling on worker memory (D-163), next to the worker count. Defaults to
+ *                      what {@code maxWorkers} already implies — each worker cgroup-sized for its jobs — so it never
+ *                      binds before {@code maxWorkers}; lower it to bound memory directly on a small host. 0 is
+ *                      unbounded. At least one worker is always admitted, so a limit below one worker cannot deadlock
  * @param ingressPort   where services' HTTP traffic arrives (routed by Host)
  * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
  * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
@@ -68,6 +72,7 @@ public record ServerConfig(
         int maxWorkers,
         cluster93.core.scheduler.JobScheduler.WhenFull jobWhenFull,
         int maxHeapMb,
+        long maxWorkerMemoryMb,
         Duration defaultTimeout,
         Duration maxTimeout,
         Duration heartbeat,
@@ -143,6 +148,10 @@ public record ServerConfig(
         if (maxWorkers < 1) {
             throw new IllegalArgumentException("C93_MAX_WORKERS must be at least 1 (it was " + maxWorkers + ")");
         }
+        if (maxWorkerMemoryMb < 0) {
+            throw new IllegalArgumentException("C93_MAX_WORKER_MEMORY_MB must be 0 (unbounded) or more (it was "
+                    + maxWorkerMemoryMb + ")");
+        }
         for (String role : roles) {
             if (!ROLES.contains(role)) {
                 throw new IllegalArgumentException("C93_ROLES must be a comma-separated subset of " + ROLES + " (it named " + role + ")");
@@ -172,6 +181,16 @@ public record ServerConfig(
                 env.getOrDefault("C93_WORKER_ENGINE", "graaljs")).trim().toLowerCase(java.util.Locale.ROOT);
         // Read once: the per-tenant and per-worker caps default to it, so they all agree on what this node is.
         int capacity = Integer.parseInt(env.getOrDefault("C93_CAPACITY", "8"));
+        // The worker caps, read once so the memory ceiling's default can be derived from them.
+        int maxJobsPerWorker = Integer.parseInt(env.getOrDefault("C93_MAX_JOBS_PER_WORKER", "4"));
+        int maxWorkers = Integer.parseInt(env.getOrDefault("C93_MAX_WORKERS", String.valueOf(capacity)));
+        int maxHeapMb = Integer.parseInt(env.getOrDefault("C93_MAX_HEAP_MB", "128"));
+        // The node-wide memory ceiling on workers (D-163). Its default is what the worker count already implies —
+        // maxWorkers workers, each cgroup-sized for its jobs (D-163) — so it never binds before C93_MAX_WORKERS and a
+        // fresh node behaves exactly as before; an operator lowers it to bound memory directly. 0 means unbounded.
+        long defaultWorkerMemoryMb = (long) maxWorkers * ((long) maxJobsPerWorker * maxHeapMb + 128L);
+        long maxWorkerMemoryMb = Long.parseLong(
+                env.getOrDefault("C93_MAX_WORKER_MEMORY_MB", String.valueOf(defaultWorkerMemoryMb)));
         return new ServerConfig(
                 env.getOrDefault("C93_NODE_ID", defaultNodeId()),
                 Integer.parseInt(env.getOrDefault("C93_HTTP_PORT", "9393")),
@@ -197,11 +216,13 @@ public record ServerConfig(
                 // job slot is ever needed — which also covers however many tenants can be active at once, since no
                 // more tenants can be running than there are concurrent jobs. An operator lowers it to bound
                 // process memory on a small host.
-                Integer.parseInt(env.getOrDefault("C93_MAX_WORKERS", String.valueOf(capacity))),
+                maxWorkers,
                 // What a submitted job does when no node has a free slot (D-156): wait for capacity (the default), or
                 // fail at once. Service runs always wait — a service that cannot start is restarted, not rejected.
                 whenFull(env.get("C93_JOB_WHEN_FULL")),
-                Integer.parseInt(env.getOrDefault("C93_MAX_HEAP_MB", "128")),
+                maxHeapMb,
+                // The node-wide memory ceiling on workers (D-163), read above so its default could use the caps.
+                maxWorkerMemoryMb,
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_DEFAULT_TIMEOUT_MS", "10000"))),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_MAX_TIMEOUT_MS", "60000"))),
                 heartbeat,

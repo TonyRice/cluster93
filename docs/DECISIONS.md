@@ -3178,3 +3178,23 @@ One **snapshot** is the source of truth: `TenantWorkerPoolManager.snapshot()` re
 
 **Evidence:**
 - `TenantWorkerPoolTest.thePoolReportsItsTenantUsage`, `aWorkerCrashIsCountedForItsTenant`, `reapingAHealthyWorkerIsNotACrash`; `TenantWorkerPoolManagerTest.theSnapshotReportsWorkerUse`; `ObservabilityTest` (node and per-tenant gauges); `NodeCommandTest.statusShowsTheNodesWorkerUseFromItsMetrics`.
+
+### D-165 — The node-wide budget is memory, not only a worker count
+**Date:** 2026-10-15 · **Status:** Accepted.
+
+**Context:**
+D-156 bounded how many worker *processes* a node runs (`WorkerBudget`, `C93_MAX_WORKERS`), not how much memory they hold. A worker's memory is its cgroup (D-163): `maxJobsPerWorker × C93_MAX_HEAP_MB` plus ~128 MB of native overhead. So the node's total worker memory was bounded only indirectly, and the part an operator cannot see — the per-worker overhead, multiplied by the worker count — was invisible to anyone reasoning in memory. D-163 named this as the next thing to account for.
+
+**Decision:**
+A `WorkerMemoryBudget` sits next to `WorkerBudget` (D-156): a worker reserves its **cgroup size** when it is spawned and gives it back when it is reaped, so the total cannot drift from the workers actually running. Its own env, `C93_MAX_WORKER_MEMORY_MB`, defaults to `C93_MAX_WORKERS × (maxJobsPerWorker × C93_MAX_HEAP_MB + 128)` — exactly what the worker count already implies — so it never binds before `C93_MAX_WORKERS` and a fresh node behaves as before; an operator lowers it to bound memory directly. `0` is unbounded. The count and memory caps are checked together on a spawn, and a job that fits neither queues (D-156) after an idle worker is reaped (D-156's "work preempts warmth"). Node-wide gauges `c93.workers.memory.used_bytes`/`limit_bytes` and the snapshot (D-164) report it.
+
+**Alternatives considered:**
+- **Bound memory instead of the count.** Rejected: the count is what bounds *processes* — PIDs and FDs, and the scheduler's concurrency — which memory does not. Both are real; the node needs both.
+- **Refuse to start when the ceiling is below one worker.** Rejected in favour of always admitting the first worker: a ceiling set too low would otherwise let no worker run at all, and a node that runs no worker does no work.
+
+**Consequences:**
+- Per-worker memory is the cgroup *maximum*, so the reservation is a ceiling a worker may never reach. That is deliberate: the budget bounds what a node can be *committed* to, which is what stops a node oversubscribing itself, not a live measurement.
+- The default makes the ceiling redundant with the count until an operator sets it — which is the point: it turns an implicit, invisible bound into an explicit, adjustable one.
+
+**Evidence:**
+- `WorkerMemoryBudgetTest`; `TenantWorkerPoolTest.theNodeMemoryCeilingRefusesASecondWorker`, `thePoolReportsItsTenantUsage`; `TenantWorkerPoolManagerTest.theSnapshotReportsWorkerUse`; `ServerConfigTest.maxWorkerMemoryIsItsOwnSetting`; `ObservabilityTest` (`c93_workers_memory_used_bytes`/`limit_bytes`).

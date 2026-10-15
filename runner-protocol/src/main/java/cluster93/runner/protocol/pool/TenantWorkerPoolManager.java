@@ -30,6 +30,8 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     private final int maxJobsPerWorker;
     /** The node-wide allowance shared by every tenant's pool, so n tenants cannot spawn n × capacity (D-156). */
     private final WorkerBudget nodeBudget;
+    /** The node-wide memory allowance shared by every tenant's pool (D-163), next to the worker count. */
+    private final WorkerMemoryBudget memoryBudget;
     /**
      * Who gets a freed worker when tenants contend (D-161). This is the only place more than one tenant is visible:
      * a per-tenant pool sees just itself, so fairness installed there could never fire.
@@ -57,6 +59,22 @@ public class TenantWorkerPoolManager implements NodeArbiter {
                                    TenantWorkerPool.ReusePolicy reusePolicy,
                                    CgroupMemoryLimiter cgroupLimiter,
                                    NodeRpcAuthorizer authorizer) {
+        this(vertx, modeBinaries, defaultMode, minWarmPerTenant, maxTotalPerTenant, maxWorkers, maxJobsPerWorker,
+                heapMb, reusePolicy, cgroupLimiter, authorizer, 0);
+    }
+
+    public TenantWorkerPoolManager(Vertx vertx,
+                                   Map<String, String> modeBinaries,
+                                   String defaultMode,
+                                   int minWarmPerTenant,
+                                   int maxTotalPerTenant,
+                                   int maxWorkers,
+                                   int maxJobsPerWorker,
+                                   int heapMb,
+                                   TenantWorkerPool.ReusePolicy reusePolicy,
+                                   CgroupMemoryLimiter cgroupLimiter,
+                                   NodeRpcAuthorizer authorizer,
+                                   long maxWorkerMemoryBytes) {
         this.vertx = Objects.requireNonNull(vertx, "vertx");
         this.modeBinaries = modeBinaries != null ? Map.copyOf(modeBinaries) : Map.of();
         this.defaultMode = defaultMode != null ? defaultMode : "javet";
@@ -69,6 +87,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         // spawn that finds the budget full first asks the manager to reap an IDLE worker node-wide and retries
         // (freeIdleWorker). Work preempts warmth, so an idle worker can never block a job.
         this.nodeBudget = new WorkerBudget(Math.max(1, maxWorkers));
+        this.memoryBudget = new WorkerMemoryBudget(maxWorkerMemoryBytes);
         this.heapMb = Math.max(16, heapMb);
         this.reusePolicy = Objects.requireNonNull(reusePolicy, "reusePolicy");
         this.cgroupLimiter = Objects.requireNonNull(cgroupLimiter, "cgroupLimiter");
@@ -82,7 +101,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         Objects.requireNonNull(tenantId, "tenantId");
         return tenantPools.computeIfAbsent(tenantId, t -> {
             String binary = resolveModeBinary(defaultMode);
-            TenantWorkerPool pool = new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker)
+            TenantWorkerPool pool = new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker, memoryBudget)
                     .arbiter(this);
             return registerTenantGauges(t, pool);
         });
@@ -107,7 +126,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         String poolKey = tenantId + ":" + effectiveMode;
         TenantWorkerPool pool = tenantPools.computeIfAbsent(poolKey, k -> {
             String binary = resolveModeBinary(effectiveMode);
-            TenantWorkerPool created = new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker)
+            TenantWorkerPool created = new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker, memoryBudget)
                     .arbiter(this);
             return registerTenantGauges(tenantId, created);
         });
@@ -221,7 +240,8 @@ public class TenantWorkerPoolManager implements NodeArbiter {
             }
         }
         tenants.sort(Comparator.comparing(WorkerPoolSnapshot.TenantWorkers::tenant));
-        return new WorkerPoolSnapshot(nodeBudget.used(), nodeBudget.limit(), warm, active.size(), List.copyOf(tenants));
+        return new WorkerPoolSnapshot(nodeBudget.used(), nodeBudget.limit(), warm, active.size(),
+                memoryBudget.usedBytes(), memoryBudget.limitBytes(), List.copyOf(tenants));
     }
 
     /** Worker processes this node is running now; a cheap reading for the node-wide gauge. */
@@ -232,6 +252,16 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     /** Worker processes this node may run; 0 means unbounded. */
     public int workersLimit() {
         return nodeBudget.limit();
+    }
+
+    /** Memory the node's workers reserve now; a cheap reading for the node-wide gauge (D-163). */
+    public long workersMemoryUsed() {
+        return memoryBudget.usedBytes();
+    }
+
+    /** Memory the node's workers may reserve; 0 means unbounded. */
+    public long workersMemoryLimit() {
+        return memoryBudget.limitBytes();
     }
 
     /** Idle workers kept warm, node-wide. */

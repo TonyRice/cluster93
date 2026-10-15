@@ -393,12 +393,14 @@ public final class Cluster93 {
                     // still never handed to another tenant.
                     cluster93.runner.protocol.pool.TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT,
                     new cluster93.runner.protocol.pool.CgroupMemoryLimiter(),
-                    cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL
+                    cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL,
+                    // The node-wide memory ceiling on workers (D-163), next to the worker count above.
+                    config.maxWorkerMemoryMb() * 1024L * 1024L
             );
             workerPoolRef.set(poolManager);
-            // Node-wide worker use (D-156, D-159): running and permitted worker processes, warmth, and how many
-            // tenants are actually using one — the numbers that say whether the node's caps are binding. Per-tenant
-            // gauges register with each tenant's pool (TenantWorkerPoolManager.poolFor).
+            // Node-wide worker use (D-156, D-159, D-163): running and permitted worker processes and memory, warmth,
+            // and how many tenants are actually using one — the numbers that say whether the caps are binding.
+            // Per-tenant gauges register with each tenant's pool (TenantWorkerPoolManager.poolFor).
             io.micrometer.core.instrument.MeterRegistry meters = Metrics.of(vertx).registry();
             io.micrometer.core.instrument.Gauge.builder("c93.workers.running", poolManager, m -> m.workersRunning())
                     .description("Worker processes this node is running").register(meters);
@@ -408,15 +410,20 @@ public final class Cluster93 {
                     .description("Idle worker processes kept warm").register(meters);
             io.micrometer.core.instrument.Gauge.builder("c93.tenants.active", poolManager, m -> m.tenantsActive())
                     .description("Tenants running at least one worker on this node").register(meters);
+            io.micrometer.core.instrument.Gauge.builder("c93.workers.memory.used", poolManager, m -> m.workersMemoryUsed())
+                    .description("Bytes of worker memory this node's workers reserve").baseUnit("bytes").register(meters);
+            io.micrometer.core.instrument.Gauge.builder("c93.workers.memory.limit", poolManager, m -> m.workersMemoryLimit())
+                    .description("Bytes of worker memory this node may reserve; 0 means unbounded").baseUnit("bytes").register(meters);
             runtime = new cluster93.runner.protocol.runtime.WorkerProcessRuntime(vertx, poolManager);
             // Say plainly what this node can run at once, and how the workers are shared: one worker per tenant
             // (D-155), running up to maxJobsPerWorker jobs each, and the pools are handed out round-robin between
             // tenants so one tenant cannot take all of them (D-153). Tenants themselves are not capped — only
             // concurrency is.
-            LOG.info("Process workers: up to {} concurrent jobs ({} MB each), {} job(s) per worker, one worker set "
-                            + "per tenant, shared round-robin between tenants; default engine {}. Raise C93_CAPACITY "
-                            + "for more concurrency.",
-                    config.capacity(), config.maxHeapMb(), config.maxJobsPerWorker(), config.workerDefaultMode());
+            LOG.info("Process workers: up to {} concurrent jobs ({} MB each), {} job(s) per worker, {} workers and "
+                            + "{} MB of worker memory at most, one worker set per tenant, shared round-robin between "
+                            + "tenants; default engine {}. Raise C93_CAPACITY for more concurrency.",
+                    config.capacity(), config.maxHeapMb(), config.maxJobsPerWorker(), config.maxWorkers(),
+                    config.maxWorkerMemoryMb(), config.workerDefaultMode());
         } else {
             runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
         }

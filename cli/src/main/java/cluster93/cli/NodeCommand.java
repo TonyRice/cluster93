@@ -699,11 +699,13 @@ final class NodeCommand extends Base {
 
         /** The node gauges this reads; anything else in the exposition is ignored. */
         private static final Set<String> WORKER_GAUGES = Set.of(
-                "c93_workers_running", "c93_workers_limit", "c93_workers_warm", "c93_tenants_active");
+                "c93_workers_running", "c93_workers_limit", "c93_workers_warm", "c93_tenants_active",
+                "c93_workers_memory_used_bytes", "c93_workers_memory_limit_bytes");
 
         private record TenantWorkers(String tenant, int workers) {}
 
-        private record Workers(int running, int limit, int warm, int tenantsActive, List<TenantWorkers> tenants) {}
+        private record Workers(int running, int limit, int warm, int tenantsActive,
+                               long memoryUsedBytes, long memoryLimitBytes, List<TenantWorkers> tenants) {}
 
         private static String metricsBase(Map<String, String> config, boolean installed) {
             return "http://localhost:" + config.getOrDefault(installed ? "C93_METRICS_PORT" : "METRICS_PORT", DEFAULT_METRICS_PORT);
@@ -714,7 +716,7 @@ final class NodeCommand extends Base {
             if (response == null || response.statusCode() >= 400) {
                 return null;
             }
-            Map<String, Integer> gauges = new HashMap<>();
+            Map<String, Double> gauges = new HashMap<>();
             List<TenantWorkers> tenants = new ArrayList<>();
             for (String line : response.body().split("\n")) {
                 int space = line.lastIndexOf(' ');
@@ -730,11 +732,15 @@ final class NodeCommand extends Base {
                         tenants.add(new TenantWorkers(tenant, (int) Math.round(number(value))));
                     }
                 } else if (WORKER_GAUGES.contains(name)) {
-                    gauges.put(name, (int) Math.round(number(value)));
+                    gauges.put(name, number(value));
                 }
             }
-            return new Workers(gauges.getOrDefault("c93_workers_running", -1), gauges.getOrDefault("c93_workers_limit", -1),
-                    gauges.getOrDefault("c93_workers_warm", 0), gauges.getOrDefault("c93_tenants_active", 0),
+            return new Workers((int) Math.round(gauges.getOrDefault("c93_workers_running", -1.0)),
+                    (int) Math.round(gauges.getOrDefault("c93_workers_limit", -1.0)),
+                    (int) Math.round(gauges.getOrDefault("c93_workers_warm", 0.0)),
+                    (int) Math.round(gauges.getOrDefault("c93_tenants_active", 0.0)),
+                    Math.round(gauges.getOrDefault("c93_workers_memory_used_bytes", 0.0)),
+                    Math.round(gauges.getOrDefault("c93_workers_memory_limit_bytes", 0.0)),
                     List.copyOf(tenants));
         }
 
@@ -762,10 +768,17 @@ final class NodeCommand extends Base {
                 return "(metrics unavailable)";
             }
             String limit = workers.limit() > 0 ? String.valueOf(workers.limit()) : "unbounded";
+            String memory = workers.memoryLimitBytes() > 0
+                    ? megabytes(workers.memoryUsedBytes()) + " / " + megabytes(workers.memoryLimitBytes())
+                    : megabytes(workers.memoryUsedBytes());
             String perTenant = workers.tenants().isEmpty() ? ""
                     : " [" + workers.tenants().stream().map(t -> t.tenant() + ": " + t.workers()).collect(Collectors.joining(", ")) + "]";
             return workers.running() + " running / " + limit + ", " + workers.tenantsActive() + " tenant(s) active, "
-                    + workers.warm() + " warm" + perTenant;
+                    + workers.warm() + " warm, " + memory + " memory" + perTenant;
+        }
+
+        private static String megabytes(long bytes) {
+            return (bytes / (1024 * 1024)) + " MB";
         }
 
         private static void putWorkers(ObjectNode result, Workers workers) {
@@ -776,7 +789,9 @@ final class NodeCommand extends Base {
                     .put("running", workers.running())
                     .put("limit", workers.limit())
                     .put("warm", workers.warm())
-                    .put("tenantsActive", workers.tenantsActive()));
+                    .put("tenantsActive", workers.tenantsActive())
+                    .put("memoryUsedBytes", workers.memoryUsedBytes())
+                    .put("memoryLimitBytes", workers.memoryLimitBytes()));
             ArrayNode tenants = Json.array();
             for (TenantWorkers tenant : workers.tenants()) {
                 tenants.add(Json.object().put("tenant", tenant.tenant()).put("workers", tenant.workers()));

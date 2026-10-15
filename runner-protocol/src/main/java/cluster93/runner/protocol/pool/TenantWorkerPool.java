@@ -62,6 +62,8 @@ public class TenantWorkerPool {
     private final long helloTimeoutMs;
     /** The node-wide allowance every tenant's pool draws from (D-156); null means this pool is the only one. */
     private final WorkerBudget nodeBudget;
+    /** The node-wide memory allowance every tenant's pool draws from (D-163); null means this pool is the only one. */
+    private final WorkerMemoryBudget memoryBudget;
     /** Who arbitrates between tenants when capacity is contended (D-161); null when this pool is the only one. */
     private NodeArbiter arbiter;
 
@@ -116,6 +118,10 @@ public class TenantWorkerPool {
     }
 
     public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget, int maxJobsPerWorker) {
+        this(vertx, binaryPath, mode, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker, null);
+    }
+
+    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget, int maxJobsPerWorker, WorkerMemoryBudget memoryBudget) {
         this.vertx = Objects.requireNonNull(vertx, "vertx");
         this.binaryPath = binaryPath;
         this.mode = (mode == null || mode.isBlank()) ? "javet" : mode.toLowerCase(Locale.ROOT);
@@ -127,10 +133,34 @@ public class TenantWorkerPool {
         this.cgroupLimiter = Objects.requireNonNull(cgroupLimiter, "cgroupLimiter");
         this.authorizer = Objects.requireNonNull(authorizer, "authorizer");
         this.nodeBudget = nodeBudget;
+        this.memoryBudget = memoryBudget;
         this.helloTimeoutMs = Math.max(1L, Long.getLong("cluster93.worker.helloTimeoutMs", DEFAULT_HELLO_TIMEOUT_MS));
 
         // Maintain warm unbound pool
         ensureWarmPool();
+    }
+
+    /** The memory one worker reserves: its cgroup's hard limit, the same sum {@link #spawnWorker} applies (D-163). */
+    private long workerMemoryBytes() {
+        return ((long) heapMb * maxJobsPerWorker + 128L) * 1024L * 1024L;
+    }
+
+    /**
+     * Takes one worker's share of the node's allowances — its slot in the worker count (D-156) and its memory
+     * (D-163) — rolling the count back if the memory did not fit, so a partial take cannot leak. Package-private so
+     * the memory ceiling can be tested without spawning a process.
+     */
+    boolean acquireNodeAllowance(long workerBytes) {
+        if (nodeBudget != null && !nodeBudget.tryAcquire()) {
+            return false;
+        }
+        if (memoryBudget != null && !memoryBudget.tryAcquire(workerBytes)) {
+            if (nodeBudget != null) {
+                nodeBudget.release();
+            }
+            return false;
+        }
+        return true;
     }
 
     public int minWarm() {
@@ -199,8 +229,9 @@ public class TenantWorkerPool {
         if (tenant == null) {
             return null;
         }
+        long memoryBytes = (long) (activeWorkerCount() + warmCount()) * workerMemoryBytes();
         return new WorkerPoolSnapshot.TenantWorkers(tenant, activeWorkerCount(), jobsInFlightCount(),
-                pendingCount(), warmCount(), budgetEnforcement());
+                pendingCount(), warmCount(), memoryBytes, budgetEnforcement());
     }
 
     /** The tenant this pool serves: one has run a job, is waiting for a worker, or is kept warm. */
@@ -497,13 +528,14 @@ public class TenantWorkerPool {
         // Counted from the moment the spawn starts, so maxTotal bounds in-flight workers too. Released by
         // recycleWorker on failure, or when the handle is recycled after use (D-135).
         totalWorkers.incrementAndGet();
-        if (nodeBudget != null && !nodeBudget.tryAcquire()) {
-            // The node is at its worker cap (D-156). A spawn for work preempts warmth: reap an idle worker from any
-            // tenant's pool and take its slot, so an idle worker can never block a job. A spawn for warmth does not —
-            // reaping one idle worker to make another would be pointless. If every worker is busy, the acquire queues
-            // the job (NodeAtCapacityException) rather than failing it.
+        long workerBytes = workerMemoryBytes();
+        if (!acquireNodeAllowance(workerBytes)) {
+            // The node is at its worker cap or its memory cap (D-156, D-163). A spawn for work preempts warmth: reap
+            // an idle worker from any tenant's pool and take its slot and memory, so an idle worker can never block
+            // a job. A spawn for warmth does not — reaping one idle worker to make another would be pointless. If
+            // every worker is busy, the acquire queues the job (NodeAtCapacityException) rather than failing it.
             boolean freed = forWork && arbiter != null && arbiter.freeIdleWorker();
-            if (!freed || !nodeBudget.tryAcquire()) {
+            if (!freed || !acquireNodeAllowance(workerBytes)) {
                 totalWorkers.decrementAndGet();
                 promise.fail(new NodeAtCapacityException());
                 return promise.future();
@@ -613,6 +645,9 @@ public class TenantWorkerPool {
             if (nodeBudget != null) {
                 nodeBudget.release();
             }
+            if (memoryBudget != null) {
+                memoryBudget.release(workerBytes);
+            }
             LOG.warn("Worker didn't start: {}", e.getMessage());
             promise.fail(e);
         }
@@ -653,6 +688,9 @@ public class TenantWorkerPool {
         totalWorkers.decrementAndGet();
         if (nodeBudget != null) {
             nodeBudget.release();
+        }
+        if (memoryBudget != null) {
+            memoryBudget.release(workerMemoryBytes());
         }
         cgroupLimiter.cleanup(worker.pid());
         // A worker that died on its own is a crash, and it is counted against its tenant (D-159). One we terminate

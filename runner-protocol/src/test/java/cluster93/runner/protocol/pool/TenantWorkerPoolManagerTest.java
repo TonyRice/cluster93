@@ -23,7 +23,8 @@ class TenantWorkerPoolManagerTest {
         // No pool is created for a tenant until it is asked for, which is what lets these tests exercise the
         // arbitration on its own: the rotation is the whole decision, and no worker is spawned.
         return new TenantWorkerPoolManager(vertx, Map.of(), "javet", 0, 2, 2, 4, 128,
-                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), NodeRpcAuthorizer.ALLOW_ALL);
+                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), NodeRpcAuthorizer.ALLOW_ALL,
+                2L * 1024 * 1024 * 1024);
     }
 
     @Test
@@ -86,11 +87,13 @@ class TenantWorkerPoolManagerTest {
             WorkerPoolSnapshot snapshot = manager.snapshot();
 
             assertThat(snapshot.workersLimit()).isEqualTo(2); // the manager's maxWorkers
+            assertThat(snapshot.workersMemoryLimitBytes()).isEqualTo(2L * 1024 * 1024 * 1024); // the manager's memory ceiling
             assertThat(snapshot.tenantsActive()).isEqualTo(1);
             assertThat(snapshot.tenants()).singleElement().satisfies(tenant -> {
                 assertThat(tenant.tenant()).isEqualTo("acme");
                 assertThat(tenant.workers()).isEqualTo(1);
                 assertThat(tenant.jobs()).isEqualTo(2);
+                assertThat(tenant.memoryBytes()).isEqualTo((128L * 4 + 128L) * 1024L * 1024L);
             });
             assertThat(manager.tenantsActive()).isEqualTo(1);
             assertThat(manager.workersLimit()).isEqualTo(2);

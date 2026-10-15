@@ -6,6 +6,19 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **The node-wide worker budget now includes memory, not only a worker count** (D-165):
+  - `WorkerBudget` (D-156) bounded how many worker *processes* a node runs, not how much memory they hold — a
+    worker's cgroup is `maxJobsPerWorker × C93_MAX_HEAP_MB` plus ~128 MB (D-163), so total memory was bounded only
+    indirectly, and the per-worker overhead times the worker count was invisible to an operator thinking in memory.
+  - A `WorkerMemoryBudget` sits next to it: a worker reserves its cgroup size when spawned and returns it when
+    reaped. New env **`C93_MAX_WORKER_MEMORY_MB`**, defaulting to exactly what `C93_MAX_WORKERS` already implies
+    (`maxWorkers × (maxJobsPerWorker × maxHeapMb + 128)`), so it never binds before the count and a fresh node
+    behaves as before; lower it to bound memory directly. `0` is unbounded, and the first worker is always admitted
+    so a ceiling below one worker cannot deadlock. The caps are checked together; a job that fits neither queues
+    (D-156) after an idle worker is reaped.
+  - Reported as `c93.workers.memory.used_bytes`/`limit_bytes` and in the snapshot (D-164); `c93 node status` shows
+    the memory line.
+
 - **A node's worker use, and each tenant's, is observable** (D-156, D-164):
   - One snapshot is the source of truth: `TenantWorkerPoolManager.snapshot()` gives, per node, workers
     running / the node's limit / warm / tenants active, and per tenant its workers, concurrent jobs, waiting jobs,

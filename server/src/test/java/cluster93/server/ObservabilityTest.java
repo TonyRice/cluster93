@@ -86,6 +86,8 @@ class ObservabilityTest {
                 .contains("c93_workers_limit{node=\"observed\"}")
                 .contains("c93_workers_warm{node=\"observed\"}")
                 .contains("c93_tenants_active{node=\"observed\"}")
+                .contains("c93_workers_memory_used_bytes{node=\"observed\"}")
+                .contains("c93_workers_memory_limit_bytes{node=\"observed\"}")
                 .contains("c93_tenant_workers{node=\"observed\",tenant=\"watched\"}")
                 .contains("c93_cluster_nodes{node=\"observed\"} 1.0")
                 .contains("c93_cluster_leader{node=\"observed\"} 1.0")

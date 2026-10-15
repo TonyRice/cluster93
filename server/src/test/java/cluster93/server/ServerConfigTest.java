@@ -56,6 +56,21 @@ class ServerConfigTest {
     }
 
     @Test
+    @DisplayName("The node-wide worker memory ceiling is its own env, defaulting to what the count implies (D-163)")
+    void maxWorkerMemoryIsItsOwnSetting() {
+        // Default: maxWorkers × (maxJobsPerWorker × maxHeapMb + overhead) = 8 × (4 × 128 + 128) MB, so the ceiling
+        // never binds before C93_MAX_WORKERS — a fresh node behaves exactly as it did.
+        assertThat(ServerConfig.fromEnv(Map.of()).maxWorkerMemoryMb()).isEqualTo(8L * (4L * 128 + 128));
+        // An operator lowers it to bound memory directly.
+        assertThat(ServerConfig.fromEnv(Map.of("C93_MAX_WORKER_MEMORY_MB", "2048")).maxWorkerMemoryMb()).isEqualTo(2048);
+        // 0 means unbounded.
+        assertThat(ServerConfig.fromEnv(Map.of("C93_MAX_WORKER_MEMORY_MB", "0")).maxWorkerMemoryMb()).isZero();
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_MAX_WORKER_MEMORY_MB", "-1")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("C93_MAX_WORKER_MEMORY_MB");
+    }
+
+    @Test
     @DisplayName("A job that cannot get capacity queues by default, and can be told to reject instead (D-156)")
     void jobWhenFullIsItsOwnSetting() {
         assertThat(ServerConfig.fromEnv(Map.of()).jobWhenFull())
