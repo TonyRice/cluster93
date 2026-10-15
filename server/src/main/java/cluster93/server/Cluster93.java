@@ -408,7 +408,7 @@ public final class Cluster93 {
         } else {
             runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
         }
-        JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
+        JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes, config.jobWhenFull());
         ServeRegistry serving = new ServeRegistry();
         StorageRoom room = new StorageRoom(quota, stores.storage(), stores.files());
         cluster93.core.auth.RateLimiter limiter = new cluster93.core.auth.RateLimiter(config.rateLimitPerMinute());

@@ -56,6 +56,18 @@ class ServerConfigTest {
     }
 
     @Test
+    @DisplayName("A job that cannot get capacity queues by default, and can be told to reject instead (D-156)")
+    void jobWhenFullIsItsOwnSetting() {
+        assertThat(ServerConfig.fromEnv(Map.of()).jobWhenFull())
+                .isEqualTo(cluster93.core.scheduler.JobScheduler.WhenFull.QUEUE);
+        assertThat(ServerConfig.fromEnv(Map.of("C93_JOB_WHEN_FULL", "reject")).jobWhenFull())
+                .isEqualTo(cluster93.core.scheduler.JobScheduler.WhenFull.REJECT);
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_JOB_WHEN_FULL", "maybe")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("C93_JOB_WHEN_FULL");
+    }
+
+    @Test
     @DisplayName("The API, ingress and metrics bind all interfaces by default, as they always have")
     void httpBindDefaultsToAllInterfaces() {
         assertThat(ServerConfig.fromEnv(Map.of()).httpBind()).isEqualTo("0.0.0.0");

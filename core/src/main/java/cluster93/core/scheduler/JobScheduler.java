@@ -26,14 +26,29 @@ public final class JobScheduler {
 
     private static final DeliveryOptions DISPATCH = new DeliveryOptions().setSendTimeout(5_000);
 
+    /** What happens to a submitted job when no node has a free slot (D-156). */
+    public enum WhenFull {
+        /** Leave it QUEUED; the reaper re-dispatches it when capacity frees. The default. */
+        QUEUE,
+        /** Fail it at once with "No node has free capacity". */
+        REJECT
+    }
+
     private final Vertx vertx;
     private final JobStore jobs;
     private final NodeRegistry nodes;
+    private final WhenFull whenFull;
 
+    /** Queues when full, the default; see {@link WhenFull}. */
     public JobScheduler(Vertx vertx, JobStore jobs, NodeRegistry nodes) {
+        this(vertx, jobs, nodes, WhenFull.QUEUE);
+    }
+
+    public JobScheduler(Vertx vertx, JobStore jobs, NodeRegistry nodes, WhenFull whenFull) {
         this.vertx = vertx;
         this.jobs = jobs;
         this.nodes = nodes;
+        this.whenFull = whenFull;
     }
 
     public Future<Job> submit(String tenant, String script, JsonObject input, Duration timeout, OrphanPolicy onOrphan, int maxAttempts) {
@@ -48,8 +63,15 @@ public final class JobScheduler {
                 System.currentTimeMillis()));
         return jobs.save(job)
                 .compose(v -> dispatch(job))
-                .recover(err -> jobs.update(job.id(), current -> current.rejected(err.getMessage(), System.currentTimeMillis()))
-                        .compose(rejected -> rejected.isPresent() ? Future.succeededFuture(rejected.get()) : jobs.get(job.id())));
+                .recover(err -> {
+                    if (whenFull == WhenFull.QUEUE && err instanceof NoCapacityException) {
+                        // No node has room right now, so the job stays QUEUED and the reaper re-dispatches it when
+                        // capacity frees (D-156). C93_JOB_WHEN_FULL=reject fails it instead.
+                        return jobs.get(job.id());
+                    }
+                    return jobs.update(job.id(), current -> current.rejected(err.getMessage(), System.currentTimeMillis()))
+                            .compose(rejected -> rejected.isPresent() ? Future.succeededFuture(rejected.get()) : jobs.get(job.id()));
+                });
     }
 
     /**
@@ -99,9 +121,9 @@ public final class JobScheduler {
         return nodes.liveNodes().compose(live -> {
             List<NodeInfo> candidates = candidates(live);
             if (candidates.isEmpty()) {
-                return Future.failedFuture("No node has free capacity (" + (live.isEmpty() ? "no live nodes" : live.stream()
+                return Future.failedFuture(new NoCapacityException("No node has free capacity (" + (live.isEmpty() ? "no live nodes" : live.stream()
                         .map(n -> n.id() + " " + n.running() + "/" + n.capacity())
-                        .collect(java.util.stream.Collectors.joining(", "))) + ")");
+                        .collect(java.util.stream.Collectors.joining(", "))) + ")"));
             }
             return dispatch(job, candidates, 0, new ArrayList<>());
         });
@@ -117,6 +139,13 @@ public final class JobScheduler {
                 .filter(NodeInfo::hasCapacity)
                 .sorted(Comparator.comparingDouble(NodeInfo::load).thenComparing(NodeInfo::id))
                 .toList();
+    }
+
+    /** No live node has a free slot right now: transient, so a job may queue rather than fail (D-156). */
+    static final class NoCapacityException extends RuntimeException {
+        NoCapacityException(String message) {
+            super(message);
+        }
     }
 
     private Future<Job> dispatch(Job job, List<NodeInfo> candidates, int index, List<String> refusals) {

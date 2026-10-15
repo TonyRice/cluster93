@@ -66,6 +66,7 @@ public record ServerConfig(
         int maxJobsPerTenant,
         int maxJobsPerWorker,
         int maxWorkers,
+        cluster93.core.scheduler.JobScheduler.WhenFull jobWhenFull,
         int maxHeapMb,
         Duration defaultTimeout,
         Duration maxTimeout,
@@ -197,6 +198,9 @@ public record ServerConfig(
                 // more tenants can be running than there are concurrent jobs. An operator lowers it to bound
                 // process memory on a small host.
                 Integer.parseInt(env.getOrDefault("C93_MAX_WORKERS", String.valueOf(capacity))),
+                // What a submitted job does when no node has a free slot (D-156): wait for capacity (the default), or
+                // fail at once. Service runs always wait — a service that cannot start is restarted, not rejected.
+                whenFull(env.get("C93_JOB_WHEN_FULL")),
                 Integer.parseInt(env.getOrDefault("C93_MAX_HEAP_MB", "128")),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_DEFAULT_TIMEOUT_MS", "10000"))),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_MAX_TIMEOUT_MS", "60000"))),
@@ -303,6 +307,19 @@ public record ServerConfig(
             return null;
         }
         return Path.of(System.getProperty("user.home"), ".cluster93", "data");
+    }
+
+    /** What a job does when no node has a free slot: queue (wait) or reject (fail at once). */
+    private static cluster93.core.scheduler.JobScheduler.WhenFull whenFull(String value) {
+        if (value == null || value.isBlank()) {
+            return cluster93.core.scheduler.JobScheduler.WhenFull.QUEUE;
+        }
+        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "queue" -> cluster93.core.scheduler.JobScheduler.WhenFull.QUEUE;
+            case "reject" -> cluster93.core.scheduler.JobScheduler.WhenFull.REJECT;
+            default -> throw new IllegalArgumentException(
+                    "C93_JOB_WHEN_FULL must be \"queue\" or \"reject\" (it was " + value + ")");
+        };
     }
 
     private static Map<String, String> parseWorkerBinaries(Map<String, String> env, String workerDefaultMode) {

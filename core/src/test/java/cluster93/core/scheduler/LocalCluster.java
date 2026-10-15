@@ -41,8 +41,16 @@ final class LocalCluster implements AutoCloseable {
     final JobStateStore state = new SharedDataJobStateStore(vertx);
     final NodeRegistry nodes = new SharedDataNodeRegistry(vertx, HEARTBEAT.multipliedBy(3));
     final FakeRuntime runtime = new FakeRuntime(vertx);
-    final JobScheduler scheduler = new JobScheduler(vertx, jobs, nodes);
+    final JobScheduler scheduler;
     final ServiceStore services = new SharedDataServiceStore(vertx);
+
+    LocalCluster() {
+        this(JobScheduler.WhenFull.QUEUE);
+    }
+
+    LocalCluster(JobScheduler.WhenFull whenFull) {
+        this.scheduler = new JobScheduler(vertx, jobs, nodes, whenFull);
+    }
 
     /** Instances whose heartbeats are being dropped, as if cut off from the cluster. */
     private final Set<String> partitioned = ConcurrentHashMap.newKeySet();

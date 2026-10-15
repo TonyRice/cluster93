@@ -55,14 +55,26 @@ class JobSchedulerTest {
     }
 
     @Test
-    void failsTheJobWhenEveryNodeIsFull() throws Exception {
+    void queuesTheJobWhenEveryNodeIsFull() throws Exception {
         cluster.awaitStatus(cluster.submit("hold", OrphanPolicy.FAIL, 1).id(), JobStatus.RUNNING);
         cluster.awaitStatus(cluster.submit("hold", OrphanPolicy.FAIL, 1).id(), JobStatus.RUNNING);
 
-        Job rejected = cluster.submit("hello", OrphanPolicy.FAIL, 1);
+        // No node has a free slot, so the job waits for capacity instead of failing (the default).
+        Job queued = cluster.submit("hello", OrphanPolicy.FAIL, 1);
 
-        assertThat(rejected.status()).isEqualTo(JobStatus.FAILED);
-        assertThat(rejected.error()).startsWith("No node has free capacity");
+        assertThat(queued.status()).isEqualTo(JobStatus.QUEUED);
+        assertThat(queued.error()).isNull();
+    }
+
+    @Test
+    void rejectsTheJobWhenEveryNodeIsFullUnderTheRejectPolicy() throws Exception {
+        try (LocalCluster rejecting = new LocalCluster(JobScheduler.WhenFull.REJECT)) {
+            // No node has ever started, so nothing has capacity.
+            Job rejected = rejecting.submit("hello", OrphanPolicy.FAIL, 1);
+
+            assertThat(rejected.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(rejected.error()).startsWith("No node has free capacity");
+        }
     }
 
     @Test
