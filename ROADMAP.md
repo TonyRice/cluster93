@@ -83,7 +83,7 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 - **W5 — Module directories drop the `cluster93-` prefix (D-134):** `tls`, `core`, `runtime-js`, `runtime-javet`, `runtime-graaljs`, `runner-protocol`, `worker`, `cluster-ignite`, `server`, `cli`; artifactIds and Java packages unchanged.
 - **W6 — Docs reconciled:** README/ROADMAP status, the four phase plans archived under `docs/design/history/`, and `DOCUMENTATION.md`'s taxonomy refreshed.
 - **Next focus:** Phase 6's browser session layer (§4). **Follow-up captured in `NOTES.md`:** one unified `c93 cluster …` pathway (master/dev/Docker node setup and cluster setup).
-- **In flight (2026-10-15):** the per-tenant worker pivot (D-155–D-163) has **landed** — one worker per tenant running several jobs at once; the switch is on (`C93_MAX_JOBS_PER_WORKER` 4, `REUSE_SAME_TENANT`); the shared-channel cancel bug (D-162, fixed), per-worker memory sizing (D-163), the node-wide worker cap and queue-when-full behaviour (D-156) are all in, along with the queue-drain fix that healed the `resumesMemoizedSteps` hang. Remaining: CPU limits per tenant (D-158), tenant-visible crash attribution (D-159), per-tenant observability, then Docker Stage 2 as **container per tenant** (D-160) — which must be rewritten before it is built.
+- **In flight (2026-10-15):** the per-tenant worker pivot (D-155–D-163) has **landed** — one worker per tenant running several jobs at once; the switch is on (`C93_MAX_JOBS_PER_WORKER` 4, `REUSE_SAME_TENANT`); the shared-channel cancel bug (D-162, fixed), per-worker memory sizing (D-163), the node-wide worker cap and queue-when-full behaviour (D-156) are all in, along with the queue-drain fix that healed the `resumesMemoizedSteps` hang. The worker-classpath isolation guard (D-030) has since landed. Remaining: tenant-visible crash attribution (D-159), per-tenant observability, the node-wide memory budget (D-163), CPU limits per tenant (D-158 — blocked until cgroup delegation is verified on a real systemd unit), then Docker Stage 2 as **container per tenant** (D-160) — which must be rewritten before it is built.
 
 ### Phase 5: Architecture Documentation & Javadoc Aggregation (COMPLETE)
 - **Task 5.1 — Master Documentation (`DOCUMENTATION.md`):**
@@ -149,6 +149,14 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 ---
 
 ## 5. Recent Key Achievements & Bug Fixes
+
+- **A guard on the worker's classpath (D-030):** the worker is a separate process with its own classpath, and nothing
+  asserted Ignite could not reach it — the server's `ArchitectureTest.igniteStaysInsideItsModule` sees Ignite on *its*
+  classpath but not `cluster93.worker`. `WorkerClasspathIsolationTest` (in `cluster93-worker`) now asserts Apache
+  Ignite, the Vert.x `IgniteClusterManager`, `cluster93-cluster-ignite` and Hazelcast are **not** on the worker's
+  classpath, and proves it is looking at the real one by asserting the allowed stack (`runner-protocol → core →
+  vertx-core`, plus `runtime-js`) **is** present. A dependency added to `core` or `runner-protocol` can no longer
+  smuggle Ignite into a worker unnoticed. Evidence: `./mvnw -o verify -pl worker -am -DskipITs` green.
 
 - **Per-tenant workers run several jobs at once, and a cancel no longer kills the siblings (D-155, D-162, D-163):**
   - A worker serves up to `C93_MAX_JOBS_PER_WORKER` jobs concurrently (default 4), each in a fresh context, and its tenant keeps it for the next job (`REUSE_SAME_TENANT`). A worker is never shared between tenants. `C93_MAX_JOBS_PER_WORKER` had been held at 1 only because a shared channel was unsafe.

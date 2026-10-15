@@ -34,7 +34,10 @@ invariants in view:
 
 - `cluster93-core` depends **only** on `vertx-core`. It must not pull in Ignite,
   Netty internals beyond Vert.x, or any engine adapter. `ArchitectureTest` in
-  `cluster93-server` guards the dependency rules.
+  `cluster93-server` guards the dependency rules, and `WorkerClasspathIsolationTest`
+  in `cluster93-worker` guards the one classpath that test cannot see: no Ignite
+  (nor Hazelcast, nor the Vert.x Ignite cluster manager) may reach a worker through
+  `core`, `runner-protocol` or `runtime-js`.
 - Apache Ignite is strictly isolated to `cluster93-cluster-ignite`. Nothing else
   may import Ignite types.
 - Worker isolates are a **zero-trust, out-of-process boundary**. The node never

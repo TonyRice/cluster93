@@ -6,6 +6,15 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A guard on the worker's classpath (D-030):**
+  - `WorkerClasspathIsolationTest` (in `worker/`) asserts Apache Ignite, the Vert.x `IgniteClusterManager`,
+    `cluster93-cluster-ignite` and Hazelcast are **not** on the worker's classpath — and proves it is looking at the
+    real classpath by asserting the stack the worker *is* allowed (`runner-protocol → core → vertx-core`, plus
+    `runtime-js`) **is** present. It would otherwise pass for the wrong reason, or not at all.
+  - The server's `ArchitectureTest.igniteStaysInsideItsModule` covers Ignite on the *server* classpath but cannot
+    see `cluster93.worker`; nothing guarded the worker's own classpath, so a dependency added to `core` or
+    `runner-protocol` could pull Ignite into a worker unnoticed. This closes that gap.
+
 - **Docker becomes a third install kind** (D-141–D-152), groundwork:
   - A `node` image stage ships `bin/worker-*`. **No stage did**, so no node image could run `C93_WORKER_MODE=process` — which is why the demo ran embedded.
   - `c93 node install --docker` lays out `node.env`, a generated `compose.yaml`, certificates and `node.meta`; the lifecycle verbs drive the container; a container node is clustered size 1 with its data bind-mounted, so persistence is the mount (D-142).
