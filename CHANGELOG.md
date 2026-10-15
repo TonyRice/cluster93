@@ -15,11 +15,19 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
   - The generated compose carries the hardening set (`cap_drop: [ALL]`, `no-new-privileges`, read-only root + `/tmp` tmpfs, pids limit) and publishes 9393–9395/5701/5801 while only `expose`ing 9396 (D-148).
 
 - **Workers are bounded and shared fairly** (D-153–D-161):
-  - **Every tenant already had its own worker pool, and each pool's limit was the whole node**, so *n* tenants could spawn `n × capacity` workers — five tenants at capacity 8 is up to 40 processes and ~5 GB of heaps on a node advertising 8. A shared `WorkerBudget` now bounds the node (D-156).
+  - **Every tenant already had its own worker pool, and each pool's limit was the whole node**, so *n* tenants could spawn `n × capacity` workers — five tenants at capacity 8 is up to 40 processes and ~5 GB of heaps on a node advertising 8. A shared `WorkerBudget` now **bounds the node's worker processes**: `C93_MAX_WORKERS` (its own env, default `C93_CAPACITY`) caps them, warmth no longer pre-spawns (`minWarm=0`), and when a job needs a worker at the cap an **idle** worker is reaped to make room — work preempts warmth, so the old deadlock (an idle worker blocking another tenant's job) is gone. A job that cannot get a worker waits rather than failing. *(The node-wide bound on concurrent **jobs** is the scheduler's, unchanged: at most `C93_CAPACITY` running attempts per node.)*
   - Tenant fairness was installed in a per-tenant pool, where it could **never see a second tenant**, so it could never fire. It moves to the manager, the only place more than one tenant is visible (D-161).
   - A freed worker is never handed straight back to the tenant just served — the rule that stops a tenant's backlog starving another (D-153).
-  - `C93_MAX_JOBS_PER_TENANT` (default `capacity/2`) caps a tenant; a single-tenant node sets it to `capacity`.
+  - `C93_MAX_JOBS_PER_TENANT` (default `capacity`) caps a tenant; a multi-tenant node lowers it.
   - A spike proved **native GraalJS enforces per-context memory**, and found that **Javet's engine limit does not count external memory** (`ArrayBuffer` backing stores), so for Javet the cgroup is the tenant budget (D-157).
+
+
+- **A worker now runs several jobs at once, per tenant — the switch is on** (D-155, D-162, D-163):
+  - A worker process serves up to `C93_MAX_JOBS_PER_WORKER` jobs **concurrently**, each in its own fresh context (default 4), and its tenant keeps it for the next job (`REUSE_SAME_TENANT`) rather than reaping it after every job. `C93_MAX_JOBS_PER_WORKER` had been held at 1 while a shared channel was unsafe; the fix below is what let it move. A worker is still never shared between tenants.
+  - **Cancelling one run no longer takes down its siblings.** `release` and `poison` now separate a *run*'s outcome from a *worker*'s health (D-162): a cancelled, failed or timed-out job frees only its own slot, and a worker is recycled **only** when it is itself bad — process gone, OOM-killed, channel broken, bind failed — and then with the reason and its stderr tail logged. Before, any non-`SUCCEEDED` job result was treated as a poisoned worker, so a parent cancelling its child reaped the very worker the parent was running on (`JobsFromScriptsTest.aParentCanStopAChildAndFollowItsEvents`, which failed deterministically with the switch on).
+  - The worker's **cgroup memory is sized for the jobs it runs** (`maxJobsPerWorker × heapMb` plus overhead), not one job's (D-163). Sized for one job, a shared worker was OOM-killed (exit 137) the moment a second job ran. The engine's per-context budget is unchanged (D-157): each job still gets its own `heapMb`.
+  - The worker's stderr tail is now logged whenever the pool recycles a worker, so a pool-initiated kill is no longer silent.
+
 
 
 - **A failed cluster start no longer cascades through the server suite**:

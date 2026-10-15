@@ -3021,17 +3021,21 @@ A worker is spawned per tenant and kept while it has work, running up to `C93_MA
 Every tenant already has its own pool, and each pool's `maxTotal` was the node's capacity. So *n* active tenants could spawn `n × capacity` workers: five tenants at capacity 8 is up to 40 processes and ~5 GB of worker heaps on a node advertising 8. There was **no node-wide limit at all** — the opposite of the problem first assumed.
 
 **Decision:**
-A `WorkerBudget` is one counter every tenant's pool draws from, reserved exactly where `totalWorkers` is incremented and released exactly where it is decremented, so the two cannot drift. `C93_MAX_JOBS_PER_TENANT` (default `capacity/2`, never 0) re-points each tenant's own cap off the whole node.
+A `WorkerBudget` is one counter every tenant's pool draws from, reserved exactly where `totalWorkers` is incremented and released exactly where it is decremented, so the two cannot drift. `C93_MAX_JOBS_PER_TENANT` (default `C93_CAPACITY`, never 0) re-points each tenant's own cap off the whole node; an operator lowers it for multi-tenancy, because the caps are independent rather than fractions of each other.
 
 **Alternatives considered:**
 - **Dividing capacity by the number of tenants.** Rejected: pools are created lazily per tenant, so the tenant count is unknown when a pool is made.
+- **Defaulting the per-tenant cap to `capacity/2`.** Tried, then rejected: it halved a tenant's concurrency and stalled the process-mode tests; the cap is its own setting and defaults to the whole node.
 
 **Consequences:**
 - A hard cap means a quiet node idles by design: capacity 8 with cap 2 leaves 6 slots unused for a single tenant. A single-tenant node should set it to `capacity`.
 - A budget leak would silently stop the node spawning workers, which is why the pairing lives in exactly two methods.
+- **The node-wide cap now bounds worker processes** (`C93_MAX_WORKERS`, its own env, default `C93_CAPACITY`) — it is no longer `unbounded()`. Gating spawns on it used to deadlock: each tenant's pool held `minWarm` against the same allowance, so several tenants filled it with idle workers and a tenant that then could not spawn queued forever (`PackagesTest` hung). The fix is that **work preempts warmth**: no pool pre-warms (`minWarm = 0`), and a spawn *for work* that finds the cap reached reaps an **idle** worker node-wide (never one with jobs on it) and retries; if every worker is busy the job queues rather than failing.
+- **The node-wide bound on concurrent *jobs* is the scheduler's, not the pool's** (D-154): it places at most `C93_CAPACITY` running attempts on a node, and the node re-checks it, so a node never runs more jobs at once than it advertises. This pool's cap is on **workers** — a different quantity, and the one that was actually unbounded.
+- **Open:** a job submitted when every node is full is **rejected** (FAILED), not queued — unlike a service run, which stays `QUEUED` for the reaper. See the work order.
 
 **Evidence:**
-- `TenantWorkerPoolTest.theNodeBudgetBoundsEveryTenantTogether`, `anUnboundedBudgetNeverRefuses`; `ServerConfigTest.maxJobsPerTenantDefaultsToHalfCapacity`.
+- `TenantWorkerPoolTest.theNodeBudgetBoundsEveryTenantTogether`, `anUnboundedBudgetNeverRefuses`; `ServerConfigTest.maxJobsPerTenantIsItsOwnSetting`.
 
 ### D-157 — The tenant budget names its enforcement layer, per engine
 **Date:** 2026-10-14 · **Status:** Accepted.
@@ -3108,3 +3112,40 @@ The arbitration moves to `TenantWorkerPoolManager`, the only place more than one
 
 **Evidence:**
 - `TenantWorkerPoolManagerTest.theManagerRotatesBetweenWaitingTenants`, `nothingWaitingMeansNothingServed`.
+
+### D-162 — A run's outcome is not the worker's health
+**Date:** 2026-10-14 · **Status:** Accepted. Enables D-155; supersedes the boolean `release(worker, errorOrOom)`.
+
+**Context:**
+The pool's accounting unit is the **worker process**; the scheduler's and the engine's failure unit is the **job**. With one job per worker they coincided, so `release(worker, errorOrOom)` meaning "this worker is done or poisoned" was correct. D-155 split them, and `f44a1aa` implemented the split for the **normal** path only, leaving one escape hatch — *"a poisoned worker goes even with jobs still on it"* — that **every run-level non-success drove**: `WorkerProcessRuntime.cancel` hardcoded `true`, and the completion callback set `isError` for any status other than `SUCCEEDED`. So a parent cancelling its child recycled the worker the parent was running on: the process was destroyed, the pipe EOF'd, and `NodeWorkerChannel.onError` failed every run on the shared channel (`JobsFromScriptsTest.aParentCanStopAChildAndFollowItsEvents`, deterministic with more than one job per worker). `release` was also not idempotent per run — cancel released, then completion released again, driving the tenant's worker count negative.
+
+**Decision:**
+Separate the two signals. `release(worker)` is the run-level event: a job that failed, timed out or was cancelled frees **only its own slot**, and while the worker still has jobs it stays in service. `poison(worker, reason)` retires a worker that is **itself** unhealthy — process gone, OOM-killed, channel broken, bind failed — and does go even with jobs still on it, because they are already lost. Only worker-level evidence calls `poison`; a run that fails to produce a result is treated as worker-level, a run that produces any result (including `FAILED`/`CANCELLED`) is not. The cancel path no longer releases at all: the slot is freed when the run actually completes, so a sibling cannot reuse the worker before the cancelled run's context is gone. `retire` is idempotent, so a stray second release cannot double-count.
+
+**Alternatives considered:**
+- **Keep one boolean and stop passing `true` on cancel.** Rejected: the completion callback would still poison on a `FAILED`/`CANCELLED` status, so a failing sibling would still take the worker down.
+- **Release on cancel and again on completion, guarded by a per-call flag.** Rejected as more state for the same result; one release point (the run completing) is simpler and is also what makes "reuse only after the context is gone" true.
+
+**Consequences:**
+- A worker is retired only on genuine worker-level faults, which is what D-159 wants to attribute.
+- A cancelled run holds its slot until its context terminates. That is deliberate: for GraalJS memory is per context (D-157), and for a runaway the run's own timeout is the backstop.
+- `TenantWorkerPool.release/poison` are the only lifecycle entry points; `WorkerProcessRuntime` chooses between them by whether the run produced a result.
+
+**Evidence:**
+- `TenantWorkerPoolTest.aJobEndingDoesNotKillAWorkerThatStillHasJobs`, `poisoningAWorkerReapsItEvenWithLiveJobs`, `releaseOnADeadWorkerReapsIt`, `aStraySecondReleaseIsHarmless`; `JobsFromScriptsTest.aParentCanStopAChildAndFollowItsEvents` (the reproduction); `ProcessModeParityTest`.
+
+### D-163 — A worker's memory is sized for the jobs it runs
+**Date:** 2026-10-14 · **Status:** Accepted. Follows D-155, D-157.
+
+**Context:**
+With one job per worker, the worker's cgroup was `heapMb + overhead`, because the engine gave the single context up to `heapMb`. With several jobs per worker the engine still gives **each** context up to `heapMb` (`sandbox.MaxHeapMemory`, under `engine.MaxIsolateMemory = maxHeapMb × contexts + 256 MB` for GraalJS), so a worker's real budget is the sum — but the cgroup was left sized for one job. A shared worker was OOM-killed (exit 137) the moment a second job pushed it past one job's budget. (`ProcessModeParityTest` surfaced it once the switch was on.)
+
+**Decision:**
+Size the worker's cgroup for the jobs it may run: `maxJobsPerWorker × heapMb` plus fixed native overhead for `memory.max`, and a little less for `memory.high`. The per-context engine budget is unchanged: `C93_MAX_HEAP_MB` is **per job**, not per worker.
+
+**Consequences:**
+- A worker running N jobs reserves N × `C93_MAX_HEAP_MB` of the node's memory; the node-wide budget (D-156, still unenforced) is where that has to be accounted next.
+- Where the cgroup is unavailable (unprivileged, non-Linux, containers without the controller), the limit is not applied and the engine's own per-context limit is the only bound — unchanged from before.
+
+**Evidence:**
+- `ProcessModeParityTest` (a shared worker survives several concurrent jobs); the cgroup arithmetic lives in `TenantWorkerPool.spawnWorker`.

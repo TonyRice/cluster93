@@ -65,6 +65,7 @@ public record ServerConfig(
         int capacity,
         int maxJobsPerTenant,
         int maxJobsPerWorker,
+        int maxWorkers,
         int maxHeapMb,
         Duration defaultTimeout,
         Duration maxTimeout,
@@ -138,6 +139,9 @@ public record ServerConfig(
         if (roles.isEmpty()) {
             throw new IllegalArgumentException("C93_ROLES must name at least one of " + ROLES);
         }
+        if (maxWorkers < 1) {
+            throw new IllegalArgumentException("C93_MAX_WORKERS must be at least 1 (it was " + maxWorkers + ")");
+        }
         for (String role : roles) {
             if (!ROLES.contains(role)) {
                 throw new IllegalArgumentException("C93_ROLES must be a comma-separated subset of " + ROLES + " (it named " + role + ")");
@@ -165,30 +169,34 @@ public record ServerConfig(
         // The process-mode worker engine used when a run does not name one; C93_WORKER_ENGINE is the legacy alias.
         String workerDefaultMode = env.getOrDefault("C93_WORKER_DEFAULT_MODE",
                 env.getOrDefault("C93_WORKER_ENGINE", "graaljs")).trim().toLowerCase(java.util.Locale.ROOT);
+        // Read once: the per-tenant and per-worker caps default to it, so they all agree on what this node is.
+        int capacity = Integer.parseInt(env.getOrDefault("C93_CAPACITY", "8"));
         return new ServerConfig(
                 env.getOrDefault("C93_NODE_ID", defaultNodeId()),
                 Integer.parseInt(env.getOrDefault("C93_HTTP_PORT", "9393")),
                 // The API, ingress and metrics bind address (D-151); all interfaces by default, as before.
                 blankToNull(env.get("C93_HTTP_BIND")) == null ? "0.0.0.0" : env.get("C93_HTTP_BIND").trim(),
-                Integer.parseInt(env.getOrDefault("C93_CAPACITY", "8")),
-                // How many jobs one tenant may run at once (D-156). Half the node by default, so two tenants fit;
-                // a single-tenant node should set it to C93_CAPACITY. This is the reservation, not the ordering.
-                // Its own env, defaulting to the node's whole capacity: one tenant is not throttled by default, and an
-                // operator lowers it for multi-tenancy. Deriving it from capacity (capacity/2) halved a tenant's
-                // concurrency and stalled the process-mode tests — the caps are independent, not fractions of each other.
-                Integer.parseInt(env.getOrDefault("C93_MAX_JOBS_PER_TENANT",
-                        env.getOrDefault("C93_CAPACITY", "8"))),
+                capacity,
+                // How many jobs one tenant may run at once (D-156). Its own env, defaulting to the node's whole
+                // capacity: one tenant is not throttled by default, and an operator lowers it for multi-tenancy.
+                // Deriving it from capacity (capacity/2) halved a tenant's concurrency and stalled the process-mode
+                // tests — the caps are independent, not fractions of each other.
+                Integer.parseInt(env.getOrDefault("C93_MAX_JOBS_PER_TENANT", String.valueOf(capacity))),
                 // One worker per job is not the model: a worker runs several jobs at once, each in its own context,
                 // and a tenant takes more workers only when it needs more than one worker can carry (D-155).
                 //
-                // HELD AT 1 for exactly one reason, found by reproducing with the channel's logs on: cancelling one
-                // run breaks the shared channel for its siblings. JobsFromScriptsTest.aParentCanStopAChildAndFollowItsEvents
-                // (a parent stopping its child) fails deterministically with 4, logging
-                //     Worker worker-NNN: protocol error with active runs
-                // — the connection errors while runs are active, so the parent dies with the child. Everything else
-                // passes with 4, including ProcessModeParityTest.detectsAWorkerProcessKill. The wiring is complete;
-                // this value is the switch, and it moves when cancel/stop is safe on a shared channel.
-                Integer.parseInt(env.getOrDefault("C93_MAX_JOBS_PER_WORKER", "1")),
+                // This is the switch for that design. It was held at 1 while cancelling one run still took down the
+                // shared channel: a run-level non-success was treated as a poisoned worker, so release() reaped a
+                // worker that still had live siblings. release()/poison() now separate the two, so a job ending —
+                // cancelled, failed or timed out — frees only its own slot. 4 is the agreed default: with
+                // C93_MAX_JOBS_PER_TENANT defaulting to C93_CAPACITY, a tenant takes ceil(capacity / 4) workers.
+                Integer.parseInt(env.getOrDefault("C93_MAX_JOBS_PER_WORKER", "4")),
+                // How many worker processes the whole node may run at once (D-156). Defaults to the node's
+                // concurrency: a live worker always holds at least one job, so at most one worker per concurrent
+                // job slot is ever needed — which also covers however many tenants can be active at once, since no
+                // more tenants can be running than there are concurrent jobs. An operator lowers it to bound
+                // process memory on a small host.
+                Integer.parseInt(env.getOrDefault("C93_MAX_WORKERS", String.valueOf(capacity))),
                 Integer.parseInt(env.getOrDefault("C93_MAX_HEAP_MB", "128")),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_DEFAULT_TIMEOUT_MS", "10000"))),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_MAX_TIMEOUT_MS", "60000"))),

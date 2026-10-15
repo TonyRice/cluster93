@@ -244,6 +244,131 @@ class TenantWorkerPoolTest {
         }
     }
 
+    @Test
+    @DisplayName("One job ending on a shared worker keeps it alive for its sibling (D-155)")
+    void aJobEndingDoesNotKillAWorkerThatStillHasJobs() {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
+        try {
+            FakeProcess process = new FakeProcess(7001L);
+            WorkerProcessHandle handle = boundHandle(process, 7001L, "acme", 4);
+
+            // Two jobs run on the one worker.
+            pool.jobStarted(handle, "acme");
+            pool.jobStarted(handle, "acme");
+            assertEquals(2, pool.jobsOn(handle));
+
+            // One job ends — a cancelled child, a failed run: a run-level event, so the worker and its sibling stay.
+            pool.release(handle);
+            assertEquals(1, pool.jobsOn(handle));
+            assertTrue(process.isAlive(), "a job ending must not reap a worker that still has a sibling on it");
+            assertTrue(handle.isAlive());
+
+            // The last job ends: the worker is now idle, and fresh-per-job reaps it.
+            pool.release(handle);
+            assertEquals(0, pool.jobsOn(handle));
+            assertFalse(process.isAlive());
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    @Test
+    @DisplayName("A worker killed while its sibling runs is reaped even though the sibling is still there (D-155)")
+    void poisoningAWorkerReapsItEvenWithLiveJobs() {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
+        try {
+            FakeProcess process = new FakeProcess(7002L);
+            WorkerProcessHandle handle = boundHandle(process, 7002L, "acme", 4);
+            pool.jobStarted(handle, "acme");
+            pool.jobStarted(handle, "acme");
+
+            // The worker itself is bad — a broken channel, an OOM. It goes even with a job still on it.
+            pool.poison(handle, "channel broke");
+            assertEquals(0, pool.jobsOn(handle));
+            assertFalse(process.isAlive());
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    @Test
+    @DisplayName("A release that finds the worker gone reaps it, so its slot is not leaked")
+    void releaseOnADeadWorkerReapsIt() {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
+        try {
+            FakeProcess process = new FakeProcess(7003L);
+            WorkerProcessHandle handle = boundHandle(process, 7003L, "acme", 4);
+            pool.jobStarted(handle, "acme");
+
+            process.destroy(); // the process died on its own while the job ran
+            pool.release(handle);
+            assertEquals(0, pool.jobsOn(handle), "a dead worker must not keep a job counted");
+            assertFalse(handle.isAlive());
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    @Test
+    @DisplayName("A stray second release is a no-op, not a negative job count")
+    void aStraySecondReleaseIsHarmless() {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
+        try {
+            FakeProcess process = new FakeProcess(7004L);
+            WorkerProcessHandle handle = boundHandle(process, 7004L, "acme", 4);
+            pool.jobStarted(handle, "acme");
+
+            pool.release(handle); // the real completion
+            pool.release(handle); // its cancel path released too: must not double-count or throw
+            assertEquals(0, pool.jobsOn(handle));
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    @Test
+    @DisplayName("With reuse on, an idle worker is kept warm rather than reaped (D-155)")
+    void reuseKeepsTheWorkerWarm() {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT);
+        try {
+            FakeProcess process = new FakeProcess(7005L);
+            WorkerProcessHandle handle = boundHandle(process, 7005L, "acme", 4);
+            pool.jobStarted(handle, "acme");
+
+            pool.release(handle);
+            assertEquals(0, pool.jobsOn(handle));
+            assertTrue(process.isAlive(), "a healthy idle worker is kept for its tenant under a reuse policy");
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    private static TenantWorkerPool newPool(io.vertx.core.Vertx vertx, TenantWorkerPool.ReusePolicy policy) {
+        // minWarm 0 so nothing is spawned: these tests drive the lifecycle bookkeeping directly.
+        return new TenantWorkerPool(vertx, null, "javet", 0, 4, 64, policy, new CgroupMemoryLimiter(),
+                cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
+    }
+
+    private static WorkerProcessHandle boundHandle(FakeProcess process, long pid, String tenant, int maxJobs) {
+        NodeWorkerChannel channel = new NodeWorkerChannel("worker-" + pid, new FakeStream(), new FakeStream());
+        WorkerProcessHandle handle = new WorkerProcessHandle(process, channel, maxJobs);
+        handle.bind(tenant, new JsonObject(), new JsonObject());
+        return handle;
+    }
+
+    private static void closeQuietly(io.vertx.core.Vertx vertx, TenantWorkerPool pool) {
+        try {
+            pool.close();
+            vertx.close().toCompletionStage().toCompletableFuture().get(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+        }
+    }
+
     private static void deleteRecursively(Path root) {
         if (!Files.exists(root)) return;
         try (var stream = Files.walk(root)) {

@@ -15,4 +15,7 @@ interface NodeArbiter {
 
     /** A worker finished and its capacity is free: give it to the fairest tenant waiting, if any. */
     void capacityFreed();
+
+    /** Reap one idle worker node-wide so a waiting job can spawn; false when every worker is busy. */
+    boolean freeIdleWorker();
 }

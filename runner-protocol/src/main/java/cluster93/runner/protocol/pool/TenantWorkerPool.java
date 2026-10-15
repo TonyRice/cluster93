@@ -81,10 +81,19 @@ public class TenantWorkerPool {
      * A worker leaves {@link #activeWorkers} when this reaches zero, and not before (D-155).
      */
     private final Map<Long, Integer> jobsInFlight = new HashMap<>();
+    /** The last few stderr lines each worker wrote, so a worker that dies can say why (D-135, D-159). */
+    private final Map<Long, StderrTail> stderrByPid = new ConcurrentHashMap<>();
     private final AtomicInteger totalWorkers = new AtomicInteger(0);
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     private record PendingAcquire(String tenantId, Promise<WorkerProcessHandle> promise) {}
+
+    /** Signals that the node-wide worker cap is reached and no idle worker could be reaped, so a job must wait. */
+    static final class NodeAtCapacityException extends RuntimeException {
+        NodeAtCapacityException() {
+            super("The node is at its worker cap");
+        }
+    }
 
     public TenantWorkerPool(Vertx vertx) {
         this(vertx, System.getProperty("cluster93.worker.binary"), null, 2, 16, 128, ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
@@ -136,6 +145,11 @@ public class TenantWorkerPool {
         return totalWorkers.get();
     }
 
+    /** How many jobs this pool believes are running on the worker (D-155); 0 once it is idle or retired. */
+    synchronized int jobsOn(WorkerProcessHandle worker) {
+        return jobsInFlight.getOrDefault(worker.pid(), 0);
+    }
+
     public synchronized int warmUnboundCount() {
         return warmUnboundQueue.size();
     }
@@ -178,8 +192,7 @@ public class TenantWorkerPool {
             if (list != null && !list.isEmpty()) {
                 WorkerProcessHandle worker = list.remove(list.size() - 1);
                 if (worker.isAlive()) {
-                    activeWorkers.put(worker.pid(), worker);
-                    workerBecameActive(worker.pid(), tenantId);
+                    jobStarted(worker, tenantId);
                     return Future.succeededFuture(worker);
                 } else {
                     recycleWorker(worker);
@@ -191,12 +204,11 @@ public class TenantWorkerPool {
         while (!warmUnboundQueue.isEmpty()) {
             WorkerProcessHandle warm = warmUnboundQueue.poll();
             if (warm.isAlive()) {
-                activeWorkers.put(warm.pid(), warm);
-                workerBecameActive(warm.pid(), tenantId);
+                jobStarted(warm, tenantId);
                 ensureWarmPool();
                 return warm.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
                         .map(v -> warm)
-                        .onFailure(err -> release(warm, true));
+                        .onFailure(err -> poison(warm, "bind failed: " + err.getMessage()));
             } else {
                 recycleWorker(warm);
             }
@@ -205,19 +217,28 @@ public class TenantWorkerPool {
         // 3. Can we spawn a new worker right now?
         if (totalWorkers.get() < maxTotal) {
             Promise<WorkerProcessHandle> promise = Promise.promise();
-            spawnWorker().onComplete(ar -> {
+            spawnWorker(true).onComplete(ar -> {
                 if (ar.succeeded()) {
                     WorkerProcessHandle spawned = ar.result();
                     synchronized (TenantWorkerPool.this) {
-                        activeWorkers.put(spawned.pid(), spawned);
-                        workerBecameActive(spawned.pid(), tenantId);
+                        jobStarted(spawned, tenantId);
                     }
                     spawned.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
                             .onSuccess(v -> promise.complete(spawned))
                             .onFailure(err -> {
-                                release(spawned, true);
+                                poison(spawned, "bind failed: " + err.getMessage());
                                 promise.fail(err);
                             });
+                } else if (ar.cause() instanceof NodeAtCapacityException) {
+                    // Every worker on the node is busy and none is idle to reap, so this job waits rather than
+                    // failing: the next worker to free capacity serves it (D-156).
+                    synchronized (TenantWorkerPool.this) {
+                        pendingByTenant.computeIfAbsent(tenantId, k -> new ArrayDeque<>())
+                                .add(new PendingAcquire(tenantId, promise));
+                        if (arbiter != null) {
+                            arbiter.tenantWaiting(tenantId);
+                        }
+                    }
                 } else {
                     promise.fail(ar.cause());
                 }
@@ -237,28 +258,72 @@ public class TenantWorkerPool {
     /**
      * Releases a worker after one of its jobs finishes.
      *
-     * <p>A worker holds several jobs at once (D-155), so a job finishing is not the worker finishing: while it has
-     * others, it stays active and its tenant still counts it, and nothing is freed for the arbiter to hand out.
+     * <p>This is the <em>run-level</em> signal: a job that failed, timed out or was cancelled frees only its own
+     * slot. A worker holds several jobs at once (D-155), so a job finishing is not the worker finishing — while it
+     * has others it stays active, its tenant still counts it, and nothing is freed for the arbiter to hand out.
+     * The job's <em>outcome</em> never retires the worker; only the worker's own health does, and that is checked
+     * here so a dead worker still cannot answer for the jobs on it.
      */
-    public synchronized void release(WorkerProcessHandle worker, boolean errorOrOom) {
-        boolean unhealthy = errorOrOom || !worker.isAlive() || cgroupLimiter.checkOomKilled(worker.pid());
-        if (unhealthy) {
-            // A poisoned worker goes even with jobs still on it: they are already lost.
-            jobsInFlight.remove(worker.pid());
-        } else {
-            int remaining = jobsInFlight.merge(worker.pid(), -1, Integer::sum);
-            if (remaining > 0) {
-                return;
-            }
-            jobsInFlight.remove(worker.pid());
+    public synchronized void release(WorkerProcessHandle worker) {
+        if (worker == null) {
+            return;
         }
-        activeWorkers.remove(worker.pid());
-        countActive(worker.boundTenantId(), -1);
+        if (!worker.isAlive()) {
+            poison(worker, "worker process is gone");
+            return;
+        }
+        if (cgroupLimiter.checkOomKilled(worker.pid())) {
+            poison(worker, "worker was OOM-killed");
+            return;
+        }
+        int remaining = jobsInFlight.merge(worker.pid(), -1, Integer::sum);
+        if (remaining > 0) {
+            // Other jobs are still running on it: it stays active, and its slot is not free.
+            return;
+        }
+        retire(worker, false, "job finished");
+    }
 
-        if (unhealthy || reusePolicy == ReusePolicy.FRESH_PER_JOB) {
+    /**
+     * Retires a worker that is itself unhealthy — its process died, it was OOM-killed, its channel broke, or it
+     * failed to bind. Unlike a job finishing, this goes even when the worker still has jobs on it: they are already
+     * lost (D-155). This is the only path that may take down a worker with live siblings, so it is named for the
+     * worker, not the job.
+     */
+    public synchronized void poison(WorkerProcessHandle worker, String reason) {
+        retire(worker, true, reason);
+    }
+
+    /**
+     * Takes a worker out of service, freeing its tenant's slot and either keeping it warm or reaping it. Idempotent:
+     * a worker already retired is not counted down twice, so a stray second release cannot drive the tenant's
+     * worker count negative.
+     */
+    private void retire(WorkerProcessHandle worker, boolean poisoned, String reason) {
+        if (worker == null) {
+            return;
+        }
+        Integer held = jobsInFlight.remove(worker.pid());
+        boolean wasActive = activeWorkers.remove(worker.pid()) != null;
+        if (!wasActive && !poisoned) {
+            // A plain release for a worker this pool is not tracking: nothing to free.
+            return;
+        }
+        if (wasActive) {
+            countActive(worker.boundTenantId(), -1);
+        }
+        boolean recycle = poisoned || reusePolicy == ReusePolicy.FRESH_PER_JOB;
+        if (poisoned) {
+            LOG.warn("Recycling worker {} (pid {}): {} ({} job(s) were still on it)",
+                    worker.workerId(), worker.pid(), reason, held == null ? 0 : held);
+        } else if (recycle) {
+            LOG.debug("Recycling worker {} (pid {}): {} (reuse policy {})",
+                    worker.workerId(), worker.pid(), reason, reusePolicy);
+        }
+        if (recycle) {
             recycleWorker(worker);
         } else {
-            // Keep warm for same tenant
+            // Keep warm for the same tenant: a worker is never handed to another tenant.
             tenantWarmQueue.computeIfAbsent(worker.boundTenantId(), k -> new ArrayList<>()).add(worker);
         }
 
@@ -267,10 +332,8 @@ public class TenantWorkerPool {
             // not in the rotation cannot strand a request here. Replacing this with the arbiter alone needs the
             // per-tenant worker (work order step 2), or a waiting request can go unserved.
             arbiter.tenantWaiting(worker.boundTenantId());
-            processNextPending();
-        } else {
-            processNextPending();
         }
+        processNextPending();
         ensureWarmPool();
     }
 
@@ -296,6 +359,16 @@ public class TenantWorkerPool {
     }
 
 
+    /**
+     * Records a worker starting a job for a tenant: it becomes the tenant's active worker, counting the worker once
+     * however many jobs it holds (D-155). Shared by every path that hands out a worker, so the bookkeeping cannot
+     * drift; package-private so the release/poison rules can be tested without spawning a process.
+     */
+    synchronized void jobStarted(WorkerProcessHandle handle, String tenantId) {
+        activeWorkers.put(handle.pid(), handle);
+        workerBecameActive(handle.pid(), tenantId);
+    }
+
     /** Records a job starting on a worker, counting the worker itself once however many jobs it holds (D-155). */
     private void workerBecameActive(long pid, String tenantId) {
         if (jobsInFlight.merge(pid, 1, Integer::sum) == 1) {
@@ -320,7 +393,7 @@ public class TenantWorkerPool {
         }
         while (warmUnboundQueue.size() < minWarm && totalWorkers.get() < maxTotal) {
             // spawnWorker counts the attempt against maxTotal and logs its own failure (with the worker's stderr).
-            spawnWorker().onComplete(ar -> {
+            spawnWorker(false).onComplete(ar -> {
                 if (ar.succeeded()) {
                     synchronized (TenantWorkerPool.this) {
                         if (closed.get()) {
@@ -335,16 +408,22 @@ public class TenantWorkerPool {
         }
     }
 
-    private Future<WorkerProcessHandle> spawnWorker() {
+    private Future<WorkerProcessHandle> spawnWorker(boolean forWork) {
         Promise<WorkerProcessHandle> promise = Promise.promise();
         // Counted from the moment the spawn starts, so maxTotal bounds in-flight workers too. Released by
         // recycleWorker on failure, or when the handle is recycled after use (D-135).
         totalWorkers.incrementAndGet();
         if (nodeBudget != null && !nodeBudget.tryAcquire()) {
-            // Another tenant took the last of the node's allowance between the check and here.
-            totalWorkers.decrementAndGet();
-            promise.fail(new IllegalStateException("The node is at its worker capacity; try again shortly"));
-            return promise.future();
+            // The node is at its worker cap (D-156). A spawn for work preempts warmth: reap an idle worker from any
+            // tenant's pool and take its slot, so an idle worker can never block a job. A spawn for warmth does not —
+            // reaping one idle worker to make another would be pointless. If every worker is busy, the acquire queues
+            // the job (NodeAtCapacityException) rather than failing it.
+            boolean freed = forWork && arbiter != null && arbiter.freeIdleWorker();
+            if (!freed || !nodeBudget.tryAcquire()) {
+                totalWorkers.decrementAndGet();
+                promise.fail(new NodeAtCapacityException());
+                return promise.future();
+            }
         }
         try {
             List<String> command = new ArrayList<>();
@@ -385,11 +464,16 @@ public class TenantWorkerPool {
             // its first run would block forever writing to a full pipe (D-128). The tail is kept so a worker that
             // dies before its hello can say why (D-135).
             StderrTail stderrTail = new StderrTail(20);
+            stderrByPid.put(pid, stderrTail);
             drainStderr(pid, process.getErrorStream(), stderrTail);
 
-            // Apply Linux cgroup memory bounds (heapMb + 64 MB native overhead)
-            long maxBytes = (heapMb + 64L) * 1024L * 1024L;
-            long highBytes = (heapMb + 32L) * 1024L * 1024L;
+            // Apply Linux cgroup memory bounds. A worker runs up to maxJobsPerWorker jobs at once, each with its own
+            // heapMb budget (D-155, D-157), so the process needs room for all of them plus native overhead. Sizing
+            // it for a single job OOM-killed a shared worker (exit 137) the moment a second job ran — the engine
+            // reports a per-job budget and the cgroup has to hold the sum.
+            long jobsMb = (long) heapMb * maxJobsPerWorker;
+            long maxBytes = (jobsMb + 128L) * 1024L * 1024L;
+            long highBytes = (jobsMb + 64L) * 1024L * 1024L;
             cgroupLimiter.applyMemoryLimit(pid, maxBytes, highBytes);
 
             WriteStream<io.vertx.core.buffer.Buffer> output = StreamBridge.writeStream(vertx, process.getOutputStream());
@@ -449,6 +533,31 @@ public class TenantWorkerPool {
         return promise.future();
     }
 
+    /**
+     * Reaps one idle worker so a job that needs a worker can spawn, releasing its slot to the node-wide budget. Only
+     * a worker with no jobs on it is ever taken: a bound worker goes to its tenant's warm queue when its last job
+     * ends ({@link #retire}), and an unbound warm worker has never run one. Returns false when nothing is idle —
+     * every live worker is running a job, so the caller queues the job instead.
+     */
+    synchronized boolean reapIdleWorker() {
+        WorkerProcessHandle idle = warmUnboundQueue.poll();
+        if (idle == null) {
+            for (List<WorkerProcessHandle> warm : tenantWarmQueue.values()) {
+                if (!warm.isEmpty()) {
+                    idle = warm.remove(warm.size() - 1);
+                    break;
+                }
+            }
+        }
+        if (idle == null) {
+            return false;
+        }
+        LOG.info("Reaping idle worker {} (pid {}) to make room for work (node is at its worker cap)",
+                idle.workerId(), idle.pid());
+        recycleWorker(idle);
+        return true;
+    }
+
     private void recycleWorker(WorkerProcessHandle worker) {
         // Each handle is counted once (in spawnWorker) and released once; terminate() is idempotent and marks the
         // handle, so a repeat recycle is a no-op (D-135).
@@ -461,6 +570,11 @@ public class TenantWorkerPool {
         }
         cgroupLimiter.cleanup(worker.pid());
         inspectExit(worker);
+        StderrTail tail = stderrByPid.remove(worker.pid());
+        String rendered = tail == null ? "" : tail.render();
+        if (!rendered.isEmpty()) {
+            LOG.warn("Worker {} (pid {}) stderr tail:{}", worker.workerId(), worker.pid(), rendered);
+        }
         worker.terminate();
     }
 

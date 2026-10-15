@@ -274,6 +274,10 @@ class ProcessModeParityTest {
                 Map.entry("C93_CLUSTER_PORT", "22701"),
                 Map.entry("C93_CLUSTER_MEMBERS", "127.0.0.1"),
                 Map.entry("C93_WORKER_MODE", "process"),
+                // Pin the shared-worker design on: a worker runs several jobs at once (D-155). Leaving this to the
+                // default would let a change to ServerConfig silently stop the parity suite exercising a shared
+                // worker, which is exactly the path this test class exists to cover.
+                Map.entry("C93_MAX_JOBS_PER_WORKER", "4"),
                 Map.entry("C93_WORKER_DEFAULT_MODE", "javet"),
                 Map.entry("C93_WORKER_BINARY_JAVET", workerScript.toString())));
         return ServerConfig.fromEnv(TestTls.secure(env));
@@ -397,7 +401,9 @@ class ProcessModeParityTest {
 
     private static void awaitServiceRunning(String name) throws Exception {
         awaitJson(nodeA, "/v1/services/" + name, s -> "RUNNING".equals(s.getString("status")));
-        Thread.sleep(1000); // let the run register its handlers
+        // Let the run register its handlers. A service on a shared worker takes longer to reach bus.handle/ctx.serve
+        // than one with a worker to itself: the second context in a warm process is built after RUNNING is reported.
+        Thread.sleep(3000);
     }
 
     /** Polls the ingress until the service is actually serving (its {@code ctx.serve} has registered). */

@@ -83,6 +83,7 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 - **W5 — Module directories drop the `cluster93-` prefix (D-134):** `tls`, `core`, `runtime-js`, `runtime-javet`, `runtime-graaljs`, `runner-protocol`, `worker`, `cluster-ignite`, `server`, `cli`; artifactIds and Java packages unchanged.
 - **W6 — Docs reconciled:** README/ROADMAP status, the four phase plans archived under `docs/design/history/`, and `DOCUMENTATION.md`'s taxonomy refreshed.
 - **Next focus:** Phase 6's browser session layer (§4). **Follow-up captured in `NOTES.md`:** one unified `c93 cluster …` pathway (master/dev/Docker node setup and cluster setup).
+- **In flight (2026-10-14):** per-tenant workers (D-155–D-163) — one worker per tenant, running several jobs at once, each in a fresh context. The switch is on (`C93_MAX_JOBS_PER_WORKER` default 4, `REUSE_SAME_TENANT`) and the shared-channel cancel bug is fixed. Remaining: make the node-wide budget actually gate spawns (D-156), CPU limits per tenant (D-158), crash attribution (D-159), per-tenant observability, then Docker Stage 2 as **container per tenant** (D-160).
 
 ### Phase 5: Architecture Documentation & Javadoc Aggregation (COMPLETE)
 - **Task 5.1 — Master Documentation (`DOCUMENTATION.md`):**
@@ -148,6 +149,13 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 ---
 
 ## 5. Recent Key Achievements & Bug Fixes
+
+- **Per-tenant workers run several jobs at once, and a cancel no longer kills the siblings (D-155, D-162, D-163):**
+  - A worker serves up to `C93_MAX_JOBS_PER_WORKER` jobs concurrently (default 4), each in a fresh context, and its tenant keeps it for the next job (`REUSE_SAME_TENANT`). A worker is never shared between tenants. `C93_MAX_JOBS_PER_WORKER` had been held at 1 only because a shared channel was unsafe.
+  - **The shared-channel cancel bug is fixed.** A run-level non-success (cancelled, failed, timed out) was being treated as a poisoned worker, so `release` reaped a worker that still had live siblings — a parent cancelling its child destroyed the worker the parent was running on. `release` and `poison` now separate the two (D-162): only a worker that is itself gone is recycled, even that with its reason and stderr tail logged.
+  - The worker's **cgroup is sized for the jobs it runs** (`maxJobsPerWorker × heapMb` + overhead), not one job's (D-163) — sized for one, a shared worker was OOM-killed (exit 137) as soon as a second job ran.
+  - Evidence: `TenantWorkerPoolTest` (5 new), `JobsFromScriptsTest.aParentCanStopAChildAndFollowItsEvents`, `ProcessModeParityTest`; full server suite 210/210 and `verify` across all modules.
+  - **The node now caps how many worker processes it runs (D-156):** `C93_MAX_WORKERS` (default `C93_CAPACITY`) bounds them; work preempts warmth, so an idle worker is reaped to make room and a job that cannot get a worker waits rather than failing. *(The node-wide bound on concurrent **jobs** is the scheduler's, unchanged.)* Worker-in-container isolation is captured as a deferred idea in `ideas/containers.md` — the node running worker processes directly is the current shape.
 
 - **Phase 11 — Consolidation & Release Readiness delivered (W1–W6):** one checkout orchestrator (`scripts/local.sh master|dev`, no `dev.sh`), `examples/js/` by language with a runner that also exercises the service example, one update surface (`c93 update [--cli|--node]`, D-138), one benchmark entrypoint (`benchmarks/run.sh cluster|engines|all`), prefix-less module directories (D-134), and docs reconciled with reality — the detail is in §3.
 

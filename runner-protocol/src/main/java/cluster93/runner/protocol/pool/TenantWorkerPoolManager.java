@@ -45,7 +45,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
                                    String defaultMode,
                                    int minWarmPerTenant,
                                    int maxTotalPerTenant,
-                                   int nodeWideWorkers,
+                                   int maxWorkers,
                                    int maxJobsPerWorker,
                                    int heapMb,
                                    TenantWorkerPool.ReusePolicy reusePolicy,
@@ -57,12 +57,12 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         this.minWarmPerTenant = Math.max(0, minWarmPerTenant);
         this.maxTotalPerTenant = Math.max(1, maxTotalPerTenant);
         this.maxJobsPerWorker = Math.max(1, maxJobsPerWorker);
-        // NOT YET BOUNDED. Gating spawns on the shared allowance deadlocks against per-pool warm workers: each
-        // tenant's pool holds minWarm against the same budget, so several tenants fill it with idle workers between
-        // them and a tenant that then cannot spawn queues forever (PackagesTest hangs). The budget is accounted and
-        // released, so the plumbing is exercised, but it starts bounding when warm workers are shared across tenants
-        // — work order step 2 (per-tenant workers).
-        this.nodeBudget = WorkerBudget.unbounded();
+        // Bounded at last (D-156). Gating spawns on the shared allowance used to deadlock: every pool held minWarm
+        // against the same budget, so several tenants filled it with idle workers and a tenant that then could not
+        // spawn queued forever (PackagesTest hung). Two things changed: pools no longer pre-warm (minWarm 0), and a
+        // spawn that finds the budget full first asks the manager to reap an IDLE worker node-wide and retries
+        // (freeIdleWorker). Work preempts warmth, so an idle worker can never block a job.
+        this.nodeBudget = new WorkerBudget(Math.max(1, maxWorkers));
         this.heapMb = Math.max(16, heapMb);
         this.reusePolicy = Objects.requireNonNull(reusePolicy, "reusePolicy");
         this.cgroupLimiter = Objects.requireNonNull(cgroupLimiter, "cgroupLimiter");
@@ -83,6 +83,11 @@ public class TenantWorkerPoolManager implements NodeArbiter {
 
     /**
      * Acquires a worker for a specific tenant and execution mode.
+     *
+     * <p>This is <b>not</b> where the node-wide concurrent-<em>job</em> bound lives. That bound is the scheduler's:
+     * it places at most {@code C93_CAPACITY} running attempts on a node and refuses more, and the node re-checks it
+     * in {@code acceptsAttempt}, so a node never runs more jobs at once than it advertises (D-154, D-156). This
+     * method only supplies a worker for a job the scheduler has already admitted.
      */
     public Future<WorkerProcessHandle> acquire(String tenantId, String mode) {
         String effectiveMode = (mode != null && !mode.isBlank()) ? mode.toLowerCase(Locale.ROOT) : defaultMode;
@@ -119,17 +124,33 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     }
 
     /**
-     * Releases an acquired worker.
+     * Releases an acquired worker after one of its jobs finishes. This is a run-level event: the pool decides from
+     * the worker's own health whether the process is retired.
      */
-    public void release(String tenantId, String mode, WorkerProcessHandle worker, boolean errorOrOom) {
-        String effectiveMode = (mode != null && !mode.isBlank()) ? mode : defaultMode;
-        String poolKey = effectiveMode.equalsIgnoreCase(defaultMode) ? tenantId : tenantId + ":" + effectiveMode.toLowerCase();
-        TenantWorkerPool pool = tenantPools.get(poolKey);
+    public void release(String tenantId, String mode, WorkerProcessHandle worker) {
+        TenantWorkerPool pool = poolFor(tenantId, mode);
         if (pool != null) {
-            pool.release(worker, errorOrOom);
+            pool.release(worker);
         } else {
             worker.terminate();
         }
+    }
+
+    /** Retires a worker that is itself unhealthy, in the pool that owns it. */
+    public void poison(String tenantId, String mode, WorkerProcessHandle worker, String reason) {
+        TenantWorkerPool pool = poolFor(tenantId, mode);
+        if (pool != null) {
+            pool.poison(worker, reason);
+        } else {
+            worker.terminate();
+        }
+    }
+
+    /** The pool that owns a tenant's workers for a mode, or null when it was never created. */
+    private TenantWorkerPool poolFor(String tenantId, String mode) {
+        String effectiveMode = (mode != null && !mode.isBlank()) ? mode.toLowerCase(Locale.ROOT) : defaultMode;
+        String poolKey = effectiveMode.equalsIgnoreCase(defaultMode) ? tenantId : tenantId + ":" + effectiveMode;
+        return tenantPools.get(poolKey);
     }
 
     @Override
@@ -167,6 +188,22 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     /** How many workers the node is running across every tenant, and what it may run. */
     public WorkerBudget nodeBudget() {
         return nodeBudget;
+    }
+
+    /**
+     * Makes room for one more worker by reaping an idle (warm) worker from any tenant's pool, returning whether one
+     * was found. A pool whose spawn the node-wide budget refused calls this and retries: work must preempt warmth,
+     * or an idle worker sitting in one tenant's pool would block another tenant's job for good. A worker with jobs
+     * still on it is never reaped here.
+     */
+    @Override
+    public boolean freeIdleWorker() {
+        for (TenantWorkerPool pool : tenantPools.values()) {
+            if (pool.reapIdleWorker()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

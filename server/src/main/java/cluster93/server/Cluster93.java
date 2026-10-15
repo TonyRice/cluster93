@@ -375,26 +375,36 @@ public final class Cluster93 {
                     vertx,
                     config.workerBinaries(),
                     config.workerDefaultMode(),
-                    1,
+                    // No pre-warmed workers by default: warmth is idle capacity, and idle workers are what filled
+                    // the node-wide allowance and deadlocked it. A worker is spawned when a job needs one — and it is
+                    // kept warm after its last job (REUSE_SAME_TENANT), so a busy tenant still avoids cold starts.
+                    0,
                     // A tenant takes as many workers as its jobs need at maxJobsPerWorker each, so its concurrency is
                     // maxJobsPerTenant whatever the two knobs are set to: 8 jobs at 4 per worker is two workers, not
                     // eight (D-155). The caps are independent env vars; this is the arithmetic that joins them.
                     Math.max(1, (config.maxJobsPerTenant() + config.maxJobsPerWorker() - 1) / config.maxJobsPerWorker()),
-                    config.capacity(),
+                    // The node-wide worker cap (D-156): how many worker processes this node may run, shared by
+                    // every tenant's pool.
+                    config.maxWorkers(),
                     config.maxJobsPerWorker(),
                     config.maxHeapMb(),
-                    cluster93.runner.protocol.pool.TenantWorkerPool.ReusePolicy.FRESH_PER_JOB,
+                    // Keep a worker while its tenant has work: an idle worker is held for the tenant's next job
+                    // rather than reaped, so a burst of sequential jobs stops paying process startup (D-155). It is
+                    // still never handed to another tenant.
+                    cluster93.runner.protocol.pool.TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT,
                     new cluster93.runner.protocol.pool.CgroupMemoryLimiter(),
                     cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL
             );
             workerPoolRef.set(poolManager);
             runtime = new cluster93.runner.protocol.runtime.WorkerProcessRuntime(vertx, poolManager);
-            // Say plainly what this node can run at once, and how the workers are shared: one worker per concurrent
-            // job, and the pool is handed out round-robin between tenants, so one tenant cannot take all of them
-            // (D-153). Tenants themselves are not capped — only concurrency is.
-            LOG.info("Process workers: up to {} concurrent jobs ({} MB each), one worker per job, shared round-robin "
-                            + "between tenants; default engine {}. Raise C93_CAPACITY for more concurrency.",
-                    config.capacity(), config.maxHeapMb(), config.workerDefaultMode());
+            // Say plainly what this node can run at once, and how the workers are shared: one worker per tenant
+            // (D-155), running up to maxJobsPerWorker jobs each, and the pools are handed out round-robin between
+            // tenants so one tenant cannot take all of them (D-153). Tenants themselves are not capped — only
+            // concurrency is.
+            LOG.info("Process workers: up to {} concurrent jobs ({} MB each), {} job(s) per worker, one worker set "
+                            + "per tenant, shared round-robin between tenants; default engine {}. Raise C93_CAPACITY "
+                            + "for more concurrency.",
+                    config.capacity(), config.maxHeapMb(), config.maxJobsPerWorker(), config.workerDefaultMode());
         } else {
             runtime = new JavetScriptRuntime(vertx, config.maxHeapMb(), config.capacity());
         }

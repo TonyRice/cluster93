@@ -1,6 +1,5 @@
 package cluster93.runner.protocol.runtime;
 
-import cluster93.core.job.JobStatus;
 import cluster93.core.runtime.Execution;
 import cluster93.core.runtime.ExecutionResult;
 import cluster93.core.runtime.LogSink;
@@ -95,8 +94,16 @@ public class WorkerProcessRuntime implements ScriptRuntime {
 
                 handle.run(channelId, execution, host, logs, state)
                         .onComplete(runRes -> {
-                            boolean isError = runRes.failed() || (runRes.succeeded() && runRes.result().status() != JobStatus.SUCCEEDED);
-                            poolManager.release(execution.tenant(), null, handle, isError);
+                            // A run that produced a result is a run-level event, whatever its status: a failed,
+                            // timed-out or cancelled job frees only its own slot and leaves a shared worker alive.
+                            // Only a run that never produced a result — the usual sign of a dead worker or a broken
+                            // channel — retires the worker itself (D-162).
+                            if (runRes.failed()) {
+                                poolManager.poison(execution.tenant(), null, handle, "run failed: "
+                                        + (runRes.cause() == null ? "worker error" : runRes.cause().getMessage()));
+                            } else {
+                                poolManager.release(execution.tenant(), null, handle);
+                            }
                             if (runRes.succeeded()) {
                                 promise.complete(runRes.result());
                             } else {
@@ -123,8 +130,10 @@ public class WorkerProcessRuntime implements ScriptRuntime {
                 public void cancel(String reason) {
                     WorkerProcessHandle handle = handleRef.get();
                     if (handle != null) {
+                        // Ask the worker to stop the run; its slot is freed when the run actually completes, so a
+                        // sibling job cannot reuse the worker before this run's context is gone. Releasing here as
+                        // well would count the slot down twice and, before D-155, reaped the shared worker.
                         handle.cancel(channelId, reason);
-                        poolManager.release(execution.tenant(), null, handle, true);
                     }
                     promise.tryComplete(ExecutionResult.cancelled("Cancelled: " + reason));
                 }
@@ -145,8 +154,14 @@ public class WorkerProcessRuntime implements ScriptRuntime {
 
                 handle.run(channelId, execution, host, logs, state)
                         .onComplete(runRes -> {
-                            boolean isError = runRes.failed() || (runRes.succeeded() && runRes.result().status() != JobStatus.SUCCEEDED);
-                            pool.release(handle, isError);
+                            // See the poolManager branch: a job's outcome is a run-level event; only a run that never
+                            // produced a result retires the worker (D-162).
+                            if (runRes.failed()) {
+                                pool.poison(handle, "run failed: "
+                                        + (runRes.cause() == null ? "worker error" : runRes.cause().getMessage()));
+                            } else {
+                                pool.release(handle);
+                            }
                             if (runRes.succeeded()) {
                                 promise.complete(runRes.result());
                             } else {
@@ -173,8 +188,8 @@ public class WorkerProcessRuntime implements ScriptRuntime {
                 public void cancel(String reason) {
                     WorkerProcessHandle handle = handleRef.get();
                     if (handle != null) {
+                        // The slot is freed when the run completes; see the poolManager branch.
                         handle.cancel(channelId, reason);
-                        pool.release(handle, true);
                     }
                     promise.tryComplete(ExecutionResult.cancelled("Cancelled: " + reason));
                 }

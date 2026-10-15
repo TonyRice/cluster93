@@ -38,8 +38,21 @@ class ServerConfigTest {
     @DisplayName("Jobs per worker is its own env, and one worker per job is not the model (D-155)")
     void maxJobsPerWorkerIsItsOwnSetting() {
         assertThat(ServerConfig.fromEnv(Map.of("C93_MAX_JOBS_PER_WORKER", "4")).maxJobsPerWorker()).isEqualTo(4);
-        // Held at 1 until the two process-mode tests below tolerate it; the wiring is what matters here.
-        assertThat(ServerConfig.fromEnv(Map.of()).maxJobsPerWorker()).isEqualTo(1);
+        // The switch is on: a worker runs several jobs at once (D-155). Held at 1 only while a cancel still took
+        // down the shared channel; release()/poison() now separate a job's outcome from the worker's health.
+        assertThat(ServerConfig.fromEnv(Map.of()).maxJobsPerWorker()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("The node-wide worker cap is its own env, defaulting to the node's concurrency (D-156)")
+    void maxWorkersIsItsOwnSetting() {
+        // A live worker always holds at least one job, so the node never needs more workers than concurrent jobs.
+        assertThat(ServerConfig.fromEnv(Map.of("C93_CAPACITY", "16")).maxWorkers()).isEqualTo(16);
+        // An operator lowers it to bound process memory on a small host.
+        assertThat(ServerConfig.fromEnv(Map.of("C93_CAPACITY", "16", "C93_MAX_WORKERS", "3")).maxWorkers()).isEqualTo(3);
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_MAX_WORKERS", "0")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("C93_MAX_WORKERS");
     }
 
     @Test
