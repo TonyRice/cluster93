@@ -7,33 +7,49 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Manages Linux cgroups v2 memory limits (MemoryMax, MemoryHigh) for tenant worker subprocesses (D-127, §7).
- * Provides graceful fallback when running in unprivileged environments, containers, or non-Linux OS.
+ * Applies Linux cgroups v2 memory limits (MemoryMax, MemoryHigh) to tenant worker subprocesses (D-127, §7), and
+ * reports what this host's cgroup setup supports via {@link CgroupSupport} (D-158).
+ *
+ * <p>The base it writes under is **detected**, not assumed: the old absolute {@code /sys/fs/cgroup/cluster93} needs
+ * root, so a node that did not run as root silently applied no limit at all. See {@link CgroupSupport} for how the
+ * node's own delegated cgroup is found. Where the cgroup is unavailable (unprivileged, non-Linux, containers without
+ * the controller) the limit is not applied and the engine's per-context limit is the only bound.
  */
 public class CgroupMemoryLimiter {
 
     private static final Logger LOG = LoggerFactory.getLogger(CgroupMemoryLimiter.class);
 
+    private final CgroupSupport support;
     private final Path cgroupBaseDir;
     private final boolean available;
 
+    /** Detects this host's cgroup v2 shape (D-158); {@link #support()} says what it found. */
     public CgroupMemoryLimiter() {
-        this(resolveDefaultCgroupPath());
+        this(CgroupSupport.detect());
     }
 
-    public CgroupMemoryLimiter(Path cgroupBaseDir) {
-        this.cgroupBaseDir = cgroupBaseDir;
-        this.available = checkAvailability(cgroupBaseDir);
-    }
-
-    private static Path resolveDefaultCgroupPath() {
-        String configured = System.getProperty("cluster93.cgroup.dir");
-        if (configured != null && !configured.isBlank()) {
-            return Path.of(configured);
+    public CgroupMemoryLimiter(CgroupSupport support) {
+        this.support = support;
+        this.cgroupBaseDir = support.base();
+        this.available = support.available();
+        LOG.info("Worker cgroups: {}", support.detail());
+        if (!available) {
+            LOG.warn("cgroups v2 limits are not applied on this host — the engine's own per-context limit is the only "
+                    + "bound. Set -Dcluster93.cgroup.dir, or run under a unit with Delegate=yes. ({})", support.detail());
         }
-        return Path.of("/sys/fs/cgroup/cluster93");
+    }
+
+    /** An explicit base, for tests and for an operator who pins one: {@code -Dcluster93.cgroup.dir}. */
+    public CgroupMemoryLimiter(Path cgroupBaseDir) {
+        this(new CgroupSupport(cgroupBaseDir, checkAvailability(cgroupBaseDir), Set.of(), "explicit base " + cgroupBaseDir));
+    }
+
+    /** What this host supports — the base, the delegated controllers and whether a limit can be applied. */
+    public CgroupSupport support() {
+        return support;
     }
 
     private static boolean checkAvailability(Path path) {
