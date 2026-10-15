@@ -181,11 +181,13 @@ public record ServerConfig(
                 // One worker per job is not the model: a worker runs several jobs at once, each in its own context,
                 // and a tenant takes more workers only when it needs more than one worker can carry (D-155).
                 //
-                // HELD AT 1 for now. Raising it to 4 fails three process-mode tests that exercise real workers
-                // (ProcessModeParityTest.answersBusRequests and .detectsAWorkerProcessKill, and
-                // JobsFromScriptsTest.aParentCanStopAChildAndFollowItsEvents), so something in the run path does not
-                // yet tolerate two jobs on one worker. The wiring is complete; this value is the switch, and it moves
-                // once those three are understood.
+                // HELD AT 1 for exactly one reason, found by reproducing with the channel's logs on: cancelling one
+                // run breaks the shared channel for its siblings. JobsFromScriptsTest.aParentCanStopAChildAndFollowItsEvents
+                // (a parent stopping its child) fails deterministically with 4, logging
+                //     Worker worker-NNN: protocol error with active runs
+                // — the connection errors while runs are active, so the parent dies with the child. Everything else
+                // passes with 4, including ProcessModeParityTest.detectsAWorkerProcessKill. The wiring is complete;
+                // this value is the switch, and it moves when cancel/stop is safe on a shared channel.
                 Integer.parseInt(env.getOrDefault("C93_MAX_JOBS_PER_WORKER", "1")),
                 Integer.parseInt(env.getOrDefault("C93_MAX_HEAP_MB", "128")),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_DEFAULT_TIMEOUT_MS", "10000"))),
