@@ -32,6 +32,14 @@ import java.util.UUID;
  *                      what {@code maxWorkers} already implies — each worker cgroup-sized for its jobs — so it never
  *                      binds before {@code maxWorkers}; lower it to bound memory directly on a small host. 0 is
  *                      unbounded. At least one worker is always admitted, so a limit below one worker cannot deadlock
+ * @param maxCpuPerTenant a tenant's aggregate CPU ceiling, as a percentage of one core (D-158): 100 is one core,
+ *                      200 two, 0 unlimited. Written as {@code cpu.max} on the tenant's cgroup, so it bounds the
+ *                      tenant's workers together, not one worker
+ * @param requireCgroupLimits when true the node refuses to start if cgroup limits cannot be enforced, instead of
+ *                      warning and falling back (D-158)
+ * @param cgroupPrepare whether the node may prepare its own cgroup at startup (move itself into a leaf child so the
+ *                      delegated controllers can be enabled for worker cgroups); {@code C93_CGROUP_PREPARE=off}
+ *                      disables it
  * @param ingressPort   where services' HTTP traffic arrives (routed by Host)
  * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
  * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
@@ -73,6 +81,9 @@ public record ServerConfig(
         cluster93.core.scheduler.JobScheduler.WhenFull jobWhenFull,
         int maxHeapMb,
         long maxWorkerMemoryMb,
+        int maxCpuPerTenant,
+        boolean requireCgroupLimits,
+        boolean cgroupPrepare,
         Duration defaultTimeout,
         Duration maxTimeout,
         Duration heartbeat,
@@ -152,6 +163,10 @@ public record ServerConfig(
             throw new IllegalArgumentException("C93_MAX_WORKER_MEMORY_MB must be 0 (unbounded) or more (it was "
                     + maxWorkerMemoryMb + ")");
         }
+        if (maxCpuPerTenant < 0) {
+            throw new IllegalArgumentException("C93_MAX_CPU_PER_TENANT must be 0 (unlimited) or a percentage "
+                    + "(it was " + maxCpuPerTenant + ")");
+        }
         for (String role : roles) {
             if (!ROLES.contains(role)) {
                 throw new IllegalArgumentException("C93_ROLES must be a comma-separated subset of " + ROLES + " (it named " + role + ")");
@@ -191,6 +206,11 @@ public record ServerConfig(
         long defaultWorkerMemoryMb = (long) maxWorkers * ((long) maxJobsPerWorker * maxHeapMb + 128L);
         long maxWorkerMemoryMb = Long.parseLong(
                 env.getOrDefault("C93_MAX_WORKER_MEMORY_MB", String.valueOf(defaultWorkerMemoryMb)));
+        // The per-tenant CPU ceiling (D-158) and the two cgroup knobs: whether the node may prepare its own cgroup
+        // at startup, and whether it refuses to start when limits cannot be enforced (rather than warning).
+        int maxCpuPerTenant = Integer.parseInt(env.getOrDefault("C93_MAX_CPU_PER_TENANT", "0"));
+        boolean requireCgroupLimits = Boolean.parseBoolean(env.getOrDefault("C93_REQUIRE_CGROUP_LIMITS", "false"));
+        boolean cgroupPrepare = !"off".equalsIgnoreCase(env.getOrDefault("C93_CGROUP_PREPARE", "auto").trim());
         return new ServerConfig(
                 env.getOrDefault("C93_NODE_ID", defaultNodeId()),
                 Integer.parseInt(env.getOrDefault("C93_HTTP_PORT", "9393")),
@@ -223,6 +243,9 @@ public record ServerConfig(
                 maxHeapMb,
                 // The node-wide memory ceiling on workers (D-163), read above so its default could use the caps.
                 maxWorkerMemoryMb,
+                maxCpuPerTenant,
+                requireCgroupLimits,
+                cgroupPrepare,
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_DEFAULT_TIMEOUT_MS", "10000"))),
                 Duration.ofMillis(Long.parseLong(env.getOrDefault("C93_MAX_TIMEOUT_MS", "60000"))),
                 heartbeat,

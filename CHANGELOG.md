@@ -6,6 +6,26 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **CPU limits per tenant, and honest cgroup detection** (D-158, D-163):
+  - The cgroup base was the absolute `/sys/fs/cgroup/cluster93`, which only **root** can create — so a node running
+    as an ordinary user (or the `cluster93` account) silently applied **no** cgroup limit at all. `CgroupSupport`
+    now detects the host's shape: `/proc/self/cgroup` and the cgroup2 mount give the node's **own** cgroup, whose
+    `cgroup.controllers` says what it may limit. The node reports it plainly (`Worker cgroups: own cgroup …;
+    delegated controllers: cpu memory`) instead of assuming a root-only path.
+  - On startup the node **prepares** its own cgroup: cgroup v2 forbids enabling a controller for children while a
+    process sits in the same cgroup, so it moves itself into a leaf child and enables the delegated controllers —
+    the sequence `scripts/cpu-delegation-probe.sh` proved on a real unit. It is skipped when other processes share
+    the cgroup, and `C93_CGROUP_PREPARE=off` disables it.
+  - **Per-tenant CPU limits:** `C93_MAX_CPU_PER_TENANT` (a percentage of one core; `0` = unlimited, the default) is
+    written as `cpu.max` on the **tenant's** cgroup, so it bounds the tenant's workers **together** — a per-worker
+    cap would let a tenant running more workers take proportionally more. Each worker is a child carrying its
+    memory bound (D-163): `<base>/tenant-<id>/cpu.max` and `<base>/tenant-<id>/worker-<pid>/memory.max`.
+  - **Warn by default, refuse on request:** `C93_REQUIRE_CGROUP_LIMITS=true` refuses to start when limits cannot be
+    enforced; by default the node warns and falls back (the engine's per-context limit is the only bound), which is
+    what the memory limiter already did.
+  - `CgroupMemoryLimiter` became `WorkerCgroups` (it does CPU too). Reported as the `c93.cgroup.limits.enforced`
+    gauge.
+
 - **A CPU-delegation probe for tenant CPU limits (D-158 groundwork):**
   - `scripts/cpu-delegation-probe.sh` answers the one thing no unit test can: whether cgroup v2 `cpu.max` is
     **delegated into** and **writable from** a service under a `Delegate=yes` unit shaped like

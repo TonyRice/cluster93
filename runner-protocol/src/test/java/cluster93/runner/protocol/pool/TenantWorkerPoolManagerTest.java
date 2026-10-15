@@ -23,7 +23,7 @@ class TenantWorkerPoolManagerTest {
         // No pool is created for a tenant until it is asked for, which is what lets these tests exercise the
         // arbitration on its own: the rotation is the whole decision, and no worker is spawned.
         return new TenantWorkerPoolManager(vertx, Map.of(), "javet", 0, 2, 2, 4, 128,
-                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), NodeRpcAuthorizer.ALLOW_ALL,
+                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL,
                 2L * 1024 * 1024 * 1024);
     }
 

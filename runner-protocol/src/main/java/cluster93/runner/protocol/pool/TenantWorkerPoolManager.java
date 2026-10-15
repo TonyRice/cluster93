@@ -39,13 +39,13 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     private final TenantRotation rotation = new TenantRotation();
     private final int heapMb;
     private final TenantWorkerPool.ReusePolicy reusePolicy;
-    private final CgroupMemoryLimiter cgroupLimiter;
+    private final WorkerCgroups cgroupLimiter;
     private final NodeRpcAuthorizer authorizer;
 
     private final Map<String, TenantWorkerPool> tenantPools = new ConcurrentHashMap<>();
 
     public TenantWorkerPoolManager(Vertx vertx, Map<String, String> modeBinaries, String defaultMode) {
-        this(vertx, modeBinaries, defaultMode, 1, 8, 8, 4, 128, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), NodeRpcAuthorizer.ALLOW_ALL);
+        this(vertx, modeBinaries, defaultMode, 1, 8, 8, 4, 128, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL);
     }
 
     public TenantWorkerPoolManager(Vertx vertx,
@@ -57,7 +57,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
                                    int maxJobsPerWorker,
                                    int heapMb,
                                    TenantWorkerPool.ReusePolicy reusePolicy,
-                                   CgroupMemoryLimiter cgroupLimiter,
+                                   WorkerCgroups cgroupLimiter,
                                    NodeRpcAuthorizer authorizer) {
         this(vertx, modeBinaries, defaultMode, minWarmPerTenant, maxTotalPerTenant, maxWorkers, maxJobsPerWorker,
                 heapMb, reusePolicy, cgroupLimiter, authorizer, 0);
@@ -72,7 +72,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
                                    int maxJobsPerWorker,
                                    int heapMb,
                                    TenantWorkerPool.ReusePolicy reusePolicy,
-                                   CgroupMemoryLimiter cgroupLimiter,
+                                   WorkerCgroups cgroupLimiter,
                                    NodeRpcAuthorizer authorizer,
                                    long maxWorkerMemoryBytes) {
         this.vertx = Objects.requireNonNull(vertx, "vertx");

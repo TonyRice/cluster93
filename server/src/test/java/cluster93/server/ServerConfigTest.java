@@ -71,6 +71,23 @@ class ServerConfigTest {
     }
 
     @Test
+    @DisplayName("The per-tenant CPU ceiling and the cgroup switches are their own settings (D-158)")
+    void cgroupSettings() {
+        // CPU is unlimited by default — a ceiling is the operator's call.
+        assertThat(ServerConfig.fromEnv(Map.of()).maxCpuPerTenant()).isZero();
+        assertThat(ServerConfig.fromEnv(Map.of("C93_MAX_CPU_PER_TENANT", "150")).maxCpuPerTenant()).isEqualTo(150);
+        // Warn by default; an operator can require limits and refuse to start without them.
+        assertThat(ServerConfig.fromEnv(Map.of()).requireCgroupLimits()).isFalse();
+        assertThat(ServerConfig.fromEnv(Map.of("C93_REQUIRE_CGROUP_LIMITS", "true")).requireCgroupLimits()).isTrue();
+        // Preparing the node's own cgroup is on by default; C93_CGROUP_PREPARE=off turns it off.
+        assertThat(ServerConfig.fromEnv(Map.of()).cgroupPrepare()).isTrue();
+        assertThat(ServerConfig.fromEnv(Map.of("C93_CGROUP_PREPARE", "off")).cgroupPrepare()).isFalse();
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_MAX_CPU_PER_TENANT", "-1")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("C93_MAX_CPU_PER_TENANT");
+    }
+
+    @Test
     @DisplayName("A job that cannot get capacity queues by default, and can be told to reject instead (D-156)")
     void jobWhenFullIsItsOwnSetting() {
         assertThat(ServerConfig.fromEnv(Map.of()).jobWhenFull())

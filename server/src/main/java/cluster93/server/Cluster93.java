@@ -371,6 +371,17 @@ public final class Cluster93 {
         ScriptRuntime runtime;
         java.util.concurrent.atomic.AtomicReference<cluster93.runner.protocol.pool.TenantWorkerPoolManager> workerPoolRef = new java.util.concurrent.atomic.AtomicReference<>();
         if ("process".equalsIgnoreCase(config.workerMode())) {
+            // The node's cgroup manager (D-158): detect what this host supports, then prepare its own subtree so
+            // tenant CPU and worker memory limits can actually be applied (moving itself into a leaf child, without
+            // which the delegated controllers cannot be enabled for children).
+            cluster93.runner.protocol.pool.WorkerCgroups cgroups = new cluster93.runner.protocol.pool.WorkerCgroups();
+            cgroups.tenantCpuPercent(config.maxCpuPerTenant());
+            if (config.cgroupPrepare()) {
+                cgroups.prepare(config.requireCgroupLimits());
+            } else if (config.requireCgroupLimits()) {
+                throw new IllegalStateException("C93_REQUIRE_CGROUP_LIMITS=true but C93_CGROUP_PREPARE=off — enable "
+                        + "preparation or drop the requirement");
+            }
             var poolManager = new cluster93.runner.protocol.pool.TenantWorkerPoolManager(
                     vertx,
                     config.workerBinaries(),
@@ -392,7 +403,7 @@ public final class Cluster93 {
                     // rather than reaped, so a burst of sequential jobs stops paying process startup (D-155). It is
                     // still never handed to another tenant.
                     cluster93.runner.protocol.pool.TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT,
-                    new cluster93.runner.protocol.pool.CgroupMemoryLimiter(),
+                    cgroups,
                     cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL,
                     // The node-wide memory ceiling on workers (D-163), next to the worker count above.
                     config.maxWorkerMemoryMb() * 1024L * 1024L
@@ -414,6 +425,9 @@ public final class Cluster93 {
                     .description("Bytes of worker memory this node's workers reserve").baseUnit("bytes").register(meters);
             io.micrometer.core.instrument.Gauge.builder("c93.workers.memory.limit", poolManager, m -> m.workersMemoryLimit())
                     .description("Bytes of worker memory this node may reserve; 0 means unbounded").baseUnit("bytes").register(meters);
+            // Whether tenant cgroup limits are actually enforced here (D-158): 1 when prepared, 0 in fallback.
+            io.micrometer.core.instrument.Gauge.builder("c93.cgroup.limits.enforced", cgroups, c -> c.isAvailable() ? 1 : 0)
+                    .description("1 when tenant cgroup (cpu/memory) limits are applied on this node").register(meters);
             runtime = new cluster93.runner.protocol.runtime.WorkerProcessRuntime(vertx, poolManager);
             // Say plainly what this node can run at once, and how the workers are shared: one worker per tenant
             // (D-155), running up to maxJobsPerWorker jobs each, and the pools are handed out round-robin between

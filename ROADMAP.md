@@ -83,7 +83,7 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 - **W5 — Module directories drop the `cluster93-` prefix (D-134):** `tls`, `core`, `runtime-js`, `runtime-javet`, `runtime-graaljs`, `runner-protocol`, `worker`, `cluster-ignite`, `server`, `cli`; artifactIds and Java packages unchanged.
 - **W6 — Docs reconciled:** README/ROADMAP status, the four phase plans archived under `docs/design/history/`, and `DOCUMENTATION.md`'s taxonomy refreshed.
 - **Next focus:** Phase 6's browser session layer (§4). **Follow-up captured in `NOTES.md`:** one unified `c93 cluster …` pathway (master/dev/Docker node setup and cluster setup).
-- **In flight (2026-10-15):** the per-tenant worker pivot (D-155–D-163) has **landed** — one worker per tenant running several jobs at once; the switch is on (`C93_MAX_JOBS_PER_WORKER` 4, `REUSE_SAME_TENANT`); the shared-channel cancel bug (D-162, fixed), per-worker memory sizing (D-163), the node-wide worker cap and queue-when-full behaviour (D-156) are all in, along with the queue-drain fix that healed the `resumesMemoizedSteps` hang. The worker-classpath isolation guard (D-030), tenant-visible crash attribution (D-159), per-tenant observability (D-164) and the node-wide memory budget (D-165) have since landed. Remaining: CPU limits per tenant (D-158 — blocked until cgroup delegation is verified on a real systemd unit), then Docker Stage 2 — **worker containers holding a tenant-agnostic pool of open workers that connect to the node** (D-166 supersedes D-160's container-per-tenant; D-167 retires the node-spawned engine-socket shape of D-144/D-145) — which must be rewritten before it is built.
+- **In flight (2026-10-15):** the per-tenant worker pivot (D-155–D-163) has **landed** — one worker per tenant running several jobs at once; the switch is on (`C93_MAX_JOBS_PER_WORKER` 4, `REUSE_SAME_TENANT`); the shared-channel cancel bug (D-162, fixed), per-worker memory sizing (D-163), the node-wide worker cap and queue-when-full behaviour (D-156) are all in, along with the queue-drain fix that healed the `resumesMemoizedSteps` hang. The worker-classpath isolation guard (D-030), tenant-visible crash attribution (D-159), per-tenant observability (D-164), the node-wide memory budget (D-165) and **cgroup detection with per-tenant CPU limits (D-158)** have since landed. Remaining: Docker Stage 2 — **worker containers holding a tenant-agnostic pool of open workers that connect to the node** (D-166 supersedes D-160's container-per-tenant; D-167 retires the node-spawned engine-socket shape of D-144/D-145) — **rewritten and ready to build**.
 
 ### Phase 5: Architecture Documentation & Javadoc Aggregation (COMPLETE)
 - **Task 5.1 — Master Documentation (`DOCUMENTATION.md`):**
@@ -149,6 +149,15 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 ---
 
 ## 5. Recent Key Achievements & Bug Fixes
+
+- **Cgroup detection and per-tenant CPU limits (D-158):** the node now detects the host's cgroup v2 shape (its own
+  cgroup from `/proc/self/cgroup`, the cgroup2 mount, and the delegated controllers) instead of assuming the
+  root-only `/sys/fs/cgroup/cluster93` — which silently applied **no** limit to any non-root node. At startup it
+  prepares its own cgroup (moving itself into a leaf so the delegated controllers can be enabled for children; the
+  sequence `scripts/cpu-delegation-probe.sh` proved on a real unit), then writes `cpu.max` per **tenant**
+  (`C93_MAX_CPU_PER_TENANT`, a percentage of one core) and `memory.max` per **worker** (D-163). Warn by default;
+  `C93_REQUIRE_CGROUP_LIMITS=true` refuses to start without enforcement. Evidence: `CgroupSupportTest`,
+  `WorkerCgroupsTest`, `ServerConfigTest`; the probe PASSED on a real systemd host.
 
 - **The node-wide worker budget now includes memory (D-165):** a `WorkerMemoryBudget` reserves each worker's cgroup
   size (`maxJobsPerWorker × maxHeapMb + 128 MB`, D-163) when it spawns and returns it when reaped, so the node's

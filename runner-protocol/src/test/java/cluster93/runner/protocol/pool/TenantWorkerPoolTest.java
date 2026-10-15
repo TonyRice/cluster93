@@ -120,18 +120,18 @@ class TenantWorkerPoolTest {
     }
 
     @Test
-    @DisplayName("CgroupMemoryLimiter handles non-existent or restricted paths gracefully")
-    void testCgroupMemoryLimiterFallback() throws IOException {
+    @DisplayName("WorkerCgroups handles non-existent or restricted paths gracefully")
+    void testWorkerCgroupsFallback() throws IOException {
         Path tempDir = Files.createTempDirectory("cgroup-test");
         try {
-            CgroupMemoryLimiter limiter = new CgroupMemoryLimiter(tempDir);
+            WorkerCgroups limiter = new WorkerCgroups(tempDir);
             if (limiter.isAvailable()) {
-                boolean applied = limiter.applyMemoryLimit(12345, 100_000_000L, 80_000_000L);
+                boolean applied = limiter.applyWorker("acme", 12345, 100_000_000L, 80_000_000L);
                 assertTrue(applied);
-                assertFalse(limiter.checkOomKilled(12345));
-                limiter.cleanup(12345);
+                assertFalse(limiter.checkOomKilled("acme", 12345));
+                limiter.cleanup("acme", 12345);
             } else {
-                assertFalse(limiter.applyMemoryLimit(12345, 100_000_000L, 80_000_000L));
+                assertFalse(limiter.applyWorker("acme", 12345, 100_000_000L, 80_000_000L));
             }
         } finally {
             deleteRecursively(tempDir);
@@ -226,7 +226,7 @@ class TenantWorkerPoolTest {
         System.setProperty("cluster93.worker.helloTimeoutMs", String.valueOf(helloTimeoutMs));
         io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
         TenantWorkerPool pool = new TenantWorkerPool(vertx, script.toString(), "javet", 0, 2, 64,
-                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(),
+                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new WorkerCgroups(),
                 cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
         try {
             var acquire = pool.acquire("tenant-a").toCompletionStage().toCompletableFuture();
@@ -382,7 +382,7 @@ class TenantWorkerPoolTest {
         // A ceiling that holds one worker's 384 MB but not two.
         WorkerMemoryBudget memory = new WorkerMemoryBudget(400L * 1024 * 1024);
         TenantWorkerPool pool = new TenantWorkerPool(vertx, null, "javet", 0, 8, 64,
-                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(),
+                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new WorkerCgroups(),
                 cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL, null, 4, memory);
         try {
             long workerBytes = (64L * 4 + 128L) * 1024L * 1024L;
@@ -440,7 +440,7 @@ class TenantWorkerPoolTest {
 
     private static TenantWorkerPool newPool(io.vertx.core.Vertx vertx, TenantWorkerPool.ReusePolicy policy) {
         // minWarm 0 so nothing is spawned: these tests drive the lifecycle bookkeeping directly.
-        return new TenantWorkerPool(vertx, null, "javet", 0, 4, 64, policy, new CgroupMemoryLimiter(),
+        return new TenantWorkerPool(vertx, null, "javet", 0, 4, 64, policy, new WorkerCgroups(),
                 cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
     }
 

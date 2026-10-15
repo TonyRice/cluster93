@@ -56,7 +56,7 @@ public class TenantWorkerPool {
     private final int maxJobsPerWorker;
     private final int heapMb;
     private final ReusePolicy reusePolicy;
-    private final CgroupMemoryLimiter cgroupLimiter;
+    private final WorkerCgroups cgroupLimiter;
     private final cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer;
     /** How long a freshly spawned worker may take to say hello before it is given up on (D-135). */
     private final long helloTimeoutMs;
@@ -98,30 +98,30 @@ public class TenantWorkerPool {
     }
 
     public TenantWorkerPool(Vertx vertx) {
-        this(vertx, System.getProperty("cluster93.worker.binary"), null, 2, 16, 128, ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(), cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
+        this(vertx, System.getProperty("cluster93.worker.binary"), null, 2, 16, 128, ReusePolicy.FRESH_PER_JOB, new WorkerCgroups(), cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
     }
 
-    public TenantWorkerPool(Vertx vertx, String binaryPath, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter) {
+    public TenantWorkerPool(Vertx vertx, String binaryPath, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, WorkerCgroups cgroupLimiter) {
         this(vertx, binaryPath, null, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
     }
 
-    public TenantWorkerPool(Vertx vertx, String binaryPath, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer) {
+    public TenantWorkerPool(Vertx vertx, String binaryPath, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, WorkerCgroups cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer) {
         this(vertx, binaryPath, null, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer);
     }
 
-    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer) {
+    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, WorkerCgroups cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer) {
         this(vertx, binaryPath, mode, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer, null, 1);
     }
 
-    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget) {
+    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, WorkerCgroups cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget) {
         this(vertx, binaryPath, mode, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, 1);
     }
 
-    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget, int maxJobsPerWorker) {
+    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, WorkerCgroups cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget, int maxJobsPerWorker) {
         this(vertx, binaryPath, mode, minWarm, maxTotal, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker, null);
     }
 
-    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, CgroupMemoryLimiter cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget, int maxJobsPerWorker, WorkerMemoryBudget memoryBudget) {
+    public TenantWorkerPool(Vertx vertx, String binaryPath, String mode, int minWarm, int maxTotal, int heapMb, ReusePolicy reusePolicy, WorkerCgroups cgroupLimiter, cluster93.runner.protocol.server.NodeRpcAuthorizer authorizer, WorkerBudget nodeBudget, int maxJobsPerWorker, WorkerMemoryBudget memoryBudget) {
         this.vertx = Objects.requireNonNull(vertx, "vertx");
         this.binaryPath = binaryPath;
         this.mode = (mode == null || mode.isBlank()) ? "javet" : mode.toLowerCase(Locale.ROOT);
@@ -259,7 +259,7 @@ public class TenantWorkerPool {
         return "graaljs".equalsIgnoreCase(mode) ? "engine" : "cgroup";
     }
 
-    public CgroupMemoryLimiter cgroupLimiter() {
+    public WorkerCgroups cgroupLimiter() {
         return cgroupLimiter;
     }
 
@@ -324,7 +324,7 @@ public class TenantWorkerPool {
         // 3. Can we spawn a new worker right now?
         if (totalWorkers.get() < maxTotal) {
             Promise<WorkerProcessHandle> promise = Promise.promise();
-            spawnWorker(true).onComplete(ar -> {
+            spawnWorker(true, tenantId).onComplete(ar -> {
                 if (ar.succeeded()) {
                     WorkerProcessHandle spawned = ar.result();
                     synchronized (TenantWorkerPool.this) {
@@ -384,7 +384,7 @@ public class TenantWorkerPool {
             poison(worker, "worker process is gone");
             return;
         }
-        if (cgroupLimiter.checkOomKilled(worker.pid())) {
+        if (cgroupLimiter.checkOomKilled(worker.boundTenantId(), worker.pid())) {
             poison(worker, "worker was OOM-killed");
             return;
         }
@@ -508,7 +508,7 @@ public class TenantWorkerPool {
         }
         while (warmUnboundQueue.size() < minWarm && totalWorkers.get() < maxTotal) {
             // spawnWorker counts the attempt against maxTotal and logs its own failure (with the worker's stderr).
-            spawnWorker(false).onComplete(ar -> {
+            spawnWorker(false, null).onComplete(ar -> {
                 if (ar.succeeded()) {
                     synchronized (TenantWorkerPool.this) {
                         if (closed.get()) {
@@ -523,7 +523,7 @@ public class TenantWorkerPool {
         }
     }
 
-    private Future<WorkerProcessHandle> spawnWorker(boolean forWork) {
+    private Future<WorkerProcessHandle> spawnWorker(boolean forWork, String tenantId) {
         Promise<WorkerProcessHandle> promise = Promise.promise();
         // Counted from the moment the spawn starts, so maxTotal bounds in-flight workers too. Released by
         // recycleWorker on failure, or when the handle is recycled after use (D-135).
@@ -587,10 +587,16 @@ public class TenantWorkerPool {
             // heapMb budget (D-155, D-157), so the process needs room for all of them plus native overhead. Sizing
             // it for a single job OOM-killed a shared worker (exit 137) the moment a second job ran — the engine
             // reports a per-job budget and the cgroup has to hold the sum.
-            long jobsMb = (long) heapMb * maxJobsPerWorker;
-            long maxBytes = (jobsMb + 128L) * 1024L * 1024L;
-            long highBytes = (jobsMb + 64L) * 1024L * 1024L;
-            cgroupLimiter.applyMemoryLimit(pid, maxBytes, highBytes);
+            // A worker's cgroup is per tenant because the tenant is the CPU boundary (D-158): its cpu.max bounds the
+            // tenant's aggregate, and the worker is a child holding the memory bound (D-163). A warm spawn (no
+            // tenant yet) applies nothing; with minWarm 0 that does not happen in practice.
+            if (tenantId != null) {
+                long jobsMb = (long) heapMb * maxJobsPerWorker;
+                long maxBytes = (jobsMb + 128L) * 1024L * 1024L;
+                long highBytes = (jobsMb + 64L) * 1024L * 1024L;
+                cgroupLimiter.applyTenantCpu(tenantId);
+                cgroupLimiter.applyWorker(tenantId, pid, maxBytes, highBytes);
+            }
 
             WriteStream<io.vertx.core.buffer.Buffer> output = StreamBridge.writeStream(vertx, process.getOutputStream());
             ReadStream<io.vertx.core.buffer.Buffer> input = StreamBridge.readStream(vertx, process.getInputStream());
@@ -692,7 +698,7 @@ public class TenantWorkerPool {
         if (memoryBudget != null) {
             memoryBudget.release(workerMemoryBytes());
         }
-        cgroupLimiter.cleanup(worker.pid());
+        cgroupLimiter.cleanup(worker.boundTenantId(), worker.pid());
         // A worker that died on its own is a crash, and it is counted against its tenant (D-159). One we terminate
         // ourselves — an idle reap, a close — is destroyed below, so inspectExit sees it alive and counts nothing.
         Integer exit = inspectExit(worker);

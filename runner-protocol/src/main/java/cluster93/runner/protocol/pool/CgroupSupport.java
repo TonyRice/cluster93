@@ -22,12 +22,13 @@ import java.util.Set;
  * internal processes"), so a node that wants to use its own subtree must first move itself into a leaf child — which
  * is why the shipped probe does exactly that before writing {@code cpu.max}.
  *
+ * @param own         the node's own cgroup (under which its workers live), or null when undetectable
  * @param base        the directory under which the node creates its worker cgroups, or null when unusable
  * @param available   whether a limit could be applied there (Linux, cgroup v2, and a writable base)
  * @param controllers the controllers delegated into the node's own cgroup ({@code cpu}, {@code memory}, …)
  * @param detail      a human-readable one-liner, for the startup log and the snapshot
  */
-public record CgroupSupport(Path base, boolean available, Set<String> controllers, String detail) {
+public record CgroupSupport(Path own, Path base, boolean available, Set<String> controllers, String detail) {
 
     public boolean memory() {
         return controllers.contains("memory");
@@ -39,7 +40,7 @@ public record CgroupSupport(Path base, boolean available, Set<String> controller
 
     /** A support reading with no usable base; the detail says why. */
     public static CgroupSupport unavailable(String detail) {
-        return new CgroupSupport(null, false, Set.of(), detail);
+        return new CgroupSupport(null, null, false, Set.of(), detail);
     }
 
     /** Reads this host's cgroup v2 shape, honouring {@code -Dcluster93.cgroup.dir} as an override. */
@@ -68,7 +69,7 @@ public record CgroupSupport(Path base, boolean available, Set<String> controller
                 ? "no cgroup2 entry in /proc/self/cgroup"
                 : "own cgroup " + own + "; delegated controllers: " + (controllers.isEmpty() ? "(none)" : String.join(",", controllers)))
                 + (writable ? "" : "; base " + base + " is not writable");
-        return new CgroupSupport(writable ? base : null, writable, controllers, detail);
+        return new CgroupSupport(own, writable ? base : null, writable, controllers, detail);
     }
 
     private static Path override() {

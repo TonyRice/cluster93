@@ -153,7 +153,7 @@ class WorkerBinaryResolutionTest {
 
     private static TenantWorkerPoolManager manager(Map<String, String> binaries, String defaultMode) {
         return new TenantWorkerPoolManager(vertx, binaries, defaultMode, 0, 8, 8, 4, 128,
-                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new CgroupMemoryLimiter(),
+                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new WorkerCgroups(),
                 cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
     }
 
