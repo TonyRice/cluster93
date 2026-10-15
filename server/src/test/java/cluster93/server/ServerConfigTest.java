@@ -24,17 +24,22 @@ class ServerConfigTest {
     }
 
     @Test
-    @DisplayName("The per-tenant job cap defaults to half the node, so two tenants fit (D-156)")
-    void maxJobsPerTenantDefaultsToHalfCapacity() {
-        // capacity 8 → 4 each, so two tenants run concurrently. The cap reserves; the rotation orders.
-        assertThat(ServerConfig.fromEnv(Map.of()).maxJobsPerTenant()).isEqualTo(4);
-        assertThat(ServerConfig.fromEnv(Map.of("C93_CAPACITY", "16")).maxJobsPerTenant()).isEqualTo(8);
+    @DisplayName("The per-tenant job cap is its own env, defaulting to the whole node (D-156)")
+    void maxJobsPerTenantIsItsOwnSetting() {
+        // Not a fraction of capacity: one tenant is not throttled by default, and an operator lowers it for
+        // multi-tenancy. Deriving it as capacity/2 halved a tenant's concurrency and stalled the process-mode tests.
+        assertThat(ServerConfig.fromEnv(Map.of()).maxJobsPerTenant()).isEqualTo(8);
+        assertThat(ServerConfig.fromEnv(Map.of("C93_CAPACITY", "16")).maxJobsPerTenant()).isEqualTo(16);
+        // Lowered for multi-tenancy, which is how a node serves several tenants concurrently.
         assertThat(ServerConfig.fromEnv(Map.of("C93_MAX_JOBS_PER_TENANT", "2")).maxJobsPerTenant()).isEqualTo(2);
-        // A single-tenant node sets it to the whole node and is not throttled.
-        assertThat(ServerConfig.fromEnv(Map.of("C93_CAPACITY", "8", "C93_MAX_JOBS_PER_TENANT", "8"))
-                .maxJobsPerTenant()).isEqualTo(8);
-        // Never zero, even on the smallest node.
-        assertThat(ServerConfig.fromEnv(Map.of("C93_CAPACITY", "1")).maxJobsPerTenant()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Jobs per worker is its own env, and one worker per job is not the model (D-155)")
+    void maxJobsPerWorkerIsItsOwnSetting() {
+        assertThat(ServerConfig.fromEnv(Map.of("C93_MAX_JOBS_PER_WORKER", "4")).maxJobsPerWorker()).isEqualTo(4);
+        // Held at 1 until the two process-mode tests below tolerate it; the wiring is what matters here.
+        assertThat(ServerConfig.fromEnv(Map.of()).maxJobsPerWorker()).isEqualTo(1);
     }
 
     @Test

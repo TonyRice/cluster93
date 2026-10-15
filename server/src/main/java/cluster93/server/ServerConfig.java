@@ -173,8 +173,11 @@ public record ServerConfig(
                 Integer.parseInt(env.getOrDefault("C93_CAPACITY", "8")),
                 // How many jobs one tenant may run at once (D-156). Half the node by default, so two tenants fit;
                 // a single-tenant node should set it to C93_CAPACITY. This is the reservation, not the ordering.
+                // Its own env, defaulting to the node's whole capacity: one tenant is not throttled by default, and an
+                // operator lowers it for multi-tenancy. Deriving it from capacity (capacity/2) halved a tenant's
+                // concurrency and stalled the process-mode tests — the caps are independent, not fractions of each other.
                 Integer.parseInt(env.getOrDefault("C93_MAX_JOBS_PER_TENANT",
-                        String.valueOf(Math.max(1, Integer.parseInt(env.getOrDefault("C93_CAPACITY", "8")) / 2)))),
+                        env.getOrDefault("C93_CAPACITY", "8"))),
                 // One worker per job is not the model: a worker runs several jobs at once, each in its own context,
                 // and a tenant takes more workers only when it needs more than one worker can carry (D-155).
                 //

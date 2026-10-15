@@ -376,12 +376,10 @@ public final class Cluster93 {
                     config.workerBinaries(),
                     config.workerDefaultMode(),
                     1,
-                    // A tenant's worker allowance. Deriving it from maxJobsPerTenant (ceil(jobsPerTenant /
-                    // jobsPerWorker)) is the design, but it HALVES a tenant's concurrency today — 8 workers became
-                    // 4 — because maxJobsPerTenant defaults to capacity/2 and was never actually enforced while a
-                    // worker ran one job. So the concurrency semantics have to be settled first: is a tenant's
-                    // allowance C93_CAPACITY (what the tests assume) or C93_MAX_JOBS_PER_TENANT (what D-156 says)?
-                    config.capacity(),
+                    // A tenant takes as many workers as its jobs need at maxJobsPerWorker each, so its concurrency is
+                    // maxJobsPerTenant whatever the two knobs are set to: 8 jobs at 4 per worker is two workers, not
+                    // eight (D-155). The caps are independent env vars; this is the arithmetic that joins them.
+                    Math.max(1, (config.maxJobsPerTenant() + config.maxJobsPerWorker() - 1) / config.maxJobsPerWorker()),
                     config.capacity(),
                     config.maxJobsPerWorker(),
                     config.maxHeapMb(),
