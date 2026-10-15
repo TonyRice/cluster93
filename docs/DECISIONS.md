@@ -2839,7 +2839,7 @@ No image stage shipped `bin/worker-*`, so no node image could run `C93_WORKER_MO
 - `NodeCommandTest.buildingFromTheCheckoutRefusesClearlyWhenThereIsNothingToBuildFrom`, `theReleaseImageDockerfileShipsTheWorkersAndNeedsNoBuildStage`; a real build verified the workers run inside the image.
 
 ### D-144 — Engine workers can run as sibling containers over the UDS transport
-**Date:** 2026-10-14 · **Status:** Accepted. Uses D-127's transport; superseded in shape by D-160.
+**Date:** 2026-10-14 · **Status:** Accepted. Uses D-127's transport; superseded in shape by D-160/D-166, and its node-spawns aspect by D-167.
 
 **Context:**
 The worker↔node protocol is transport-agnostic and the UDS transport already existed (D-127), with `worker ipc --socket` implemented and tested — but the server always spawned stdio pipes and never constructed a UDS listener.
@@ -2855,7 +2855,7 @@ The worker↔node protocol is transport-agnostic and the UDS transport already e
 - `UdsTransportTest`, `WorkerEngineIntegrationTest` (the transport); the spawn path is unbuilt.
 
 ### D-145 — `--worker-containers` requires a rootless engine
-**Date:** 2026-10-14 · **Status:** Accepted. Refined by D-152.
+**Date:** 2026-10-14 · **Status:** Accepted. Refined by D-152. **Superseded by D-167** (the node never holds an engine socket).
 
 **Context:**
 To spawn worker containers the node must be given an engine socket. A rootful engine's socket is a root credential: anything holding it can `docker run -v /:/host`.
@@ -3245,4 +3245,41 @@ address discovery, no registration call and no lease in the open-worker case —
 **Evidence:**
 - Design (not built): `~/.opencode/plan/worker-containers-design.md` — §5 the node-listens handshake, §6 the
   consequences above, §8 the settled decisions. The Stage 2 rewrite of `docker-node-pathway-workorder.md` is the
-  build order; D-144/D-145's engine-socket shape is expected to fall with it.
+  build order; D-144/D-145's engine-socket shape falls with D-167.
+
+### D-167 — The node never creates worker containers
+**Date:** 2026-10-15 · **Status:** Accepted. Supersedes D-145, and the node-spawn part of D-144.
+
+**Context:**
+D-144 had the node run engine workers as **sibling containers** over the UDS transport, and D-145 required a
+**rootless** engine for it — because that shape means handing the node a container-engine socket, and a rootful
+socket is a root credential (`docker run -v /:/host`). D-160/D-166 then reshaped the container tier (the tenant
+boundary is the worker process; the workers connect to the node). That leaves the question D-145 answered: does the
+node hold an engine socket at all?
+
+**Decision:**
+**No — the node never creates, starts, stops or removes a container.** The **deployment** (compose, k8s) creates the
+worker containers; their workers connect to the node over the UDS transport the node listens on (D-166, D-127). The
+node therefore holds **no container-engine credential**, and D-145's rootless-engine requirement disappears with the
+socket it guarded. `--worker-containers` and the node-side `C93_WORKER_TRANSPORT` switch are retired.
+
+**Alternatives considered:**
+- **Keep the engine socket as an opt-in** (`--worker-containers` + rootless, D-145) so a node could spawn a container
+  on demand. Rejected: it puts a root-equivalent credential in the node for a capability the deployment already
+  provides, and keeps two worker sources alive where one will do — the same reasoning D-166 used to drop the
+  multiplexing host.
+
+**Consequences:**
+- **Dynamic container spawn is given up.** Adding a worker container is a **deployment** action, not a node action.
+  Supply and idle control follow to the deployment (D-166, `worker-containers-design.md` §6).
+- The engine probe (`NodeInstall.detectEngine`) remains only for the CLI's own **install-time** driving of the
+  node's *own* container (D-141); it is no longer load-bearing for workers, and its rootless answer stops being a
+  gate.
+- §S6 ("the node's largest privilege") of `docker-node-pathway-workorder.md` is retired with the socket.
+- **D-147 and D-150 remain in scope and become more load-bearing**, not less: with the node listening, the
+  connection must carry a per-connection secret (D-147) and every RPC must be authorised (D-150) before any tenant
+  code can reach a socket.
+
+**Evidence:**
+- `~/.opencode/plan/worker-containers-design.md` §1 (the divergence table) and §8 (settled). Not built; the Stage 2
+  rewrite is the build order.
