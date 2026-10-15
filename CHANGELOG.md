@@ -12,7 +12,11 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
     `install/systemd/cluster93.service`. It creates exactly one temporary unit (`c93-cgprobe-<pid>.service`),
     touches only that unit and the cgroup subtree under it, creates no users, and removes everything on exit
     (trap on EXIT/INT/TERM); its busy loop is killed by reading its own cgroup — never a bare `pkill`. `--dry-run`
-    prints the plan and changes nothing.
+    prints the plan and changes nothing; `--user NAME` picks the non-root account to test with (a bare
+    `sudo C93_PROBE_USER=…` does **not** work — sudo resets the environment).
+  - **Result: it PASSED on a real systemd host** (2026-10-15) — `cpu` delegated into the unit, the non-root service
+    user wrote `cpu.max` under the unit's own cgroup, and the quota throttled (`nr_throttled > 0`) — so **D-158's
+    blocker is cleared**.
   - It also makes the **base-path gap** visible: `CgroupMemoryLimiter` defaults to the absolute
     `/sys/fs/cgroup/cluster93`, but under a delegated unit the only writable subtree is the unit's own cgroup — so
     the memory limit may be silently unapplied on a real install too. Pointing `-Dcluster93.cgroup.dir` at the

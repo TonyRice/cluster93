@@ -37,8 +37,40 @@ set -euo pipefail
 UNIT_NAME="c93-cgprobe-$$"
 UNIT_FILE="/etc/systemd/system/${UNIT_NAME}.service"
 CG="/sys/fs/cgroup/system.slice/${UNIT_NAME}.service"
+
+usage() {
+    cat <<'USAGE'
+Run the CPU-delegation probe (D-158) on a systemd + cgroup-v2 host.
+
+Usage:
+  sudo scripts/cpu-delegation-probe.sh
+  sudo scripts/cpu-delegation-probe.sh --user cluster93   # test as a named account
+  scripts/cpu-delegation-probe.sh --dry-run               # print the plan, change nothing
+
+Options:
+  --user NAME   the non-root service user to test with (must already exist);
+                default: whoever invoked sudo, else cluster93
+  --dry-run     print every command without executing anything
+  -h, --help    this text
+
+Note: `sudo C93_PROBE_USER=...` does NOT work — sudo resets the environment.
+Use --user NAME, or `sudo C93_PROBE_USER=... env ...`. The environment variable
+C93_PROBE_USER is still honoured when this script is run as root directly.
+USAGE
+}
+
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+PROBE_USER_ARG=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY_RUN=1 ;;
+        --user) PROBE_USER_ARG="${2:-}"; shift ;;
+        --user=*) PROBE_USER_ARG="${1#--user=}" ;;
+        -h | --help) usage; exit 0 ;;
+        *) warn "Unknown argument: $1"; usage >&2; exit 2 ;;
+    esac
+    shift
+done
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -68,6 +100,7 @@ fi
 
 # A non-root service user that already exists. Never create one.
 resolve_service_user() {
+    if [ -n "$PROBE_USER_ARG" ]; then printf '%s' "$PROBE_USER_ARG"; return; fi
     if [ -n "${C93_PROBE_USER:-}" ]; then printf '%s' "$C93_PROBE_USER"; return; fi
     if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then printf '%s' "$SUDO_USER"; return; fi
     if id cluster93 >/dev/null 2>&1; then printf 'cluster93'; return; fi
@@ -194,7 +227,10 @@ fi
 
 # --- A4: does the quota actually throttle? ------------------------------------
 
+# The backgrounded loop is killed in cleanup by reading its cgroup; disown it so bash does not report
+# that honest kill as "Killed" on the way out.
 as_root sh -c "echo \$\$ > '$CG/probe/cgroup.procs'; exec bash -c 'while :; do :; done'" &
+disown "$!" 2>/dev/null || true
 nr=0
 for ((i = 0; i < 20; i++)); do
     nr="$(awk '/^nr_throttled /{print $2}' "$CG/probe/cpu.stat" 2>/dev/null || echo 0)"

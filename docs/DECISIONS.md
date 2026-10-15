@@ -3067,6 +3067,11 @@ cgroup v2 `cpu.max` for process workers, `--cpus` for container workers, so one 
 **Consequences:**
 - The cpu controller is available at the root but **not enabled in the node's cgroup** on the development box; delegation has to be verified on a real systemd unit before this can be claimed to work.
 
+**Evidence:**
+- **Delegation verified on a real systemd host** (2026-10-15; Linux 7.0.0, systemd 259, cgroup v2): under a throwaway `Delegate=yes` unit shaped like `install/systemd/cluster93.service`, the unit's `cgroup.controllers` listed `cpu`, the **service user** (not root) enabled `+cpu` and wrote `cpu.max = 50000 100000` under the unit's own cgroup, and a busy loop was **throttled** (`nr_throttled = 4`). The probe is `scripts/cpu-delegation-probe.sh`; the procedure is `~/.opencode/plan/cpu-limits-tenant-test.md`. **The blocker is cleared.**
+- **The base path is the real work, not the controller.** `CgroupMemoryLimiter` defaults to the absolute `/sys/fs/cgroup/cluster93`, but under a delegated unit the only writable subtree is the unit's **own** cgroup — so both the CPU limit and the **existing memory limit** (D-127/D-163) need the base pointed at it (`-Dcluster93.cgroup.dir`, or a resolved default). Finding that on a real host is this decision's first deliverable.
+- **Still open (unchanged):** whether an **unavailable** controller is a warning (consistent with the memory limiter's graceful fallback) or a refusal. The probe passed on a host that *has* delegation, so it does not settle the negative case; `cpu-limits-tenant-test.md` §B3 and §5 hold it.
+
 ### D-159 — Crash attribution: tenant and job, not just a pid
 **Date:** 2026-10-14 · **Status:** Accepted — built 2026-10-15.
 
