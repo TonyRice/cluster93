@@ -3087,7 +3087,7 @@ Record a worker's exit and its stderr tail against the **tenant and job** and su
 - Tests: `WorkerExitTest`, `WorkerProcessRuntimeTest`, `ProcessModeParityTest.detectsAWorkerProcessKill` (a real `kill -9`).
 
 ### D-160 — Stage 2 is container-per-tenant, not per-job
-**Date:** 2026-10-14 · **Status:** Accepted. Supersedes D-144's shape.
+**Date:** 2026-10-14 · **Status:** Accepted. Supersedes D-144's shape. **Superseded in shape by D-166.**
 
 **Context:**
 A container per job is far too expensive to be the plan, and it would have to be rewritten the moment D-155 landed.
@@ -3198,3 +3198,51 @@ A `WorkerMemoryBudget` sits next to `WorkerBudget` (D-156): a worker reserves it
 
 **Evidence:**
 - `WorkerMemoryBudgetTest`; `TenantWorkerPoolTest.theNodeMemoryCeilingRefusesASecondWorker`, `thePoolReportsItsTenantUsage`; `TenantWorkerPoolManagerTest.theSnapshotReportsWorkerUse`; `ServerConfigTest.maxWorkerMemoryIsItsOwnSetting`; `ObservabilityTest` (`c93_workers_memory_used_bytes`/`limit_bytes`).
+
+### D-166 — The tenant boundary is the worker process, not the container
+**Date:** 2026-10-15 · **Status:** Accepted. Supersedes D-160's shape. Shapes the Docker Stage 2 rewrite.
+
+**Context:**
+D-160 decided the container path would be **one container per tenant**, carrying that tenant's jobs, with `--memory`
+and `--cpus` per tenant and one socket each — i.e. it made the **container** the tenant boundary. Reconsidering it
+against what the worker model already is: a worker binds to exactly one tenant **for life** and that binding is the
+crash and memory boundary (D-155), a container can hold several worker processes, and the per-tenant resource limits
+D-160 wanted are already **per worker** (cgroup sizing, D-163; the node-wide memory budget, D-165). Making the
+container the boundary bought nothing the process boundary did not already give, and cost either a container per
+tenant or a multiplexing "worker host" — a second component in the path that re-implements worker lifecycle.
+
+**Decision:**
+**The tenant boundary stays the worker process.** A worker container holds a **tenant-agnostic pool of open
+workers**: N `worker-*` processes, each connecting to the node **independently**, kept alive by a trivial supervisor
+(an `sh`/`s6`/`tini` loop — not a protocol peer: no tenant config, no node credentials, no runner-protocol code).
+The node binds each unbound worker to whichever tenant has work (D-155); the worker never declares a tenant. The
+direction is settled with it: **the node listens and the worker connects** (D-127's built direction), so there is no
+address discovery, no registration call and no lease in the open-worker case — a connection *is* an open worker.
+
+**Alternatives considered:**
+- **One container per tenant (D-160's shape).** Rejected: it makes the container the boundary the process already
+  is, needs a container (or a multiplexing host) per tenant, and duplicates per-tenant limits that are already
+  per-worker.
+- **A container-hosted "worker host" that multiplexes several workers over one connection.** Rejected: it puts a
+  second component between the node and the workers, against the zero-trust boundary where the node alone binds
+  tenants and authorises calls.
+- **The worker listens and the node dials.** Rejected: it forces an address registry, an authenticated registration
+  and a lease (what happens when a holder dies), none of which the node-listens direction needs.
+
+**Consequences:**
+- **The container is *host* isolation, not *tenant* isolation.** Guest code is still separated by the engine (a
+  fresh context per job, D-157); the container separates the *pool* from the machine. Two tenants' workers may share
+  a container, so this tier is for **trusted tenants** — today's posture. A hostile tier still wants a per-tenant
+  box or a per-worker sandbox (gVisor/Kata).
+- **The node can neither spawn nor shed an open worker.** Supply — how many workers a container runs and its
+  `--memory`/`--cpus` — is the **deployment's**; the node accepts what connects. So `WorkerMemoryBudget` (D-165)
+  must reserve on **connect** and count idle, unbound workers (they hold memory before any job does), and the node
+  cannot drop an idle worker by closing its socket (its supervisor would just restart it).
+- **Fairness matters more**: many tenants contend for one shared pool, which is exactly `TenantWorkerPoolManager`'s
+  job (D-161).
+- **Placement simplifies**: a node advertises "I accept container workers", not a set of tenants.
+
+**Evidence:**
+- Design (not built): `~/.opencode/plan/worker-containers-design.md` — §5 the node-listens handshake, §6 the
+  consequences above, §8 the settled decisions. The Stage 2 rewrite of `docker-node-pathway-workorder.md` is the
+  build order; D-144/D-145's engine-socket shape is expected to fall with it.
