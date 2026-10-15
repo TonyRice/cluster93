@@ -869,6 +869,17 @@ public class NodeWorkerChannel {
         LOG.info("Worker {}: received GOODBYE", workerId);
     }
 
+    /**
+     * Called once when the worker's connection ends, however it ends. The pool reaps the worker through this, so a
+     * worker that dies is reclaimed even when there was no registered run to fail — which is the case that used to
+     * leave its slot held forever, stalling the queue whenever the allowance was tight (D-155).
+     */
+    public void onClosed(java.util.function.Consumer<Throwable> handler) {
+        this.closedHandler = handler;
+    }
+
+    private volatile java.util.function.Consumer<Throwable> closedHandler;
+
     private void onError(Throwable err) {
         if (!broken.compareAndSet(false, true)) {
             return;
@@ -887,6 +898,10 @@ public class NodeWorkerChannel {
         for (ActiveRun run : activeRuns.values()) {
             cleanupRun(run);
             run.completion().tryComplete(ExecutionResult.failed("Worker process died: " + message));
+        }
+        java.util.function.Consumer<Throwable> closed = closedHandler;
+        if (closed != null) {
+            closed.accept(err);
         }
         activeRuns.clear();
     }

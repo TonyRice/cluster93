@@ -398,6 +398,22 @@ public class TenantWorkerPool {
             String workerId = "worker-" + pid;
             NodeWorkerChannel channel = new NodeWorkerChannel(workerId, output, input, new cluster93.runner.protocol.flow.CreditManager(), authorizer);
             WorkerProcessHandle handle = new WorkerProcessHandle(process, channel, maxJobsPerWorker);
+            // Reap the worker when its connection ends, whatever the run bookkeeping says. Without this a worker that
+            // dies holds its slot (and the node's budget) for good, and with a small allowance the queue stalls.
+            channel.onClosed(err -> {
+                synchronized (TenantWorkerPool.this) {
+                    boolean reaped = handle.state() != WorkerProcessHandle.State.TERMINATED;
+                    recycleWorker(handle);
+                    if (reaped) {
+                        LOG.warn("Worker {} (pid {}) closed; its slot is freed", workerId, pid);
+                        if (arbiter != null) {
+                            arbiter.capacityFreed();
+                        } else {
+                            processNextPending();
+                        }
+                    }
+                }
+            });
 
             // A worker must say hello; if it dies first, or never answers, fail the acquire instead of waiting forever.
             AtomicBoolean settled = new AtomicBoolean(false);
