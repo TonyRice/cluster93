@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -85,6 +86,12 @@ public class WorkerCgroups {
             return true;
         }
         boolean ok = prepareOwn();
+        if (!ok) {
+            // Do not leave `available` true: a per-worker write would then only fail and warn on every spawn. Falling
+            // back cleanly is what the host deserves when its cgroup cannot host worker limits.
+            available = false;
+            base = null;
+        }
         if (!ok && required) {
             throw new IllegalStateException("C93_REQUIRE_CGROUP_LIMITS is set but cgroup limits cannot be enforced: "
                     + support.detail());
@@ -94,7 +101,42 @@ public class WorkerCgroups {
 
     /** Whether the base exists and the controllers we need are already enabled for children of the node's cgroup. */
     private boolean usable() {
-        return available && base != null && Files.isDirectory(base);
+        if (!available || base == null) {
+            return false;
+        }
+        Path own = support.own();
+        if (own == null) {
+            // An explicit base: the operator has seen to the plumbing, so a directory is enough.
+            return Files.isDirectory(base);
+        }
+        // A directory left behind by an earlier failed attempt is not usable: the controllers must actually be
+        // enabled in the node's own cgroup, or a child would have no memory.max/cpu.max to write.
+        return Files.isDirectory(base) && subtreeControl(own).containsAll(wantedControllers());
+    }
+
+    /** The controllers we would use and this host delegates. */
+    private Set<String> wantedControllers() {
+        Set<String> wanted = new LinkedHashSet<>();
+        if (support.cpu()) {
+            wanted.add("cpu");
+        }
+        if (support.memory()) {
+            wanted.add("memory");
+        }
+        return wanted;
+    }
+
+    /** The controllers a cgroup has enabled for its children, from {@code cgroup.subtree_control}. */
+    private static Set<String> subtreeControl(Path cgroup) {
+        try {
+            Path file = cgroup.resolve("cgroup.subtree_control");
+            if (!Files.isReadable(file)) {
+                return Set.of();
+            }
+            return new LinkedHashSet<>(java.util.Arrays.asList(Files.readString(file).trim().split("\\s+")));
+        } catch (IOException | RuntimeException ignored) {
+            return Set.of();
+        }
     }
 
     private boolean prepareOwn() {
