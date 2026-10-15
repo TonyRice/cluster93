@@ -2886,7 +2886,7 @@ A container install refuses when a process install occupies the same ports, unle
 - `NodeCommandTest.aContainerInstallRefusesASystemProcessInstallThatWouldShareItsPorts`.
 
 ### D-147 — The worker channel carries a per-spawn secret in `HELLO`
-**Date:** 2026-10-14 · **Status:** Accepted.
+**Date:** 2026-10-14 · **Status:** Accepted. **Refined by D-168** for deployment-provisioned workers (the secret is pre-shared, not per-spawn).
 
 **Context:**
 stdio binds a channel to a specific child process for free — the pipe *is* the worker. A socket binds it to "whoever connected to slot N", so a naive swap makes the node↔worker binding weaker, not merely different.
@@ -3180,7 +3180,7 @@ One **snapshot** is the source of truth: `TenantWorkerPoolManager.snapshot()` re
 - `TenantWorkerPoolTest.thePoolReportsItsTenantUsage`, `aWorkerCrashIsCountedForItsTenant`, `reapingAHealthyWorkerIsNotACrash`; `TenantWorkerPoolManagerTest.theSnapshotReportsWorkerUse`; `ObservabilityTest` (node and per-tenant gauges); `NodeCommandTest.statusShowsTheNodesWorkerUseFromItsMetrics`.
 
 ### D-165 — The node-wide budget is memory, not only a worker count
-**Date:** 2026-10-15 · **Status:** Accepted.
+**Date:** 2026-10-15 · **Status:** Accepted. **Refined by D-169** (the budget also reserves on connect, for workers the node did not spawn).
 
 **Context:**
 D-156 bounded how many worker *processes* a node runs (`WorkerBudget`, `C93_MAX_WORKERS`), not how much memory they hold. A worker's memory is its cgroup (D-163): `maxJobsPerWorker × C93_MAX_HEAP_MB` plus ~128 MB of native overhead. So the node's total worker memory was bounded only indirectly, and the part an operator cannot see — the per-worker overhead, multiplied by the worker count — was invisible to anyone reasoning in memory. D-163 named this as the next thing to account for.
@@ -3283,3 +3283,60 @@ socket it guarded. `--worker-containers` and the node-side `C93_WORKER_TRANSPORT
 **Evidence:**
 - `~/.opencode/plan/worker-containers-design.md` §1 (the divergence table) and §8 (settled). Not built; the Stage 2
   rewrite is the build order.
+
+### D-168 — The worker secret is pre-shared, not per-spawn
+**Date:** 2026-10-15 · **Status:** Accepted. Refines D-147 for deployment-provisioned workers.
+
+**Context:**
+D-147 introduced the secret in `HELLO` so that a socket is not a **downgrade** from a pipe: stdio binds a channel to
+the child the node itself created, and a socket binds it to "whoever connected". It assumed the node **spawns** the
+worker — a fresh 32 random bytes per worker, passed in the container's environment. D-166/D-167 then made the
+**deployment** create the containers, with the workers connecting to the node, so there is no spawn to attach a
+per-spawn secret to.
+
+**Decision:**
+For deployment-provisioned workers the secret is **pre-shared and per-node**: a file both sides read
+(`C93_WORKER_SECRET_FILE`, mode `0400`, mounted read-only into workers), presented in `HELLO` and validated. It is
+**weaker** than per-spawn — anyone who can read the mount can present it — and is stated as such rather than
+implied, so the narrowed shape leans harder on the other layers: the filesystem boundary (dir `0700`, socket
+`0600`), a **`SO_PEERCRED`** check that the connecting process is the node's own user, and the authorizer (D-150).
+A per-spawn secret remains the right shape wherever the node **does** spawn (the process tier, and any future
+node-spawned container tier).
+
+**Consequences:**
+- The secret file becomes a thing to protect: `0400`, owned by the node's user, mounted read-only into workers, and
+  named in the guide. A loose mount defeats it.
+- **`SO_PEERCRED` is promoted from an aside to a required layer** on Linux (S3, `docker-node-pathway-workorder.md`
+  §S3); its non-Linux fallback is an open question (§S3, §2.4).
+- The `HELLO` field D-147 added is mechanically unchanged (an added optional JSON field); what changes is how the
+  value is *provisioned*, not the handshake.
+
+**Evidence:**
+- `docker-node-pathway-workorder.md` §2.4, §S3, §S5; `worker-containers-design.md` §5.
+
+### D-169 — The memory budget reserves on connect, for workers the node did not spawn
+**Date:** 2026-10-15 · **Status:** Accepted. Refines D-165 for deployment-provisioned workers.
+
+**Context:**
+D-165's `WorkerMemoryBudget` reserves a worker's cgroup size when the node **spawns** it and releases it when the
+worker is recycled. With D-166/D-167 the node does not spawn container workers — they **connect** to its listening
+socket — so a spawn-time reservation would never account for them, and an **idle, unbound** worker, which holds
+memory before any job does, would be invisible to the node's memory ceiling.
+
+**Decision:**
+The budget also reserves **on connect** and releases **on close**, so a connected worker counts from the moment it
+joins the pool, idle and unbound included. One reservation per worker whichever source it came from (spawn or
+connect), and the pairing stays in exactly two places, so it cannot drift — the same rule D-165 set for the count.
+
+**Consequences:**
+- The node's memory ceiling now covers container workers as well as process workers — the only unit common to an
+  isolate and a container, which is why `ideas/containers.md` asked for memory and not "workers".
+- **The size to reserve for a container worker is not the node's to measure** — its cgroup is the container's
+  (`--memory`), which the node never sets. So the node reserves a **declared** size (configured, or announced by
+  the worker in `HELLO`, which already carries `--heap-mb`); this must be stated so the reservation is not mistaken
+  for a measurement. The exact source is settled at build time.
+- A `worker:container` capability advertises that a node accepts such workers, so placement does not send work to a
+  node with no pool (docker work order §2.6).
+
+**Evidence:**
+- `docker-node-pathway-workorder.md` §2.6; `worker-containers-design.md` §6.
