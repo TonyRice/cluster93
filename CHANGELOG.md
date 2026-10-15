@@ -6,6 +6,19 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A CPU-delegation probe for tenant CPU limits (D-158 groundwork):**
+  - `scripts/cpu-delegation-probe.sh` answers the one thing no unit test can: whether cgroup v2 `cpu.max` is
+    **delegated into** and **writable from** a service under a `Delegate=yes` unit shaped like
+    `install/systemd/cluster93.service`. It creates exactly one temporary unit (`c93-cgprobe-<pid>.service`),
+    touches only that unit and the cgroup subtree under it, creates no users, and removes everything on exit
+    (trap on EXIT/INT/TERM); its busy loop is killed by reading its own cgroup — never a bare `pkill`. `--dry-run`
+    prints the plan and changes nothing.
+  - It also makes the **base-path gap** visible: `CgroupMemoryLimiter` defaults to the absolute
+    `/sys/fs/cgroup/cluster93`, but under a delegated unit the only writable subtree is the unit's own cgroup — so
+    the memory limit may be silently unapplied on a real install too. Pointing `-Dcluster93.cgroup.dir` at the
+    unit's cgroup is the fix both limits need.
+  - Not wired into any test or CI: it is a manual operator probe, run on a real systemd host.
+
 - **The node-wide worker budget now includes memory, not only a worker count** (D-165):
   - `WorkerBudget` (D-156) bounded how many worker *processes* a node runs, not how much memory they hold — a
     worker's cgroup is `maxJobsPerWorker × C93_MAX_HEAP_MB` plus ~128 MB (D-163), so total memory was bounded only
