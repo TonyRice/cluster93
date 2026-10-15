@@ -208,6 +208,8 @@ public class TenantWorkerPool {
                 ensureWarmPool();
                 return warm.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
                         .map(v -> warm)
+                        // The worker is bound now: a job that queued while it was being taken can use its spare slots.
+                        .onSuccess(v -> processNextPending())
                         .onFailure(err -> poison(warm, "bind failed: " + err.getMessage()));
             } else {
                 recycleWorker(warm);
@@ -224,7 +226,12 @@ public class TenantWorkerPool {
                         jobStarted(spawned, tenantId);
                     }
                     spawned.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
-                            .onSuccess(v -> promise.complete(spawned))
+                            .onSuccess(v -> {
+                                promise.complete(spawned);
+                                // The new worker is bound and has spare slots: a job that queued while it was
+                                // starting (because this spawn held the tenant's only worker slot) can now run.
+                                processNextPending();
+                            })
                             .onFailure(err -> {
                                 poison(spawned, "bind failed: " + err.getMessage());
                                 promise.fail(err);
@@ -278,7 +285,10 @@ public class TenantWorkerPool {
         }
         int remaining = jobsInFlight.merge(worker.pid(), -1, Integer::sum);
         if (remaining > 0) {
-            // Other jobs are still running on it: it stays active, and its slot is not free.
+            // Other jobs are still running on it, so the worker stays active — but a slot just freed, and a job
+            // waiting for capacity may fit on this very worker. Serve the queue now: waiting for the worker to go
+            // idle is a hang, because a tenant's worker is often kept busy by long-running siblings (D-155).
+            processNextPending();
             return;
         }
         retire(worker, false, "job finished");
