@@ -159,6 +159,48 @@ class NodeCommandTest {
     }
 
     @Test
+    void statusShowsTheNodesWorkerUseFromItsMetrics() throws Exception {
+        writeLocalEnv();
+        HttpServer metrics = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        metrics.createContext("/metrics", exchange -> {
+            byte[] body = """
+                    c93_workers_running{node="local-master"} 3.0
+                    c93_workers_limit{node="local-master"} 8.0
+                    c93_workers_warm{node="local-master"} 1.0
+                    c93_tenants_active{node="local-master"} 2.0
+                    c93_tenant_workers{node="local-master",tenant="acme"} 2.0
+                    c93_tenant_workers{node="local-master",tenant="globex"} 1.0
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        metrics.start();
+        try {
+            // Point the node's metrics port at the stand-in; the CLI reads worker use from /metrics (D-156).
+            Path localEnv = Path.of(env.get("C93_HOME")).resolve("local.env");
+            Files.writeString(localEnv, Files.readString(localEnv)
+                    .replace("METRICS_PORT=\"9090\"", "METRICS_PORT=\"" + metrics.getAddress().getPort() + "\""));
+
+            Result text = run("node", "status");
+            assertThat(text.code()).as(text.err()).isZero();
+            assertThat(text.out())
+                    .contains("workers:")
+                    .contains("3 running / 8")
+                    .contains("2 tenant(s) active")
+                    .contains("acme: 2");
+
+            Result json = run("--json", "node", "status");
+            com.fasterxml.jackson.databind.JsonNode node = Json.parse(json.out());
+            assertThat(node.path("workers").path("running").asInt()).isEqualTo(3);
+            assertThat(node.path("workers").path("limit").asInt()).isEqualTo(8);
+            assertThat(node.path("tenants").size()).isEqualTo(2);
+        } finally {
+            metrics.stop(0);
+        }
+    }
+
+    @Test
     void theServerEnvironmentFallsBackToTheMastersOwnDataDirectory() {
         Map<String, String> environment = NodeCommand.serverEnvironment(Map.of(), io());
 

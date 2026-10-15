@@ -81,6 +81,12 @@ class ObservabilityTest {
                 .contains("c93_isolates_start_seconds_count{node=\"observed\"} 1")
                 .contains("c93_jobs_running{node=\"observed\"} 0.0")
                 .contains("c93_api_rate_limited_total{node=\"observed\",tenant=\"watched\"}")
+                // Worker use (D-156, D-159): node-wide caps, and a per-tenant series once that tenant ran a job.
+                .contains("c93_workers_running{node=\"observed\"}")
+                .contains("c93_workers_limit{node=\"observed\"}")
+                .contains("c93_workers_warm{node=\"observed\"}")
+                .contains("c93_tenants_active{node=\"observed\"}")
+                .contains("c93_tenant_workers{node=\"observed\",tenant=\"watched\"}")
                 .contains("c93_cluster_nodes{node=\"observed\"} 1.0")
                 .contains("c93_cluster_leader{node=\"observed\"} 1.0")
                 .contains("vertx_http_server_requests_total")

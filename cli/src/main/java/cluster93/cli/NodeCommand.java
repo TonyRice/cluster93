@@ -3,6 +3,7 @@ package cluster93.cli;
 import cluster93.tls.ClusterCa;
 import cluster93.tls.ClusterInit;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -19,10 +20,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * {@code c93 node}: install a node from a release, drive it as a service, and manage cluster membership. This is the
@@ -540,6 +544,7 @@ final class NodeCommand extends Base {
             boolean health = healthy(base, Duration.ofSeconds(3));
             String nodes = nodeIds(base, token);
             String backend = backendName(target.backend());
+            Workers workers = workers(metricsBase(config, true));
 
             if (json()) {
                 ObjectNode result = Json.object()
@@ -554,6 +559,7 @@ final class NodeCommand extends Base {
                         .put("running", running)
                         .put("health", health ? "ok" : "unreachable")
                         .put("nodes", nodes);
+                putWorkers(result, workers);
                 if (layout.container()) {
                     // A container node has no pid file: the engine owns its state (D-141).
                     result.put("container", NodeService.project(layout));
@@ -579,6 +585,7 @@ final class NodeCommand extends Base {
                     : "  PID:            " + (pid > 0 ? pid + (running ? " (running)" : " (not running)") : "(not running)"));
             out().println("  health:         " + (health ? "ok" : "unreachable"));
             out().println("  nodes:          " + nodes);
+            out().println("  workers:        " + describeWorkers(workers));
             return 0;
         }
 
@@ -593,6 +600,7 @@ final class NodeCommand extends Base {
             boolean running = pid > 0 && ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
             boolean health = healthy(base, Duration.ofSeconds(3));
             String nodes = nodeIds(base, token);
+            Workers workers = workers(metricsBase(config, false));
 
             String installed = meta.get("git_commit");
             String head = gitHead(io);
@@ -624,6 +632,7 @@ final class NodeCommand extends Base {
                         .put("health", health ? "ok" : "unreachable");
                 result.put("pid", pid > 0 ? pid : -1);
                 result.put("nodes", nodes);
+                putWorkers(result, workers);
                 result.put("installedCommit", installed == null ? "" : installed);
                 result.put("currentCommit", head == null ? "" : head);
                 result.put("updateAvailable", update);
@@ -648,6 +657,7 @@ final class NodeCommand extends Base {
             out().println("  PID:            " + (pid > 0 ? pid + (running ? " (running)" : " (not running)") : "(not running)"));
             out().println("  health:         " + (health ? "ok" : "unreachable"));
             out().println("  nodes:          " + nodes);
+            out().println("  workers:        " + describeWorkers(workers));
             if (update || cliUpdate || consoleUpdate) {
                 out().println();
                 if (update) {
@@ -681,6 +691,97 @@ final class NodeCommand extends Base {
             } catch (CliException e) {
                 return "ok";
             }
+        }
+
+        // --- worker use ---------------------------------------------------------------------------------
+        // A node's worker use (D-156) is a metric, not a REST field, so this reads the same /metrics gauges
+        // Prometheus scrapes. Best-effort: an unreachable or disabled metrics port simply omits the line.
+
+        /** The node gauges this reads; anything else in the exposition is ignored. */
+        private static final Set<String> WORKER_GAUGES = Set.of(
+                "c93_workers_running", "c93_workers_limit", "c93_workers_warm", "c93_tenants_active");
+
+        private record TenantWorkers(String tenant, int workers) {}
+
+        private record Workers(int running, int limit, int warm, int tenantsActive, List<TenantWorkers> tenants) {}
+
+        private static String metricsBase(Map<String, String> config, boolean installed) {
+            return "http://localhost:" + config.getOrDefault(installed ? "C93_METRICS_PORT" : "METRICS_PORT", DEFAULT_METRICS_PORT);
+        }
+
+        private static Workers workers(String metricsBase) {
+            HttpResponse<String> response = get(metricsBase + "/metrics", null, Duration.ofSeconds(2));
+            if (response == null || response.statusCode() >= 400) {
+                return null;
+            }
+            Map<String, Integer> gauges = new HashMap<>();
+            List<TenantWorkers> tenants = new ArrayList<>();
+            for (String line : response.body().split("\n")) {
+                int space = line.lastIndexOf(' ');
+                if (line.isBlank() || line.startsWith("#") || space < 0) {
+                    continue;
+                }
+                String series = line.substring(0, space).trim();
+                String name = series.contains("{") ? series.substring(0, series.indexOf('{')) : series;
+                String value = line.substring(space + 1).trim();
+                if (name.equals("c93_tenant_workers")) {
+                    String tenant = tagValue(series, "tenant");
+                    if (tenant != null) {
+                        tenants.add(new TenantWorkers(tenant, (int) Math.round(number(value))));
+                    }
+                } else if (WORKER_GAUGES.contains(name)) {
+                    gauges.put(name, (int) Math.round(number(value)));
+                }
+            }
+            return new Workers(gauges.getOrDefault("c93_workers_running", -1), gauges.getOrDefault("c93_workers_limit", -1),
+                    gauges.getOrDefault("c93_workers_warm", 0), gauges.getOrDefault("c93_tenants_active", 0),
+                    List.copyOf(tenants));
+        }
+
+        private static String tagValue(String series, String key) {
+            String needle = key + "=\"";
+            int at = series.indexOf(needle);
+            if (at < 0) {
+                return null;
+            }
+            int start = at + needle.length();
+            int end = series.indexOf('"', start);
+            return end < 0 ? null : series.substring(start, end);
+        }
+
+        private static double number(String value) {
+            try {
+                return Double.parseDouble(value);
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+
+        private static String describeWorkers(Workers workers) {
+            if (workers == null) {
+                return "(metrics unavailable)";
+            }
+            String limit = workers.limit() > 0 ? String.valueOf(workers.limit()) : "unbounded";
+            String perTenant = workers.tenants().isEmpty() ? ""
+                    : " [" + workers.tenants().stream().map(t -> t.tenant() + ": " + t.workers()).collect(Collectors.joining(", ")) + "]";
+            return workers.running() + " running / " + limit + ", " + workers.tenantsActive() + " tenant(s) active, "
+                    + workers.warm() + " warm" + perTenant;
+        }
+
+        private static void putWorkers(ObjectNode result, Workers workers) {
+            if (workers == null) {
+                return;
+            }
+            result.set("workers", Json.object()
+                    .put("running", workers.running())
+                    .put("limit", workers.limit())
+                    .put("warm", workers.warm())
+                    .put("tenantsActive", workers.tenantsActive()));
+            ArrayNode tenants = Json.array();
+            for (TenantWorkers tenant : workers.tenants()) {
+                tenants.add(Json.object().put("tenant", tenant.tenant()).put("workers", tenant.workers()));
+            }
+            result.set("tenants", tenants);
         }
     }
 

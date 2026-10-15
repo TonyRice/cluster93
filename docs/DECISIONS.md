@@ -3155,3 +3155,26 @@ Size the worker's cgroup for the jobs it may run: `maxJobsPerWorker × heapMb` p
 
 **Evidence:**
 - `ProcessModeParityTest` (a shared worker survives several concurrent jobs); the cgroup arithmetic lives in `TenantWorkerPool.spawnWorker`.
+
+### D-164 — Per-tenant observability is a snapshot, its metrics, and the CLI
+**Date:** 2026-10-15 · **Status:** Accepted.
+
+**Context:**
+The worker pools that D-155/D-156 introduced were invisible from outside. `TenantWorkerPoolManager` was reachable only by `close()` (captured in `RunningNode`), so the API, the metrics code and the CLI could not see a node's workers at all; each pool's `activeByTenant` map was documented "for reporting how the pool is shared out" but never exposed. The only worker-ish number anywhere was `/v1/nodes[].running`, which is the scheduler's *jobs* count, not the pool's *workers*.
+
+**Decision:**
+One **snapshot** is the source of truth: `TenantWorkerPoolManager.snapshot()` returns a `WorkerPoolSnapshot` — per node, workers running / the node's limit / warm / tenants active; per tenant, its workers, concurrent jobs, waiting jobs, and which layer enforces its memory budget (D-157). Two surfaces read it:
+- **Prometheus**: node gauges `c93.workers.running|limit|warm` and `c93.tenants.active`, per-tenant gauges `c93.tenant.workers|jobs.running|jobs.waiting`, and a per-tenant crash counter `c93.workers.crashes` fed by D-159. Per-tenant gauges register with the tenant's pool as it is created.
+- **CLI**: `c93 node status` reads the node's `/metrics` for the node-wide line, because the per-tenant worker stats are a metric and **no REST field is added** yet.
+
+**Alternatives considered:**
+- **Extend `/v1/nodes` with worker fields.** Deferred, not rejected: node objects are published by heartbeat from the cluster store (`NodeInfo`, in core) and the pool manager lives in `server`, so it would mean threading the pool into the heartbeat or a new endpoint. The metrics route already had the data and the existing scrape.
+- **Register every per-tenant gauge at startup.** Rejected: tenants appear over time and are lazy, so the gauges register when a tenant's pool does.
+
+**Consequences:**
+- Per-tenant series are real cardinality: one `c93_tenant_*` set per tenant that has run a job on this node. Bounded by tenants, never by jobs.
+- The CLI's worker line is best-effort — an unreachable or disabled metrics port simply omits it.
+- The node-wide gauges read `WorkerBudget.used()` (in-flight spawns included), which can exceed the sum of the per-tenant "workers with a job"; the node view is the authoritative cap.
+
+**Evidence:**
+- `TenantWorkerPoolTest.thePoolReportsItsTenantUsage`, `aWorkerCrashIsCountedForItsTenant`, `reapingAHealthyWorkerIsNotACrash`; `TenantWorkerPoolManagerTest.theSnapshotReportsWorkerUse`; `ObservabilityTest` (node and per-tenant gauges); `NodeCommandTest.statusShowsTheNodesWorkerUseFromItsMetrics`.

@@ -316,19 +316,29 @@ class ProcessModeParityTest {
     private static void requireLoadableEngine(Path workerClasses) throws Exception {
         Path registration = workerClasses == null ? null
                 : workerClasses.resolve("META-INF").resolve("services").resolve("cluster93.worker.WorkerEngine");
-        String engine = registration != null && Files.isRegularFile(registration)
-                ? Files.readString(registration).strip() : "";
-        boolean known = engine.endsWith("JavetWorkerEngine") || engine.endsWith("GraalJsWorkerEngine");
-        if (!known) {
-            String message = "ProcessModeParityTest runs the worker as a child JVM, and needs one of the engines "
-                    + "cluster93-worker registers with a Maven profile. The worker build at "
-                    + (workerClasses == null ? "worker/target/classes (missing)" : workerClasses.toString())
-                    + " registers '" + (engine.isEmpty() ? "<no engine>" : engine) + "'. Build it with: "
-                    + "./mvnw -pl worker -am -Pjavet compile   (or -Pgraaljs, or run scripts/dev.sh build)";
-            // A container abort shows no reason in the console, so say it first, then skip rather than hang (D-135).
-            System.err.println("[ProcessModeParityTest] SKIPPED: " + message);
-            org.junit.jupiter.api.Assumptions.abort(message);
+        List<String> named = registration != null && Files.isRegularFile(registration)
+                ? Files.readAllLines(registration).stream().map(String::strip)
+                        .filter(line -> !line.isEmpty() && !line.startsWith("#")).toList()
+                : List.of();
+        // The service file is only a list of names, and it survives a build that did not compile what it names: a
+        // worker built without its engine profile leaves "cluster93.worker.javet.JavetWorkerEngine" registered with
+        // no such class, and the child JVM dies at startup with a ServiceConfigurationError instead of running.
+        // Require the registered engine to be on the worker's classpath, not merely named (D-135).
+        String engine = named.stream()
+                .filter(name -> Files.isRegularFile(workerClasses.resolve(name.replace('.', '/') + ".class")))
+                .findFirst().orElse("");
+        if (!engine.isEmpty()) {
+            return;
         }
+        String found = named.isEmpty() ? "<no engine>" : String.join(", ", named) + " (not compiled)";
+        String message = "ProcessModeParityTest runs the worker as a child JVM, and needs a worker built with one of "
+                + "the engine profiles. The worker build at "
+                + (workerClasses == null ? "worker/target/classes (missing)" : workerClasses.toString())
+                + " registers '" + found + "'. Build it with: "
+                + "./mvnw -pl worker -am -Pjavet compile   (or -Pgraaljs, or run scripts/dev.sh build)";
+        // A container abort shows no reason in the console, so say it first, then skip rather than hang (D-135).
+        System.err.println("[ProcessModeParityTest] SKIPPED: " + message);
+        org.junit.jupiter.api.Assumptions.abort(message);
     }
 
     private static String quote(String value) {

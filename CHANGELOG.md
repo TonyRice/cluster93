@@ -6,6 +6,21 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A node's worker use, and each tenant's, is observable** (D-156, D-164):
+  - One snapshot is the source of truth: `TenantWorkerPoolManager.snapshot()` gives, per node, workers
+    running / the node's limit / warm / tenants active, and per tenant its workers, concurrent jobs, waiting jobs,
+    and which layer enforces its memory budget (D-157). The pools' `activeByTenant` ("for reporting how the pool is
+    shared out") is finally reported; the manager, previously reachable only by `close()`, now answers for them.
+  - **Prometheus** gains node gauges (`c93.workers.running|limit|warm`, `c93.tenants.active`), per-tenant gauges
+    (`c93.tenant.workers|jobs.running|jobs.waiting`) and a per-tenant crash counter (`c93.workers.crashes`, fed by
+    D-159). A worker that dies on its own is a crash; one the node stops itself (an idle reap, a close) is not.
+  - **`c93 node status`** shows the node's live worker use — a `workers:` line, and `workers`/`tenants` in `--json` —
+    read from the node's `/metrics`. Per-tenant worker stats are a metric, so no REST field is added yet (D-164).
+  - **`ProcessModeParityTest` no longer trusts the service file alone.** A worker built without its engine profile
+    registers an engine name whose class was never compiled; the test used to start it and lose every job to a
+    `ServiceConfigurationError`. It now requires the registered engine to be *on the worker's classpath*, and skips
+    with the build hint otherwise.
+
 - **A worker's death is attributed to the job that was running on it, not just to a pid** (D-159):
   - When a worker dies mid-run the channel could only report that the pipe ended — "Worker process connection
     closed unexpectedly (EOF)". The tenant is now told **why**: a `FAILED` run on a worker whose channel is gone is

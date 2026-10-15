@@ -81,6 +81,34 @@ public final class Metrics implements Shareable {
                 .tag("restart", String.valueOf(restart)).register(registry).increment();
     }
 
+    // --- workers (D-155, D-156, D-159) ---
+
+    /** A worker process died on its own while bound to a tenant (D-159): an OOM kill, a segfault, a crash. */
+    public void workerCrashed(String tenant) {
+        Counter.builder("c93.workers.crashes").description("Worker processes that died on their own, by tenant")
+                .tag("tenant", tenant).register(registry).increment();
+    }
+
+    /**
+     * Registers the per-tenant worker gauges, read live from {@code state} on each scrape. Register once per tenant:
+     * Micrometer keeps the first meter for a name and tag set, so calling this again does nothing. The caller must
+     * hold {@code state} strongly for as long as the gauges should read (a weak reference otherwise reports NaN).
+     */
+    public <T> void tenantWorkers(String tenant, T state,
+                                  java.util.function.ToDoubleFunction<T> workers,
+                                  java.util.function.ToDoubleFunction<T> jobs,
+                                  java.util.function.ToDoubleFunction<T> waiting) {
+        tenantGauge("c93.tenant.workers", "Workers a tenant is running (D-155)", tenant, state, workers);
+        tenantGauge("c93.tenant.jobs.running", "Jobs a tenant is running at once on this node", tenant, state, jobs);
+        tenantGauge("c93.tenant.jobs.waiting", "Jobs of a tenant waiting for a worker", tenant, state, waiting);
+    }
+
+    private <T> void tenantGauge(String name, String description, String tenant, T state,
+                                 java.util.function.ToDoubleFunction<T> reader) {
+        io.micrometer.core.instrument.Gauge.builder(name, state, reader)
+                .description(description).tag("tenant", tenant).register(registry);
+    }
+
     // --- the API and storage ---
 
     /** A script's connection refused by the egress gate (D-108), by tenant and reason. */

@@ -83,7 +83,7 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 - **W5 — Module directories drop the `cluster93-` prefix (D-134):** `tls`, `core`, `runtime-js`, `runtime-javet`, `runtime-graaljs`, `runner-protocol`, `worker`, `cluster-ignite`, `server`, `cli`; artifactIds and Java packages unchanged.
 - **W6 — Docs reconciled:** README/ROADMAP status, the four phase plans archived under `docs/design/history/`, and `DOCUMENTATION.md`'s taxonomy refreshed.
 - **Next focus:** Phase 6's browser session layer (§4). **Follow-up captured in `NOTES.md`:** one unified `c93 cluster …` pathway (master/dev/Docker node setup and cluster setup).
-- **In flight (2026-10-15):** the per-tenant worker pivot (D-155–D-163) has **landed** — one worker per tenant running several jobs at once; the switch is on (`C93_MAX_JOBS_PER_WORKER` 4, `REUSE_SAME_TENANT`); the shared-channel cancel bug (D-162, fixed), per-worker memory sizing (D-163), the node-wide worker cap and queue-when-full behaviour (D-156) are all in, along with the queue-drain fix that healed the `resumesMemoizedSteps` hang. The worker-classpath isolation guard (D-030) and tenant-visible crash attribution (D-159) have since landed. Remaining: per-tenant observability, the node-wide memory budget (D-163), CPU limits per tenant (D-158 — blocked until cgroup delegation is verified on a real systemd unit), then Docker Stage 2 as **container per tenant** (D-160) — which must be rewritten before it is built.
+- **In flight (2026-10-15):** the per-tenant worker pivot (D-155–D-163) has **landed** — one worker per tenant running several jobs at once; the switch is on (`C93_MAX_JOBS_PER_WORKER` 4, `REUSE_SAME_TENANT`); the shared-channel cancel bug (D-162, fixed), per-worker memory sizing (D-163), the node-wide worker cap and queue-when-full behaviour (D-156) are all in, along with the queue-drain fix that healed the `resumesMemoizedSteps` hang. The worker-classpath isolation guard (D-030), tenant-visible crash attribution (D-159) and per-tenant observability (D-164) have since landed. Remaining: the node-wide memory budget (D-163), CPU limits per tenant (D-158 — blocked until cgroup delegation is verified on a real systemd unit), then Docker Stage 2 as **container per tenant** (D-160) — which must be rewritten before it is built.
 
 ### Phase 5: Architecture Documentation & Javadoc Aggregation (COMPLETE)
 - **Task 5.1 — Master Documentation (`DOCUMENTATION.md`):**
@@ -149,6 +149,16 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 ---
 
 ## 5. Recent Key Achievements & Bug Fixes
+
+- **A node's worker use, and each tenant's, is now observable (D-156, D-164):** `TenantWorkerPoolManager.snapshot()`
+  reports, per node, workers running / the limit / warm / tenants active, and per tenant its workers, concurrent jobs,
+  waiting jobs and memory-budget enforcement layer (D-157). Prometheus gains node gauges (`c93.workers.running|limit|warm`,
+  `c93.tenants.active`), per-tenant gauges (`c93.tenant.workers|jobs.running|jobs.waiting`) and a per-tenant crash
+  counter (`c93.workers.crashes`, fed by D-159); `c93 node status` reads them from `/metrics` for a `workers:` line.
+  The same pass hardened `ProcessModeParityTest`: it now requires the registered worker engine to be *compiled*, not
+  merely named, so a worker built without its engine profile skips with the build hint instead of losing every job to a
+  `ServiceConfigurationError`. Evidence: `TenantWorkerPoolTest`, `TenantWorkerPoolManagerTest`, `ObservabilityTest`,
+  `NodeCommandTest.statusShowsTheNodesWorkerUseFromItsMetrics`; `verify -pl cli,runner-protocol,server -am` green.
 
 - **A worker's crash now names the tenant and the job, not just a pid (D-159):** a job whose worker dies is re-labelled
   from the worker's exit code — "killed: out of memory or force-killed (SIGKILL)" (137), "crashed: segmentation fault

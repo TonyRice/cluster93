@@ -7,6 +7,7 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.core.streams.WriteStream;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -19,6 +20,7 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TenantWorkerPoolTest {
@@ -343,6 +345,70 @@ class TenantWorkerPoolTest {
             pool.release(handle);
             assertEquals(0, pool.jobsOn(handle));
             assertTrue(process.isAlive(), "a healthy idle worker is kept for its tenant under a reuse policy");
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    @Test
+    @DisplayName("The pool reports its tenant's workers, jobs, and warm count for a snapshot (D-156)")
+    void thePoolReportsItsTenantUsage() {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT);
+        try {
+            FakeProcess process = new FakeProcess(7103L);
+            WorkerProcessHandle handle = boundHandle(process, 7103L, "acme", 4);
+            pool.jobStarted(handle, "acme");
+            pool.jobStarted(handle, "acme");
+
+            WorkerPoolSnapshot.TenantWorkers usage = pool.tenantUsage();
+            assertThat(usage.tenant()).isEqualTo("acme");
+            assertThat(usage.workers()).isEqualTo(1);
+            assertThat(usage.jobs()).isEqualTo(2);
+            assertThat(usage.pending()).isZero();
+            // newPool builds a javet pool, whose budget the cgroup enforces (D-157).
+            assertThat(usage.budgetEnforcement()).isEqualTo("cgroup");
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    @Test
+    @DisplayName("A worker that died on its own is counted as a crash for its tenant (D-159)")
+    void aWorkerCrashIsCountedForItsTenant() {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        cluster93.core.metrics.Metrics.install(vertx, registry);
+        TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
+        try {
+            FakeProcess process = new FakeProcess(7101L, 137);
+            WorkerProcessHandle handle = boundHandle(process, 7101L, "acme", 1);
+            pool.jobStarted(handle, "acme");
+
+            process.destroy(); // it died on its own, exit 137 (OOM or a forced kill)
+            pool.release(handle);
+
+            assertThat(registry.get("c93.workers.crashes").tag("tenant", "acme").counter().count()).isEqualTo(1.0);
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    @Test
+    @DisplayName("Reaping a worker the node stops itself is not a crash (D-159)")
+    void reapingAHealthyWorkerIsNotACrash() {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        cluster93.core.metrics.Metrics.install(vertx, registry);
+        TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
+        try {
+            FakeProcess process = new FakeProcess(7102L);
+            WorkerProcessHandle handle = boundHandle(process, 7102L, "acme", 1);
+            pool.jobStarted(handle, "acme");
+
+            pool.close(); // the pool stops a healthy worker itself; only a self-death is a crash
+
+            assertThat(registry.find("c93.workers.crashes").counter()).isNull();
         } finally {
             closeQuietly(vertx, pool);
         }

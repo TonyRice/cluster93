@@ -1,12 +1,18 @@
 package cluster93.runner.protocol.pool;
 
+import cluster93.core.metrics.Metrics;
 import cluster93.runner.protocol.server.NodeRpcAuthorizer;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -76,8 +82,9 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         Objects.requireNonNull(tenantId, "tenantId");
         return tenantPools.computeIfAbsent(tenantId, t -> {
             String binary = resolveModeBinary(defaultMode);
-            return new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker)
+            TenantWorkerPool pool = new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker)
                     .arbiter(this);
+            return registerTenantGauges(t, pool);
         });
     }
 
@@ -100,8 +107,9 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         String poolKey = tenantId + ":" + effectiveMode;
         TenantWorkerPool pool = tenantPools.computeIfAbsent(poolKey, k -> {
             String binary = resolveModeBinary(effectiveMode);
-            return new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker)
+            TenantWorkerPool created = new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker)
                     .arbiter(this);
+            return registerTenantGauges(tenantId, created);
         });
         return pool.acquire(tenantId);
     }
@@ -188,6 +196,63 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     /** How many workers the node is running across every tenant, and what it may run. */
     public WorkerBudget nodeBudget() {
         return nodeBudget;
+    }
+
+    /** Registers a tenant's worker gauges once, backed by the pool, which the manager holds for its lifetime. */
+    private TenantWorkerPool registerTenantGauges(String tenantId, TenantWorkerPool pool) {
+        Metrics.of(vertx).tenantWorkers(tenantId, pool,
+                TenantWorkerPool::activeWorkerCount, TenantWorkerPool::jobsInFlightCount, TenantWorkerPool::pendingCount);
+        return pool;
+    }
+
+    /** A point-in-time reading of every tenant's worker use on this node (D-156), for the CLI and tests. */
+    public WorkerPoolSnapshot snapshot() {
+        List<WorkerPoolSnapshot.TenantWorkers> tenants = new ArrayList<>();
+        Set<String> active = new HashSet<>();
+        int warm = 0;
+        for (TenantWorkerPool pool : tenantPools.values()) {
+            warm += pool.warmCount();
+            WorkerPoolSnapshot.TenantWorkers usage = pool.tenantUsage();
+            if (usage != null && (usage.workers() > 0 || usage.pending() > 0)) {
+                tenants.add(usage);
+                if (usage.workers() > 0) {
+                    active.add(usage.tenant());
+                }
+            }
+        }
+        tenants.sort(Comparator.comparing(WorkerPoolSnapshot.TenantWorkers::tenant));
+        return new WorkerPoolSnapshot(nodeBudget.used(), nodeBudget.limit(), warm, active.size(), List.copyOf(tenants));
+    }
+
+    /** Worker processes this node is running now; a cheap reading for the node-wide gauge. */
+    public int workersRunning() {
+        return nodeBudget.used();
+    }
+
+    /** Worker processes this node may run; 0 means unbounded. */
+    public int workersLimit() {
+        return nodeBudget.limit();
+    }
+
+    /** Idle workers kept warm, node-wide. */
+    public int workersWarm() {
+        int warm = 0;
+        for (TenantWorkerPool pool : tenantPools.values()) {
+            warm += pool.warmCount();
+        }
+        return warm;
+    }
+
+    /** Distinct tenants running at least one worker right now. */
+    public int tenantsActive() {
+        Set<String> active = new HashSet<>();
+        for (TenantWorkerPool pool : tenantPools.values()) {
+            WorkerPoolSnapshot.TenantWorkers usage = pool.tenantUsage();
+            if (usage != null && usage.workers() > 0) {
+                active.add(usage.tenant());
+            }
+        }
+        return active.size();
     }
 
     /**

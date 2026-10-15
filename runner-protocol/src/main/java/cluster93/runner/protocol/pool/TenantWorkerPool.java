@@ -154,6 +154,80 @@ public class TenantWorkerPool {
         return warmUnboundQueue.size();
     }
 
+    /** How many workers this pool is running for its tenant right now (D-155), for the snapshot and its gauges. */
+    synchronized int activeWorkerCount() {
+        int count = 0;
+        for (int workers : activeByTenant.values()) {
+            count += workers;
+        }
+        return count;
+    }
+
+    /** How many jobs this pool's workers are running at once right now. */
+    synchronized int jobsInFlightCount() {
+        int count = 0;
+        for (int jobs : jobsInFlight.values()) {
+            count += jobs;
+        }
+        return count;
+    }
+
+    /** How many acquires are waiting for a worker (a sibling must free a slot, or the node must have room). */
+    synchronized int pendingCount() {
+        int count = 0;
+        for (Deque<PendingAcquire> queue : pendingByTenant.values()) {
+            count += queue.size();
+        }
+        return count;
+    }
+
+    /** How many idle workers this pool keeps warm — bound to its tenant, or unbound and still free to bind. */
+    synchronized int warmCount() {
+        int count = warmUnboundQueue.size();
+        for (List<WorkerProcessHandle> warm : tenantWarmQueue.values()) {
+            count += warm.size();
+        }
+        return count;
+    }
+
+    /**
+     * A reading of this pool for its tenant, or null when it has no tenant yet (only unbound warm workers). A pool is
+     * per tenant (D-155), so there is at most one.
+     */
+    synchronized WorkerPoolSnapshot.TenantWorkers tenantUsage() {
+        String tenant = tenantOfPool();
+        if (tenant == null) {
+            return null;
+        }
+        return new WorkerPoolSnapshot.TenantWorkers(tenant, activeWorkerCount(), jobsInFlightCount(),
+                pendingCount(), warmCount(), budgetEnforcement());
+    }
+
+    /** The tenant this pool serves: one has run a job, is waiting for a worker, or is kept warm. */
+    private String tenantOfPool() {
+        for (String tenant : activeByTenant.keySet()) {
+            return tenant;
+        }
+        for (String tenant : pendingByTenant.keySet()) {
+            return tenant;
+        }
+        for (List<WorkerProcessHandle> warm : tenantWarmQueue.values()) {
+            if (!warm.isEmpty()) {
+                WorkerProcessHandle worker = warm.get(0);
+                return worker.boundTenantId();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Which layer enforces this tenant's memory budget (D-157): GraalJS bounds each context in the engine, while
+     * Javet's engine limit does not count external memory, so the cgroup is the tenant budget there.
+     */
+    public String budgetEnforcement() {
+        return "graaljs".equalsIgnoreCase(mode) ? "engine" : "cgroup";
+    }
+
     public CgroupMemoryLimiter cgroupLimiter() {
         return cgroupLimiter;
     }
@@ -581,7 +655,12 @@ public class TenantWorkerPool {
             nodeBudget.release();
         }
         cgroupLimiter.cleanup(worker.pid());
-        inspectExit(worker);
+        // A worker that died on its own is a crash, and it is counted against its tenant (D-159). One we terminate
+        // ourselves — an idle reap, a close — is destroyed below, so inspectExit sees it alive and counts nothing.
+        Integer exit = inspectExit(worker);
+        if (exit != null && exit != 0 && worker.boundTenantId() != null) {
+            cluster93.core.metrics.Metrics.of(vertx).workerCrashed(worker.boundTenantId());
+        }
         StderrTail tail = stderrByPid.remove(worker.pid());
         String rendered = tail == null ? "" : tail.render();
         if (!rendered.isEmpty()) {
@@ -590,8 +669,12 @@ public class TenantWorkerPool {
         worker.terminate();
     }
 
-    /** A worker that died on its own leaves an exit code that says how: 137 is SIGKILL/OOM, 139 is SIGSEGV. */
-    private static void inspectExit(WorkerProcessHandle worker) {
+    /**
+     * A worker that died on its own leaves an exit code that says how: 137 is SIGKILL/OOM, 139 is SIGSEGV. This only
+     * reports and logs it; the caller counts it as a crash (D-159). Returns the code, or null while the worker is
+     * alive, or when its state is not yet known.
+     */
+    private static Integer inspectExit(WorkerProcessHandle worker) {
         try {
             if (!worker.process().isAlive()) {
                 int code = worker.process().exitValue();
@@ -603,10 +686,12 @@ public class TenantWorkerPool {
                 } else if (code != 0) {
                     LOG.warn("Worker {} (pid {}, tenant {}) exited with code {}", worker.workerId(), worker.pid(), tenant, code);
                 }
+                return code;
             }
         } catch (IllegalThreadStateException ignored) {
             // still alive when we looked
         }
+        return null;
     }
 
     /** The tenant a worker is bound to, or "unbound" for one that never took a job. */

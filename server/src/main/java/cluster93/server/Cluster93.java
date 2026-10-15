@@ -396,6 +396,18 @@ public final class Cluster93 {
                     cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL
             );
             workerPoolRef.set(poolManager);
+            // Node-wide worker use (D-156, D-159): running and permitted worker processes, warmth, and how many
+            // tenants are actually using one — the numbers that say whether the node's caps are binding. Per-tenant
+            // gauges register with each tenant's pool (TenantWorkerPoolManager.poolFor).
+            io.micrometer.core.instrument.MeterRegistry meters = Metrics.of(vertx).registry();
+            io.micrometer.core.instrument.Gauge.builder("c93.workers.running", poolManager, m -> m.workersRunning())
+                    .description("Worker processes this node is running").register(meters);
+            io.micrometer.core.instrument.Gauge.builder("c93.workers.limit", poolManager, m -> m.workersLimit())
+                    .description("Worker processes this node may run; 0 means unbounded").register(meters);
+            io.micrometer.core.instrument.Gauge.builder("c93.workers.warm", poolManager, m -> m.workersWarm())
+                    .description("Idle worker processes kept warm").register(meters);
+            io.micrometer.core.instrument.Gauge.builder("c93.tenants.active", poolManager, m -> m.tenantsActive())
+                    .description("Tenants running at least one worker on this node").register(meters);
             runtime = new cluster93.runner.protocol.runtime.WorkerProcessRuntime(vertx, poolManager);
             // Say plainly what this node can run at once, and how the workers are shared: one worker per tenant
             // (D-155), running up to maxJobsPerWorker jobs each, and the pools are handed out round-robin between

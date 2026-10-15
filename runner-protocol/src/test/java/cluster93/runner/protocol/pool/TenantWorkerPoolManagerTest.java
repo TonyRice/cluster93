@@ -1,7 +1,9 @@
 package cluster93.runner.protocol.pool;
 
 import cluster93.runner.protocol.server.NodeRpcAuthorizer;
+import cluster93.runner.protocol.server.NodeWorkerChannel;
 import io.vertx.core.Vertx;
+import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -59,6 +61,39 @@ class TenantWorkerPoolManagerTest {
 
             manager.capacityFreed();
             assertThat(manager.nextWaitingTenant()).isNull();
+        } finally {
+            vertx.close();
+        }
+    }
+
+    @Test
+    @DisplayName("The snapshot reports each tenant's workers and jobs, and the node's worker limit (D-156)")
+    void theSnapshotReportsWorkerUse() {
+        Vertx vertx = Vertx.vertx();
+        try {
+            TenantWorkerPoolManager manager = manager(vertx);
+            TenantWorkerPool acme = manager.poolFor("acme");
+
+            // Two jobs on one worker, driven through the pool's bookkeeping so no process is spawned.
+            TenantWorkerPoolTest.FakeProcess process = new TenantWorkerPoolTest.FakeProcess(7201L);
+            NodeWorkerChannel channel = new NodeWorkerChannel("worker-7201",
+                    new TenantWorkerPoolTest.FakeStream(), new TenantWorkerPoolTest.FakeStream());
+            WorkerProcessHandle handle = new WorkerProcessHandle(process, channel, 4);
+            handle.bind("acme", new JsonObject(), new JsonObject());
+            acme.jobStarted(handle, "acme");
+            acme.jobStarted(handle, "acme");
+
+            WorkerPoolSnapshot snapshot = manager.snapshot();
+
+            assertThat(snapshot.workersLimit()).isEqualTo(2); // the manager's maxWorkers
+            assertThat(snapshot.tenantsActive()).isEqualTo(1);
+            assertThat(snapshot.tenants()).singleElement().satisfies(tenant -> {
+                assertThat(tenant.tenant()).isEqualTo("acme");
+                assertThat(tenant.workers()).isEqualTo(1);
+                assertThat(tenant.jobs()).isEqualTo(2);
+            });
+            assertThat(manager.tenantsActive()).isEqualTo(1);
+            assertThat(manager.workersLimit()).isEqualTo(2);
         } finally {
             vertx.close();
         }
