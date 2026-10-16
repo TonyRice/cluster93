@@ -91,6 +91,22 @@ class WorkerSocketTest {
         if (workerVertx != null) { await(workerVertx.close()); }
         if (clientVertx != null) { await(clientVertx.close()); }
         if (node != null) { await(node.stop()); }
+        deleteRecursively(dir);
+    }
+
+    private static void deleteRecursively(Path root) {
+        if (root == null || !Files.exists(root)) {
+            return;
+        }
+        try (var stream = Files.walk(root)) {
+            stream.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (Exception ignored) {
+                }
+            });
+        } catch (Exception ignored) {
+        }
     }
 
     @Test

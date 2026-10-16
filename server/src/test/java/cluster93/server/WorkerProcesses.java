@@ -26,8 +26,13 @@ final class WorkerProcesses {
         if (real == null) {
             return null;
         }
-        Path link = Files.createTempDirectory("c93-marked-worker-").resolve(marker);
+        Path dir = Files.createTempDirectory("c93-marked-worker-");
+        // A symlink in a temp directory whose name carries the marker, so a node's workers are visible in /proc
+        // without touching the shared bin/. The JVM removes it on a clean exit, so repeated runs do not pile up.
+        dir.toFile().deleteOnExit();
+        Path link = dir.resolve(marker);
         Files.createSymbolicLink(link, Path.of(real));
+        link.toFile().deleteOnExit();
         return link;
     }
 
