@@ -218,7 +218,7 @@ const data = await res.json();      // or res.text(), res.bytes(), or stream res
 ```
 
 - Only `http` and `https`.
-- **Every connection goes through the egress gate** (both fetches) (D-108), and a refusal fails with `code: 'egress_denied'` and a message that says why:
+- **Every connection goes through the egress gate** (both fetches) (D-108), and a refusal fails with `code: 'egress_denied'` and a message that says why. Through `fetch` that reason sits one level down, as Node puts it: the rejection is `TypeError: fetch failed` with `err.cause.code === 'egress_denied'` and the message on `err.cause`; a refused socket (`net`/`tls`, which is what `http` writes its request over) rejects with the `code` on the error itself:
   - **By default, public addresses** are allowed.
   - **Private and reserved addresses are refused by default:** loopback, 10/8, 172.16/12, 192.168/16, link-local (including the 169.254.169.254 cloud metadata endpoint), CGNAT, unique-local IPv6, the documentation ranges, and IPv6 forms that carry one of these (NAT64, 6to4, IPv4-mapped and IPv4-compatible).
   - **Operators can change both** (D-111): allow and deny rules for the whole cluster and for your tenant, and an "allow-list" posture under which only what a rule allows is reachable.
