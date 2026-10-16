@@ -3384,3 +3384,62 @@ on its own context. The drain is deferred, not inline: a claim takes its job slo
   overrunning the worker.
 - `ProcessModeParityTest`: `217/217` on three consecutive full-suite runs (it had been failing roughly half to
   three-quarters of them), and `./mvnw -o verify -pl cli,runner-protocol,server -am` is green.
+
+### D-171 — The connected-worker build details, and what a real container taught us
+**Date:** 2026-10-15 · **Status:** Accepted. Settles the build-time questions D-166/D-167/D-169 left open; refines D-150.
+
+**Context:**
+D-166/D-167 fixed the shape (the node listens, the deployment creates the containers, a connection is an open worker)
+and D-168/D-169 fixed the secret and the memory reservation, but three things were explicitly left to build time: the
+connect-retry numbers, the capability name, and where a connected worker's reserved size comes from. Two more surfaced
+once a **real** worker container was run against a real node (`scripts/worker-isolation-check.sh`, case C3 on rootful
+Docker, 2026-10-15) — neither is visible to a unit test.
+
+**Decision:**
+1. **The retry is bounded and visible:** `ipc --socket` tries **30** times, backing off **100 ms doubling to a 5 s
+   cap** (≈2 minutes), then exits non-zero naming the socket. It is what makes "listen first, connect second" safe
+   with no start ordering, and failing visibly is what lets the supervisor's restart and the node's log both show a
+   worker that cannot reach the node.
+2. **The capability is `worker:container`**, advertised by a node with `C93_WORKER_SOCKET` set. Placement itself
+   stays the scheduler's — the `worker` role decides whether a node takes tenant compute and capacity decides how
+   much — because `NodeInfo` carries no capabilities yet; the advertisement is what says "this node accepts a pool a
+   deployment supplied", and the pool is tenant-agnostic, so no per-tenant routing exists to gate.
+3. **A connected worker's reserved size is declared, from `HELLO`:** the worker announces its `--heap-mb` and
+   `--threads`, and the node reserves `heapMb × maxJobs + 128 MB`, falling back to its own defaults when a worker
+   announces nothing. Its container's cgroup is the deployment's, so this is the one size the node can know — and it
+   is why `HELLO` grew those two fields.
+4. **Connections are bounded by `C93_WORKER_CONNECTIONS_MAX`** (defaulting to `C93_MAX_WORKERS`), **not** by the
+   worker-count allowance: the node cannot refuse a connection without the worker's supervisor immediately starting
+   another, so a refused connection is a reconnect loop rather than a decision. Memory is the unit both sources share
+   (D-169).
+5. **The authorizer checks a run's liveness, and exempts the run's own teardown** (D-150): a call must be for a run
+   this node is executing and for the tenant the worker is bound to, and must name a documented host-API area. The
+   teardown calls — `execution.close`, `serve.unlisten`, the `*.unsubscribe`/`unconsume`/`unevents` family — are sent
+   one frame after `RESULT_RUN`, when the node has already let the run go, so they are allowed on the binding alone;
+   they only release what the run held, and the channel answers them only for a run it still carries.
+6. **The socket is forced to `0600`** after the bind. The kernel creates it with the process umask — on the test host
+   that was `0775`, i.e. connectable by every user, which is precisely the boundary a worker connection crosses (S3).
+7. **Two facts a deployment must know**, both found by the isolation check rather than by reasoning: the node image's
+   **entrypoint is the server**, so a worker container must replace it (`--entrypoint`, or `entrypoint:` in compose) —
+   passing the worker command as arguments starts a *second node*; and a **GraalJS** worker needs a home that is both
+   **writable and executable** (`--tmpfs /home:rw,exec,mode=1777`), because it unpacks its native isolate library into
+   `$HOME/.cache` and then `dlopen`s it, so a read-only root (S4) makes it die at startup and a `noexec` home cannot
+   load it.
+
+**Consequences:**
+- A worker container that cannot reach the node says so itself, once, instead of retrying forever or dying silently.
+- The connection cap is a bound on what the node *accepts*; the pool's size is still the deployment's, and the node
+  still cannot shed an idle worker (§2.7).
+- The teardown exemption is a small, named hole in the liveness check, chosen over weakening it for every call: the
+  calls that touch tenant state are still scoped to a run the node is executing.
+- The GraalJS cache requirement means a worker container is not *quite* "no writable filesystem": it needs a scratch
+  home, which `compose.workers.tmpl` supplies as a tmpfs and documents.
+
+**Evidence:**
+- `WorkerSocketSourceTest` (connect → HELLO → secret → open worker → bind → a real job), `WorkerSocketTest` (a real
+  node, a real worker over the socket, a job through the API, `c93_workers_running 0`), `UdsConnectRetryTest` (the
+  retry succeeds late and fails cleanly), `WorkerRpcAuthorizerTest`.
+- `scripts/worker-isolation-check.sh`: C3 (rootful Docker, `--user <uid>:<gid>`) — HELLO, a job round trip, the wrong
+  secret refused, and no network reachability from inside the container; C4 (a foreign uid) — refused. It found the
+  `0775` socket, the entrypoint trap and the GraalJS cache failure; C1/C2 (rootless podman and rootless Docker) print
+  `SKIP` with the command that would enable them, which is what this host has.

@@ -710,6 +710,9 @@ class NodeCommandTest {
         // The ports in node.env are the container's; the host mapping is compose's job.
         assertThat(config).containsEntry("C93_HTTP_PORT", "9393");
         assertThat(config.get("C93_ADMIN_TOKEN")).hasSize(64);
+        // Accepting worker containers is opt-in and discoverable: the settings appear commented in node.env (D-166).
+        assertThat(config).containsEntry("# C93_WORKER_SOCKET", "/run/cluster93/workers/node.sock");
+        assertThat(config).containsEntry("# C93_WORKER_SECRET_FILE", "/run/secrets/c93-worker-secret");
     }
 
     @Test
@@ -734,6 +737,9 @@ class NodeCommandTest {
         // Persistence is the bind mount, and the certificates are read-only (D-142).
         assertThat(compose).contains(layout.dataDir() + ":/var/lib/cluster93");
         assertThat(compose).contains(layout.tlsDir() + ":/tls:ro");
+        // The worker socket directory is mounted unconditionally, so a deployment's worker containers can share it and
+        // enabling them is an env change rather than another install (D-166).
+        assertThat(compose).contains(NodeInstall.workerSocketDir(layout) + ":/run/cluster93/workers");
         // Hardening (S4).
         assertThat(compose).contains("cap_drop: [ALL]");
         assertThat(compose).contains("no-new-privileges:true");

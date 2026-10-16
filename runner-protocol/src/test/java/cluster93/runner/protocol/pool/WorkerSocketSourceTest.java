@@ -77,6 +77,16 @@ class WorkerSocketSourceTest {
         manager = manager(1L * 1024 * 1024 * 1024);
         await(manager.listenForWorkers(socketPath, "s3cret", 8));
 
+        // The directory the node listens in is its own, and only its owner may reach it (S3): the connect is what
+        // proves it was made 0700 for us, since a tighter-mode socket is unreachable to anyone else.
+        assertThat(java.nio.file.Files.getPosixFilePermissions(Path.of(socketPath).getParent()).toString())
+                .isEqualTo("[OWNER_READ, OWNER_WRITE, OWNER_EXECUTE]");
+        // And the socket itself: the kernel creates it with the process umask, which is often group- or
+        // world-connectable — the node forces it back to its owner alone, because this is the boundary a worker
+        // connection crosses (S3).
+        assertThat(java.nio.file.Files.getPosixFilePermissions(Path.of(socketPath)).toString())
+                .isEqualTo("[OWNER_READ, OWNER_WRITE]");
+
         await(connectAndSayHello("s3cret", 64, 4));
         awaitUntil("the connection to become an open worker", () -> manager.openWorkerCount() == 1);
         assertThat(manager.connectedWorkerCount()).isEqualTo(1);

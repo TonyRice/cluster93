@@ -1,0 +1,87 @@
+# Worker containers for a Cluster93 node (D-166, D-167).
+#
+# THE DEPLOYMENT OWNS THIS FILE. The node never creates, starts or removes a container, and holds no engine socket.
+# A worker container runs one or more `worker-* ipc --socket` processes that CONNECT to the node's listening socket,
+# so adding supply is a deployment action, not a node action. Copy it beside the node's own compose file and adjust
+# the image, the worker count, and the identity flag for your engine.
+#
+# What it must share with the node:
+#   * the node's worker socket DIRECTORY (the node creates `node.sock` in it at runtime, so the file itself cannot be
+#     bind-mounted). A container node mounts its own `<config dir>/workers` there; the path inside is always
+#     /run/cluster93/workers, so nothing has to be translated.
+#   * the worker secret, mounted READ-ONLY at 0400 on the host, owned by the node's user (S5). Both sides read it;
+#     the worker presents it in HELLO and the node checks it (D-147, D-168).
+# It needs no network at all: everything a script reaches goes through the node (S10).
+#
+# What the node needs (node.env, see docs/guides/node.md):
+#   C93_WORKER_SOCKET=/run/cluster93/workers/node.sock     the node listens here (uncommented, once enabled)
+#   C93_WORKER_SECRET_FILE=/run/secrets/c93-worker-secret  the node reads the secret from here
+#   C93_WORKER_CONNECTIONS_MAX=...                         how many connections it accepts (defaults to its workers)
+#
+# Identity (D-149) — a worker must present the node's host identity, so the 0700 socket dir / 0600 socket stay tight:
+#   rootless podman:  userns_mode: keep-id
+#   rootless docker:  user: "0"                  (container root IS the invoking user under a rootless userns)
+#   rootful docker:   user: "<host-uid>:<host-gid>"
+#
+# The node image's ENTRYPOINT is the server, so a worker container MUST replace it (the `entrypoint:` below does):
+# passing the worker command as `command:` alone would start a second node inside the worker container.
+#
+# The image's worker binaries must be this version or newer: an older `worker-javet` does not know `--secret-file`,
+# and the node refuses a connection that presents no secret when one is configured.
+#
+# Verify the whole thing with scripts/worker-isolation-check.sh, which runs these cases against a real engine and
+# prints a matrix (hello | job | wrong secret refused | no network reachability).
+
+x-worker: &worker
+  # Pin by DIGEST, not tag: a tag is mutable, and the deployment is what pulls it (S7).
+  image: cluster93-node@sha256:REPLACE_WITH_THE_NODE_IMAGE_DIGEST
+  restart: unless-stopped
+  # No network: a worker reaches the node only over the mounted socket, so there is no route to misconfigure (S10).
+  network_mode: none
+  # S4: no capabilities, no setuid escalation, no writable root, a bounded process table, and the pool's bounds —
+  # --memory/--cpus bound the POOL this container holds, not one tenant (D-166).
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  read_only: true
+  # /tmp for the usual scratch, and /home for the engine's own cache: a GraalJS worker unpacks a native isolate
+  # library into $HOME/.cache and then dlopens it, so its home must be writable AND executable. Without this a
+  # read-only root makes the worker die at startup (the isolation check is what catches it).
+  tmpfs:
+    - /tmp
+    - /home:rw,exec,mode=1777,size=256m
+  pids_limit: 512
+  mem_limit: 512m
+  cpus: 1.0
+  # The labels an operator's sweep filters on, so it can never touch another node's containers (S9).
+  labels:
+    c93.node: "REPLACE_WITH_THE_NODE_ID"
+  volumes:
+    - "REPLACE_WITH_THE_HOST_WORKER_SOCKET_DIR:/run/cluster93/workers"
+    - "REPLACE_WITH_THE_HOST_SECRET_FILE:/run/secrets/c93-worker-secret:ro"
+  environment:
+    C93_WORKER_SECRET_FILE: /run/secrets/c93-worker-secret
+    # A read-only root leaves nowhere for the engine to unpack its native isolate library: GraalJS installs it under
+    # $HOME/.cache, so point HOME at the /tmp tmpfs above (Javet does not need this, but it does no harm).
+    HOME: /tmp
+
+services:
+  # One supervisor per container keeps N workers alive. Each connects to the node independently; the supervisor
+  # speaks no protocol and configures no tenant, and the node binds every connection to whichever tenant has work.
+  workers:
+    <<: *worker
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        for i in 1 2 3 4; do
+          /opt/cluster93/bin/worker-javet ipc \
+            --socket /run/cluster93/workers/node.sock \
+            --secret-file /run/secrets/c93-worker-secret \
+            --heap-mb 128 --threads 4 &
+        done
+        # A worker that dies (or cannot reach the node) takes the container down, and `restart` brings it back: the
+        # node cannot shed a worker itself, so keeping N alive is the supervisor's job (D-166, §2.7).
+        wait -n
+        exit 1
+    # Scale the SUPPLY by running more of these containers, or more workers in each. The node accepts whatever
+    # connects, up to C93_WORKER_CONNECTIONS_MAX and its worker memory ceiling (D-169).

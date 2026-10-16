@@ -6,6 +6,44 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **Worker containers: the node listens, the deployment connects** (D-166, D-167, D-171):
+  - A node can run its engine workers as **containers the deployment creates**. It binds a Unix socket
+    (`C93_WORKER_SOCKET`) and every connection becomes an **open worker** — UNBOUND, tenant-agnostic — that it binds
+    to whichever tenant has work (D-155). The node **never creates a container** and holds no engine socket: no
+    `--worker-containers`, no `docker.sock` (D-167). `C93_WORKER_CONNECTIONS_MAX` bounds what it accepts (default:
+    its worker count), and a node with the socket set advertises `worker:container`.
+  - **The secret is pre-shared and per-node** (`C93_WORKER_SECRET_FILE`, mode `0400`, mounted into the workers):
+    a worker presents it in `HELLO` and the node checks it, because a socket binds a channel to *whoever connected*
+    where a pipe binds it to a child the node made (D-168). The node warns when the file is looser than `0400`.
+  - **`HELLO` also carries the worker's `--heap-mb` and `--threads`,** so the node reserves memory **from connect** —
+    an idle, unbound worker included — and falls back to its own defaults when a worker declares nothing (D-169).
+    The size is declared, not measured: the container's cgroup is the deployment's.
+  - **The real `NodeRpcAuthorizer` lands** (D-150, no longer `ALLOW_ALL`): a call is answered only for a run this node
+    is executing and for the tenant the worker is bound to, and only inside a documented host-API area. A run's own
+    teardown (`execution.close`, `serve.unlisten`, the unregister calls) arrives one frame after `RESULT_RUN`, so it
+    is allowed on the binding alone.
+  - **One handle, two sources.** `WorkerProcessHandle` became `WorkerHandle` + `ProcessWorkerHandle` /
+    `SocketWorkerHandle` over one shared base, and the pool keys by `workerId` rather than a pid. A connection has no
+    pid, no exit code and no cgroup the node sets, so its death says only that the connection ended rather than
+    inventing a cause (D-159); it holds no slot of the node's worker-process allowance, and memory is the unit both
+    sources share.
+  - **`WorkerMain ipc --socket` retries** the connect with bounded backoff (~30 tries, 100 ms doubling to a 5 s cap)
+    and then exits naming the socket, so start order does not matter and a worker that cannot reach the node says so
+    itself. `--secret-file` (or `C93_WORKER_SECRET_FILE`) supplies the secret.
+  - **Everything the socket boundary needs:** the socket is forced to **`0600`** after the bind (the kernel's umask
+    made it `0775` — connectable by anyone, which is exactly the boundary a worker crosses) and its directory to
+    `0700` (S3).
+  - `install/docker/compose.workers.tmpl` is the deployment-side sketch — a supervisor keeping N workers alive,
+    `--network none`, the S4 hardening set, the D-149 identity flags, and the writable-and-executable home a GraalJS
+    worker needs — and `scripts/worker-isolation-check.sh` runs the cases only a real engine can decide (identity,
+    wrong secret, no network reachability), printing a matrix and touching nothing it did not create.
+  - A container node's compose mounts its worker socket directory, so enabling workers is an env change rather than
+    another install; `docs/guides/node.md` has the section, including the two traps a unit test cannot catch: the
+    node image's entrypoint is the server (a worker container must replace it) and a GraalJS worker unpacks a native
+    isolate library into `$HOME/.cache` (so its home must be writable **and** executable).
+  - `c93.workers.connected` reports the worker containers connected to this node, which the spawned-worker count does
+    not include (D-164).
+
 - **A queued job is served whenever a shared worker has a free slot** (D-170):
   - A tenant's claim queues when it finds no worker and no room to spawn. It can then be served without anything
     being freed — by taking a free job slot on a worker that is already active (workers run several jobs each, D-155)

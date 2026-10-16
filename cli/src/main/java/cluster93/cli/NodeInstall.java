@@ -381,6 +381,11 @@ final class NodeInstall {
         config.put("C93_WORKER_DEFAULT_MODE", "graaljs");
         config.put("C93_ADMIN_TOKEN", generateToken());
         config.put("C93_TENANT", "local");
+        // A node can also accept worker containers the deployment runs (D-166): they connect to this socket, whose
+        // directory is mounted into every worker container. Uncomment both, put the secret in a 0400 file on the host,
+        // and mount that read-only into the workers — docs/guides/node.md ("Worker containers").
+        config.put("# C93_WORKER_SOCKET", "/run/cluster93/workers/node.sock");
+        config.put("# C93_WORKER_SECRET_FILE", "/run/secrets/c93-worker-secret");
         return config;
     }
 
@@ -411,6 +416,11 @@ final class NodeInstall {
         config.put("C93_WORKER_DEFAULT_MODE", "graaljs");
         config.put("C93_ADMIN_TOKEN", generateToken());
         config.put("C93_TENANT", "local");
+        // Container workers are opt-in (D-166): the deployment creates the containers and they connect to this node,
+        // which the compose file already mounts a directory for. Uncomment both, put the secret in a 0400 file on the
+        // host, mount it read-only into the workers, and restart — see docs/guides/node.md ("Worker containers").
+        config.put("# C93_WORKER_SOCKET", "/run/cluster93/workers/node.sock");
+        config.put("# C93_WORKER_SECRET_FILE", "/run/secrets/c93-worker-secret");
         return config;
     }
 
@@ -479,6 +489,10 @@ final class NodeInstall {
         compose.append("    volumes:\n");
         compose.append("      - \"").append(layout.dataDir()).append(":/var/lib/cluster93\"\n");
         compose.append("      - \"").append(layout.tlsDir()).append(":/tls:ro\"\n");
+        // The worker socket directory (D-166): the node creates its socket here at runtime, so a worker container
+        // cannot bind-mount the file — it mounts this directory. Mounted unconditionally so enabling container
+        // workers is an env change (`C93_WORKER_SOCKET` in node.env) rather than another install.
+        compose.append("      - \"").append(workerSocketDir(layout)).append(":/run/cluster93/workers\"\n");
         compose.append("    healthcheck:\n");
         compose.append("      test: [\"CMD\", \"bash\", \"-c\", \"exec 3<>/dev/tcp/localhost/9393 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3\"]\n");
         compose.append("      interval: 5s\n");
@@ -747,6 +761,10 @@ final class NodeInstall {
         if (layout.logDir() != null) {
             Files.createDirectories(layout.logDir());
         }
+        // The worker socket directory the compose file mounts, at 0700 before anything can reach it (D-166, S3).
+        Path socketDir = workerSocketDir(layout);
+        Files.createDirectories(socketDir);
+        restrictDir(socketDir);
         writeEnv(layout, config);
 
         Path caHome = null;
@@ -1223,6 +1241,26 @@ final class NodeInstall {
     private static void restrict(Path file) {
         try {
             Files.setPosixFilePermissions(file, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        } catch (IOException | UnsupportedOperationException ignored) {
+            // not POSIX (Windows): nothing to do
+        }
+    }
+
+    /**
+     * The host directory whose socket the node listens on for worker containers (D-166). Inside the container it is
+     * always {@code /run/cluster93/workers}, so the socket path in {@code node.env} needs no translation, and the
+     * deployment mounts the same directory into every worker container. It lives beside the node's configuration
+     * rather than in {@code /run}: a bind source that vanishes on a reboot is recreated by the engine as root-owned,
+     * and the node could then no longer create its socket there.
+     */
+    static Path workerSocketDir(Layout layout) {
+        return layout.envFile().getParent().resolve("workers");
+    }
+
+    /** {@link #workerSocketDir} at 0700: only the node's user may reach the socket, which the kernel enforces (S3). */
+    private static void restrictDir(Path dir) {
+        try {
+            Files.setPosixFilePermissions(dir, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
         } catch (IOException | UnsupportedOperationException ignored) {
             // not POSIX (Windows): nothing to do
         }

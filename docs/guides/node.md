@@ -111,6 +111,90 @@ c93 node env --set HTTP_PORT=9494
 c93 node restart
 ```
 
+## Worker containers
+
+A node can run its engine workers as **containers a deployment creates** (D-166, D-167). The node **listens** on a
+Unix socket; the workers **connect** to it, and each connection becomes an **open worker** the node binds to
+whichever tenant has work. The node never creates a container, holds no Docker socket, and does not know how many
+workers exist until they connect.
+
+This is **host isolation, not tenant isolation**: a container holds a tenant-agnostic pool, so two tenants' workers
+may share one. Guests stay separated by the engine — a fresh context per job — exactly as before.
+
+### Enabling it
+
+1. Uncomment the two settings in `node.env` (an install writes them commented, so they are discoverable):
+
+   ```
+   C93_WORKER_SOCKET=/run/cluster93/workers/node.sock
+   C93_WORKER_SECRET_FILE=/run/secrets/c93-worker-secret
+   ```
+
+   `C93_WORKER_CONNECTIONS_MAX` bounds how many connections the node accepts (default: its worker count). A
+   **container** node already mounts its worker socket directory — `<config dir>/workers` — at
+   `/run/cluster93/workers`, at `0700`, so a co-located worker container can share it. A **process** node
+   (`c93 node install`) has no such mount: create the directory yourself
+   (`install -d -m 0700 -o <node-user> -g <node-group> /run/cluster93/workers`) and mount the same path into the
+   worker container. The node creates `node.sock` in it at runtime, so share the **directory**, never the file.
+
+2. Create the secret once, readable by the node's user and by nobody else:
+
+   ```bash
+   sudo install -m 0400 -o <node-user> -g <node-group> /dev/null /run/secrets/c93-worker-secret
+   head -c 32 /dev/urandom | base64 | sudo tee /run/secrets/c93-worker-secret >/dev/null
+   ```
+
+   It is **pre-shared**, not per-worker: the node cannot hand a fresh secret to a container it did not create
+   (D-168). Whoever can read that file can present it, which is why the socket directory is `0700`, the socket
+   `0600`, and the file's mode matters. The node warns when it finds the file looser than `0400`.
+
+3. Restart the node, then start worker containers. `install/docker/compose.workers.tmpl` is a complete sketch (a
+   supervisor keeping N workers alive, `--network none`, the hardening set, labels for a sweep, and the identity
+   flag for each engine — D-149); by hand it is one line:
+
+   ```bash
+   docker run --rm --network none \
+     --cap-drop=ALL --security-opt no-new-privileges --read-only --tmpfs /tmp \
+     --entrypoint /opt/cluster93/bin/worker-javet \
+     --tmpfs /home:rw,exec,mode=1777,size=256m \
+     -v /run/cluster93/workers:/run/cluster93/workers \
+     -v /run/secrets/c93-worker-secret:/run/secrets/c93-worker-secret:ro \
+     'cluster93-node@sha256:…' ipc \
+       --socket /run/cluster93/workers/node.sock \
+       --secret-file /run/secrets/c93-worker-secret \
+       --heap-mb 128 --threads 4
+   ```
+
+   Two things the node image cannot tell you, both caught by the check below rather than by a unit test: its
+   entrypoint is **the server**, so a worker container must replace it (`--entrypoint`, or `entrypoint:` in compose)
+   — passing the worker command as arguments starts a second node — and a **GraalJS** worker needs a writable,
+   **executable** home (`--tmpfs /home:rw,exec,mode=1777`), because it unpacks its native isolate library into
+   `$HOME/.cache` and then `dlopen`s it: a read-only root has nowhere to put it, and a `noexec` home cannot load it.
+
+   A worker that starts **before** the node retries the connect with backoff for about two minutes and then exits,
+   so start order does not matter, and a worker that cannot connect says so in its own log.
+
+### What it looks like from here
+
+- `c93 node status` and `GET /metrics` report the connections: `c93_workers_connected` counts them, while
+  `c93_workers_running` counts the worker **processes** the node spawned — 0 when the deployment supplies them all.
+- A worker that dies fails its in-flight jobs and names the tenant and job; **why** its container died (an OOM, a
+  kill) is the deployment's to read from the container's exit status, so the node says only that the connection
+  ended (D-159) rather than inventing a cause.
+- **Memory is reserved from the moment a worker connects**, idle and unbound included: the node reserves what the
+  worker declares (`--heap-mb` × `--threads` plus overhead), because the container's own `--memory` is the
+  deployment's (D-169). A connection that would exceed `C93_MAX_WORKER_MEMORY_MB` is refused, with the reason in the
+  node's log.
+- **Idle control is the deployment's.** The node cannot shed an open worker — closing its socket only makes the
+  supervisor start another — so size the pool with the worker count and the container's limits.
+
+### Verifying it on a real engine
+
+`scripts/worker-isolation-check.sh` runs the cases only a real engine can decide (whether a container reaches the
+`0600` socket as the right identity, whether the wrong secret is refused, whether the worker container genuinely has
+no network) and prints a matrix. It is safe to re-run: everything it creates is labelled with its run id, it uses
+its own ports and temp directories under `mktemp -d`, and it never touches anything it did not create.
+
 ## Join a cluster
 
 A node starts as a single-node cluster. To join others, sign it a certificate with the cluster's CA
