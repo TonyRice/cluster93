@@ -176,4 +176,30 @@ class ServerConfigTest {
         assertThat(ServerConfig.fromEnv(Map.of("C93_CONSOLE_ALLOWED_CIDRS", " 127.0.0.1/32 , 10.0.0.0/8 ,,"))
                 .consoleAllowedCidrs()).containsExactly("127.0.0.1/32", "10.0.0.0/8");
     }
+
+    @Test
+    @DisplayName("The worker socket is its own setting, and needs the process pool it accepts workers for (D-166)")
+    void workerSocketSettings() {
+        ServerConfig base = ServerConfig.fromEnv(Map.of());
+        assertThat(base.workerSocket()).as("no socket, no container workers, is the default").isNull();
+        assertThat(base.workerSecretFile()).isNull();
+        assertThat(base.workerConnectionsMax())
+                .as("bounded out of the box by the same quantity the memory ceiling is derived from")
+                .isEqualTo(base.maxWorkers());
+
+        ServerConfig socket = ServerConfig.fromEnv(Map.of(
+                "C93_WORKER_SOCKET", "/run/cluster93/workers/node.sock",
+                "C93_WORKER_SECRET_FILE", "/run/secrets/c93-worker-secret",
+                "C93_WORKER_CONNECTIONS_MAX", "12"));
+        assertThat(socket.workerSocket()).isEqualTo(Path.of("/run/cluster93/workers/node.sock"));
+        assertThat(socket.workerSecretFile()).isEqualTo(Path.of("/run/secrets/c93-worker-secret"));
+        assertThat(socket.workerConnectionsMax()).isEqualTo(12);
+
+        // The socket accepts workers for the process pool; embedded runs have no pool to put them in.
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of(
+                "C93_WORKER_SOCKET", "/tmp/node.sock", "C93_WORKER_MODE", "embedded")))
+                .hasMessageContaining("C93_WORKER_SOCKET needs C93_WORKER_MODE=process");
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_WORKER_CONNECTIONS_MAX", "-1")))
+                .hasMessageContaining("C93_WORKER_CONNECTIONS_MAX");
+    }
 }

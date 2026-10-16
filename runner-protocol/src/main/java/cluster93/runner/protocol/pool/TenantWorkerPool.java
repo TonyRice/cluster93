@@ -323,6 +323,19 @@ public class TenantWorkerPool {
             }
         }
 
+        // 2b. An open worker the node accepted from a worker container (D-166): supply a deployment created is used
+        //     before the node spawns a process of its own, and it is bound to this tenant here — the worker never
+        //     chose one. It holds no worker-process allowance slot, but it is one of this pool's workers (D-169).
+        WorkerHandle open = arbiter == null ? null : arbiter.takeOpenWorker(tenantId);
+        if (open != null) {
+            totalWorkers.incrementAndGet();
+            jobStarted(open, tenantId);
+            return open.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
+                    .map(v -> open)
+                    .onSuccess(v -> processNextPending())
+                    .onFailure(err -> poison(open, "bind failed: " + err.getMessage()));
+        }
+
         // 3. Can we spawn a new worker right now?
         if (totalWorkers.get() < maxTotal) {
             Promise<WorkerHandle> promise = Promise.promise();

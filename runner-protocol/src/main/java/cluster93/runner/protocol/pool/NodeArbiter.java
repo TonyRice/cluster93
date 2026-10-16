@@ -18,4 +18,12 @@ interface NodeArbiter {
 
     /** Reap one idle worker node-wide so a waiting job can spawn; false when every worker is busy. */
     boolean freeIdleWorker();
+
+    /**
+     * An open worker this node accepted, to bind to {@code tenantId} (D-166), or null when none is waiting. A node
+     * that accepts worker containers implements it; one that only spawns leaves it null, which is why it defaults.
+     */
+    default WorkerHandle takeOpenWorker(String tenantId) {
+        return null;
+    }
 }

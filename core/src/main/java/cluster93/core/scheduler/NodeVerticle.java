@@ -76,7 +76,7 @@ public final class NodeVerticle extends VerticleBase {
     private long heartbeatTimer;
     private boolean stopping;
 
-    private record Slot(int attempt, RunningExecution execution) {
+    private record Slot(int attempt, RunningExecution execution, String tenant) {
     }
 
     public NodeVerticle(String nodeId, String instanceId, int capacity, JobStore jobs, JobStateStore state, NodeRegistry nodes,
@@ -158,7 +158,7 @@ public final class NodeVerticle extends VerticleBase {
             message.fail(409, "Node " + nodeId + " is already running job " + jobId);
             return;
         }
-        slots.put(jobId, new Slot(attempt, null));
+        slots.put(jobId, new Slot(attempt, null, null));
         announce();
         message.reply(instanceId);
 
@@ -188,6 +188,18 @@ public final class NodeVerticle extends VerticleBase {
         }
         slot.execution().stop(message.body().getString("reason"), stopGrace);
         message.reply(instanceId);
+    }
+
+    /**
+     * The tenant of a run this node is currently executing, or null when it is running none (D-150). A worker's call
+     * is authorized against this: the run must be this node's, and it must belong to the tenant the worker is bound
+     * to. Answered from the node's own books so it costs no store read on the event loop; the durable attempt fencing
+     * stays the compare-and-set every state write already does (D-009…D-012), and a run the job store has moved
+     * elsewhere stops being live here within one heartbeat ({@link #checkRunningJobs} cancels what it no longer owns).
+     */
+    public String runningTenant(String jobId) {
+        Slot slot = slots.get(jobId);
+        return slot == null || slot.execution() == null ? null : slot.tenant();
     }
 
     private Future<Void> run(Job job) {
@@ -234,7 +246,7 @@ public final class NodeVerticle extends VerticleBase {
                     carried.service());
             RunningExecution execution = runtime.execute(execution(job, jobContext, imports, env), logSink(job.id(), logs, env), stateSink(job.id(), attempt),
                     hostApis.create(job.tenant(), job.id(), job.service() != null, imports));
-            slots.put(job.id(), new Slot(attempt, execution));
+            slots.put(job.id(), new Slot(attempt, execution, job.tenant()));
             if (job.cancelRequested() != null) {
                 execution.stop(job.cancelRequested(), stopGrace);
             }

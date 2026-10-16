@@ -41,6 +41,11 @@ public class WorkerDaemon {
     private final WorkerClientConnection connection;
     private final ScriptRuntime runtime;
     private final String engineName;
+    /** The pre-shared secret to present in HELLO (D-147, D-168); null when the node spawned this worker over a pipe. */
+    private final String secret;
+    /** This worker's per-job heap budget and how many jobs it runs at once, so the node can reserve on connect (D-169). */
+    private final int heapMb;
+    private final int maxJobs;
     private String boundTenantId;
 
     private final Map<Integer, RunningExecution> activeRuns = new ConcurrentHashMap<>();
@@ -48,9 +53,24 @@ public class WorkerDaemon {
     private final Map<String, RemoteHostApis> hostsByRunId = new ConcurrentHashMap<>();
 
     public WorkerDaemon(WorkerClientConnection connection, ScriptRuntime runtime, String engineName) {
+        this(connection, runtime, engineName, null, 0, 0);
+    }
+
+    /**
+     * @param secret  the pre-shared secret to present in {@code HELLO} (D-168), or null/blank for a worker the node
+     *                spawned over a pipe — a pipe already binds the channel to the child the node made
+     * @param heapMb  this worker's per-job heap budget, as its engine was started
+     * @param maxJobs how many jobs it runs at once (its {@code --threads}); the deployment sized it, and the node
+     *                reserves memory for it from connect, so it declares both (D-169)
+     */
+    public WorkerDaemon(WorkerClientConnection connection, ScriptRuntime runtime, String engineName,
+                        String secret, int heapMb, int maxJobs) {
         this.connection = Objects.requireNonNull(connection, "connection");
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.engineName = Objects.requireNonNull(engineName, "engineName");
+        this.secret = secret;
+        this.heapMb = heapMb;
+        this.maxJobs = maxJobs;
 
         connection.setFrameHandler(this::onFrame);
         connection.streamMultiplexer().setOpenHandler(this::onOpenStream);
@@ -61,7 +81,7 @@ public class WorkerDaemon {
      */
     public Future<Void> start() {
         long pid = ProcessHandle.current().pid();
-        HelloMessage hello = new HelloMessage(engineName, "2.0.0", pid);
+        HelloMessage hello = new HelloMessage(engineName, "2.0.0", pid, secret, heapMb, maxJobs);
         return connection.send(hello.toFrame());
     }
 

@@ -67,6 +67,14 @@ import java.util.UUID;
  *                      designates the node that serves the management web console (docs/design/node-roles.md)
  * @param capabilities  execution engines this node advertises for capability matching, such as {@code js:v8} or {@code js:graaljs}
  *                      (empty means advertise no special capabilities, so any worker node matches)
+ * @param workerMode    how a run reaches its engine: {@code embedded} (in this JVM) or {@code process} (a worker,
+ *                      spawned or connected — D-127, D-166)
+ * @param workerSocket  where the node listens for worker containers (D-166), or null to accept none. The deployment
+ *                      creates the containers; the node only binds each connection to whichever tenant has work
+ * @param workerSecretFile a file both the node and every worker container read (D-168): a connecting worker presents
+ *                      its contents in {@code HELLO} and the node validates it. Null accepts whatever reaches the
+ *                      socket, which is warned about — the 0700 dir and 0600 socket are then the only binding
+ * @param workerConnectionsMax how many worker connections the node accepts at once (D-166); 0 is unbounded
  * @param consoleDomain the host the web console answers on (docs/design/apps-and-console.md); null disables console-host handling
  * @param consoleAllowedCidrs client CIDRs allowed to reach the console host; empty means no network restriction
  */
@@ -136,6 +144,9 @@ public record ServerConfig(
         String workerMode,
         String workerDefaultMode,
         Map<String, String> workerBinaries,
+        Path workerSocket,
+        Path workerSecretFile,
+        int workerConnectionsMax,
         Set<String> roles,
         Set<String> capabilities,
         String consoleDomain,
@@ -166,6 +177,14 @@ public record ServerConfig(
         if (maxCpuPerTenant < 0) {
             throw new IllegalArgumentException("C93_MAX_CPU_PER_TENANT must be 0 (unlimited) or a percentage "
                     + "(it was " + maxCpuPerTenant + ")");
+        }
+        if (workerConnectionsMax < 0) {
+            throw new IllegalArgumentException("C93_WORKER_CONNECTIONS_MAX must be 0 (unbounded) or more (it was "
+                    + workerConnectionsMax + ")");
+        }
+        if (workerSocket != null && !"process".equals(workerMode)) {
+            throw new IllegalArgumentException("C93_WORKER_SOCKET needs C93_WORKER_MODE=process: the socket accepts "
+                    + "workers for the process pool, and embedded runs have no pool (it was " + workerMode + ")");
         }
         for (String role : roles) {
             if (!ROLES.contains(role)) {
@@ -312,6 +331,16 @@ public record ServerConfig(
                 env.getOrDefault("C93_WORKER_MODE", "process").trim().toLowerCase(java.util.Locale.ROOT),
                 workerDefaultMode,
                 parseWorkerBinaries(env, workerDefaultMode),
+                // Where the node listens for worker containers (D-166). The deployment creates the containers, so this
+                // is the node's only role in them; unset means the node accepts no container worker at all.
+                blankToNull(env.get("C93_WORKER_SOCKET")) == null ? null : Path.of(env.get("C93_WORKER_SOCKET").trim()),
+                // The pre-shared secret a connecting worker presents in HELLO (D-147, D-168): a mounted file both
+                // sides read, since the node does not create the worker and so cannot hand it a fresh secret.
+                blankToNull(env.get("C93_WORKER_SECRET_FILE")) == null ? null
+                        : Path.of(env.get("C93_WORKER_SECRET_FILE").trim()),
+                // How many worker connections the node accepts at once. Defaults to the node's worker count, the same
+                // quantity the memory ceiling is derived from, so a deployment is bounded out of the box (D-166).
+                Integer.parseInt(env.getOrDefault("C93_WORKER_CONNECTIONS_MAX", String.valueOf(maxWorkers))),
                 parseSet(env.getOrDefault("C93_ROLES", String.join(",", ROLES))),
                 parseSet(env.getOrDefault("C93_CAPABILITIES", "")),
                 // The console's host binding and the networks allowed to reach it (docs/design/apps-and-console.md).

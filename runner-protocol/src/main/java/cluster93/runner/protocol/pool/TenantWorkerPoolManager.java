@@ -1,12 +1,22 @@
 package cluster93.runner.protocol.pool;
 
 import cluster93.core.metrics.Metrics;
+import cluster93.runner.protocol.message.HelloMessage;
 import cluster93.runner.protocol.server.NodeRpcAuthorizer;
+import cluster93.runner.protocol.server.NodeWorkerChannel;
+import cluster93.runner.protocol.transport.uds.UdsServerTransport;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
+import io.vertx.core.net.NetSocket;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -14,12 +24,22 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Supervises per-tenant {@link TenantWorkerPool} instances, isolating warm worker pools,
  * memory bounds, and recycling lifecycles across tenants (D-127).
+ *
+ * <p>It is also the node's <b>listening</b> end for worker containers (D-166, D-167): the node binds one Unix socket
+ * and every connection to it is an <b>open worker</b> — tenant-agnostic, exactly what the unbound queue always meant.
+ * The manager holds them because the pool is per tenant and an open worker belongs to no tenant yet; a pool takes one
+ * when it has work for it, and the node binds it there. The node never creates a container, so this is a worker
+ * <em>source</em> beside the spawn path, not a second orchestrator.
  */
 public class TenantWorkerPoolManager implements NodeArbiter {
+
+    private static final Logger LOG = LoggerFactory.getLogger(TenantWorkerPoolManager.class);
 
     private final Vertx vertx;
     private final Map<String, String> modeBinaries;
@@ -43,6 +63,25 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     private final NodeRpcAuthorizer authorizer;
 
     private final Map<String, TenantWorkerPool> tenantPools = new ConcurrentHashMap<>();
+
+    // --- the listening worker source (D-166, D-167) ---
+
+    /**
+     * Open workers: connections that have said hello, presented the secret, and claimed no tenant yet. The node binds
+     * each to whichever tenant has work. They live here, not in a tenant's pool, because they belong to no tenant —
+     * which is exactly what "tenant-agnostic pool" means (D-166).
+     */
+    private final Deque<SocketWorkerHandle> openWorkers = new ArrayDeque<>();
+    /** Every live worker connection, open or bound. The accept cap is its size, so a count cannot drift from it. */
+    private final Set<SocketWorkerHandle> connections = ConcurrentHashMap.newKeySet();
+    private final AtomicLong connectionSequence = new AtomicLong(1);
+    /** The node's listening socket, or null when it accepts no worker container ({@code C93_WORKER_SOCKET} unset). */
+    private UdsServerTransport workerListener;
+    private String workerSocketPath;
+    /** How many worker connections the node accepts at once (D-166); 0 means unbounded. */
+    private int maxWorkerConnections;
+    /** The pre-shared secret a connecting worker must present (D-147, D-168); null means none is required. */
+    private String workerSecret;
 
     public TenantWorkerPoolManager(Vertx vertx, Map<String, String> modeBinaries, String defaultMode) {
         this(vertx, modeBinaries, defaultMode, 1, 8, 8, 4, 128, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL);
@@ -305,9 +344,190 @@ public class TenantWorkerPoolManager implements NodeArbiter {
      * Closes all tenant worker pools and destroys processes.
      */
     public void close() {
+        closeWorkerListener();
+        // Open workers belong to no pool, so no pool closes them: close them here.
+        List<SocketWorkerHandle> open;
+        synchronized (this) {
+            open = new ArrayList<>(openWorkers);
+            openWorkers.clear();
+            connections.clear();
+        }
+        open.forEach(SocketWorkerHandle::terminate);
         for (TenantWorkerPool pool : tenantPools.values()) {
             pool.close();
         }
         tenantPools.clear();
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The listening worker source (D-166, D-167)
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Starts listening for worker containers: binds {@code socketPath} and turns every connection into an open worker.
+     * The pool keeps spawning processes as before — this is a second source, not a replacement, so a node may run both.
+     *
+     * @param socketPath     where the node listens; the path carries no tenant, because a connection claims none
+     * @param secret         the pre-shared secret every connecting worker must present (D-168), or null/blank for none
+     *                       — which is warned about, since a shared socket is then guarded by its permissions alone
+     * @param maxConnections how many worker connections the node accepts at once; 0 or less is unbounded
+     */
+    public Future<Void> listenForWorkers(String socketPath, String secret, int maxConnections) {
+        this.workerSocketPath = socketPath;
+        this.workerSecret = (secret == null || secret.isBlank()) ? null : secret;
+        this.maxWorkerConnections = Math.max(0, maxConnections);
+        if (this.workerSecret == null) {
+            LOG.warn("Worker socket {} is open without a secret: any process that can reach it is accepted. Set "
+                    + "C93_WORKER_SECRET_FILE (mode 0400, mounted read-only into the worker containers).", socketPath);
+        }
+        workerListener = new UdsServerTransport(vertx, socketPath);
+        return workerListener.listen(this::onWorkerSocket).onSuccess(v -> LOG.info(
+                "Listening for worker containers on {} ({} connection(s) at most{}): the deployment creates them, the "
+                        + "node binds each connection to whichever tenant has work (D-166, D-167)",
+                socketPath, maxWorkerConnections == 0 ? "unbounded" : String.valueOf(maxWorkerConnections),
+                this.workerSecret == null ? ", no secret" : ", secret required"));
+    }
+
+    /** Stops listening for worker connections. */
+    public void closeWorkerListener() {
+        if (workerListener != null) {
+            workerListener.close();
+            workerListener = null;
+        }
+    }
+
+    /** Whether this node accepts worker containers at all. */
+    public boolean acceptsWorkerConnections() {
+        return workerListener != null;
+    }
+
+    /** How many worker connections are live right now, open and bound together. */
+    public synchronized int connectedWorkerCount() {
+        return connections.size();
+    }
+
+    /** How many connections have claimed no tenant yet. */
+    public synchronized int openWorkerCount() {
+        return openWorkers.size();
+    }
+
+    /**
+     * An open worker this node accepted, to bind to {@code tenantId} (D-166). A pool takes one before spawning, so a
+     * worker a deployment supplied is preferred over a process the node starts; null when none is waiting.
+     */
+    @Override
+    public synchronized WorkerHandle takeOpenWorker(String tenantId) {
+        return openWorkers.poll();
+    }
+
+    /**
+     * A connection arrived. It is not trusted yet: it must say hello, present the secret the node provisioned (D-147,
+     * D-168) and fit the node's memory ceiling (D-169) before it becomes a worker at all. A pipe binds a channel to a
+     * child the node made; a socket binds it to whoever connected, so these checks are the binding.
+     */
+    private void onWorkerSocket(NetSocket socket) {
+        long id = connectionSequence.getAndIncrement();
+        String workerId = "worker-c" + id;
+        if (maxWorkerConnections > 0 && connectedWorkerCount() >= maxWorkerConnections) {
+            LOG.warn("Refusing worker connection {} on {}: the node already holds {} (C93_WORKER_CONNECTIONS_MAX)",
+                    workerId, workerSocketPath, connectedWorkerCount());
+            socket.close();
+            return;
+        }
+        NodeWorkerChannel channel = new NodeWorkerChannel(workerId, socket, socket,
+                new cluster93.runner.protocol.flow.CreditManager(), authorizer);
+        long helloTimeoutMs = Math.max(1L, Long.getLong("cluster93.worker.helloTimeoutMs", TenantWorkerPool.DEFAULT_HELLO_TIMEOUT_MS));
+        AtomicBoolean settled = new AtomicBoolean(false);
+        long timerId = vertx.setTimer(helloTimeoutMs, timer -> {
+            if (settled.compareAndSet(false, true)) {
+                LOG.warn("Worker connection {} did not say hello within {} ms; closing it", workerId, helloTimeoutMs);
+                socket.close();
+            }
+        });
+        channel.awaitHello().onComplete(ar -> {
+            if (!settled.compareAndSet(false, true)) {
+                return; // the timer already gave up on this connection
+            }
+            vertx.cancelTimer(timerId);
+            if (ar.failed()) {
+                LOG.warn("Worker connection {} ended before its hello: {}", workerId, String.valueOf(ar.cause().getMessage()));
+                socket.close();
+                return;
+            }
+            HelloMessage hello = ar.result();
+            if (!secretAccepted(hello.secret())) {
+                LOG.warn("Refusing worker connection {} (engine {}, pid {}): it presented the wrong secret (D-168)",
+                        workerId, hello.engine(), hello.pid());
+                socket.close();
+                return;
+            }
+            long reservedBytes = declaredWorkerBytes(hello);
+            if (memoryBudget != null && !memoryBudget.tryAcquire(reservedBytes)) {
+                LOG.warn("Refusing worker connection {} (engine {}): its {} MB would exceed the node's worker memory "
+                                + "ceiling ({} MB of {} MB already reserved). Raise C93_MAX_WORKER_MEMORY_MB, or run "
+                                + "fewer worker containers (D-169).",
+                        workerId, hello.engine(), reservedBytes / (1024 * 1024),
+                        memoryBudget.usedBytes() / (1024 * 1024), memoryBudget.limitBytes() / (1024 * 1024));
+                socket.close();
+                return;
+            }
+            SocketWorkerHandle handle = new SocketWorkerHandle(id, socket::close, channel,
+                    hello.maxJobs() > 0 ? hello.maxJobs() : maxJobsPerWorker, reservedBytes);
+            synchronized (this) {
+                connections.add(handle);
+                openWorkers.add(handle);
+            }
+            channel.onClosed(err -> onWorkerConnectionClosed(handle));
+            LOG.info("Worker container connected: {} (engine {}, pid {}, {} job(s) at once, {} MB reserved); it is open, "
+                            + "and the node will bind it to whichever tenant needs it (D-166)",
+                    workerId, hello.engine(), hello.pid(), handle.maxJobs(), reservedBytes / (1024 * 1024));
+            // A tenant may already be waiting for capacity: offer it this worker through the same fairness path a
+            // freed worker takes, so a connection is served to the fairest waiting tenant (D-161).
+            capacityFreed();
+        });
+    }
+
+    /**
+     * A worker connection ended, however it ended. A connection that claimed no tenant is still the manager's, so its
+     * memory is given back here; one a pool took is the pool's to reap, exactly as it reaps a dead process (D-159) —
+     * its in-flight jobs must fail, the worker leaves the pool's books, and it gives the memory back.
+     */
+    private synchronized void onWorkerConnectionClosed(SocketWorkerHandle handle) {
+        handle.connectionEnded();
+        connections.remove(handle);
+        if (openWorkers.remove(handle)) {
+            if (memoryBudget != null) {
+                memoryBudget.release(handle.reservedBytes());
+            }
+            LOG.info("Open worker {} disconnected before taking work; {} MB given back",
+                    handle.workerId(), handle.reservedBytes() / (1024 * 1024));
+            return;
+        }
+        String tenant = handle.boundTenantId();
+        TenantWorkerPool pool = tenant == null ? null : poolFor(tenant, null);
+        if (pool != null) {
+            pool.poison(handle, "worker connection ended");
+        }
+    }
+
+    /** Whether the worker presented the secret the node provisioned (D-168). Constant-time: a secret is not a guess. */
+    private boolean secretAccepted(String presented) {
+        if (workerSecret == null) {
+            return true;
+        }
+        return presented != null && MessageDigest.isEqual(workerSecret.getBytes(StandardCharsets.UTF_8),
+                presented.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The node-wide memory to reserve for a connected worker (D-169): what it <b>declares</b> — its {@code --heap-mb}
+     * times the jobs it runs at once, plus native overhead — falling back to this node's own defaults when it declares
+     * nothing. A connected worker's cgroup belongs to its container, which the node never sets, so this is a declared
+     * size rather than the measured one a spawned worker's cgroup gives (D-163).
+     */
+    private long declaredWorkerBytes(HelloMessage hello) {
+        int jobs = hello.maxJobs() > 0 ? hello.maxJobs() : maxJobsPerWorker;
+        int heap = hello.heapMb() > 0 ? hello.heapMb() : heapMb;
+        return ((long) heap * jobs + 128L) * 1024L * 1024L;
     }
 }

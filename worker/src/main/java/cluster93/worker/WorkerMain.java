@@ -63,9 +63,11 @@ public final class WorkerMain {
         Vertx vertx = Vertx.vertx();
         if ("ipc".equals(args[0])) {
             try {
-                ScriptRuntime runtime = engine.runtime(vertx, heapMb, Math.max(2, intOption(args, "--threads", 2)));
+                int threads = Math.max(2, intOption(args, "--threads", 2));
+                ScriptRuntime runtime = engine.runtime(vertx, heapMb, threads);
                 String socketPath = stringOption(args, "--socket", null);
-                ipc(vertx, runtime, engine.name(), socketPath);
+                String secretFile = stringOption(args, "--secret-file", null);
+                ipc(vertx, runtime, engine.name(), socketPath, heapMb, threads, secretFile);
             } catch (Exception e) {
                 System.err.println("Worker IPC daemon failed: " + e.getMessage());
                 System.exit(1);
@@ -251,11 +253,18 @@ public final class WorkerMain {
         }
     }
 
-    private static void ipc(Vertx vertx, ScriptRuntime runtime, String engineName, String socketPath) throws Exception {
+    private static void ipc(Vertx vertx, ScriptRuntime runtime, String engineName, String socketPath, int heapMb,
+                            int threads, String secretFile) throws Exception {
         WorkerClientConnection conn;
+        String secret = readSecret(secretFile);
         if (socketPath != null && !socketPath.isBlank()) {
             cluster93.runner.protocol.transport.uds.UdsClientTransport uds = new cluster93.runner.protocol.transport.uds.UdsClientTransport(vertx);
-            var socket = uds.connect(socketPath).toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            // Listen first, connect second (D-166): the deployment starts the node and its worker containers together,
+            // so a worker that loses the race waits for the socket — bounded, then it fails and its supervisor's
+            // restart shows the reason (work order §2.3).
+            var socket = uds.connectRetrying(socketPath, CONNECT_ATTEMPTS,
+                            Duration.ofMillis(CONNECT_BACKOFF_INITIAL_MS), Duration.ofMillis(CONNECT_BACKOFF_CAP_MS))
+                    .toCompletionStage().toCompletableFuture().get(connectDeadlineMs(), TimeUnit.MILLISECONDS);
             conn = new WorkerClientConnection(socket, socket);
         } else {
             conn = new WorkerClientConnection(
@@ -263,7 +272,7 @@ public final class WorkerMain {
                     StreamBridge.readStream(vertx, System.in)
             );
         }
-        WorkerDaemon daemon = new WorkerDaemon(conn, runtime, engineName);
+        WorkerDaemon daemon = new WorkerDaemon(conn, runtime, engineName, secret, heapMb, threads);
         daemon.start().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
 
         CountDownLatch latch = new CountDownLatch(1);
@@ -272,6 +281,42 @@ public final class WorkerMain {
         // The node closed the connection (EOF or GOODBYE): exit explicitly so no zombie worker is left behind (D-128).
         System.out.flush();
         System.exit(0);
+    }
+
+    /** How many times {@code ipc --socket} tries the node's socket before giving up, and how it backs off (§2.3). */
+    static final int CONNECT_ATTEMPTS = 30;
+    static final long CONNECT_BACKOFF_INITIAL_MS = 100L;
+    static final long CONNECT_BACKOFF_CAP_MS = 5_000L;
+
+    /** How long the whole bounded retry may take, with slack, so the wait itself cannot hang forever. */
+    private static long connectDeadlineMs() {
+        long total = 1_000L;
+        long backoff = CONNECT_BACKOFF_INITIAL_MS;
+        for (int i = 1; i < CONNECT_ATTEMPTS; i++) {
+            total += Math.min(backoff, CONNECT_BACKOFF_CAP_MS);
+            backoff = Math.min(backoff * 2, CONNECT_BACKOFF_CAP_MS);
+        }
+        return total + 10_000L;
+    }
+
+    /**
+     * The pre-shared secret to present in {@code HELLO} (D-168), read from {@code --secret-file} or
+     * {@code C93_WORKER_SECRET_FILE}. A missing file is a hard failure rather than an empty secret: connecting
+     * without the secret the node expects would be refused anyway, and saying so is clearer than a rejection.
+     */
+    private static String readSecret(String secretFile) {
+        String path = secretFile;
+        if (path == null || path.isBlank()) {
+            path = System.getenv("C93_WORKER_SECRET_FILE");
+        }
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        try {
+            return Files.readString(Path.of(path), StandardCharsets.UTF_8).trim();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Could not read the worker secret from " + path + ": " + e.getMessage(), e);
+        }
     }
 
     /** Unused, but keeps JsonArray's class reachable for scripts' outputs in a native image. */

@@ -333,6 +333,45 @@ public final class Cluster93 {
         });
     }
 
+    /**
+     * The pre-shared secret a connecting worker presents in {@code HELLO} (D-147, D-168), read from the mounted file
+     * both sides see. A node that provisions one must be able to read it, so an unreadable file stops the node; a
+     * file looser than <b>0400</b> is warned about, because that mount is what a local user could read (S5).
+     *
+     * @return the secret, or null when no file is configured — which the pool then warns about
+     */
+    private static String readWorkerSecret(java.nio.file.Path file) {
+        if (file == null) {
+            return null;
+        }
+        try {
+            String secret = java.nio.file.Files.readString(file, java.nio.charset.StandardCharsets.UTF_8).trim();
+            if (secret.isEmpty()) {
+                throw new IllegalStateException("C93_WORKER_SECRET_FILE " + file + " is empty; a worker secret must "
+                        + "hold the value both sides present and check (D-168)");
+            }
+            warnIfSecretIsLoose(file);
+            return secret;
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Could not read C93_WORKER_SECRET_FILE " + file + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** Says so when the secret file is readable by anyone but its owner (S5). Best-effort: not every filesystem says. */
+    private static void warnIfSecretIsLoose(java.nio.file.Path file) {
+        try {
+            java.util.Set<java.nio.file.attribute.PosixFilePermission> perms =
+                    java.nio.file.Files.getPosixFilePermissions(file);
+            if (perms.size() > 1 || !perms.contains(java.nio.file.attribute.PosixFilePermission.OWNER_READ)) {
+                LOG.warn("The worker secret {} is {}: it should be 0400, owned by this node's user, so only the node "
+                        + "and the worker containers can read it (S5).", file,
+                        java.nio.file.attribute.PosixFilePermissions.toString(perms));
+            }
+        } catch (UnsupportedOperationException | java.io.IOException ignored) {
+            // A filesystem without POSIX permissions: nothing to check here.
+        }
+    }
+
     private static Future<RunningNode> wire(ServerConfig config, java.util.function.Function<Vertx, TxtResolver> txt, Vertx vertx,
                                             Stores stores, IgniteCluster cluster, Security security) {
         // A fresh id per process start: a restarted node must not be mistaken for its previous life (D-009).
@@ -370,6 +409,7 @@ public final class Cluster93 {
                 new cluster93.core.host.dns.DnsResolver(vertx, config.egressDnsServers()), config.egressInternalDomains()));
         ScriptRuntime runtime;
         java.util.concurrent.atomic.AtomicReference<cluster93.runner.protocol.pool.TenantWorkerPoolManager> workerPoolRef = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<cluster93.core.scheduler.NodeVerticle> nodeVerticleRef = new java.util.concurrent.atomic.AtomicReference<>();
         if ("process".equalsIgnoreCase(config.workerMode())) {
             // The node's cgroup manager (D-158): detect what this host supports, then prepare its own subtree so
             // tenant CPU and worker memory limits can actually be applied (moving itself into a leaf child, without
@@ -404,11 +444,29 @@ public final class Cluster93 {
                     // still never handed to another tenant.
                     cluster93.runner.protocol.pool.TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT,
                     cgroups,
-                    cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL,
+                    // The real authorizer (D-150): with a worker socket the channel is bound to whoever connected, so
+                    // every call is checked against the run's tenant and the node's own live runs.
+                    new WorkerRpcAuthorizer(jobId -> {
+                        cluster93.core.scheduler.NodeVerticle node = nodeVerticleRef.get();
+                        return node == null ? null : node.runningTenant(jobId);
+                    }),
                     // The node-wide memory ceiling on workers (D-163), next to the worker count above.
                     config.maxWorkerMemoryMb() * 1024L * 1024L
             );
             workerPoolRef.set(poolManager);
+            // The listening end for worker containers (D-166, D-167): the deployment creates them, they connect, and
+            // the pool binds each connection to whichever tenant has work. Nothing here creates a container.
+            if (config.workerSocket() != null) {
+                String workerSecret = readWorkerSecret(config.workerSecretFile());
+                try {
+                    // Bind before the node serves: a worker started alongside it retries until this exists (§2.3).
+                    poolManager.listenForWorkers(config.workerSocket().toString(), workerSecret, config.workerConnectionsMax())
+                            .toCompletionStage().toCompletableFuture().get(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    throw new IllegalStateException("Could not listen for worker containers on " + config.workerSocket()
+                            + ": " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()), e);
+                }
+            }
             // Node-wide worker use (D-156, D-159, D-163): running and permitted worker processes and memory, warmth,
             // and how many tenants are actually using one — the numbers that say whether the caps are binding.
             // Per-tenant gauges register with each tenant's pool (TenantWorkerPoolManager.poolFor).
@@ -484,8 +542,15 @@ public final class Cluster93 {
         boolean apiRole = config.roles().contains("api");
         boolean ingressRole = config.roles().contains("ingress");
         int nodeCapacity = config.roles().contains("worker") ? config.capacity() : 0;
+        // A node that listens for worker containers says so (D-166): the deployment creates the containers, and this
+        // node binds each connection to a tenant. Placement stays the scheduler's — "worker" role and capacity — so
+        // this is advertised for what it is: this node accepts a pool a deployment supplied.
+        java.util.Set<String> capabilities = new java.util.LinkedHashSet<>(config.capabilities());
+        if (config.workerSocket() != null) {
+            capabilities.add("worker:container");
+        }
         LOG.info("Node {} roles: {} (capacity {}, capabilities {})", config.nodeId(), config.roles(), nodeCapacity,
-                config.capabilities().isEmpty() ? "none" : config.capabilities());
+                capabilities.isEmpty() ? "none" : capabilities);
         ApiVerticle api = apiRole ? new ApiVerticle(config, jobs, state, nodes, scheduler, services, domains, txt.apply(vertx), hostRouter,
                 visibleFiles, quota, authenticator, stores.auth(), room, new StorageApi.Wiring(stores.storage(), stores.routed(),
                         secretBox, config.diskRoot(), stores.blobs().name()),
@@ -522,10 +587,15 @@ public final class Cluster93 {
                     security.tls() == null ? java.util.function.UnaryOperator.identity() : client -> ClusterSecurity.internalClient(client, security.tls()),
                     appRouter, visibleFiles, () -> api == null ? -1 : api.port()) : null;
             return vertx.deployVerticle(endpoint)
-                    .compose(id -> vertx.deployVerticle(new NodeVerticle(config.nodeId(), instanceId, nodeCapacity, jobs, state, nodes,
-                            runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port(),
-                            new cluster93.core.packages.PackageLoader(packages, config.packageCacheBytes(),
-                                    cluster93.core.metrics.Metrics.of(vertx)), tenantSecrets)))
+                    .compose(id -> {
+                        cluster93.core.scheduler.NodeVerticle nodeVerticle = new cluster93.core.scheduler.NodeVerticle(config.nodeId(), instanceId, nodeCapacity, jobs, state, nodes,
+                                runtime, config.heartbeat(), config.stopGrace(), hostApis, config.advertiseHost() + ":" + endpoint.port(),
+                                new cluster93.core.packages.PackageLoader(packages, config.packageCacheBytes(),
+                                        cluster93.core.metrics.Metrics.of(vertx)), tenantSecrets);
+                        // The authorizer answers from this node's own running jobs, so it needs the verticle (D-150).
+                        nodeVerticleRef.set(nodeVerticle);
+                        return vertx.deployVerticle(nodeVerticle);
+                    })
                     .compose(id -> vertx.deployVerticle(new OrphanReaper(config.nodeId(), instanceId, jobs, nodes, scheduler, config.heartbeat(),
                             config.orphanGrace(), config.requeueAfter())))
                     .compose(id -> vertx.deployVerticle(new ServiceSupervisor(instanceId, services, jobs, nodes, scheduler,
