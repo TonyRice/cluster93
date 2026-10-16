@@ -48,10 +48,11 @@ PULL=0
 WANT_CASE=""
 NAMED_IMAGE=""
 IMAGE=""
-# The worker command the containers run: whichever engine this checkout actually has in bin/ (a build may hold one).
-WORKER_BIN="worker-javet"
-if [ -x "$ROOT/bin/worker-graaljs" ] && [ ! -x "$ROOT/bin/worker-javet" ]; then
-  WORKER_BIN="worker-graaljs"
+# The worker command the containers run: whichever engine this checkout actually has in bin/ (a build may hold one),
+# overridable to check a specific engine (C93_IDCHECK_WORKER=worker-graaljs).
+WORKER_BIN="${C93_IDCHECK_WORKER:-worker-javet}"
+if [ ! -x "$ROOT/bin/${WORKER_BIN#worker-}" ] && [ ! -x "$ROOT/bin/$WORKER_BIN" ]; then
+  [ -x "$ROOT/bin/worker-graaljs" ] && WORKER_BIN="worker-graaljs"
 fi
 while [ $# -gt 0 ]; do
   case "$1" in

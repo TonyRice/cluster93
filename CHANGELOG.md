@@ -45,7 +45,8 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
     design had left implicit: the identity flag with the image's ids
     (`--userns=keep-id:uid=10001,gid=999`; plain `keep-id` leaves the container as `c93` and it cannot read the
     secret at all) and a **registry-qualified base image** (`docker.io/library/eclipse-temurin:21-jre`), since podman
-    refuses a bare short name where Docker resolves one.
+    refuses a bare short name where Docker resolves one. Verified with **both engines** (`worker-javet` and
+    `worker-graaljs`, `C93_IDCHECK_WORKER=…` picks one), since they unpack their libraries in different places.
   - **The socket is enforced, not merely tightened.** The node sets it to `0600`, reads the mode back, and **fails to
     start** when it is anything else or when another user could write in its directory (a sticky directory like `/tmp`
     is fine), because the socket's mode is what binds a connection to its owner and there is no peer-credential check
