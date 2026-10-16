@@ -3346,3 +3346,41 @@ connect), and the pairing stays in exactly two places, so it cannot drift — th
 
 **Evidence:**
 - `docker-node-pathway-workorder.md` §2.6; `worker-containers-design.md` §6.
+
+### D-170 — A claim served from a shared worker's free slot drains the pool queue
+**Date:** 2026-10-15 · **Status:** Accepted. Refines the queue behaviour D-155 and D-156 introduced.
+
+**Context:**
+A tenant's pool holds few worker processes, each running up to `maxJobsPerWorker` jobs at once (D-155). A claim that
+finds no worker and no room to spawn is queued and served later by `processNextPending`, which the pool ran when
+capacity *freed* (`release`, `poison`) or when a spawn completed. Because a worker now carries several jobs, a claim
+can also be satisfied **without anything being freed** — by taking a free job slot on a worker that is already active
+(step 1 of `acquire`). That step returned its worker and stopped, so serving one claim left any claim queued behind it
+unserved. Whether that bit was a race: a claim that arrived while the tenant's only worker was still starting (not yet
+in `activeWorkers`) queued, and the spawn's completion then pumped the queue exactly **once**. A claim left over waited
+for a *release* — and a worker whose siblings are long-running (a service, which never ends) never releases, so it
+waited forever. `3ccfc99` had closed the same gap for the *first* stranded claim ("a worker that becomes bound serves
+the queue too"); it was incomplete for a second and later claim.
+
+**Decision:**
+When a claim is served by taking a free job slot on an active shared worker, the pool **drains one more queued claim**,
+on its own context. The drain is deferred, not inline: a claim takes its job slot only when its job actually starts
+(the handle counts it then), so draining inline could hand the same free slot out twice.
+
+**Consequences:**
+- The queue advances whenever a claim is served, however it was served — capacity freed *or* a free slot taken — so no
+  claim waits on a release only a long-running sibling could produce.
+- The drain places one claim per turn and stops as soon as a claim cannot be placed, so it cannot spin: a claim with
+  no room is queued again and no further drain is scheduled. Admission stays the caller's (D-155).
+- Deferral makes the pool's view of a worker's free slots correct before the next claim is served, because the runtime
+  admits the job synchronously when its handle arrives.
+
+**Evidence:**
+- **Diagnosed from thread dumps of a stuck run**, not inferred: the worker was idle with two long-running service
+  isolations; the node's pool held the job as a queued `PendingAcquire` (`workers=1/1 active=0 pending=1 -> queued`)
+  and never served it. Reproduced on the pre-D-158 tree, so it predated the cgroup work.
+- `TenantWorkerPoolTest.servingAClaimFromASharedWorkerDrainsTheQueue` — without the drain, only the first of four
+  queued claims is placed; with it, the worker's free slots carry three and the fourth keeps waiting rather than
+  overrunning the worker.
+- `ProcessModeParityTest`: `217/217` on three consecutive full-suite runs (it had been failing roughly half to
+  three-quarters of them), and `./mvnw -o verify -pl cli,runner-protocol,server -am` is green.

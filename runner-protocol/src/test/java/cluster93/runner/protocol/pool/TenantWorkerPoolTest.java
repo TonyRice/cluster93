@@ -19,6 +19,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
@@ -330,6 +332,63 @@ class TenantWorkerPoolTest {
         } finally {
             closeQuietly(vertx, pool);
         }
+    }
+
+    @Test
+    @DisplayName("A claim served from a shared worker's free slot drains the claims queued behind it (D-170)")
+    void servingAClaimFromASharedWorkerDrainsTheQueue() throws Exception {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        // The node's worker allowance is spent elsewhere, so this pool cannot spawn: a claim that cannot take an
+        // existing worker's free job slot has to queue.
+        WorkerBudget node = new WorkerBudget(1);
+        assertThat(node.tryAcquire()).isTrue();
+        TenantWorkerPool pool = new TenantWorkerPool(vertx, null, "javet", 0, 4, 64,
+                TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new WorkerCgroups(),
+                cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL, node, 4);
+        try {
+            // Four claims queue while the tenant's worker is still starting (it is not active yet, so none can take
+            // a free slot). As the runtime does, a claim takes its job slot as soon as its worker arrives (D-155).
+            List<Future<WorkerProcessHandle>> claims = new ArrayList<>();
+            for (int i = 0; i < 4; i++) {
+                Future<WorkerProcessHandle> claim = pool.acquire("acme");
+                claim.onComplete(ar -> {
+                    if (ar.succeeded()) {
+                        ar.result().admitJob();
+                    }
+                });
+                claims.add(claim);
+            }
+            assertThat(pool.pendingCount()).isEqualTo(4);
+
+            // The spawn that had been in flight completes: the worker binds and starts one long-running sibling that
+            // will never release, and the pool pumps the queue once.
+            WorkerProcessHandle worker = boundHandle(new FakeProcess(9201L), 9201L, "acme", 4);
+            pool.jobStarted(worker, "acme");
+            worker.admitJob();
+            pool.pump();
+
+            // The claim that took the first free slot must not be the last one served: its three free slots carry the
+            // three claims that fit, and the fourth keeps waiting rather than overrunning the worker.
+            awaitUntil("the worker's free slots to be filled", () -> worker.runningJobs() == 4);
+            assertThat(worker.runningJobs()).isEqualTo(4);
+            assertThat(claims.stream().filter(Future::succeeded).count())
+                    .as("three of the four queued claims fit on the worker's free slots").isEqualTo(3);
+            assertThat(pool.pendingCount())
+                    .as("the claim that does not fit still waits for capacity").isEqualTo(1);
+        } finally {
+            closeQuietly(vertx, pool);
+        }
+    }
+
+    private static void awaitUntil(String what, java.util.function.BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (condition.getAsBoolean()) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        fail("Timed out waiting for " + what);
     }
 
     @Test

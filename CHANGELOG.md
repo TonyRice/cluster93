@@ -6,6 +6,22 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A queued job is served whenever a shared worker has a free slot** (D-170):
+  - A tenant's claim queues when it finds no worker and no room to spawn. It can then be served without anything
+    being freed — by taking a free job slot on a worker that is already active (workers run several jobs each, D-155)
+    — and that path returned its worker and **stopped**, leaving any claim queued behind it unserved. The queue was
+    only otherwise pumped by a *release*, so when a worker's siblings were long-running (a service, which never ends)
+    nothing ever released and the rest of the queue waited **forever**.
+  - `3ccfc99` had fixed the same gap for the first stranded claim; it was incomplete for a second and later one.
+    Serving a claim from a shared worker's free slot now drains one more queued claim, deferred to the pool's context
+    so the claim just served takes its slot first (a job is counted only when it starts).
+  - Diagnosed from thread dumps of a stuck run rather than inferred: the worker idle with two service isolations, the
+    node's pool holding the job as a queued `PendingAcquire`. This is what had been failing
+    `ProcessModeParityTest.resumesMemoizedSteps` (a resumed attempt that reached no worker, its run timeout never
+    firing) — **not a flake**, and not caused by the cgroup work, as the pre-D-158 tree failed it identically.
+    Regression test `TenantWorkerPoolTest.servingAClaimFromASharedWorkerDrainsTheQueue`; server suite `217/217` on
+    three consecutive runs.
+
 - **CPU limits per tenant, and honest cgroup detection** (D-158, D-163):
   - The cgroup base was the absolute `/sys/fs/cgroup/cluster93`, which only **root** can create — so a node running
     as an ordinary user (or the `cluster93` account) silently applied **no** cgroup limit at all. `CgroupSupport`

@@ -287,6 +287,9 @@ public class TenantWorkerPool {
         for (WorkerProcessHandle active : activeWorkers.values()) {
             if (tenantId.equals(active.boundTenantId()) && active.isAlive() && active.hasCapacity()) {
                 workerBecameActive(active.pid(), tenantId);
+                // This claim took a free job slot on a shared worker, so the pool may still have room for a claim
+                // already queued behind it. Keep the queue moving (D-170).
+                drainQueueLater();
                 return Future.succeededFuture(active);
             }
         }
@@ -469,6 +472,27 @@ public class TenantWorkerPool {
                 next.promise().complete(ar.result());
             } else {
                 next.promise().fail(ar.cause());
+            }
+        });
+    }
+
+    /**
+     * Serves one more waiting claim, on this pool's context, when any are queued. A claim can be satisfied by taking a
+     * free job slot on a shared worker ({@link #acquire}, step 1) without freeing anything, so serving it may leave room
+     * for a claim queued behind it. Without this drain, the claim just served was the last one until something
+     * <em>released</em> capacity — and a worker whose siblings are long-running (a service, say) never releases any, so
+     * the rest of the queue waited for good (D-170). Deferred rather than immediate: the claim just served takes its
+     * slot only when its job starts, which the handle counts then, so draining inline could hand the same slot out twice.
+     */
+    private void drainQueueLater() {
+        synchronized (this) {
+            if (pendingByTenant.isEmpty() || closed.get()) {
+                return;
+            }
+        }
+        vertx.runOnContext(v -> {
+            synchronized (TenantWorkerPool.this) {
+                processNextPending();
             }
         });
     }
