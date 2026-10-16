@@ -3426,8 +3426,24 @@ Docker, 2026-10-15) — neither is visible to a unit test.
    `$HOME/.cache` and then `dlopen`s it, so a read-only root (S4) makes it die at startup and a `noexec` home cannot
    load it.
 
+8. **`SO_PEERCRED` (S3's layer 2) is NOT implemented, and the tree says so rather than implying otherwise.**
+   The node's UDS listener is the **JDK NIO** implementation (`io.vertx.core.impl.transports.UnixDomainSocketNioTransport`):
+   no native transport is on the classpath (the platform `netty-transport-native-epoll` artifact is absent; only the
+   shared `netty-transport-native-unix-common` is), and Netty exposes **no accessor** for a peer's credentials — its
+   `io.netty.channel.unix.PeerCredentials` type exists, but nothing in 4.2.18 constructs or returns one through a
+   public API (`Socket`, `DomainSocketChannel` and `FileDescriptor` offer no such method, and `FileDescriptor.fd` is
+   package-private). `java.nio` has no `SO_PEERCRED` support at all, and Vert.x's `NetSocket` exposes only addresses
+   (plus `peerCertificates()` for TLS). Getting it would mean either reaching into `sun.nio.ch` by reflection for the
+   fd and calling `getsockopt` through FFM, or adding the native epoll transport and depending on an API Netty does
+   not promise — both are deliberate additions with fragile edges, not build details, so neither was taken here.
+   **The binding therefore rests on the other three layers:** the `0700` directory and `0600` socket (which the
+   kernel enforces *before* a connection exists, so a peer that is not the node's user is refused outright rather
+   than rejected after the fact), the pre-shared secret (which only a reader of a `0400` file can present), and the
+   authorizer (which scopes every call to a run's tenant). **The shared-group fallback is consequently not offered
+   anywhere** — a `0750`/`0660` socket would be the one configuration where the filesystem stops telling peers apart
+   and `SO_PEERCRED` would carry the layer, so if an operator ever wants that fallback, layer 2 has to land first.
+
 **Consequences:**
-- A worker container that cannot reach the node says so itself, once, instead of retrying forever or dying silently.
 - The connection cap is a bound on what the node *accepts*; the pool's size is still the deployment's, and the node
   still cannot shed an idle worker (§2.7).
 - The teardown exemption is a small, named hole in the liveness check, chosen over weakening it for every call: the
