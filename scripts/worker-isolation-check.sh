@@ -91,6 +91,9 @@ cleanup() {
       "$1" image rm -f "$2" >/dev/null 2>&1 || true
     done
   fi
+  if [ -n "$ECHO_PID" ] && kill -0 "$ECHO_PID" 2>/dev/null; then
+    kill "$ECHO_PID" 2>/dev/null || true
+  fi
   if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
     kill "$NODE_PID" 2>/dev/null || true
     for _ in $(seq 1 20); do kill -0 "$NODE_PID" 2>/dev/null || break; sleep 0.25; done
@@ -122,7 +125,9 @@ have_podman() { command -v podman >/dev/null 2>&1; }
 rootless_podman() { podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -qi true; }
 
 describe_cases() {
-  say "Cases (each asserts: worker HELLO arrives | a job round-trips | the wrong secret is refused | no network):"
+  say "Cases (each asserts: HELLO | a job round-trips | a job fetches the host through the node | the gate refuses"
+  say "                      the cluster's own ports | a service answers through the ingress | the wrong secret is"
+  say "                      refused | no network in the container):"
   say "  C1  rootless podman, --userns=keep-id        $(rootless_podman && echo AVAILABLE || echo 'SKIP (needs podman rootless: podman info)')"
   say "  C2  rootless docker, container uid 0         $( { have_docker && rootless_docker; } && echo AVAILABLE || echo 'SKIP (needs dockerd-rootless-setuptool.sh install)')"
   say "  C3  rootful docker, --user <uid>:<gid>       $( { have_docker && ! rootless_docker; } && echo AVAILABLE || echo 'SKIP (pose: rootful docker is not in use)')"
@@ -158,6 +163,8 @@ start_node() {
     C93_HTTP_BIND=127.0.0.1 \
     C93_ADVERTISE_HOST=127.0.0.1 \
     C93_RATE_LIMIT_PER_MINUTE=0 \
+    C93_INGRESS_DOMAIN=idcheck.test \
+    C93_EGRESS_ALLOW_PRIVATE=true \
     C93_ADMIN_TOKEN="$ADMIN_TOKEN" \
     C93_WORKER_SOCKET="$TMP/sockets/node.sock" \
     C93_WORKER_SECRET_FILE="$TMP/secrets/secret" \
@@ -175,6 +182,26 @@ mint_job_token() {  # mint_job_token <tenant>
   curl -s -m 10 -X POST "http://127.0.0.1:$HTTP_PORT/v1/tenants/$1/tokens" -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H 'Content-Type: application/json' -d '{"name":"idcheck","scopes":["*"]}' \
     | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+# A tiny HTTP server on the host, outside every container: the one thing a container worker cannot reach by itself,
+# and therefore what proves the node is doing the fetching (python3 for a one-file server; without it that assertion
+# is reported n/a rather than skipped silently).
+ECHO_PORT=""
+ECHO_PID=""
+start_echo_server() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  install -d "$TMP/echo"
+  printf 'pong-from-the-node' > "$TMP/echo/ping.txt"
+  ECHO_PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()' 2>/dev/null)
+  [ -n "$ECHO_PORT" ] || return 0
+  python3 -m http.server "$ECHO_PORT" --bind 127.0.0.1 --directory "$TMP/echo" >/dev/null 2>&1 &
+  ECHO_PID=$!
+  for _ in $(seq 1 40); do
+    curl -sf -m 2 "http://127.0.0.1:$ECHO_PORT/ping.txt" >/dev/null 2>&1 && return 0
+    sleep 0.25
+  done
+  ECHO_PORT=""
 }
 
 metric() { curl -sf -m 2 "http://127.0.0.1:$METRICS_PORT/metrics" 2>/dev/null | awk -v k="$1" '$1 ~ "^"k"\\{" { print $NF }' | head -1; }
@@ -262,12 +289,26 @@ run_worker() {  # run_worker <name> <identity args...>
       --heap-mb 64 --threads 4 >/dev/null
 }
 
-submit_job() {
+submit_job() {  # submit_job [script]: the job's id
+  local script="export default () => ({ ran: true })"
+  [ $# -ge 1 ] && script="$1"
+  local body
+  body=$(jq_json 'script' "$script")
   curl -sf -m 5 -X POST "http://127.0.0.1:$HTTP_PORT/v1/jobs" \
     -H "Authorization: Bearer $JOB_TOKEN" -H "X-Cluster93-Tenant: $TENANT" \
     -H 'Content-Type: application/json' \
-    -d '{"script":"export default () => ({ ran: true })","timeoutMs":15000}' \
+    -d "$body" \
     | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+# A one-field JSON body from a shell string, with the characters that matter escaped (no jq dependency).
+jq_json() {  # jq_json <field> <value>
+  printf '{"%s":"%s","timeoutMs":15000}' "$1" "$(printf '%s' "$2" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')"
+}
+
+job_json() {  # job_json <id>: the job's record
+  curl -s -m 5 "http://127.0.0.1:$HTTP_PORT/v1/jobs/$1" \
+    -H "Authorization: Bearer $JOB_TOKEN" -H "X-Cluster93-Tenant: $TENANT"
 }
 
 await_job() {  # await_job <job id>: SUCCEEDED or the status
@@ -284,7 +325,7 @@ await_job() {  # await_job <job id>: SUCCEEDED or the status
 
 check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity args...>
   local case_id="$1" engine="$2" rootless="$3" flag="$4"; shift 4
-  local hello=no job=no secret=no network=no result=FAIL
+  local hello=no job=no fetch=n/a gate=no inbound=no secret=no network=no result=FAIL
   # This case runs on its own engine: podman keeps a separate image store from docker, so both the image and every
   # command below have to come from the same one.
   ENGINE="$engine"
@@ -308,6 +349,55 @@ check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity 
       job=yes
     fi
   fi
+  # The gate is in the path even from a container: the node refuses its own cluster ports outright ("scripts can
+  # never reach the cluster"), and the container has no network of its own to bypass it with.
+  local gate=no
+  if [ "$job" = yes ]; then
+    local gate_id
+    gate_id=$(submit_job "export default async () => { try { await fetch('http://127.0.0.1:$INTERNAL_PORT/health'); return { reached: true }; } catch (e) { return { reached: false, why: e.cause ? [e.cause.code, e.cause.message].join(' ') : String(e.message) }; } }")
+    if [ -n "$gate_id" ] && [ "$(await_job "$gate_id")" = "SUCCEEDED" ]; then
+      local gate_json; gate_json=$(job_json "$gate_id")
+      case "$gate_json" in
+        *'"reached":false'*cluster*) gate=yes ;;
+      esac
+    fi
+  fi
+
+  # Inbound, from a container: a service served through the node's ingress, with its requests proxied **over the
+  # socket** — and the node spawned nothing, so the container's worker answered them.
+  # Egress, from a container: the worker has no network at all, so a job that fetches the host's endpoint proves the
+  # *node* fetched it and streamed the body back over the socket (n/a without python3, which serves that endpoint).
+  local fetch=n/a
+  if [ -n "$ECHO_PORT" ] && [ "$job" = yes ]; then
+    fetch=no
+    local fetch_id
+    fetch_id=$(submit_job "export default async () => { const r = await fetch('http://127.0.0.1:$ECHO_PORT/ping.txt'); return { body: await r.text() }; }")
+    if [ -n "$fetch_id" ] && [ "$(await_job "$fetch_id")" = "SUCCEEDED" ]; then
+      case "$(job_json "$fetch_id")" in *pong-from-the-node*) fetch=yes ;; esac
+    fi
+  fi
+
+  local inbound=no
+  if [ "$hello" = yes ]; then
+    if curl -sf -m 5 -X PUT "http://127.0.0.1:$HTTP_PORT/v1/services/web" \
+        -H "Authorization: Bearer $JOB_TOKEN" -H "X-Cluster93-Tenant: $TENANT" \
+        -H 'Content-Type: application/json' \
+        -d "$(jq_json 'script' "export default async (input, ctx) => {
+              await ctx.serve((req) => req.path === '/ping' ? 'pong-from-the-container' : { status: 404 });
+              return ctx.stopRequested;
+            }")" >/dev/null; then
+      for _ in $(seq 1 60); do
+        curl -sf -m 5 "http://127.0.0.1:$HTTP_PORT/v1/services/web" -H "Authorization: Bearer $JOB_TOKEN" \
+          -H "X-Cluster93-Tenant: $TENANT" | grep -q '"status":"RUNNING"' && break
+        sleep 0.5
+      done
+      sleep 3   # the handler is registered after the run reports RUNNING
+      local served
+      served=$(curl -s -m 5 -H "Host: web--$TENANT.idcheck.test" "http://127.0.0.1:$INGRESS_PORT/ping")
+      [ "$served" = "pong-from-the-container" ] && [ "$(metric c93_workers_running)" = "0.0" ] && inbound=yes
+    fi
+  fi
+
   # The wrong secret must be refused: the connection count must not grow past the one good worker.
   local bad_scratch="$SCRATCH/$RUN_ID-bad"
   install -d -m 0777 "$bad_scratch/tmp" "$bad_scratch/home"
@@ -335,7 +425,8 @@ check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity 
   else
     network=yes
   fi
-  if [ "$hello" != yes ] || [ "$job" != yes ] || [ "$secret" != yes ] || [ "$network" != yes ]; then
+  if [ "$hello" != yes ] || [ "$job" != yes ] || [ "$fetch" = no ] || [ "$gate" != yes ] \
+      || [ "$inbound" != yes ] || [ "$secret" != yes ] || [ "$network" != yes ]; then
     say "  the engine's scratch space ($SCRATCH/$RUN_ID-ok):"
     find "$SCRATCH/$RUN_ID-ok" -name '*.so' 2>/dev/null | sed 's/^/    /' | head -3
     du -sh "$SCRATCH/$RUN_ID-ok" 2>/dev/null | sed 's/^/    size: /'
@@ -360,9 +451,15 @@ check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity 
       say ""
     fi
   fi
-  [ "$hello" = yes ] && [ "$job" = yes ] && [ "$secret" = yes ] && [ "$network" = yes ] && result=PASS
-  printf '%s | %s | %s | %-22s | %-5s | %-3s | %-6s | %-7s | %s\n' \
-    "$case_id" "$engine" "$rootless" "$flag" "$hello" "$job" "$secret" "$network" "$result"
+  [ "$hello" = yes ] && [ "$job" = yes ] && [ "$fetch" != no ] && [ "$gate" = yes ] && [ "$inbound" = yes ] \
+    && [ "$secret" = yes ] && [ "$network" = yes ] && result=PASS
+  printf '%s | %s | %s | %-22s | %-5s | %-3s | %-5s | %-5s | %-7s | %-6s | %-7s | %s\n' \
+    "$case_id" "$engine" "$rootless" "$flag" "$hello" "$job" "$fetch" "$gate" "$inbound" "$secret" "$network" "$result"
+  # Stop this case's service before its worker goes: otherwise the supervisor restarts it onto a *spawned* worker
+  # and the next case's "the node spawned nothing" assertions are measuring that instead.
+  curl -s -m 5 -X DELETE "http://127.0.0.1:$HTTP_PORT/v1/services/web" -H "Authorization: Bearer $JOB_TOKEN" \
+    -H "X-Cluster93-Tenant: $TENANT" >/dev/null 2>&1 || true
+  sleep 1
   "$ENGINE" rm -f "$RUN_ID-ok" "$RUN_ID-bad" >/dev/null 2>&1 || true
   [ "$result" = PASS ]
 }
@@ -438,6 +535,7 @@ if [ -z "$IMAGE" ] && ! workers_are_current; then
   say ""
 fi
 start_node
+start_echo_server
 JOB_TOKEN="$(mint_job_token "$TENANT")"
 if [ -z "$JOB_TOKEN" ]; then
   say "Could not mint a tenant token through the API (see $TMP/node.log); there is nothing to submit a job with."
@@ -445,8 +543,8 @@ if [ -z "$JOB_TOKEN" ]; then
 fi
 
 
-printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-3s | %-6s | %-7s | %s\n' \
-  case engine rootless identity hello job secret network result
+printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-3s | %-5s | %-5s | %-7s | %-6s | %-7s | %s\n' \
+  case engine rootless identity hello job fetch gate inbound secret network result
 FAILED=0
 SKIPPED=0
 run_case_if() {  # run_case_if <available> <case id> <engine> <rootless> <flag> [args...]
