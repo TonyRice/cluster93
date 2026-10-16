@@ -141,15 +141,15 @@ class TenantWorkerPoolTest {
     }
 
     @Test
-    @DisplayName("WorkerProcessHandle transitions UNBOUND -> BOUND and enforces its invariants")
-    void testWorkerProcessHandleStateTransitions() {
+    @DisplayName("WorkerHandle transitions UNBOUND -> BOUND and enforces its invariants")
+    void testWorkerHandleStateTransitions() {
         FakeProcess fakeProcess = new FakeProcess(9999L);
         FakeStream fakeStream = new FakeStream();
 
         NodeWorkerChannel channel = new NodeWorkerChannel("worker-9999", fakeStream, fakeStream);
-        WorkerProcessHandle handle = new WorkerProcessHandle(fakeProcess, channel);
+        WorkerHandle handle = new ProcessWorkerHandle(fakeProcess, channel);
 
-        assertEquals(WorkerProcessHandle.State.UNBOUND, handle.state());
+        assertEquals(WorkerHandle.State.UNBOUND, handle.state());
         assertEquals(9999L, handle.pid());
         assertEquals("worker-9999", handle.workerId());
         assertTrue(handle.isAlive());
@@ -158,7 +158,7 @@ class TenantWorkerPoolTest {
 
         // Bind to tenant "acme"
         handle.bind("acme", new JsonObject(), new JsonObject());
-        assertEquals(WorkerProcessHandle.State.BOUND, handle.state());
+        assertEquals(WorkerHandle.State.BOUND, handle.state());
         assertEquals("acme", handle.boundTenantId());
         assertTrue(handle.hasCapacity());
 
@@ -168,7 +168,7 @@ class TenantWorkerPoolTest {
 
         // Terminate
         handle.terminate();
-        assertEquals(WorkerProcessHandle.State.TERMINATED, handle.state());
+        assertEquals(WorkerHandle.State.TERMINATED, handle.state());
         assertFalse(handle.isAlive());
     }
 
@@ -179,7 +179,7 @@ class TenantWorkerPoolTest {
         FakeStream fakeStream = new FakeStream();
         NodeWorkerChannel channel = new NodeWorkerChannel("worker-4242", fakeStream, fakeStream);
         // Four jobs at once, as a worker per tenant would run (D-155).
-        WorkerProcessHandle handle = new WorkerProcessHandle(fakeProcess, channel, 4);
+        WorkerHandle handle = new ProcessWorkerHandle(fakeProcess, channel, 4);
         handle.bind("acme", new JsonObject(), new JsonObject());
 
         assertEquals(4, handle.maxJobs());
@@ -255,7 +255,7 @@ class TenantWorkerPoolTest {
         TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
         try {
             FakeProcess process = new FakeProcess(7001L);
-            WorkerProcessHandle handle = boundHandle(process, 7001L, "acme", 4);
+            WorkerHandle handle = boundHandle(process, 7001L, "acme", 4);
 
             // Two jobs run on the one worker.
             pool.jobStarted(handle, "acme");
@@ -284,7 +284,7 @@ class TenantWorkerPoolTest {
         TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
         try {
             FakeProcess process = new FakeProcess(7002L);
-            WorkerProcessHandle handle = boundHandle(process, 7002L, "acme", 4);
+            WorkerHandle handle = boundHandle(process, 7002L, "acme", 4);
             pool.jobStarted(handle, "acme");
             pool.jobStarted(handle, "acme");
 
@@ -304,7 +304,7 @@ class TenantWorkerPoolTest {
         TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
         try {
             FakeProcess process = new FakeProcess(7003L);
-            WorkerProcessHandle handle = boundHandle(process, 7003L, "acme", 4);
+            WorkerHandle handle = boundHandle(process, 7003L, "acme", 4);
             pool.jobStarted(handle, "acme");
 
             process.destroy(); // the process died on its own while the job ran
@@ -323,7 +323,7 @@ class TenantWorkerPoolTest {
         TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
         try {
             FakeProcess process = new FakeProcess(7004L);
-            WorkerProcessHandle handle = boundHandle(process, 7004L, "acme", 4);
+            WorkerHandle handle = boundHandle(process, 7004L, "acme", 4);
             pool.jobStarted(handle, "acme");
 
             pool.release(handle); // the real completion
@@ -348,9 +348,9 @@ class TenantWorkerPoolTest {
         try {
             // Four claims queue while the tenant's worker is still starting (it is not active yet, so none can take
             // a free slot). As the runtime does, a claim takes its job slot as soon as its worker arrives (D-155).
-            List<Future<WorkerProcessHandle>> claims = new ArrayList<>();
+            List<Future<WorkerHandle>> claims = new ArrayList<>();
             for (int i = 0; i < 4; i++) {
-                Future<WorkerProcessHandle> claim = pool.acquire("acme");
+                Future<WorkerHandle> claim = pool.acquire("acme");
                 claim.onComplete(ar -> {
                     if (ar.succeeded()) {
                         ar.result().admitJob();
@@ -362,7 +362,7 @@ class TenantWorkerPoolTest {
 
             // The spawn that had been in flight completes: the worker binds and starts one long-running sibling that
             // will never release, and the pool pumps the queue once.
-            WorkerProcessHandle worker = boundHandle(new FakeProcess(9201L), 9201L, "acme", 4);
+            WorkerHandle worker = boundHandle(new FakeProcess(9201L), 9201L, "acme", 4);
             pool.jobStarted(worker, "acme");
             worker.admitJob();
             pool.pump();
@@ -398,7 +398,7 @@ class TenantWorkerPoolTest {
         TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT);
         try {
             FakeProcess process = new FakeProcess(7005L);
-            WorkerProcessHandle handle = boundHandle(process, 7005L, "acme", 4);
+            WorkerHandle handle = boundHandle(process, 7005L, "acme", 4);
             pool.jobStarted(handle, "acme");
 
             pool.release(handle);
@@ -416,7 +416,7 @@ class TenantWorkerPoolTest {
         TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT);
         try {
             FakeProcess process = new FakeProcess(7103L);
-            WorkerProcessHandle handle = boundHandle(process, 7103L, "acme", 4);
+            WorkerHandle handle = boundHandle(process, 7103L, "acme", 4);
             pool.jobStarted(handle, "acme");
             pool.jobStarted(handle, "acme");
 
@@ -465,7 +465,7 @@ class TenantWorkerPoolTest {
         TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
         try {
             FakeProcess process = new FakeProcess(7101L, 137);
-            WorkerProcessHandle handle = boundHandle(process, 7101L, "acme", 1);
+            WorkerHandle handle = boundHandle(process, 7101L, "acme", 1);
             pool.jobStarted(handle, "acme");
 
             process.destroy(); // it died on its own, exit 137 (OOM or a forced kill)
@@ -486,7 +486,7 @@ class TenantWorkerPoolTest {
         TenantWorkerPool pool = newPool(vertx, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB);
         try {
             FakeProcess process = new FakeProcess(7102L);
-            WorkerProcessHandle handle = boundHandle(process, 7102L, "acme", 1);
+            WorkerHandle handle = boundHandle(process, 7102L, "acme", 1);
             pool.jobStarted(handle, "acme");
 
             pool.close(); // the pool stops a healthy worker itself; only a self-death is a crash
@@ -503,9 +503,9 @@ class TenantWorkerPoolTest {
                 cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL);
     }
 
-    private static WorkerProcessHandle boundHandle(FakeProcess process, long pid, String tenant, int maxJobs) {
+    private static WorkerHandle boundHandle(FakeProcess process, long pid, String tenant, int maxJobs) {
         NodeWorkerChannel channel = new NodeWorkerChannel("worker-" + pid, new FakeStream(), new FakeStream());
-        WorkerProcessHandle handle = new WorkerProcessHandle(process, channel, maxJobs);
+        WorkerHandle handle = new ProcessWorkerHandle(process, channel, maxJobs);
         handle.bind(tenant, new JsonObject(), new JsonObject());
         return handle;
     }

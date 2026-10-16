@@ -57,12 +57,23 @@ public final class WorkerExit {
      * @param cause   the failure the run reported, or null
      * @return a tenant-facing failure reason
      */
-    public static String runFailure(Process process, Throwable cause) {
-        String exit = describe(process);
-        if (exit != null) {
-            return "Worker " + exit;
+    public static String runFailure(String deathCause, Throwable cause) {
+        if (deathCause != null) {
+            return "Worker " + deathCause;
         }
         String detail = (cause == null || cause.getMessage() == null) ? "worker error" : cause.getMessage();
         return "Worker error: " + detail;
+    }
+
+    /**
+     * The reason to show a tenant for a run that produced no result (D-159), for a worker whose own words are
+     * already known — a spawned worker's exit status, or a connected worker's "the connection ended" (D-166).
+     *
+     * @param process the worker's process, or null
+     * @param cause   the failure the run reported, or null
+     * @return a tenant-facing failure reason
+     */
+    public static String runFailure(Process process, Throwable cause) {
+        return runFailure(describe(process), cause);
     }
 }

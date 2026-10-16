@@ -11,7 +11,7 @@ import cluster93.core.runtime.api.HostApis;
 import cluster93.runner.protocol.pool.TenantWorkerPool;
 import cluster93.runner.protocol.pool.TenantWorkerPoolManager;
 import cluster93.runner.protocol.pool.WorkerExit;
-import cluster93.runner.protocol.pool.WorkerProcessHandle;
+import cluster93.runner.protocol.pool.WorkerHandle;
 import cluster93.runner.protocol.server.NodeWorkerChannel;
 import cluster93.runner.protocol.transport.StreamBridge;
 import io.vertx.core.Context;
@@ -84,15 +84,17 @@ public class WorkerProcessRuntime implements ScriptRuntime {
         long start = System.nanoTime();
 
         if (poolManager != null) {
-            AtomicReference<WorkerProcessHandle> handleRef = new AtomicReference<>();
+            AtomicReference<WorkerHandle> handleRef = new AtomicReference<>();
             poolManager.acquire(execution.tenant(), null).onComplete(ar -> {
                 if (ar.failed()) {
                     promise.complete(ExecutionResult.failed("Worker pool failure: " + ar.cause().getMessage()));
                     return;
                 }
-                WorkerProcessHandle handle = ar.result();
+                WorkerHandle handle = ar.result();
                 handleRef.set(handle);
-                pumpStderr(handle.process().getErrorStream(), logs);
+                if (handle.spawned()) {
+                    pumpStderr(handle.process().getErrorStream(), logs);
+                }
                 cluster93.core.metrics.Metrics.of(vertx).isolateStarted(Duration.ofNanos(System.nanoTime() - start));
 
                 handle.run(channelId, execution, host, logs, state)
@@ -107,7 +109,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
                                 poolManager.release(execution.tenant(), null, handle);
                                 completeRun(handle, runRes.result(), promise);
                             } else {
-                                String death = WorkerExit.runFailure(handle.process(), runRes.cause());
+                                String death = WorkerExit.runFailure(handle.deathCause(), runRes.cause());
                                 poolManager.poison(execution.tenant(), null, handle, "run failed: " + death);
                                 completeRun(handle, ExecutionResult.failed(death), promise);
                             }
@@ -122,7 +124,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
 
                 @Override
                 public void stop(String reason, Duration grace) {
-                    WorkerProcessHandle handle = handleRef.get();
+                    WorkerHandle handle = handleRef.get();
                     if (handle != null) {
                         handle.stop(channelId, reason, grace.toMillis());
                     }
@@ -130,7 +132,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
 
                 @Override
                 public void cancel(String reason) {
-                    WorkerProcessHandle handle = handleRef.get();
+                    WorkerHandle handle = handleRef.get();
                     if (handle != null) {
                         // Ask the worker to stop the run; its slot is freed when the run actually completes, so a
                         // sibling job cannot reuse the worker before this run's context is gone. Releasing here as
@@ -143,15 +145,17 @@ public class WorkerProcessRuntime implements ScriptRuntime {
         }
 
         if (pool != null) {
-            AtomicReference<WorkerProcessHandle> handleRef = new AtomicReference<>();
+            AtomicReference<WorkerHandle> handleRef = new AtomicReference<>();
             pool.acquire(execution.tenant()).onComplete(ar -> {
                 if (ar.failed()) {
                     promise.complete(ExecutionResult.failed("Worker pool failure: " + ar.cause().getMessage()));
                     return;
                 }
-                WorkerProcessHandle handle = ar.result();
+                WorkerHandle handle = ar.result();
                 handleRef.set(handle);
-                pumpStderr(handle.process().getErrorStream(), logs);
+                if (handle.spawned()) {
+                    pumpStderr(handle.process().getErrorStream(), logs);
+                }
                 cluster93.core.metrics.Metrics.of(vertx).isolateStarted(Duration.ofNanos(System.nanoTime() - start));
 
                 handle.run(channelId, execution, host, logs, state)
@@ -163,7 +167,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
                                 pool.release(handle);
                                 completeRun(handle, runRes.result(), promise);
                             } else {
-                                String death = WorkerExit.runFailure(handle.process(), runRes.cause());
+                                String death = WorkerExit.runFailure(handle.deathCause(), runRes.cause());
                                 pool.poison(handle, "run failed: " + death);
                                 completeRun(handle, ExecutionResult.failed(death), promise);
                             }
@@ -178,7 +182,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
 
                 @Override
                 public void stop(String reason, Duration grace) {
-                    WorkerProcessHandle handle = handleRef.get();
+                    WorkerHandle handle = handleRef.get();
                     if (handle != null) {
                         handle.stop(channelId, reason, grace.toMillis());
                     }
@@ -186,7 +190,7 @@ public class WorkerProcessRuntime implements ScriptRuntime {
 
                 @Override
                 public void cancel(String reason) {
-                    WorkerProcessHandle handle = handleRef.get();
+                    WorkerHandle handle = handleRef.get();
                     if (handle != null) {
                         // The slot is freed when the run completes; see the poolManager branch.
                         handle.cancel(channelId, reason);
@@ -324,12 +328,21 @@ public class WorkerProcessRuntime implements ScriptRuntime {
      * Completes a run. A failure on a worker whose channel has died is attributed to the worker's exit cause (D-159);
      * anything else — a success, or a script that failed on a live worker — completes at once with its own outcome.
      */
-    private void completeRun(WorkerProcessHandle handle, ExecutionResult result, Promise<ExecutionResult> promise) {
-        if (result.status() == JobStatus.FAILED && handle.channel().isBroken()) {
-            awaitWorkerExitAndComplete(handle.process(), result, promise);
-        } else {
+    private void completeRun(WorkerHandle handle, ExecutionResult result, Promise<ExecutionResult> promise) {
+        if (result.status() != JobStatus.FAILED || !handle.channel().isBroken()) {
             promise.complete(result);
+            return;
         }
+        if (handle.spawned()) {
+            // The exit status says how it died (D-159), and it is read from the process reaper rather than the
+            // instant the pipe ends: the EOF and the exit are observed on different threads.
+            awaitWorkerExitAndComplete(handle.process(), result, promise);
+            return;
+        }
+        // A connected worker has no exit status for the node to read — its container's is the deployment's (D-166) —
+        // so its death is named with the tenant and job, and no cause is invented for it (§2.5).
+        String death = handle.deathCause();
+        promise.complete(death == null ? result : ExecutionResult.failed("Worker " + death));
     }
 
     /**

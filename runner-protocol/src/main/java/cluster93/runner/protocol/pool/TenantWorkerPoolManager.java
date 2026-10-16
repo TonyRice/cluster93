@@ -115,7 +115,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
      * in {@code acceptsAttempt}, so a node never runs more jobs at once than it advertises (D-154, D-156). This
      * method only supplies a worker for a job the scheduler has already admitted.
      */
-    public Future<WorkerProcessHandle> acquire(String tenantId, String mode) {
+    public Future<WorkerHandle> acquire(String tenantId, String mode) {
         String effectiveMode = (mode != null && !mode.isBlank()) ? mode.toLowerCase(Locale.ROOT) : defaultMode;
         // If mode matches default, use the tenant pool
         if (effectiveMode.equalsIgnoreCase(defaultMode)) {
@@ -154,7 +154,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
      * Releases an acquired worker after one of its jobs finishes. This is a run-level event: the pool decides from
      * the worker's own health whether the process is retired.
      */
-    public void release(String tenantId, String mode, WorkerProcessHandle worker) {
+    public void release(String tenantId, String mode, WorkerHandle worker) {
         TenantWorkerPool pool = poolFor(tenantId, mode);
         if (pool != null) {
             pool.release(worker);
@@ -164,7 +164,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     }
 
     /** Retires a worker that is itself unhealthy, in the pool that owns it. */
-    public void poison(String tenantId, String mode, WorkerProcessHandle worker, String reason) {
+    public void poison(String tenantId, String mode, WorkerHandle worker, String reason) {
         TenantWorkerPool pool = poolFor(tenantId, mode);
         if (pool != null) {
             pool.poison(worker, reason);

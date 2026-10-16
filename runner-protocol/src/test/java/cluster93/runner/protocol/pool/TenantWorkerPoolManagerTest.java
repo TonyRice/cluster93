@@ -79,7 +79,7 @@ class TenantWorkerPoolManagerTest {
             TenantWorkerPoolTest.FakeProcess process = new TenantWorkerPoolTest.FakeProcess(7201L);
             NodeWorkerChannel channel = new NodeWorkerChannel("worker-7201",
                     new TenantWorkerPoolTest.FakeStream(), new TenantWorkerPoolTest.FakeStream());
-            WorkerProcessHandle handle = new WorkerProcessHandle(process, channel, 4);
+            WorkerHandle handle = new ProcessWorkerHandle(process, channel, 4);
             handle.bind("acme", new JsonObject(), new JsonObject());
             acme.jobStarted(handle, "acme");
             acme.jobStarted(handle, "acme");
