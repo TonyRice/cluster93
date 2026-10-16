@@ -46,6 +46,7 @@ INTERNAL_PORT=9496
 DRY_RUN=0
 PULL=0
 WANT_CASE=""
+NAMED_IMAGE=""
 IMAGE=""
 # The worker command the containers run: whichever engine this checkout actually has in bin/ (a build may hold one).
 WORKER_BIN="worker-javet"
@@ -56,7 +57,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --pull) PULL=1 ;;
-    --image) IMAGE="$2"; shift ;;
+    --image) NAMED_IMAGE="$2"; shift ;;
     --case) WANT_CASE="$2"; shift ;;
     -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
@@ -73,7 +74,7 @@ hr() { printf '%s\n' "----------------------------------------------------------
 TMP=""
 NODE_PID=""
 ENGINE=""
-BUILT_IMAGE=""
+declare -a PREPARED_IMAGES=()
 declare -a CONTAINERS=()
 
 cleanup() {
@@ -83,10 +84,11 @@ cleanup() {
     while IFS= read -r id; do
       [ -n "$id" ] && "$ENGINE" rm -f "$id" >/dev/null 2>&1 || true
     done < <("$ENGINE" ps -aq --filter "label=$LABEL" 2>/dev/null || true)
-    if [ -n "$BUILT_IMAGE" ]; then
-      # Only the image this run built and tagged with its own run id.
-      "$ENGINE" image rm -f "$BUILT_IMAGE" >/dev/null 2>&1 || true
-    fi
+    for entry in ${PREPARED_IMAGES[@]+"${PREPARED_IMAGES[@]}"}; do
+      # Only the images this run built, each removed by the engine that built it.
+      set -- $entry
+      "$1" image rm -f "$2" >/dev/null 2>&1 || true
+    done
   fi
   if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
     kill "$NODE_PID" 2>/dev/null || true
@@ -134,6 +136,7 @@ start_node() {
   [ -f "$node_jar" ] || { say "Missing $node_jar — build it: ./mvnw -q -pl server -am package -DskipTests"; exit 1; }
   install -d -m 0700 "$TMP/sockets"
   install -d -m 0700 "$TMP/secrets"
+  install -d -m 0700 "$TMP/scratch"
   od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$TMP/secrets/secret"
   chmod 0400 "$TMP/secrets/secret"
   # A secret that is NOT the node's, for the refusal check: same shape, wrong value.
@@ -199,27 +202,31 @@ wait_for() {
 # ---------------------------------------------------------------------------------------
 # The worker image: built from the checkout, or one you name. Labelled so cleanup can find it.
 # ---------------------------------------------------------------------------------------
-prepare_image() {
-  if [ -n "$IMAGE" ]; then
-    say "Using the image you named: $IMAGE"
+image_for() {  # image_for <engine>: the tag that engine has an image under, building it on first use
+  local engine="$1"
+  if [ -n "$NAMED_IMAGE" ]; then
+    echo "$NAMED_IMAGE"
     return 0
   fi
-  local context="$TMP/image"
-  install -d "$context"
-  cp "$ROOT/server/target/c93.jar" "$context/c93.jar"
-  cp "$ROOT/install/docker/Dockerfile.node" "$context/Dockerfile"
-  local worker
-  for worker in worker-javet worker-graaljs; do
-    if [ -f "$ROOT/bin/$worker" ]; then cp "$ROOT/bin/$worker" "$context/$worker"
-    elif [ -f "$ROOT/bin/$worker.gz" ]; then gunzip -c "$ROOT/bin/$worker.gz" > "$context/$worker"
-    else say "  (no $worker in the checkout: the image will have one engine)"
-    fi
-  done
-  BUILT_IMAGE="cluster93-idcheck:$RUN_ID"
-  say "Building a node image from the checkout (tag $BUILT_IMAGE)..."
-  "$ENGINE" build -t "$BUILT_IMAGE" "$context" > "$TMP/image.log" 2>&1 \
-    || { say "Image build failed: see $TMP/image.log"; exit 1; }
-  IMAGE="$BUILT_IMAGE"
+  local context="$TMP/image-$engine" tag="cluster93-idcheck:$RUN_ID"
+  [ "$engine" = podman ] && tag="cluster93-idcheck:$RUN_ID-podman"
+  if [ ! -d "$context" ]; then
+    install -d "$context"
+    cp "$ROOT/server/target/c93.jar" "$context/c93.jar"
+    cp "$ROOT/install/docker/Dockerfile.node" "$context/Dockerfile"
+    local worker
+    for worker in worker-javet worker-graaljs; do
+      if [ -f "$ROOT/bin/$worker" ]; then cp "$ROOT/bin/$worker" "$context/$worker"
+      elif [ -f "$ROOT/bin/$worker.gz" ]; then gunzip -c "$ROOT/bin/$worker.gz" > "$context/$worker"
+      else say "  (no $worker in the checkout: the image will have one engine)" >&2
+      fi
+    done
+    say "Building a node image with $engine (tag $tag)..." >&2
+    "$engine" build -t "$tag" "$context" > "$TMP/build-$engine.log" 2>&1 \
+      || { say "Image build with $engine failed: see $TMP/build-$engine.log" >&2; exit 1; }
+    PREPARED_IMAGES+=("$engine $tag")
+  fi
+  echo "$tag"
 }
 
 # ---------------------------------------------------------------------------------------
@@ -227,19 +234,26 @@ prepare_image() {
 # ---------------------------------------------------------------------------------------
 run_worker() {  # run_worker <name> <identity args...>
   local name="$1"; shift
+  # A worker engine unpacks a native library and dlopens it: Javet under /tmp/javet/..., GraalJS under the user's home
+  # ($HOME/.cache is not what decides it — a native image bakes java.io.tmpdir, and user.home comes from passwd). So the
+  # deployment gives it a directory of its own AT those paths: a plain directory is executable by default (no `exec`
+  # tmpfs relaxation), costs no container memory, and survives a restart. One per container, so two workers never write
+  # the same file at once.
+  local scratch="$SCRATCH/$RUN_ID-$name"
+  install -d -m 0777 "$scratch/tmp" "$scratch/home"
   "$ENGINE" run -d \
     --name "$RUN_ID-$name" \
     --label "$LABEL" \
     --network none \
     --cap-drop=ALL \
     --security-opt no-new-privileges \
-    --read-only --tmpfs /tmp:rw,exec,mode=1777,size=512m \
+    --read-only \
     --pids-limit 512 \
-    --tmpfs /home:rw,exec,mode=1777,size=256m \
-    -e HOME=/tmp \
     "$@" \
     -v "$TMP/sockets:/run/cluster93/workers" \
     -v "$TMP/secrets/secret:/run/secrets/c93-worker-secret:ro" \
+    -v "$scratch/tmp:/tmp" \
+    -v "$scratch/home:/home" \
     --entrypoint "/opt/cluster93/bin/$WORKER_BIN" \
     "$IMAGE" ipc \
       --socket /run/cluster93/workers/node.sock \
@@ -270,11 +284,20 @@ await_job() {  # await_job <job id>: SUCCEEDED or the status
 check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity args...>
   local case_id="$1" engine="$2" rootless="$3" flag="$4"; shift 4
   local hello=no job=no secret=no network=no result=FAIL
+  # This case runs on its own engine: podman keeps a separate image store from docker, so both the image and every
+  # command below have to come from the same one.
+  ENGINE="$engine"
+  IMAGE="$(image_for "$engine")"
+  # Every case starts from whatever workers are still connected (the previous case's, if any), so its assertions are
+  # about its own connection: the count has to grow by exactly one.
+  local before_connected want_connected
+  before_connected="$(metric c93_workers_connected)"
+  want_connected="$(( ${before_connected%.*} + 1 )).0"
 
   run_worker "ok" "$@" || { say "  $case_id: the worker container did not start"; return 1; }
   # A container worker's cold start is seconds, but a loaded host (a concurrent build, a cold image cache) is where the
   # margin matters: the worker retries for ~2 minutes by design, so wait for it rather than calling it a failure.
-  if wait_for_metric c93_workers_connected 1.0 360; then hello=yes; fi
+  if wait_for_metric c93_workers_connected "$want_connected" 360; then hello=yes; fi
   local id=""
   if [ "$hello" = yes ]; then
     id=$(submit_job)
@@ -285,11 +308,13 @@ check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity 
     fi
   fi
   # The wrong secret must be refused: the connection count must not grow past the one good worker.
+  local bad_scratch="$SCRATCH/$RUN_ID-bad"
+  install -d -m 0777 "$bad_scratch/tmp" "$bad_scratch/home"
   "$ENGINE" run -d --name "$RUN_ID-bad" --label "$LABEL" --network none --cap-drop=ALL \
-    --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,exec,mode=1777,size=512m \
-    --tmpfs /home:rw,exec,mode=1777,size=256m --pids-limit 512 -e HOME=/tmp "$@" \
+    --security-opt no-new-privileges --read-only --pids-limit 512 "$@" \
     -v "$TMP/sockets:/run/cluster93/workers" \
     -v "$TMP/secrets/wrong:/run/secrets/c93-worker-secret:ro" \
+    -v "$bad_scratch/tmp:/tmp" -v "$bad_scratch/home:/home" \
     --entrypoint "/opt/cluster93/bin/$WORKER_BIN" \
     "$IMAGE" ipc --socket /run/cluster93/workers/node.sock \
       --secret-file /run/secrets/c93-worker-secret --heap-mb 64 --threads 4 >/dev/null 2>&1 || true
@@ -301,7 +326,7 @@ check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity 
     [ "$refusals" -ge 1 ] && break
     sleep 0.5
   done
-  if [ "$(metric c93_workers_connected)" = "1.0" ] && [ "$refusals" -ge 1 ]; then secret=yes; fi
+  if [ "$(metric c93_workers_connected)" = "$want_connected" ] && [ "$refusals" -ge 1 ]; then secret=yes; fi
   # No network reachability, probed from inside a container on the same footing (S10).
   if "$ENGINE" run --rm --network none --cap-drop=ALL --security-opt no-new-privileges \
       --entrypoint /bin/bash "$IMAGE" -c 'exec 3<>/dev/tcp/1.1.1.1/80' >/dev/null 2>&1; then
@@ -310,11 +335,19 @@ check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity 
     network=yes
   fi
   if [ "$hello" != yes ] || [ "$job" != yes ] || [ "$secret" != yes ] || [ "$network" != yes ]; then
+    say "  the engine's scratch space ($SCRATCH/$RUN_ID-ok):"
+    find "$SCRATCH/$RUN_ID-ok" -name '*.so' 2>/dev/null | sed 's/^/    /' | head -3
+    du -sh "$SCRATCH/$RUN_ID-ok" 2>/dev/null | sed 's/^/    size: /'
     say "  --- why $case_id did not pass ---"
     say "  the worker container's own output (last 10 lines):"
     "$ENGINE" logs "$RUN_ID-ok" 2>&1 | tail -10 | sed 's/^/    /'
     say "  what the node saw:"
     grep -aE "Worker container connected|Refusing worker connection|Listening for worker|did not say hello|Job .* ended" "$TMP/node.log" | tail -5 | sed 's/^/    /'
+    say "  a probe with the same mounts and identity:"
+    "$ENGINE" run --rm --read-only --network none --pids-limit 512 "$@" \
+      -v "$TMP/sockets:/run/cluster93/workers" \
+      -v "$TMP/secrets/secret:/run/secrets/c93-worker-secret:ro" \
+      --entrypoint /bin/bash "$IMAGE" -c 'id; ls -la /run/secrets/ /run/cluster93/workers/ 2>&1 | head -8; (cat /run/secrets/c93-worker-secret >/dev/null && echo SECRET-READ-OK) || echo SECRET-READ-FAIL' 2>&1 | tail -10 | sed 's/^/    /'
     if [ "$secret" != yes ]; then
       say "  the wrong-secret worker: status=$("$ENGINE" inspect -f '{{.State.Status}}' "$RUN_ID-bad" 2>/dev/null || echo 'never started'), connected=$(metric c93_workers_connected), refusals-in-node-log=$(grep -ac 'wrong secret' "$TMP/node.log")"
       "$ENGINE" logs "$RUN_ID-bad" 2>&1 | tail -6 | sed 's/^/    /'
@@ -329,6 +362,7 @@ check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity 
   [ "$hello" = yes ] && [ "$job" = yes ] && [ "$secret" = yes ] && [ "$network" = yes ] && result=PASS
   printf '%s | %s | %s | %-22s | %-5s | %-3s | %-6s | %-7s | %s\n' \
     "$case_id" "$engine" "$rootless" "$flag" "$hello" "$job" "$secret" "$network" "$result"
+  "$ENGINE" rm -f "$RUN_ID-ok" "$RUN_ID-bad" >/dev/null 2>&1 || true
   [ "$result" = PASS ]
 }
 
@@ -339,18 +373,20 @@ check_identity_refused() {  # check_identity_refused <engine> <foreign uid:gid>
   local engine="$1" foreign="$2"
   local before after hello=no
   before="$(metric c93_workers_connected)"
+  local foreign_scratch="$SCRATCH/$RUN_ID-foreign"
+  install -d -m 0777 "$foreign_scratch/tmp" "$foreign_scratch/home"
   "$ENGINE" run -d --name "$RUN_ID-foreign" --label "$LABEL" --network none --cap-drop=ALL \
-    --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,exec,mode=1777,size=512m \
-    --tmpfs /home:rw,exec,mode=1777,size=256m \
-    --pids-limit 512 -e HOME=/tmp --user "$foreign" \
+    --security-opt no-new-privileges --read-only --pids-limit 512 --user "$foreign" \
     -v "$TMP/sockets:/run/cluster93/workers" \
     -v "$TMP/secrets/secret:/run/secrets/c93-worker-secret:ro" \
+    -v "$foreign_scratch/tmp:/tmp" -v "$foreign_scratch/home:/home" \
     --entrypoint "/opt/cluster93/bin/$WORKER_BIN" \
     "$IMAGE" ipc --socket /run/cluster93/workers/node.sock \
       --secret-file /run/secrets/c93-worker-secret --heap-mb 64 --threads 4 >/dev/null 2>&1 || true
   sleep 12   # long enough for the retry loop to try several times and be refused each time
   after="$(metric c93_workers_connected)"
   if [ "$before" = "$after" ]; then hello=no; refused=yes; fi
+  "$ENGINE" rm -f "$RUN_ID-foreign" >/dev/null 2>&1 || true
   printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-3s | %-6s | %-7s | %s\n' \
     "C4" "$engine" "rootful" "--user $foreign" "no" "-" "-" "-" "$([ "${refused:-no}" = yes ] && echo PASS || echo FAIL)"
   [ "${refused:-no}" = yes ]
@@ -385,6 +421,7 @@ ENGINE=docker
 have_docker || ENGINE=podman
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/c93-idcheck-XXXXXX")"
+SCRATCH="$TMP/scratch"
 say "worker-isolation-check $RUN_ID (engine: $ENGINE)"
 hr
 # A worker image with current binaries is only needed by the cases that reach the node and present a secret; the
@@ -405,7 +442,7 @@ if [ -z "$JOB_TOKEN" ]; then
   say "Could not mint a tenant token through the API (see $TMP/node.log); there is nothing to submit a job with."
   exit 1
 fi
-[ "$WORKERS_OK" = 1 ] && prepare_image
+
 
 printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-3s | %-6s | %-7s | %s\n' \
   case engine rootless identity hello job secret network result
@@ -428,7 +465,11 @@ run_case_if() {  # run_case_if <available> <case id> <engine> <rootless> <flag> 
   check_case "$@" || FAILED=1
 }
 
-run_case_if "$(rootless_podman && echo 1 || echo 0)" C1 podman rootless-podman "--userns=keep-id" --userns=keep-id
+# Podman rootless (D-149): the image's own user (c93, 10001:999) is mapped to the invoking host uid, which is what makes
+# the node's files — the 0600 socket and the 0400 secret — belong to the container's process. Plain `keep-id` does NOT
+# do that: it leaves the container running as the image's user while the host files appear as the invoking uid, so the
+# worker cannot read the secret at all.
+run_case_if "$(rootless_podman && echo 1 || echo 0)" C1 podman rootless-podman "--userns=keep-id:uid=10001,gid=999" --userns=keep-id:uid=10001,gid=999
 run_case_if "$( { have_docker && rootless_docker; } && echo 1 || echo 0)" C2 docker rootless-docker "container uid 0" --user 0:0
 run_case_if "$( { have_docker && ! rootless_docker; } && echo 1 || echo 0)" C3 docker rootful "--user $(id -u):$(id -g)" --user "$(id -u):$(id -g)"
 if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C4" ]; then

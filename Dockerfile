@@ -7,7 +7,7 @@
 # local-jar comes before build so that building it never runs the Maven build.
 
 # Javet ships glibc native libraries, so the image must not be Alpine/musl.
-FROM eclipse-temurin:21-jre AS runtime
+FROM docker.io/library/eclipse-temurin:21-jre AS runtime
 RUN useradd --system --uid 10001 c93 \
  && mkdir -p /var/lib/cluster93 && chown c93 /var/lib/cluster93
 WORKDIR /opt/cluster93
@@ -53,7 +53,7 @@ COPY server/target/c93.jar /opt/cluster93/c93.jar
 COPY bin/worker-javet bin/worker-graaljs /opt/cluster93/bin/
 USER c93
 
-FROM eclipse-temurin:21-jdk AS build
+FROM docker.io/library/eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY .mvn .mvn
 COPY mvnw pom.xml ./

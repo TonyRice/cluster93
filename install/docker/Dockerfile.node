@@ -15,7 +15,7 @@
 #     worker-graaljs    gunzipped from worker-graaljs.gz
 #
 # Javet ships glibc native libraries, so the base image must not be Alpine/musl.
-FROM eclipse-temurin:21-jre
+FROM docker.io/library/eclipse-temurin:21-jre
 RUN useradd --system --uid 10001 c93 \
  && mkdir -p /var/lib/cluster93 /opt/cluster93/bin && chown -R c93 /var/lib/cluster93 /opt/cluster93
 WORKDIR /opt/cluster93

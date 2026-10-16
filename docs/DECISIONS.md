@@ -3453,9 +3453,22 @@ Docker, 2026-10-15) — neither is visible to a unit test.
     A worker unpacks a native library and then `dlopen`s it: Javet loads its V8 from `/tmp/javet/...`, GraalJS its
     isolate from `$HOME/.cache`. A read-only root (S4) has nowhere to put either, and Docker's `--tmpfs` defaults to
     `noexec`, so the worker *joins the pool* and then fails its first job with
-    `UnsatisfiedLinkError: Can't load library: /tmp/javet/1/libjavet-v8-linux-x86_64-i18n.v.6.0.2.so`. The worker
-    container therefore mounts `/tmp` and `/home` with `exec` (and a size) — the one relaxation S4 needs, inside a
-    single-purpose, non-privileged container. Both are in `compose.workers.tmpl` and in the guide.
+    `UnsatisfiedLinkError: Can't load library: /tmp/javet/1/libjavet-v8-linux-x86_64-i18n.v.6.0.2.so`. **A native image
+    bakes those paths in** — `java.io.tmpdir` is fixed at build time and `user.home` comes from the passwd entry, not
+    `$HOME` — so they cannot be pointed at a nicer directory: the deployment gives each container a directory of its
+    own mounted **at** them (`…/w1/tmp:/tmp`, `…/w1/home:/home`). A plain directory is executable by default, so
+    **nothing is relaxed** (no `noexec` tmpfs, no `--tmpfs …:exec`), it costs no container memory, and it holds a few
+    tens of MB rewritten at each start and never accumulating — one directory per container, since two workers must
+    not write the same file at once. Measured: the library is rewritten even when present, so "extract once, ever"
+    would need the library baked into the image at build time; that remains an option, not a requirement.
+11. **Rootless podman needs the image's ids spelled out** (D-149's mapping, made explicit): `--userns=keep-id:uid=10001,gid=999`,
+    not plain `--userns=keep-id`. Plain `keep-id` maps the *invoking* uid to itself and leaves the container running
+    as the image's user (`c93`, 10001), while the node's socket and secret belong to the invoking uid — so the worker
+    cannot read the secret and never joins (found by case C1, which is exactly why the check exists). With the ids,
+    C1 passes: the container's process owns the node's files, so the `0600` socket and the `0400` secret are its own.
+    Relatedly, a **registry-qualified base image** (`docker.io/library/eclipse-temurin:21-jre`) is required for
+    `podman build` on a host with no configured search registries — podman refuses a bare short name, where Docker
+    resolves one.
 
 **Consequences:**
 - The connection cap is a bound on what the node *accepts*; the pool's size is still the deployment's, and the node
@@ -3469,15 +3482,15 @@ Docker, 2026-10-15) — neither is visible to a unit test.
 - `WorkerSocketSourceTest` (connect → HELLO → secret → open worker → bind → a real job), `WorkerSocketTest` (a real
   node, a real worker over the socket, a job through the API, `c93_workers_running 0`), `UdsConnectRetryTest` (the
   retry succeeds late and fails cleanly), `WorkerRpcAuthorizerTest`.
-- `scripts/worker-isolation-check.sh`, against a real rootful Docker on the build host: **C3 passes** — a worker
-  container reaches the `0600` socket as the deployment's identity, presents the secret, joins the pool as an open
-  worker and **runs a tenant's job over it** (`Job … ended SUCCEEDED after 393 ms`) while `c93_workers_running` stays
-  `0.0`, so the node genuinely spawned nothing. The wrong secret is refused, and the container has no network
-  reachability. **C4 (a foreign uid) passes**, and C1/C2 (rootless podman, rootless Docker) print `SKIP` with the
-  command that would enable them, which is what that host has. It also **found** four of the facts above: the `0775`
-  socket (the kernel's umask, not `0600`), the entrypoint trap (a worker that passes its command as arguments starts a
-  *second node*), the engine scratch space (`FileSystemException: …/.cache: Read-only file system`, then
-  `UnsatisfiedLinkError` from a `noexec` mount — item 10), and the two traps in one worker container's own startup.
+- `scripts/worker-isolation-check.sh`, against real engines on the build host: **C1 (rootless podman), C3 (rootful
+  Docker) and C4 (a foreign uid refused) all pass** — a worker container reaches the `0600` socket as the
+  deployment's identity, presents the secret, joins the pool as an open worker and **runs a tenant's job over it**
+  (`Job … ended SUCCEEDED after 393 ms`) while `c93_workers_running` stays `0.0`, so the node genuinely spawned
+  nothing; the wrong secret is refused; the container has no network reachability; C2 prints `SKIP` until rootless
+  Docker exists. It also **found** four of the facts above: the `0775` socket (the kernel's umask, not `0600`), the
+  entrypoint trap (a worker that passes its command as arguments starts a *second node*), the engine scratch space
+  (`FileSystemException: …/.cache: Read-only file system`, then `UnsatisfiedLinkError` from a `noexec` mount — item
+  10), and the two traps in one worker container's own startup.
   Getting that pass needed `bin/worker-*` rebuilt (the checkout's predated `--secret-file`, so they presented no
   secret and the node refused them — correctly, but for a reason that was not the deployment's; the check now
   **skips** with the rebuild command rather than reporting a false failure) and three fixes to the check itself, each

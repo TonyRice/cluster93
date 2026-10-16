@@ -914,9 +914,9 @@ class NodeCommandTest {
         assertThat(dockerfile).contains("chmod +x /opt/cluster93/bin/worker-javet");
         // It assembles artifacts, so it must not try to compile anything.
         assertThat(dockerfile).doesNotContain("mvnw");
-        assertThat(dockerfile).doesNotContain("FROM eclipse-temurin:21-jdk");
+        assertThat(dockerfile).doesNotContain("eclipse-temurin:21-jdk");
         // Javet's natives are glibc, and the heap ceiling keeps Ignite's off-heap region fitting beside the JVM.
-        assertThat(dockerfile).contains("FROM eclipse-temurin:21-jre");
+        assertThat(dockerfile).contains("FROM docker.io/library/eclipse-temurin:21-jre");
         assertThat(dockerfile).contains("MaxRAMPercentage=40");
         assertThat(dockerfile).contains("USER c93");
     }

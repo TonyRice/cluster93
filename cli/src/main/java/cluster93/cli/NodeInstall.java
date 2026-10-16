@@ -692,7 +692,7 @@ final class NodeInstall {
         return """
                 # A Cluster93 node image built from a release: c93.jar plus the native workers, so the node can run
                 # C93_WORKER_MODE=process. Javet ships glibc natives, so the base must not be Alpine/musl.
-                FROM eclipse-temurin:21-jre
+                FROM docker.io/library/eclipse-temurin:21-jre
                 RUN useradd --system --uid 10001 c93 \\
                  && mkdir -p /var/lib/cluster93 /opt/cluster93/bin && chown -R c93 /var/lib/cluster93 /opt/cluster93
                 WORKDIR /opt/cluster93

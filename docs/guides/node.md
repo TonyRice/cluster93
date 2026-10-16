@@ -154,10 +154,12 @@ may share one. Guests stay separated by the engine — a fresh context per job �
    flag for each engine — D-149); by hand it is one line:
 
    ```bash
+   mkdir -p /var/lib/cluster93-worker-scratch/w1/{tmp,home}     # this worker's own scratch, see below
    docker run --rm --network none \
-     --cap-drop=ALL --security-opt no-new-privileges --read-only --tmpfs /tmp \
+     --cap-drop=ALL --security-opt no-new-privileges --read-only \
      --entrypoint /opt/cluster93/bin/worker-javet \
-     --tmpfs /home:rw,exec,mode=1777,size=256m \
+     -v /var/lib/cluster93-worker-scratch/w1/tmp:/tmp \
+     -v /var/lib/cluster93-worker-scratch/w1/home:/home \
      -v /run/cluster93/workers:/run/cluster93/workers \
      -v /run/secrets/c93-worker-secret:/run/secrets/c93-worker-secret:ro \
      'cluster93-node@sha256:…' ipc \
@@ -166,13 +168,20 @@ may share one. Guests stay separated by the engine — a fresh context per job �
        --heap-mb 128 --threads 4
    ```
 
-   Two things the node image cannot tell you, both caught by the check below rather than by a unit test: its
-   entrypoint is **the server**, so a worker container must replace it (`--entrypoint`, or `entrypoint:` in compose)
-   —    — passing the worker command as arguments starts a second node — and a worker engine needs **writable and
-   executable** scratch space, because it unpacks a native library and then `dlopen`s it: Javet loads its V8 from
-   `/tmp/javet/...` and GraalJS its isolate from `$HOME/.cache`. A read-only root has nowhere to put either, and
-   Docker's tmpfs defaults to `noexec`, so both need `exec` (`--tmpfs /tmp:rw,exec,mode=1777` and
-   `--tmpfs /home:rw,exec,mode=1777`). Without it a worker joins the pool and then fails its first job.
+   Three things the node image cannot tell you, all caught by the check below rather than by a unit test:
+
+   - its entrypoint is **the server**, so a worker container must replace it (`--entrypoint`, or `entrypoint:` in
+     compose) — passing the worker command as arguments starts a second node;
+   - a worker engine **unpacks a native library and `dlopen`s it** — Javet's V8 under `/tmp/javet/...`, GraalJS's
+     isolate under the user's home — and, being a native image, it cannot be *pointed* elsewhere: those paths are
+     baked in. So give each container a directory of its own mounted **at** them, as above. A plain directory is
+     executable by default (nothing is relaxed: no `noexec` tmpfs, no `--tmpfs …:exec`), costs no container memory,
+     and holds a few tens of MB that are rewritten at each start but never accumulate. A worker without it joins the
+     pool and then fails its first job with `UnsatisfiedLinkError`;
+   - on **rootless podman** the identity flag needs the image's own ids: `--userns=keep-id:uid=10001,gid=999`, i.e.
+     "map the image's user (c93) to my uid". Plain `keep-id` leaves the container running as `c93` while the node's
+     socket and secret belong to *your* uid, so the worker cannot even read the secret (D-149 describes the mapping
+     the ids make explicit).
 
    A worker that starts **before** the node retries the connect with backoff for about two minutes and then exits,
    so start order does not matter, and a worker that cannot connect says so in its own log.

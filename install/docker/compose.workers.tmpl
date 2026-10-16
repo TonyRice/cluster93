@@ -19,7 +19,10 @@
 #   C93_WORKER_CONNECTIONS_MAX=...                         how many connections it accepts (defaults to its workers)
 #
 # Identity (D-149) — a worker must present the node's host identity, so the 0700 socket dir / 0600 socket stay tight:
-#   rootless podman:  userns_mode: keep-id
+#   rootless podman:  userns_mode: "keep-id:uid=10001,gid=999"
+#                     (the image's OWN user, c93 10001:999, mapped to the invoking host uid — which is what makes the
+#                     node's files belong to the container's process. Plain `keep-id` does not: the container stays
+#                     c93 while the host's files appear as your uid, and the worker cannot read the secret.)
 #   rootless docker:  user: "0"                  (container root IS the invoking user under a rootless userns)
 #   rootful docker:   user: "<host-uid>:<host-gid>"
 #
@@ -43,13 +46,6 @@ x-worker: &worker
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   read_only: true
-  # Writable AND executable scratch, which a read-only root has nowhere else to put: a worker engine unpacks a native
-  # library and then dlopens it — Javet loads its V8 from /tmp/javet/..., GraalJS its isolate from $HOME/.cache — and
-  # Docker's tmpfs defaults to noexec, so a worker dies at (or just before) its first job without this. It is the one
-  # relaxation the hardening set needs, and it is inside a single-purpose, non-privileged container.
-  tmpfs:
-    - /tmp:rw,exec,mode=1777,size=512m
-    - /home:rw,exec,mode=1777,size=256m
   pids_limit: 512
   mem_limit: 512m
   cpus: 1.0
@@ -59,11 +55,16 @@ x-worker: &worker
   volumes:
     - "REPLACE_WITH_THE_HOST_WORKER_SOCKET_DIR:/run/cluster93/workers"
     - "REPLACE_WITH_THE_HOST_SECRET_FILE:/run/secrets/c93-worker-secret:ro"
+    # A directory of this container's own, mounted AT the paths the engine uses. A worker unpacks a native library and
+    # then dlopens it — Javet under /tmp/javet/..., GraalJS under the user's home — and both paths are baked into the
+    # native image, so they cannot be pointed elsewhere: the mount has to land on them. A plain directory is
+    # executable by default (no `noexec` tmpfs, no `--tmpfs …:exec` relaxation), costs no container memory, and
+    # persists, so it can be inspected and cleaned up by hand. Give each container its own, since two workers must not
+    # write the same file at once. Expect a few tens of MB, rewritten at each start and never accumulating.
+    - "./worker-scratch/REPLACE_WITH_A_UNIQUE_NAME/tmp:/tmp"
+    - "./worker-scratch/REPLACE_WITH_A_UNIQUE_NAME/home:/home"
   environment:
     C93_WORKER_SECRET_FILE: /run/secrets/c93-worker-secret
-    # A read-only root leaves nowhere for the engine to unpack its native isolate library: GraalJS installs it under
-    # $HOME/.cache, so point HOME at the /tmp tmpfs above (Javet does not need this, but it does no harm).
-    HOME: /tmp
 
 services:
   # One supervisor per container keeps N workers alive. Each connects to the node independently; the supervisor
