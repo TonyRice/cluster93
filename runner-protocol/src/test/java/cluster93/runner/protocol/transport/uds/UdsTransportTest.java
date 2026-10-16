@@ -20,11 +20,15 @@ import org.junit.jupiter.api.Test;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class UdsTransportTest {
 
@@ -53,8 +57,7 @@ class UdsTransportTest {
 
     @Test
     @DisplayName("Communicates over non-blocking Unix Domain Sockets: Handshake, RPC, and cleanup")
-    void testUdsHandshakeAndRpc() throws Exception {
-        // Skip on OS if domain sockets aren't supported (Linux & macOS support them natively)
+    void testUdsHandshakeAndRpc() throws Exception {        // Skip on OS if domain sockets aren't supported (Linux & macOS support them natively)
         String os = System.getProperty("os.name", "").toLowerCase();
         if (!os.contains("linux") && !os.contains("mac")) {
             return;
@@ -103,5 +106,64 @@ class UdsTransportTest {
         clientSocket.close().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
         serverTransport.close().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
         assertFalse(new File(socketPath).exists(), "Domain socket file should be deleted on server close");
+    }
+
+    @Test
+    @DisplayName("The socket is its owner's alone, and a directory another user could replace it in is refused (S3)")
+    void refusesADirectoryAnotherUserCouldReplaceTheSocketIn() throws Exception {
+        Path loose = Files.createTempDirectory("c93-loose-socket-dir-");
+        Files.setPosixFilePermissions(loose, PosixFilePermissions.fromString("rwxrwxrwx"));
+        UdsServerTransport transport = new UdsServerTransport(vertx, loose.resolve("node.sock").toString());
+        try {
+            assertThatThrownBy(() -> transport.listen(socket -> { }).toCompletionStage().toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS))
+                    .as("a world-writable, non-sticky directory lets another user bind their own socket")
+                    .hasMessageContaining("writable by other users");
+        } finally {
+            transport.close().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            deleteRecursively(loose);
+        }
+    }
+
+    @Test
+    @DisplayName("A sticky directory is accepted, because the kernel stops another user removing the socket (S3)")
+    void acceptsAStickyDirectoryLikeTmp() throws Exception {
+        Path sticky = Files.createTempDirectory("c93-sticky-socket-dir-");
+        assumeTrue(setSticky(sticky), "this filesystem cannot set the sticky bit");
+        UdsServerTransport transport = new UdsServerTransport(vertx, sticky.resolve("node.sock").toString());
+        try {
+            transport.listen(socket -> { }).toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            // Accepted, and the socket itself is still its owner's alone.
+            assertThat(Files.getPosixFilePermissions(sticky.resolve("node.sock")).toString())
+                    .isEqualTo("[OWNER_READ, OWNER_WRITE]");
+        } finally {
+            transport.close().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            deleteRecursively(sticky);
+        }
+    }
+
+    /** {@code 1777}: world-writable like {@code /tmp}, but sticky. False when the host cannot set it. */
+    private static boolean setSticky(Path dir) {
+        try {
+            Files.setAttribute(dir, "unix:mode", 0_1777);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static void deleteRecursively(Path root) {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (var stream = Files.walk(root)) {
+            stream.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (Exception ignored) {
+                }
+            });
+        } catch (Exception ignored) {
+        }
     }
 }

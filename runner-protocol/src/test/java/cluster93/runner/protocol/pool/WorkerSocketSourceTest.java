@@ -145,14 +145,14 @@ class WorkerSocketSourceTest {
         await(connectAndSayHello("s3cret", 64, 4));
         awaitUntil("the first connection to become an open worker", () -> manager.openWorkerCount() == 1);
 
-        NetSocket second = await(client.connect(socketPath));
-        sockets.add(second);
-        CountDownLatch closed = new CountDownLatch(1);
-        second.closeHandler(v -> closed.countDown());
+        // A second one says hello too, so an acceptance would show up as a second worker. (The node's refusal is not
+        // observed through the client's close handler: it can close before the handler is registered.)
+        await(connectAndSayHello("s3cret", 64, 4));
+        Thread.sleep(500);
 
-        assertThat(closed.await(10, TimeUnit.SECONDS))
-                .as("a connection past C93_WORKER_CONNECTIONS_MAX is refused").isTrue();
-        assertThat(manager.connectedWorkerCount()).isEqualTo(1);
+        assertThat(manager.connectedWorkerCount())
+                .as("a connection past C93_WORKER_CONNECTIONS_MAX is refused, so it never joins").isEqualTo(1);
+        assertThat(manager.openWorkerCount()).isEqualTo(1);
     }
 
     @Test

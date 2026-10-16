@@ -182,6 +182,12 @@ may share one. Guests stay separated by the engine — a fresh context per job �
 - A worker that dies fails its in-flight jobs and names the tenant and job; **why** its container died (an OOM, a
   kill) is the deployment's to read from the container's exit status, so the node says only that the connection
   ended (D-159) rather than inventing a cause.
+- **The node checks its own socket at startup and refuses to run if it cannot hold it.** The socket must be `0600`
+  in a directory no other user can write to (a sticky one like `/tmp` is fine). If it cannot be — an odd mount, a
+  filesystem that hides Unix permissions, a directory someone loosened — the node fails to start with the path and
+  the mode in the message, because the socket's permissions are what bind a connection to its owner: this node has
+  no peer-credential check to fall back on. Fix the mode or the mount, or run a process node (don't set
+  `C93_WORKER_SOCKET`).
 - **Memory is reserved from the moment a worker connects**, idle and unbound included: the node reserves what the
   worker declares (`--heap-mb` × `--threads` plus overhead), because the container's own `--memory` is the
   deployment's (D-169). A connection that would exceed `C93_MAX_WORKER_MEMORY_MB` is refused, with the reason in the

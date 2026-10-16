@@ -3442,6 +3442,13 @@ Docker, 2026-10-15) — neither is visible to a unit test.
    authorizer (which scopes every call to a run's tenant). **The shared-group fallback is consequently not offered
    anywhere** — a `0750`/`0660` socket would be the one configuration where the filesystem stops telling peers apart
    and `SO_PEERCRED` would carry the layer, so if an operator ever wants that fallback, layer 2 has to land first.
+9. **Layer 1 is enforced at bind time, not assumed.** `UdsServerTransport.listen` sets the socket to `0600`, reads
+   the mode back, and **fails the bind** (closing the socket) when it is anything else; it also refuses a directory
+   in which another user could write — that is what would let someone remove the socket and bind their own over it —
+   except a **sticky** one like `/tmp`, where the kernel refuses to remove a file the writer does not own. A host
+   that cannot report Unix permissions at all is refused too, for the same reason. So the node either holds the
+   socket to its own user or serves no worker containers: it never accepts peers it cannot tell apart. This is what
+   makes layer 2's absence inconsequential rather than merely recorded, and it is why the choice above was made.
 
 **Consequences:**
 - The connection cap is a bound on what the node *accepts*; the pool's size is still the deployment's, and the node

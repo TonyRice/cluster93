@@ -33,6 +33,10 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
   - **Everything the socket boundary needs:** the socket is forced to **`0600`** after the bind (the kernel's umask
     made it `0775` — connectable by anyone, which is exactly the boundary a worker crosses) and its directory to
     `0700` (S3).
+  - **The socket is enforced, not merely tightened.** The node sets it to `0600`, reads the mode back, and **fails to
+    start** when it is anything else or when another user could write in its directory (a sticky directory like `/tmp`
+    is fine), because the socket's mode is what binds a connection to its owner and there is no peer-credential check
+    behind it (S3, D-171). It never accepts peers it cannot tell apart.
   - `install/docker/compose.workers.tmpl` is the deployment-side sketch — a supervisor keeping N workers alive,
     `--network none`, the S4 hardening set, the D-149 identity flags, and the writable-and-executable home a GraalJS
     worker needs — and `scripts/worker-isolation-check.sh` runs the cases only a real engine can decide (identity,
