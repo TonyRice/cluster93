@@ -256,7 +256,7 @@ payload:     u32 jsonLength, the JSON, then raw bytes
 | Type | Direction | What it is |
 |---|---|---|
 | `HELLO` / `WELCOME` | worker → node / node → worker | protocol version, engine, capabilities |
-| `BIND` | node → worker | the tenant, limits and env for a warm worker; once, for its whole life |
+| `BIND` | node → worker | the tenant, limits and env for a warm worker; sent again when an idle worker is re-bound to another tenant (D-172) |
 | `RUN`, `STOP`, `CANCEL` | node → worker | start a run (the script, input, context, timeout, package list), stop it with a grace period, cancel it |
 | `RESULT_RUN` | worker → node | the run's outcome (`ExecutionResult`) |
 | `CALL` | worker → node | `{id, run, method, params}`: a host-API call |
