@@ -518,15 +518,19 @@ public class TenantWorkerPool {
     /**
      * Hands one idle worker of this pool to the manager, so another tenant's pool can re-bind it (D-172), or null when
      * this pool has none to spare. Only a worker with nothing left on it is offered: the warm queue holds workers whose
-     * last run has finished, which is exactly the drain the re-bind requires.
+     * last run has finished, which is exactly the drain the re-bind requires. One that died while it sat idle is
+     * recycled here — where its own books are — rather than handed over.
      */
     synchronized WorkerHandle offerIdleWorker() {
         for (List<WorkerHandle> warm : tenantWarmQueue.values()) {
-            if (!warm.isEmpty()) {
+            while (!warm.isEmpty()) {
                 WorkerHandle idle = warm.remove(warm.size() - 1);
-                totalWorkers.decrementAndGet();
-                LOG.info("Handing idle worker {} to another tenant that has work for it", idle.workerId());
-                return idle;
+                if (idle.isAlive() && idle.state() != WorkerHandle.State.TERMINATED) {
+                    totalWorkers.decrementAndGet();
+                    LOG.info("Handing idle worker {} to another tenant that has work for it", idle.workerId());
+                    return idle;
+                }
+                recycleWorker(idle);
             }
         }
         return null;

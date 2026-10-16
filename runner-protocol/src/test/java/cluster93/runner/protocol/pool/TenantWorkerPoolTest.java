@@ -243,6 +243,36 @@ class TenantWorkerPoolTest {
     }
 
     @Test
+    @DisplayName("A worker that died while it sat idle is recycled, not handed to another tenant (D-172)")
+    void aDeadIdleWorkerIsNotHandedOver() throws Exception {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        TenantWorkerPoolManager manager = new TenantWorkerPoolManager(vertx, java.util.Map.of(), "javet", 0, 1, 1, 1, 64,
+                TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(),
+                cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL, 0);
+        TenantWorkerPool acme = manager.poolFor("acme");
+        TenantWorkerPool globex = manager.poolFor("globex");
+        try {
+            FakeProcess process = new FakeProcess(7203L, 137);
+            WorkerHandle worker = boundHandle(process, 7203L, "acme", 1);
+            acme.adopt(worker, null, "acme");
+            assertThat(manager.nodeBudget().tryAcquire()).isTrue();
+            acme.release(worker); // idle, and warm for acme
+            process.destroy();    // and then it dies, as a worker can while it sits there
+
+            // It must not be handed over: a dead process cannot serve anyone. Globex waits instead, and acme's own
+            // books stay right — the worker is recycled where it is counted.
+            Future<WorkerHandle> waiting = globex.acquire("globex");
+            assertThat(waiting.isComplete()).as("a dead idle worker must never be adopted").isFalse();
+            assertThat(worker.state()).isEqualTo(WorkerHandle.State.TERMINATED);
+            assertThat(acme.totalWorkers()).as("recycled, so acme still counts what it holds").isZero();
+            assertThat(acme.warmCount()).as("and it is no longer warm").isZero();
+        } finally {
+            manager.close();
+            vertx.close().toCompletionStage().toCompletableFuture().get(5, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     @DisplayName("A worker admits several jobs at once, and refuses the one past its limit (D-155)")
     void aWorkerAdmitsSeveralJobsAtOnce() {
         FakeProcess fakeProcess = new FakeProcess(4242L);

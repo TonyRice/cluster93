@@ -20,7 +20,8 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
     because the tenant is the CPU boundary. No protocol change: both ends already accepted a repeated `BIND`, and a run
     whose tenant does not match the current binding is still refused.
   - Covered by `WorkerRebindTest` (one worker container, two tenants in turn: the second job runs on the same connection,
-    `c93_workers_running` stays `0.0`, and the second tenant's run sees nothing of the first) and two pool tests.
+    `c93_workers_running` stays `0.0`, and the second tenant's run sees nothing of the first) and three pool tests (reuse
+    without a new process; a busy worker is never moved; a worker that died while idle is recycled, not handed over).
 
 - **Worker containers: the node listens, the deployment connects** (D-166, D-167, D-171):
   - A node can run its engine workers as **containers the deployment creates**. It binds a Unix socket

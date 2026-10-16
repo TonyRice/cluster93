@@ -76,7 +76,11 @@ public class NodeWorkerChannel {
     private final AtomicInteger nodeStreamSeq = new AtomicInteger(2);
     private final Vertx vertx;
 
-    private String boundTenantId;
+    /**
+     * The tenant this channel's worker serves. It can change while the connection is alive: an idle worker is re-bound
+     * to another tenant (D-172), so it is volatile — the bind and the run that must match it are on different threads.
+     */
+    private volatile String boundTenantId;
     private final Promise<HelloMessage> helloPromise = Promise.promise();
     private final Map<String, ActiveRun> activeRuns = new ConcurrentHashMap<>();
     private final Map<String, PendingEvent> pendingEvents = new ConcurrentHashMap<>();

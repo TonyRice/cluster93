@@ -3550,8 +3550,9 @@ worker is a reuse opportunity, and the reason it was not reused was a rule about
 
 **Evidence:**
 - `TenantWorkerPoolTest.anIdleWorkerIsReboundToAnotherTenant` (two tenants, one worker, one node slot: tenant B is served
-  by tenant A's worker, same worker id, no new process, the counts transfer and the node's slot count does not move) and
-  `aBusyWorkerIsNeverMoved` (a worker with a run in flight is not offered; the waiting claim queues rather than take it).
+  by tenant A's worker, same worker id, no new process, the counts transfer and the node's slot count does not move),
+  `aBusyWorkerIsNeverMoved` (a worker with a run in flight is not offered; the waiting claim queues rather than take it)
+  and `aDeadIdleWorkerIsNotHandedOver` (one that died while it sat idle is recycled where its books are, not adopted).
 - `WorkerRebindTest` end-to-end: one worker container over the socket, tenant A runs a job, goes idle and warm, then tenant
   B's job is served **on the same connection** — `c93_workers_running` stays `0.0`, `c93_workers_connected` stays `1.0`, the
   worker reports itself re-bound, and B's run sees nothing of A's (a marker A set in its engine's globals reads back

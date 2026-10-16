@@ -34,7 +34,11 @@ abstract class AbstractWorkerHandle implements WorkerHandle {
     private final AtomicInteger runningJobs = new AtomicInteger();
     private final AtomicReference<State> state = new AtomicReference<>(State.UNBOUND);
     private volatile Instant lastUsedAt;
-    private String boundTenantId;
+    /**
+     * The tenant this worker serves. It moves when an idle worker is re-bound (D-172), and the pool that hands a worker
+     * over reads it from a different thread than the one that wrote it, so it is volatile rather than set-once.
+     */
+    private volatile String boundTenantId;
 
     AbstractWorkerHandle(NodeWorkerChannel channel, int maxJobs, long reservedBytes) {
         this.channel = Objects.requireNonNull(channel, "channel");
