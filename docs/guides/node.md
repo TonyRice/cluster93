@@ -168,9 +168,11 @@ may share one. Guests stay separated by the engine — a fresh context per job �
 
    Two things the node image cannot tell you, both caught by the check below rather than by a unit test: its
    entrypoint is **the server**, so a worker container must replace it (`--entrypoint`, or `entrypoint:` in compose)
-   — passing the worker command as arguments starts a second node — and a **GraalJS** worker needs a writable,
-   **executable** home (`--tmpfs /home:rw,exec,mode=1777`), because it unpacks its native isolate library into
-   `$HOME/.cache` and then `dlopen`s it: a read-only root has nowhere to put it, and a `noexec` home cannot load it.
+   —    — passing the worker command as arguments starts a second node — and a worker engine needs **writable and
+   executable** scratch space, because it unpacks a native library and then `dlopen`s it: Javet loads its V8 from
+   `/tmp/javet/...` and GraalJS its isolate from `$HOME/.cache`. A read-only root has nowhere to put either, and
+   Docker's tmpfs defaults to `noexec`, so both need `exec` (`--tmpfs /tmp:rw,exec,mode=1777` and
+   `--tmpfs /home:rw,exec,mode=1777`). Without it a worker joins the pool and then fails its first job.
 
    A worker that starts **before** the node retries the connect with backoff for about two minutes and then exits,
    so start order does not matter, and a worker that cannot connect says so in its own log.
@@ -197,9 +199,10 @@ may share one. Guests stay separated by the engine — a fresh context per job �
 
 ### Verifying it on a real engine
 
-`scripts/worker-isolation-check.sh` runs the cases only a real engine can decide (whether a container reaches the
-`0600` socket as the right identity, whether the wrong secret is refused, whether the worker container genuinely has
-no network) and prints a matrix. It is safe to re-run: everything it creates is labelled with its run id, it uses
+`scripts/worker-isolation-check.sh` runs the cases only a real engine can decide — whether a container reaches the
+`0600` socket as the right identity, whether a job round-trips on it, whether the wrong secret is refused, whether the
+worker container genuinely has no network — and prints a matrix: **C3 (rootful Docker, `--user`) passes**, C4 (a
+foreign uid) is refused, and C1/C2 print `SKIP` until podman or rootless Docker exists. It is safe to re-run: everything it creates is labelled with its run id, it uses
 its own ports and temp directories under `mktemp -d`, and it never touches anything it did not create.
 
 ## Join a cluster

@@ -3449,6 +3449,13 @@ Docker, 2026-10-15) — neither is visible to a unit test.
    that cannot report Unix permissions at all is refused too, for the same reason. So the node either holds the
    socket to its own user or serves no worker containers: it never accepts peers it cannot tell apart. This is what
    makes layer 2's absence inconsequential rather than merely recorded, and it is why the choice above was made.
+10. **A worker engine needs writable *and executable* scratch space** — found by the isolation check, not by reasoning.
+    A worker unpacks a native library and then `dlopen`s it: Javet loads its V8 from `/tmp/javet/...`, GraalJS its
+    isolate from `$HOME/.cache`. A read-only root (S4) has nowhere to put either, and Docker's `--tmpfs` defaults to
+    `noexec`, so the worker *joins the pool* and then fails its first job with
+    `UnsatisfiedLinkError: Can't load library: /tmp/javet/1/libjavet-v8-linux-x86_64-i18n.v.6.0.2.so`. The worker
+    container therefore mounts `/tmp` and `/home` with `exec` (and a size) — the one relaxation S4 needs, inside a
+    single-purpose, non-privileged container. Both are in `compose.workers.tmpl` and in the guide.
 
 **Consequences:**
 - The connection cap is a bound on what the node *accepts*; the pool's size is still the deployment's, and the node
@@ -3462,12 +3469,19 @@ Docker, 2026-10-15) — neither is visible to a unit test.
 - `WorkerSocketSourceTest` (connect → HELLO → secret → open worker → bind → a real job), `WorkerSocketTest` (a real
   node, a real worker over the socket, a job through the API, `c93_workers_running 0`), `UdsConnectRetryTest` (the
   retry succeeds late and fails cleanly), `WorkerRpcAuthorizerTest`.
-- `scripts/worker-isolation-check.sh`: it was run against a real rootful Docker on the build host, and it is what
-  **found** three of the facts above — the `0775` socket (the kernel's umask, not `0600`), the entrypoint trap (a
-  worker container that passes the worker command as arguments starts a *second node*), and the GraalJS cache failure
-  (`FileSystemException: /home/ubuntu/.cache: Read-only file system`, then `UnsatisfiedLinkError` from a `noexec`
-  home). **C4 (a foreign uid) passes**, and C1/C2 (rootless podman, rootless Docker) print `SKIP` with the command
-  that would enable them, which is what that host has. **C3's four assertions need current worker binaries**: the
-  checkout's `bin/worker-*` predate `--secret-file`, so they present no secret and the node refuses them — correctly,
-  but for a reason that is not the deployment's, so the check **skips** with the rebuild command
-  (`./scripts/build-workers.sh`) rather than reporting a false failure.
+- `scripts/worker-isolation-check.sh`, against a real rootful Docker on the build host: **C3 passes** — a worker
+  container reaches the `0600` socket as the deployment's identity, presents the secret, joins the pool as an open
+  worker and **runs a tenant's job over it** (`Job … ended SUCCEEDED after 393 ms`) while `c93_workers_running` stays
+  `0.0`, so the node genuinely spawned nothing. The wrong secret is refused, and the container has no network
+  reachability. **C4 (a foreign uid) passes**, and C1/C2 (rootless podman, rootless Docker) print `SKIP` with the
+  command that would enable them, which is what that host has. It also **found** four of the facts above: the `0775`
+  socket (the kernel's umask, not `0600`), the entrypoint trap (a worker that passes its command as arguments starts a
+  *second node*), the engine scratch space (`FileSystemException: …/.cache: Read-only file system`, then
+  `UnsatisfiedLinkError` from a `noexec` mount — item 10), and the two traps in one worker container's own startup.
+  Getting that pass needed `bin/worker-*` rebuilt (the checkout's predated `--secret-file`, so they presented no
+  secret and the node refused them — correctly, but for a reason that was not the deployment's; the check now
+  **skips** with the rebuild command rather than reporting a false failure) and three fixes to the check itself, each
+  of which had made it lie: a metric wait whose `$(…)` was expanded once instead of re-read (a worker that had
+  connected was reported as never having said hello), a **tenant token** for the job (an admin-capable token is
+  refused without `X-Cluster93-Tenant`), and a missing socket mount in the wrong-secret case (which made that
+  assertion pass vacuously, before it actually asserted the refusal).

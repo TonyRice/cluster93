@@ -33,6 +33,12 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
   - **Everything the socket boundary needs:** the socket is forced to **`0600`** after the bind (the kernel's umask
     made it `0775` — connectable by anyone, which is exactly the boundary a worker crosses) and its directory to
     `0700` (S3).
+  - **A worker engine needs writable *and executable* scratch space.** A worker unpacks a native library and then
+    `dlopen`s it — Javet's V8 from `/tmp/javet/...`, GraalJS's isolate from `$HOME/.cache` — so a read-only root plus
+    Docker's `noexec` tmpfs default makes a worker join the pool and then fail its first job
+    (`UnsatisfiedLinkError`). `compose.workers.tmpl` and the guide mount both with `exec`; the isolation check is what
+    caught it, and **C3 now passes** against a real rootful Docker (a container worker runs a tenant's job while the
+    node spawns nothing).
   - **The socket is enforced, not merely tightened.** The node sets it to `0600`, reads the mode back, and **fails to
     start** when it is anything else or when another user could write in its directory (a sticky directory like `/tmp`
     is fine), because the socket's mode is what binds a connection to its owner and there is no peer-credential check

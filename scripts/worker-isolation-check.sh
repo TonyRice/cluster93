@@ -34,6 +34,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_ID="idcheck$$-$(date +%s)"
 LABEL="c93.idcheck=$RUN_ID"
 NODE_ID="idcheck$$"
+TENANT="idcheck$$"
 # 64 hex characters, as `c93 node install` generates: the server refuses one shorter than 32 (D-044).
 ADMIN_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 
@@ -162,7 +163,28 @@ start_node() {
   wait_for 60 "the node to answer /health" curl -sf -m 2 "http://127.0.0.1:$HTTP_PORT/health" >/dev/null
 }
 
+# An operator's way to a job token: a tenant, then a token for it (D-044, D-045) — the admin token manages tenants and
+# tokens, and a job needs the tenant's own token.
+mint_job_token() {  # mint_job_token <tenant>
+  curl -s -m 10 -X POST "http://127.0.0.1:$HTTP_PORT/v1/tenants" -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H 'Content-Type: application/json' -d "{\"name\":\"$1\"}" >/dev/null
+  curl -s -m 10 -X POST "http://127.0.0.1:$HTTP_PORT/v1/tenants/$1/tokens" -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H 'Content-Type: application/json' -d '{"name":"idcheck","scopes":["*"]}' \
+    | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
 metric() { curl -sf -m 2 "http://127.0.0.1:$METRICS_PORT/metrics" 2>/dev/null | awk -v k="$1" '$1 ~ "^"k"\\{" { print $NF }' | head -1; }
+
+# Waits for a metric to reach a value, **re-reading it each turn**. (Passing `test "$(metric …)" = …` to wait_for
+# instead would expand the metric once, before the loop, and test that frozen value over and over.)
+wait_for_metric() {  # wait_for_metric <metric> <expected value> <tries>
+  local name="$1" expected="$2" tries="$3"
+  for _ in $(seq 1 "$tries"); do
+    [ "$(metric "$name")" = "$expected" ] && return 0
+    sleep 0.5
+  done
+  return 1
+}
 
 wait_for() {
   local tries="$1" what="$2"; shift 2
@@ -205,13 +227,13 @@ prepare_image() {
 # ---------------------------------------------------------------------------------------
 run_worker() {  # run_worker <name> <identity args...>
   local name="$1"; shift
-  "$ENGINE" run -d --rm \
+  "$ENGINE" run -d \
     --name "$RUN_ID-$name" \
     --label "$LABEL" \
     --network none \
     --cap-drop=ALL \
     --security-opt no-new-privileges \
-    --read-only --tmpfs /tmp \
+    --read-only --tmpfs /tmp:rw,exec,mode=1777,size=512m \
     --pids-limit 512 \
     --tmpfs /home:rw,exec,mode=1777,size=256m \
     -e HOME=/tmp \
@@ -227,15 +249,17 @@ run_worker() {  # run_worker <name> <identity args...>
 
 submit_job() {
   curl -sf -m 5 -X POST "http://127.0.0.1:$HTTP_PORT/v1/jobs" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
-    -d '{"script":"export default async () => ({ engine: process.version ? \"worker\" : \"worker\" })","timeoutMs":15000}' \
+    -H "Authorization: Bearer $JOB_TOKEN" -H "X-Cluster93-Tenant: $TENANT" \
+    -H 'Content-Type: application/json' \
+    -d '{"script":"export default () => ({ ran: true })","timeoutMs":15000}' \
     | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
 await_job() {  # await_job <job id>: SUCCEEDED or the status
   local id="$1" status=""
-  for _ in $(seq 1 60); do
-    status=$(curl -sf -m 5 "http://127.0.0.1:$HTTP_PORT/v1/jobs/$id" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  for _ in $(seq 1 120); do
+    status=$(curl -sf -m 5 "http://127.0.0.1:$HTTP_PORT/v1/jobs/$id" -H "Authorization: Bearer $JOB_TOKEN" \
+        -H "X-Cluster93-Tenant: $TENANT" \
       | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
     case "$status" in SUCCEEDED|FAILED|CANCELLED|TIMED_OUT) echo "$status"; return 0 ;; esac
     sleep 0.5
@@ -248,27 +272,59 @@ check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity 
   local hello=no job=no secret=no network=no result=FAIL
 
   run_worker "ok" "$@" || { say "  $case_id: the worker container did not start"; return 1; }
-  if wait_for 40 "the worker's HELLO to be counted" test "$(metric c93_workers_connected)" = "1.0"; then hello=yes; fi
+  # A container worker's cold start is seconds, but a loaded host (a concurrent build, a cold image cache) is where the
+  # margin matters: the worker retries for ~2 minutes by design, so wait for it rather than calling it a failure.
+  if wait_for_metric c93_workers_connected 1.0 360; then hello=yes; fi
+  local id=""
   if [ "$hello" = yes ]; then
-    local id; id=$(submit_job)
-    if [ -n "$id" ] && [ "$(await_job "$id")" = "SUCCEEDED" ]; then job=yes; fi
+    id=$(submit_job)
+    if [ -n "$id" ] && [ "$(await_job "$id")" = "SUCCEEDED" ] \
+        && [ "$(metric c93_workers_running)" = "0.0" ]; then
+      # The job finished **and** this node spawned no worker process: it ran on the connection (D-166).
+      job=yes
+    fi
   fi
   # The wrong secret must be refused: the connection count must not grow past the one good worker.
-  "$ENGINE" run -d --rm --name "$RUN_ID-bad" --label "$LABEL" --network none --cap-drop=ALL \
-    --security-opt no-new-privileges --read-only --tmpfs /tmp \
+  "$ENGINE" run -d --name "$RUN_ID-bad" --label "$LABEL" --network none --cap-drop=ALL \
+    --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,exec,mode=1777,size=512m \
     --tmpfs /home:rw,exec,mode=1777,size=256m --pids-limit 512 -e HOME=/tmp "$@" \
+    -v "$TMP/sockets:/run/cluster93/workers" \
     -v "$TMP/secrets/wrong:/run/secrets/c93-worker-secret:ro" \
     --entrypoint "/opt/cluster93/bin/$WORKER_BIN" \
     "$IMAGE" ipc --socket /run/cluster93/workers/node.sock \
       --secret-file /run/secrets/c93-worker-secret --heap-mb 64 --threads 4 >/dev/null 2>&1 || true
-  sleep 3
-  if [ "$(metric c93_workers_connected)" = "1.0" ] && grep -q "wrong secret" "$TMP/node.log"; then secret=yes; fi
+  # The refusal lands when that worker's own cold start finishes (the engine + V8 load take seconds), so wait for it
+  # rather than guessing a sleep — and require it, not merely that the count did not grow.
+  local refusals=0
+  for _ in $(seq 1 120); do
+    refusals=$(grep -ac "wrong secret" "$TMP/node.log")
+    [ "$refusals" -ge 1 ] && break
+    sleep 0.5
+  done
+  if [ "$(metric c93_workers_connected)" = "1.0" ] && [ "$refusals" -ge 1 ]; then secret=yes; fi
   # No network reachability, probed from inside a container on the same footing (S10).
   if "$ENGINE" run --rm --network none --cap-drop=ALL --security-opt no-new-privileges \
       --entrypoint /bin/bash "$IMAGE" -c 'exec 3<>/dev/tcp/1.1.1.1/80' >/dev/null 2>&1; then
     network=no
   else
     network=yes
+  fi
+  if [ "$hello" != yes ] || [ "$job" != yes ] || [ "$secret" != yes ] || [ "$network" != yes ]; then
+    say "  --- why $case_id did not pass ---"
+    say "  the worker container's own output (last 10 lines):"
+    "$ENGINE" logs "$RUN_ID-ok" 2>&1 | tail -10 | sed 's/^/    /'
+    say "  what the node saw:"
+    grep -aE "Worker container connected|Refusing worker connection|Listening for worker|did not say hello|Job .* ended" "$TMP/node.log" | tail -5 | sed 's/^/    /'
+    if [ "$secret" != yes ]; then
+      say "  the wrong-secret worker: status=$("$ENGINE" inspect -f '{{.State.Status}}' "$RUN_ID-bad" 2>/dev/null || echo 'never started'), connected=$(metric c93_workers_connected), refusals-in-node-log=$(grep -ac 'wrong secret' "$TMP/node.log")"
+      "$ENGINE" logs "$RUN_ID-bad" 2>&1 | tail -6 | sed 's/^/    /'
+    fi
+    if [ -n "$id" ]; then
+      say "  the job:"
+      curl -s -m 5 "http://127.0.0.1:$HTTP_PORT/v1/jobs/$id" -H "Authorization: Bearer $JOB_TOKEN" \
+        -H "X-Cluster93-Tenant: $TENANT" | head -c 600 | sed 's/^/    /'
+      say ""
+    fi
   fi
   [ "$hello" = yes ] && [ "$job" = yes ] && [ "$secret" = yes ] && [ "$network" = yes ] && result=PASS
   printf '%s | %s | %s | %-22s | %-5s | %-3s | %-6s | %-7s | %s\n' \
@@ -283,8 +339,9 @@ check_identity_refused() {  # check_identity_refused <engine> <foreign uid:gid>
   local engine="$1" foreign="$2"
   local before after hello=no
   before="$(metric c93_workers_connected)"
-  "$ENGINE" run -d --rm --name "$RUN_ID-foreign" --label "$LABEL" --network none --cap-drop=ALL \
-    --security-opt no-new-privileges --read-only --tmpfs /tmp --tmpfs /home:rw,exec,mode=1777,size=256m \
+  "$ENGINE" run -d --name "$RUN_ID-foreign" --label "$LABEL" --network none --cap-drop=ALL \
+    --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,exec,mode=1777,size=512m \
+    --tmpfs /home:rw,exec,mode=1777,size=256m \
     --pids-limit 512 -e HOME=/tmp --user "$foreign" \
     -v "$TMP/sockets:/run/cluster93/workers" \
     -v "$TMP/secrets/secret:/run/secrets/c93-worker-secret:ro" \
@@ -343,6 +400,11 @@ if [ -z "$IMAGE" ] && ! workers_are_current; then
   say ""
 fi
 start_node
+JOB_TOKEN="$(mint_job_token "$TENANT")"
+if [ -z "$JOB_TOKEN" ]; then
+  say "Could not mint a tenant token through the API (see $TMP/node.log); there is nothing to submit a job with."
+  exit 1
+fi
 [ "$WORKERS_OK" = 1 ] && prepare_image
 
 printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-3s | %-6s | %-7s | %s\n' \

@@ -43,11 +43,12 @@ x-worker: &worker
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   read_only: true
-  # /tmp for the usual scratch, and /home for the engine's own cache: a GraalJS worker unpacks a native isolate
-  # library into $HOME/.cache and then dlopens it, so its home must be writable AND executable. Without this a
-  # read-only root makes the worker die at startup (the isolation check is what catches it).
+  # Writable AND executable scratch, which a read-only root has nowhere else to put: a worker engine unpacks a native
+  # library and then dlopens it — Javet loads its V8 from /tmp/javet/..., GraalJS its isolate from $HOME/.cache — and
+  # Docker's tmpfs defaults to noexec, so a worker dies at (or just before) its first job without this. It is the one
+  # relaxation the hardening set needs, and it is inside a single-purpose, non-privileged container.
   tmpfs:
-    - /tmp
+    - /tmp:rw,exec,mode=1777,size=512m
     - /home:rw,exec,mode=1777,size=256m
   pids_limit: 512
   mem_limit: 512m
