@@ -3557,5 +3557,9 @@ worker is a reuse opportunity, and the reason it was not reused was a rule about
   B's job is served **on the same connection** — `c93_workers_running` stays `0.0`, `c93_workers_connected` stays `1.0`, the
   worker reports itself re-bound, and B's run sees nothing of A's (a marker A set in its engine's globals reads back
   `undefined`, because the run's context is fresh).
+- `scripts/worker-isolation-check.sh` re-run against **both** rebuilt engines (`worker-javet`, `worker-graaljs`): **C1
+  (rootless podman), C3 (rootful Docker) and C4 (a foreign uid refused) pass**, with a job round trip, the host fetched
+  through the node, the gate refusing the cluster's own port, a service answered through the ingress, the wrong secret
+  refused and no network in the container — so the container path is unchanged by the re-bind.
 - The touched-module gate: `./mvnw -o verify -pl cli,runner-protocol,server -am -DskipITs` (server 230, runner-protocol 96,
   cli 114/2 skipped, plus core/runtime).
