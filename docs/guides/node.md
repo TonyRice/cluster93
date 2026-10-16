@@ -204,7 +204,9 @@ may share one. Guests stay separated by the engine — a fresh context per job �
   deployment's (D-169). A connection that would exceed `C93_MAX_WORKER_MEMORY_MB` is refused, with the reason in the
   node's log.
 - **Idle control is the deployment's.** The node cannot shed an open worker — closing its socket only makes the
-  supervisor start another — so size the pool with the worker count and the container's limits.
+  supervisor start another — so size the pool with the worker count and the container's limits. What it *can* do is
+  put an idle worker back to work: a worker with nothing running on it is re-bound to whichever tenant has work, so one
+  container serves tenants in turn instead of one of them sitting warm while another starts a process (D-172).
 
 ### Verifying it on a real engine
 

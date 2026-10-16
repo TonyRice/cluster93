@@ -26,4 +26,14 @@ interface NodeArbiter {
     default WorkerHandle takeOpenWorker(String tenantId) {
         return null;
     }
+
+    /**
+     * An idle worker to re-bind to {@code tenantId}, taken from another tenant's pool (D-172), or null when no pool has
+     * one to spare. Called when a claim cannot be served any other way: it preempts another tenant's warm worker, which
+     * is the same rule that lets work reap an idle worker node-wide (D-156) — except that the process is reused rather
+     * than replaced.
+     */
+    default WorkerHandle takeIdleWorkerFor(String tenantId) {
+        return null;
+    }
 }

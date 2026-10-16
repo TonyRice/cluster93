@@ -341,6 +341,25 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     }
 
     /**
+     * Takes an idle worker another tenant is holding, for {@code tenantId} to re-bind, or null when none is free
+     * (D-172). The caller adopts it ({@link TenantWorkerPool#adopt}) and sends the new binding. The worker has no run
+     * left — a pool only ever offers workers whose last run finished — so moving the binding cannot pull the ground
+     * from under a call: the run-level authorisation and the worker's cgroup move with it.
+     */
+    @Override
+    public WorkerHandle takeIdleWorkerFor(String tenantId) {
+        for (TenantWorkerPool pool : tenantPools.values()) {
+            WorkerHandle idle = pool.offerIdleWorker();
+            if (idle != null) {
+                LOG.info("Handing idle worker {} (tenant {}) to tenant {} instead of starting another process (D-172)",
+                        idle.workerId(), idle.boundTenantId(), tenantId);
+                return idle;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Closes all tenant worker pools and destroys processes.
      */
     public void close() {

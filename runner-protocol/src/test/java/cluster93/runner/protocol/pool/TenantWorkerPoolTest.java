@@ -141,7 +141,7 @@ class TenantWorkerPoolTest {
     }
 
     @Test
-    @DisplayName("WorkerHandle transitions UNBOUND -> BOUND and enforces its invariants")
+    @DisplayName("A worker binds, and re-binds while idle, but never with a run in flight (D-155, D-172)")
     void testWorkerHandleStateTransitions() {
         FakeProcess fakeProcess = new FakeProcess(9999L);
         FakeStream fakeStream = new FakeStream();
@@ -162,14 +162,84 @@ class TenantWorkerPoolTest {
         assertEquals("acme", handle.boundTenantId());
         assertTrue(handle.hasCapacity());
 
-        // Binding again must fail with IllegalStateException
-        var ex = assertThrows(Exception.class, () -> handle.bind("other", new JsonObject(), new JsonObject()).toCompletionStage().toCompletableFuture().join());
-        assertTrue(ex.getCause() instanceof IllegalStateException || ex instanceof IllegalStateException);
+        // Idle, it can be handed to another tenant (D-172): the process is reusable, the tenant is not permanent.
+        handle.bind("globex", new JsonObject(), new JsonObject());
+        assertEquals("globex", handle.boundTenantId());
+
+        // With a run in flight it refuses to move: that run's calls stay authorised against the tenant it started under.
+        assertTrue(handle.admitJob());
+        var refused = handle.bind("acme", new JsonObject(), new JsonObject());
+        assertTrue(refused.failed(), "a worker with a job on it must not change tenant");
+        assertTrue(String.valueOf(refused.cause().getMessage()).contains("idle"),
+                "the refusal must say what it is waiting for: " + refused.cause().getMessage());
+        assertEquals("globex", handle.boundTenantId(), "and it keeps the tenant it is running for");
 
         // Terminate
         handle.terminate();
         assertEquals(WorkerHandle.State.TERMINATED, handle.state());
         assertFalse(handle.isAlive());
+    }
+
+    @Test
+    @DisplayName("An idle worker is re-bound to another tenant instead of a process being started (D-172)")
+    void anIdleWorkerIsReboundToAnotherTenant() throws Exception {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        // One worker node-wide, kept warm while its tenant has nothing running: the second tenant can neither take it
+        // as its own (it is bound elsewhere) nor start a process (no slot left), so only re-binding can serve it.
+        TenantWorkerPoolManager manager = new TenantWorkerPoolManager(vertx, java.util.Map.of(), "javet", 0, 1, 1, 1, 64,
+                TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(),
+                cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL, 0);
+        TenantWorkerPool acme = manager.poolFor("acme");
+        TenantWorkerPool globex = manager.poolFor("globex");
+        try {
+            WorkerHandle worker = boundHandle(new FakeProcess(7201L), 7201L, "acme", 1);
+            // The pool takes the worker on as it takes a spawned one, so the counts are the real ones.
+            acme.adopt(worker, null, "acme");
+            assertThat(manager.nodeBudget().tryAcquire()).as("the node's one worker slot is this worker's").isTrue();
+            acme.release(worker); // its job finished: idle, and kept warm for its tenant
+            assertThat(worker.boundTenantId()).isEqualTo("acme");
+
+            WorkerHandle got = globex.acquire("globex").toCompletionStage().toCompletableFuture()
+                    .get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+            assertThat(got.workerId()).as("the same process serves globex; no new one was started")
+                    .isEqualTo(worker.workerId());
+            assertThat(got.boundTenantId()).isEqualTo("globex");
+            assertThat(got.state()).isEqualTo(WorkerHandle.State.BOUND);
+            assertThat(manager.nodeBudget().used()).as("no second worker slot was taken").isEqualTo(1);
+            assertThat(acme.totalWorkers()).as("the pool that gave it up no longer counts it").isZero();
+            assertThat(globex.totalWorkers()).isEqualTo(1);
+            assertThat(globex.pendingCount()).isZero();
+        } finally {
+            manager.close();
+            vertx.close().toCompletionStage().toCompletableFuture().get(5, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    @DisplayName("A worker with a run in flight is never re-bound to another tenant (D-172)")
+    void aBusyWorkerIsNeverMoved() throws Exception {
+        io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+        TenantWorkerPoolManager manager = new TenantWorkerPoolManager(vertx, java.util.Map.of(), "javet", 0, 1, 1, 1, 64,
+                TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(),
+                cluster93.runner.protocol.server.NodeRpcAuthorizer.ALLOW_ALL, 0);
+        TenantWorkerPool acme = manager.poolFor("acme");
+        TenantWorkerPool globex = manager.poolFor("globex");
+        try {
+            WorkerHandle worker = boundHandle(new FakeProcess(7202L), 7202L, "acme", 4);
+            acme.jobStarted(worker, "acme"); // acme is using it: active, not idle
+            assertThat(manager.nodeBudget().tryAcquire()).isTrue();
+
+            // Nothing is idle to hand over and no process can be started, so globex waits rather than take it.
+            Future<WorkerHandle> waiting = globex.acquire("globex");
+            assertThat(waiting.isComplete()).as("it must wait rather than move a worker that is running").isFalse();
+            assertThat(globex.pendingCount()).isEqualTo(1);
+            assertThat(worker.boundTenantId()).as("the worker keeps the tenant it is running for").isEqualTo("acme");
+            assertThat(worker.state()).isEqualTo(WorkerHandle.State.BOUND);
+        } finally {
+            manager.close();
+            vertx.close().toCompletionStage().toCompletableFuture().get(5, java.util.concurrent.TimeUnit.SECONDS);
+        }
     }
 
     @Test

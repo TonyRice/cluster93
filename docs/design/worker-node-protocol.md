@@ -26,7 +26,8 @@ This document specifies the high-throughput inter-process communication (IPC) pr
                            │         IN-CLUSTER TENANT WORKER             │
                            │    (`worker-graaljs` / `worker-javet`)       │
                            │                                              │
-                           │ • Bound to one tenant for life               │
+                           │ • Serves one tenant at a time (re-bound    │
+                           │   to another whenever it goes idle)        │
                            │ • Isolated by Linux cgroup memory caps       │
                            │ • Zero authority: RPCs node for host APIs    │
                            │ • Pure compute local (crypto, zlib, text)    │
@@ -35,7 +36,7 @@ This document specifies the high-throughput inter-process communication (IPC) pr
 
 ### In Scope: In-Cluster Workers
 - **Process Model:** Dedicated tenant worker processes spawned as GraalVM `native-image` binaries (`worker-javet`, `worker-graaljs`), containerized processes via Podman/gVisor (`runsc`), or Firecracker microVMs.
-- **Lifetime & Tenancy:** A worker process is spawned unbound into a warm pool, bound to **one tenant for its lifetime** via `BIND`, and handles runs/services sequentially or concurrently for that tenant.
+- **Lifetime & Tenancy:** A worker process is spawned unbound into a warm pool, bound via `BIND` to **one tenant at a time**, and handles runs/services sequentially or concurrently for that tenant. It is not bound for life: once nothing is running on it, the node re-binds it to whichever tenant has work (D-172), so a warm process is reused rather than replaced.
 - **Resource Containment:** Enforced externally via Linux cgroups v2 (`MemoryMax`, `CPUWeight`), seccomp filters, and namespaces.
 - **Zero Trust:** The worker process is treated as potentially compromised. The Node holds all state, identity, and authority.
 
@@ -222,7 +223,7 @@ Objects with lifecycles spanning multiple calls (TCP sockets, HTTP/2 streams, fi
 Because the worker executes untrusted guest code, the Node enforces strict defense-in-depth:
 
 1. **Identity Isolation:**
-   - The worker is bound to a tenant ID **once** via `BIND`.
+   - The worker is bound to a tenant ID via `BIND`, and the binding is changed only by another `BIND` while the worker has nothing running (D-172); a run whose tenant does not match the binding in force is refused.
    - The worker **never** sends `tenantId` in `CALL` or `RUN` frames. The Node supplies `tenantId` from its internal run registry table.
 2. **Method Allowlisting:**
    - The Node validates incoming `CALL.method` against a strict allowlist. Any unknown or unauthorized method immediately terminates the call with `INVALID_METHOD`.

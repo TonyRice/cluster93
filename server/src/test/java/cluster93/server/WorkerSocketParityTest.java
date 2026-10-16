@@ -118,8 +118,8 @@ class WorkerSocketParityTest {
     }
 
     /**
-     * Another worker, connected over the same socket. A worker is bound to one tenant for life (D-155), so a scenario
-     * that runs for a different tenant needs a connection of its own — the pool binds the first one to ask.
+     * Another worker, connected over the same socket. A worker serves one tenant at a time and may be re-bound once idle
+     * (D-172), so a scenario that needs a worker the pool has not already given away simply connects its own.
      */
     private static WorkerDaemon connectWorker() throws Exception {
         NetSocket socket = await(workerTransport.connect(socketPath));
@@ -214,7 +214,8 @@ class WorkerSocketParityTest {
                                 .put("note", "no service lives on port 1")))));
         assertThat(policy.statusCode()).as(policy.bodyAsString()).isIn(200, 201);
 
-        // Its own connection: the pool binds a worker to one tenant for life (D-155).
+        // Its own connection: a worker already bound and warm is a candidate for re-binding, not a guarantee (D-172),
+        // so this scenario supplies the worker it wants rather than borrowing the pool's.
         connectWorker();
         awaitUntil("the gated tenant's worker to join the pool",
                 () -> scrape().contains("c93_workers_connected{node=\"socketparity\"} 2.0"));

@@ -6,6 +6,22 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A worker is re-bound when it goes idle, instead of being kept for one tenant for life** (D-172, refines D-155/D-166):
+  - A worker still serves **one tenant at a time** — every host-API call is authorised against the tenant the run belongs
+    to, and the worker sits in that tenant's cgroup — but the binding is no longer permanent. When a worker has nothing
+    running on it (its last job or service released), it is a reuse opportunity: the node hands it to whichever tenant
+    has work **before** it starts a process, and only a worker with a run in flight is never moved.
+  - This is what an idle, deployment-supplied worker container was missing: with the node-wide worker cap and the
+    connection cap (D-156, D-171), tenant A's idle container used to sit warm while tenant B's job spawned a process of
+    the node's own or waited. It now serves B, and the node still creates nothing.
+  - `bind()` re-binds an idle worker and refuses one that is running (naming "idle"); `WorkerHandle`'s one-shot
+    `UNBOUND → BOUND` state is gone. The pools transfer the worker between their books, the node-wide worker and memory
+    allowances stay with the worker (taken at spawn, given back at death), and a spawned worker's cgroup **moves** with it
+    because the tenant is the CPU boundary. No protocol change: both ends already accepted a repeated `BIND`, and a run
+    whose tenant does not match the current binding is still refused.
+  - Covered by `WorkerRebindTest` (one worker container, two tenants in turn: the second job runs on the same connection,
+    `c93_workers_running` stays `0.0`, and the second tenant's run sees nothing of the first) and two pool tests.
+
 - **Worker containers: the node listens, the deployment connects** (D-166, D-167, D-171):
   - A node can run its engine workers as **containers the deployment creates**. It binds a Unix socket
     (`C93_WORKER_SOCKET`) and every connection becomes an **open worker** — UNBOUND, tenant-agnostic — that it binds

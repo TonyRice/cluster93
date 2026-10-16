@@ -336,6 +336,18 @@ public class TenantWorkerPool {
                     .onFailure(err -> poison(open, "bind failed: " + err.getMessage()));
         }
 
+        // 2c. An idle worker another tenant is holding: re-bind it rather than start another process (D-172). A worker
+        //     whose last run has finished is safe to move — its calls are authorised per run, and its cgroup moves with
+        //     it — so an idle process goes back to serving whoever has work instead of being replaced.
+        WorkerHandle adopted = arbiter == null ? null : arbiter.takeIdleWorkerFor(tenantId);
+        if (adopted != null) {
+            adopt(adopted, adopted.boundTenantId(), tenantId);
+            return adopted.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
+                    .map(v -> adopted)
+                    .onSuccess(v -> processNextPending())
+                    .onFailure(err -> poison(adopted, "re-bind failed: " + err.getMessage()));
+        }
+
         // 3. Can we spawn a new worker right now?
         if (totalWorkers.get() < maxTotal) {
             Promise<WorkerHandle> promise = Promise.promise();
@@ -452,7 +464,8 @@ public class TenantWorkerPool {
         if (recycle) {
             recycleWorker(worker);
         } else {
-            // Keep warm for the same tenant: a worker is never handed to another tenant.
+            // Keep warm: an idle worker is a spare process this tenant may use again, and one the arbiter may hand to
+            // another tenant that has work (D-172) — it is only ever re-bound while it has nothing running.
             tenantWarmQueue.computeIfAbsent(worker.boundTenantId(), k -> new ArrayList<>()).add(worker);
         }
 
@@ -485,6 +498,38 @@ public class TenantWorkerPool {
                 next.promise().fail(ar.cause());
             }
         });
+    }
+
+    /**
+     * Takes an idle worker <b>from another tenant</b> into this pool and re-binds it (D-172). The node-wide allowances
+     * (worker count and memory, D-156/D-165) stay with the worker — they were taken when it was spawned and are given
+     * back when it dies — so only this pool's own count and the worker's cgroup move.
+     */
+    synchronized void adopt(WorkerHandle worker, String fromTenant, String tenantId) {
+        totalWorkers.incrementAndGet();
+        if (worker instanceof ProcessWorkerHandle process && fromTenant != null) {
+            // The tenant is the CPU boundary (D-158), so the worker moves cgroups with its new tenant.
+            process.movedToTenant(tenantId);
+            cgroupLimiter.cleanup(fromTenant, process.pid());
+        }
+        jobStarted(worker, tenantId);
+    }
+
+    /**
+     * Hands one idle worker of this pool to the manager, so another tenant's pool can re-bind it (D-172), or null when
+     * this pool has none to spare. Only a worker with nothing left on it is offered: the warm queue holds workers whose
+     * last run has finished, which is exactly the drain the re-bind requires.
+     */
+    synchronized WorkerHandle offerIdleWorker() {
+        for (List<WorkerHandle> warm : tenantWarmQueue.values()) {
+            if (!warm.isEmpty()) {
+                WorkerHandle idle = warm.remove(warm.size() - 1);
+                totalWorkers.decrementAndGet();
+                LOG.info("Handing idle worker {} to another tenant that has work for it", idle.workerId());
+                return idle;
+            }
+        }
+        return null;
     }
 
     /**

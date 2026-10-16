@@ -121,13 +121,28 @@ abstract class AbstractWorkerHandle implements WorkerHandle {
         runningJobs.decrementAndGet();
     }
 
+    /**
+     * Binds this worker to a tenant, or <b>re-binds</b> it when it is idle (D-172). A worker serves one tenant at a
+     * time — the tenant is what every host-API call is authorised against and whose cgroup the worker sits in — but a
+     * worker with nothing left to run is a reusable host: it can be handed to another tenant instead of being thrown
+     * away and replaced.
+     *
+     * <p>A worker with a run in flight is never re-bound: that run's calls must stay authorised against the tenant they
+     * started under, so the binding cannot move beneath it. The pool only offers workers whose last run has finished.
+     */
     @Override
     public Future<Void> bind(String tenantId, JsonObject limits, JsonObject env) {
-        if (!state.compareAndSet(State.UNBOUND, State.BOUND)) {
-            return Future.failedFuture(new IllegalStateException("Worker " + workerId + " is already in state " + state.get()));
+        State current = state.get();
+        if (current == State.TERMINATED) {
+            return Future.failedFuture(new IllegalStateException("Worker " + workerId + " is terminated"));
+        }
+        if (current == State.BOUND && runningJobs.get() > 0) {
+            return Future.failedFuture(new IllegalStateException("Worker " + workerId + " is running " + runningJobs.get()
+                    + " job(s) and cannot change tenant until it is idle"));
         }
         this.boundTenantId = tenantId;
         this.lastUsedAt = Instant.now();
+        state.set(State.BOUND);
         return channel.bind(tenantId, limits, env);
     }
 

@@ -60,8 +60,11 @@ class SocketWorkerHandleTest {
         assertThat(handle.admitJob()).isFalse();
         assertThat(handle.runningJobs()).isEqualTo(4);
 
-        // Binding is for life: a worker is never handed to another tenant.
-        assertThat(handle.bind("globex", new JsonObject(), new JsonObject()).failed()).isTrue();
+        // Idle it can be handed to another tenant; with runs on it, it refuses (D-172).
+        var refused = handle.bind("globex", new JsonObject(), new JsonObject());
+        assertThat(refused.failed()).as("a worker with runs in flight must not change tenant").isTrue();
+        assertThat(String.valueOf(refused.cause().getMessage())).contains("idle");
+        assertThat(handle.boundTenantId()).isEqualTo("acme");
     }
 
     @Test

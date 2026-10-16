@@ -3002,7 +3002,7 @@ Dispatch is a round-robin over the tenants waiting, and the rule that matters is
 - Keeping `C93_CAPACITY`'s meaning stable matters: operators have it set.
 
 ### D-155 — One worker per tenant, several jobs each
-**Date:** 2026-10-14 · **Status:** Accepted. Shapes D-160.
+**Date:** 2026-10-14 · **Status:** Accepted. Shapes D-160. **Refined by D-172**: the binding is one tenant *at a time*, not for the worker's life — an idle worker can be handed to another tenant.
 
 **Context:**
 `ScriptRunner` already runs `isolateThreads` contexts at once and gives every job a fresh `JsContext` closed afterwards — so several jobs per process is not a new execution model. The pool never passed `--threads`, so every worker fell back to `WorkerMain`'s default of **2**.
@@ -3386,7 +3386,7 @@ on its own context. The drain is deferred, not inline: a claim takes its job slo
   three-quarters of them), and `./mvnw -o verify -pl cli,runner-protocol,server -am` is green.
 
 ### D-171 — The connected-worker build details, and what a real container taught us
-**Date:** 2026-10-15 · **Status:** Accepted. Settles the build-time questions D-166/D-167/D-169 left open; refines D-150.
+**Date:** 2026-10-15 · **Status:** Accepted. Settles the build-time questions D-166/D-167/D-169 left open; refines D-150. **Refined by D-172** (a worker connection is re-bindable once idle, so item 4's "the node cannot shed an idle worker" is no longer the whole story).
 
 **Context:**
 D-166/D-167 fixed the shape (the node listens, the deployment creates the containers, a connection is an open worker)
@@ -3498,3 +3498,63 @@ Docker, 2026-10-15) — neither is visible to a unit test.
   connected was reported as never having said hello), a **tenant token** for the job (an admin-capable token is
   refused without `X-Cluster93-Tenant`), and a missing socket mount in the wrong-secret case (which made that
   assertion pass vacuously, before it actually asserted the refusal).
+
+### D-172 — A worker serves one tenant at a time, and is re-bound when idle
+**Date:** 2026-10-16 · **Status:** Accepted (Tony: "I do think BIND should be rebindable"). Refines D-155; made necessary by the caps in D-156 and the connection source in D-166.
+
+**Context:**
+D-155 made the binding permanent: "a worker is **never shared between tenants**", and the node enforced it with a one-shot
+`bind()` (`UNBOUND → BOUND`, and a second call failed). Every cap added afterwards made that stickiness more expensive. A
+node-wide worker cap (D-156) and an accept cap on connections (D-171 item 4) mean a bound worker that has gone **idle**
+cannot be shed: it sits in tenant A's warm queue while tenant B — with work waiting — either starts another process or
+waits for the cap. With a deployment-supplied container (D-166, D-167) that is the deployment's one container idling while
+the node spawns a process of its own. Tony's question ("does that mean a worker that has no more running jobs or services
+can just go back into the pool?") had an obvious answer, and the honest one was not the answer the code gave: yes, an idle
+worker is a reuse opportunity, and the reason it was not reused was a rule about *processes*, not about isolation.
+
+**Decision:**
+1. **A worker serves one tenant at a time, not one tenant for life.** The binding is a state the worker and the channel
+   carry, and it can move — but only while the worker has **nothing running on it** (no job, no service): the drain
+   condition is exactly "in flight == 0", which the pool's books already guarantee, because a worker only reaches a warm
+   queue when its last run has been released. `WorkerHandle.bind` therefore re-binds an idle worker (and refuses one with
+   runs in flight, naming "idle" so the refusal says what it is waiting for). "Sharing" here means *re-binding in turn*;
+   two tenants never run on one worker at once.
+2. **Reuse comes before a new process.** `TenantWorkerPool.acquire` asks the node for an idle worker another tenant is
+   holding (path 2c) before it spawns, after its own tenant's workers and the node's open workers. The arbiter
+   (`NodeArbiter.takeIdleWorkerFor`) is the only thing that sees more than one tenant, so the choice belongs there —
+   alongside the rotation (D-161) and the reap (D-156), of which this is the twin: work preempts warmth, but it now
+   **reuses** the idle worker instead of retrying the spawn.
+3. **The accounting moves with the worker, the allowances do not.** `adopt`/`offerIdleWorker` transfer the worker between
+   the two pools' books (`totalWorkers`), because the node-wide worker count and memory are taken when the worker is
+   *created* and released when it *dies* — moving pools changes neither, so a transfer cannot leak a slot or double-count
+   memory. A worker's cgroup moves with it (`WorkerCgroups.applyWorker` writes `cgroup.procs`, which *is* the move; the
+   old tenant's directory is cleaned up after), since the tenant is the CPU boundary (D-158). A connected worker's cgroup
+   belongs to its container, so nothing moves there.
+4. **The protocol needed no new message.** Both ends already accept a repeated `BIND` — `WorkerDaemon.onBind` sets the
+   bound tenant, `NodeWorkerChannel.bind` sets its own and sends the frame — and `NodeWorkerChannel.run` already refuses a
+   run whose tenant does not match the channel's current binding. That last check is what makes re-binding safe rather
+   than merely convenient: a run dispatched under the old tenant cannot execute on a worker that has moved.
+
+**Consequences:**
+- Warmth is now shared: a tenant's idle worker can be taken by another tenant that has work, so a burst of sequential jobs
+  pays a cold start when a second tenant interleaves. That is the same trade D-156 already made for the caps (work
+  preempts warmth) and the same one D-153 makes between tenants; the alternative — the idle worker blocking a job — is
+  worse, and it was demonstrably happening with the deployment's one container.
+- A worker **with runs in flight is never moved** (nothing to gain: its tenant needs it, and its calls must stay
+  authorised against the tenant they started under). So a busy tenant is not disturbed by a waiting one.
+- The run-level boundary is unchanged, and it is what the isolation claim rests on: a fresh context per run, host-API calls
+  authorised per run (D-150), per-tenant cgroups, and the secret/socket boundary on the connection (D-171). What changed is
+  the lifetime of a *process*, not the lifetime of a *boundary*.
+- Unbound pre-warmed workers (`minWarm > 0`, 0 by default) are still this pool's own spares and are still reaped for
+  warmth rather than offered; if warmth is ever turned on again, offering those too is the obvious next step.
+
+**Evidence:**
+- `TenantWorkerPoolTest.anIdleWorkerIsReboundToAnotherTenant` (two tenants, one worker, one node slot: tenant B is served
+  by tenant A's worker, same worker id, no new process, the counts transfer and the node's slot count does not move) and
+  `aBusyWorkerIsNeverMoved` (a worker with a run in flight is not offered; the waiting claim queues rather than take it).
+- `WorkerRebindTest` end-to-end: one worker container over the socket, tenant A runs a job, goes idle and warm, then tenant
+  B's job is served **on the same connection** — `c93_workers_running` stays `0.0`, `c93_workers_connected` stays `1.0`, the
+  worker reports itself re-bound, and B's run sees nothing of A's (a marker A set in its engine's globals reads back
+  `undefined`, because the run's context is fresh).
+- The touched-module gate: `./mvnw -o verify -pl cli,runner-protocol,server -am -DskipITs` (server 230, runner-protocol 96,
+  cli 114/2 skipped, plus core/runtime).

@@ -222,7 +222,9 @@ public class NodeWorkerChannel {
     }
 
     /**
-     * Sends BIND message to bind the worker to one tenant for life.
+     * Sends a BIND message, making {@code tenantId} the tenant this worker serves. Called on a fresh worker and again
+     * when an idle one is handed to another tenant (D-172); {@link #run} refuses a run whose tenant does not match the
+     * binding in force, so a run dispatched under the old tenant cannot execute after the move.
      */
     public Future<Void> bind(String tenantId, JsonObject limits, JsonObject env) {
         this.boundTenantId = Objects.requireNonNull(tenantId, "tenantId");

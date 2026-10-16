@@ -440,8 +440,8 @@ public final class Cluster93 {
                     config.maxJobsPerWorker(),
                     config.maxHeapMb(),
                     // Keep a worker while its tenant has work: an idle worker is held for the tenant's next job
-                    // rather than reaped, so a burst of sequential jobs stops paying process startup (D-155). It is
-                    // still never handed to another tenant.
+                    // rather than reaped, so a burst of sequential jobs stops paying process startup (D-155). It can
+                    // also be handed to another tenant that has work (D-172), but only while it has nothing running.
                     cluster93.runner.protocol.pool.TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT,
                     cgroups,
                     // The real authorizer (D-150): with a worker socket the channel is bound to whoever connected, so

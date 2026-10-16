@@ -47,7 +47,10 @@ public interface WorkerHandle {
 
     Instant lastUsedAt();
 
-    /** The tenant this worker is bound to for life, or null while it is still open (unbound). */
+    /**
+     * The tenant this worker is serving now, or null while it is still open (unbound). A worker serves one tenant at a
+     * time, and is re-bound to another when it goes idle (D-172).
+     */
     String boundTenantId();
 
     /** How many jobs this worker may run at once (D-155). */

@@ -124,6 +124,21 @@ public class ProcessWorkerHandle extends AbstractWorkerHandle {
         return cgroups != null && cgroups.checkOomKilled(boundTenantId(), pid());
     }
 
+    /**
+     * Moves this worker into {@code tenantId}'s cgroup, from whichever tenant it served (D-172). The tenant is the CPU
+     * boundary (D-158), so a worker handed to another tenant has to move with it; its own memory bound does not change
+     * (the worker is the same size whoever it runs for). The caller drops the old tenant's directory afterwards
+     * ({@link WorkerCgroups#cleanup}).
+     */
+    void movedToTenant(String tenantId) {
+        if (cgroups == null) {
+            return;
+        }
+        long maxBytes = reservedBytes();
+        cgroups.applyTenantCpu(tenantId);
+        cgroups.applyWorker(tenantId, pid(), maxBytes, Math.max(0L, maxBytes - 64L * 1024 * 1024));
+    }
+
     @Override
     public String stderrTail() {
         return stderr.render();
