@@ -3439,7 +3439,12 @@ Docker, 2026-10-15) — neither is visible to a unit test.
 - `WorkerSocketSourceTest` (connect → HELLO → secret → open worker → bind → a real job), `WorkerSocketTest` (a real
   node, a real worker over the socket, a job through the API, `c93_workers_running 0`), `UdsConnectRetryTest` (the
   retry succeeds late and fails cleanly), `WorkerRpcAuthorizerTest`.
-- `scripts/worker-isolation-check.sh`: C3 (rootful Docker, `--user <uid>:<gid>`) — HELLO, a job round trip, the wrong
-  secret refused, and no network reachability from inside the container; C4 (a foreign uid) — refused. It found the
-  `0775` socket, the entrypoint trap and the GraalJS cache failure; C1/C2 (rootless podman and rootless Docker) print
-  `SKIP` with the command that would enable them, which is what this host has.
+- `scripts/worker-isolation-check.sh`: it was run against a real rootful Docker on the build host, and it is what
+  **found** three of the facts above — the `0775` socket (the kernel's umask, not `0600`), the entrypoint trap (a
+  worker container that passes the worker command as arguments starts a *second node*), and the GraalJS cache failure
+  (`FileSystemException: /home/ubuntu/.cache: Read-only file system`, then `UnsatisfiedLinkError` from a `noexec`
+  home). **C4 (a foreign uid) passes**, and C1/C2 (rootless podman, rootless Docker) print `SKIP` with the command
+  that would enable them, which is what that host has. **C3's four assertions need current worker binaries**: the
+  checkout's `bin/worker-*` predate `--secret-file`, so they present no secret and the node refuses them — correctly,
+  but for a reason that is not the deployment's, so the check **skips** with the rebuild command
+  (`./scripts/build-workers.sh`) rather than reporting a false failure.

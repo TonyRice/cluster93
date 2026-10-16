@@ -330,26 +330,39 @@ have_docker || ENGINE=podman
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/c93-idcheck-XXXXXX")"
 say "worker-isolation-check $RUN_ID (engine: $ENGINE)"
 hr
+# A worker image with current binaries is only needed by the cases that reach the node and present a secret; the
+# wrong-identity case (C4) is refused before any of that, so it still runs.
+WORKERS_OK=1
 if [ -z "$IMAGE" ] && ! workers_are_current; then
-  say "The checkout's bin/$WORKER_BIN is missing or older than the worker sources, so it cannot present the secret"
-  say "this node expects (--secret-file arrived with D-168) and the cases would fail for a reason that is not the"
-  say "deployment's. Rebuild it, then run this again:"
-  say "  ./scripts/build-workers.sh graaljs   (or javet)     # ~minutes"
-  say "Or name an image whose workers are current:  $0 --image <ref>"
-  describe_cases
-  exit 0
+  WORKERS_OK=0
+  say "NOTE: the checkout's bin/$WORKER_BIN is missing or older than the worker sources, so it cannot present the"
+  say "      secret this node expects (--secret-file arrived with D-168): the cases that join the pool would fail"
+  say "      for a reason that is not the deployment's, so they are skipped. Rebuild, then run this again:"
+  say "        ./scripts/build-workers.sh graaljs   (or javet)     # ~minutes"
+  say "      Or name an image whose workers are current:  $0 --image <ref>"
+  say ""
 fi
 start_node
-prepare_image
+[ "$WORKERS_OK" = 1 ] && prepare_image
 
 printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-3s | %-6s | %-7s | %s\n' \
   case engine rootless identity hello job secret network result
 FAILED=0
+SKIPPED=0
 run_case_if() {  # run_case_if <available> <case id> <engine> <rootless> <flag> [args...]
   local available="$1"; shift
   local case_id="$1"
   if [ "$WANT_CASE" != "" ] && [ "$WANT_CASE" != "$case_id" ]; then return 0; fi
-  if [ "$available" != 1 ]; then printf '%-3s | %-6s | %s\n' "$case_id" "$2" "SKIP (this host cannot run it — see the case list)"; return 0; fi
+  if [ "$WORKERS_OK" != 1 ]; then
+    printf '%-3s | %-6s | %s\n' "$case_id" "$2" "SKIP (rebuild the workers — see the note above)"
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+  if [ "$available" != 1 ]; then
+    printf '%-3s | %-6s | %s\n' "$case_id" "$2" "SKIP (this host cannot run it — see the case list)"
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
   check_case "$@" || FAILED=1
 }
 
@@ -357,13 +370,23 @@ run_case_if "$(rootless_podman && echo 1 || echo 0)" C1 podman rootless-podman "
 run_case_if "$( { have_docker && rootless_docker; } && echo 1 || echo 0)" C2 docker rootless-docker "container uid 0" --user 0:0
 run_case_if "$( { have_docker && ! rootless_docker; } && echo 1 || echo 0)" C3 docker rootful "--user $(id -u):$(id -g)" --user "$(id -u):$(id -g)"
 if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C4" ]; then
-  if have_docker && ! rootless_docker; then
+  if [ "$WORKERS_OK" != 1 ]; then
+    printf '%-3s | %-16s | %s\n' "C4" docker "SKIP (needs the worker image — see the note above)"
+    SKIPPED=$((SKIPPED + 1))
+  elif have_docker && ! rootless_docker; then
     check_identity_refused docker 12345:12345 || FAILED=1
   else
     printf '%-3s | %-16s | %s\n' "C4" docker "SKIP (needs a rootful engine to run a foreign uid)"
+    SKIPPED=$((SKIPPED + 1))
   fi
 fi
 
 hr
-if [ "$FAILED" = 0 ]; then say "All available cases passed. SKIP lines say what would enable the others."; else say "At least one available case FAILED."; fi
+if [ "$FAILED" != 0 ]; then
+  say "At least one available case FAILED."
+elif [ "$SKIPPED" != 0 ]; then
+  say "Nothing failed; $SKIPPED case(s) were skipped. Each SKIP line says what would enable it."
+else
+  say "Every case this host can run passed."
+fi
 exit "$FAILED"

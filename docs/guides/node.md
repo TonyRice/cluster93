@@ -132,7 +132,8 @@ may share one. Guests stay separated by the engine — a fresh context per job �
 
    `C93_WORKER_CONNECTIONS_MAX` bounds how many connections the node accepts (default: its worker count). A
    **container** node already mounts its worker socket directory — `<config dir>/workers` — at
-   `/run/cluster93/workers`, at `0700`, so a co-located worker container can share it. A **process** node
+   `/run/cluster93/workers`, at `0700`, so a co-located worker container can share it (a `--system` install gives
+   that directory to the container's user, which is who creates the socket in it). A **process** node
    (`c93 node install`) has no such mount: create the directory yourself
    (`install -d -m 0700 -o <node-user> -g <node-group> /run/cluster93/workers`) and mount the same path into the
    worker container. The node creates `node.sock` in it at runtime, so share the **directory**, never the file.

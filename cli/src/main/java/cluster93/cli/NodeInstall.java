@@ -765,6 +765,11 @@ final class NodeInstall {
         Path socketDir = workerSocketDir(layout);
         Files.createDirectories(socketDir);
         restrictDir(socketDir);
+        if (layout.system()) {
+            // A system container runs as the image's user (uid 10001), so the directory it creates the socket in has
+            // to be that user's; only root can give it away, which is what `--system` already requires (S1.7).
+            giveToContainerUser(socketDir);
+        }
         writeEnv(layout, config);
 
         Path caHome = null;
@@ -1263,6 +1268,16 @@ final class NodeInstall {
             Files.setPosixFilePermissions(dir, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
         } catch (IOException | UnsupportedOperationException ignored) {
             // not POSIX (Windows): nothing to do
+        }
+    }
+
+    /** Best effort: hand a directory to the container's own user, which only an install running as root can do. */
+    private static void giveToContainerUser(Path dir) {
+        try {
+            Files.setAttribute(dir, "unix:uid", 10001);
+            Files.setAttribute(dir, "unix:gid", 10001);
+        } catch (IOException | UnsupportedOperationException | IllegalArgumentException ignored) {
+            // Not Linux, or not root: a user install's own uid already owns it.
         }
     }
 
