@@ -477,6 +477,10 @@ public final class Cluster93 {
                     .description("Worker processes this node may run; 0 means unbounded").register(meters);
             io.micrometer.core.instrument.Gauge.builder("c93.workers.warm", poolManager, m -> m.workersWarm())
                     .description("Idle worker processes kept warm").register(meters);
+            // Worker containers connected to this node's socket, bound or still open (D-166): they are workers the
+            // node runs but did not spawn, so the count above (spawned processes) does not include them.
+            io.micrometer.core.instrument.Gauge.builder("c93.workers.connected", poolManager, m -> m.connectedWorkerCount())
+                    .description("Worker containers connected to this node's worker socket").register(meters);
             io.micrometer.core.instrument.Gauge.builder("c93.tenants.active", poolManager, m -> m.tenantsActive())
                     .description("Tenants running at least one worker on this node").register(meters);
             io.micrometer.core.instrument.Gauge.builder("c93.workers.memory.used", poolManager, m -> m.workersMemoryUsed())
