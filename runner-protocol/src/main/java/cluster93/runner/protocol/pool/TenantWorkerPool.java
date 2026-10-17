@@ -1,5 +1,6 @@
 package cluster93.runner.protocol.pool;
 
+import cluster93.runner.protocol.message.PolicyMessage;
 import cluster93.runner.protocol.server.NodeWorkerChannel;
 import cluster93.runner.protocol.transport.StreamBridge;
 import io.vertx.core.Future;
@@ -313,9 +314,8 @@ public class TenantWorkerPool {
             if (warm.isAlive()) {
                 jobStarted(warm, tenantId);
                 ensureWarmPool();
-                return warm.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
-                        .map(v -> warm)
-                        // The worker is bound now: a job that queued while it was being taken can use its spare slots.
+                // The worker is bound now: a job that queued while it was being taken can use its spare slots.
+                return bindAndArm(warm, tenantId)
                         .onSuccess(v -> processNextPending())
                         .onFailure(err -> poison(warm, "bind failed: " + err.getMessage()));
             } else {
@@ -330,8 +330,7 @@ public class TenantWorkerPool {
         if (open != null) {
             totalWorkers.incrementAndGet();
             jobStarted(open, tenantId);
-            return open.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
-                    .map(v -> open)
+            return bindAndArm(open, tenantId)
                     .onSuccess(v -> processNextPending())
                     .onFailure(err -> poison(open, "bind failed: " + err.getMessage()));
         }
@@ -342,8 +341,7 @@ public class TenantWorkerPool {
         WorkerHandle adopted = arbiter == null ? null : arbiter.takeIdleWorkerFor(tenantId);
         if (adopted != null) {
             adopt(adopted, adopted.boundTenantId(), tenantId);
-            return adopted.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
-                    .map(v -> adopted)
+            return bindAndArm(adopted, tenantId)
                     .onSuccess(v -> processNextPending())
                     .onFailure(err -> poison(adopted, "re-bind failed: " + err.getMessage()));
         }
@@ -357,7 +355,7 @@ public class TenantWorkerPool {
                     synchronized (TenantWorkerPool.this) {
                         jobStarted(spawned, tenantId);
                     }
-                    spawned.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
+                    bindAndArm(spawned, tenantId)
                             .onSuccess(v -> {
                                 promise.complete(spawned);
                                 // The new worker is bound and has spare slots: a job that queued while it was
@@ -498,6 +496,51 @@ public class TenantWorkerPool {
                 next.promise().fail(ar.cause());
             }
         });
+    }
+
+    /**
+     * Binds a worker to a tenant and hands it the egress policy it is to decide under (D-173), in that order: a worker
+     * must never run a job before it knows the rules it is meant to apply.
+     */
+    private Future<WorkerHandle> bindAndArm(WorkerHandle worker, String tenantId) {
+        return worker.bind(tenantId, new JsonObject().put("heapMb", heapMb), new JsonObject())
+                .map(v -> {
+                    sendPolicy(worker, tenantId);
+                    return worker;
+                });
+    }
+
+    /**
+     * Hands a bound worker the policy for {@code tenantId} (D-173), when this node has one to send. A node that decides
+     * egress itself sends nothing: a worker given no policy refuses to connect anywhere on its own.
+     */
+    private void sendPolicy(WorkerHandle worker, String tenantId) {
+        NodeArbiter arbiterOf = arbiter;
+        if (arbiterOf == null || worker == null || !worker.isAlive()) {
+            return;
+        }
+        PolicyMessage policy = arbiterOf.policyFor(tenantId);
+        if (policy == null) {
+            return;
+        }
+        worker.channel().send(policy.toFrame()).onFailure(err ->
+                LOG.debug("Worker {} did not take its egress policy: {}", worker.workerId(), err.getMessage()));
+    }
+
+    /**
+     * Re-sends the policy to every worker this pool has bound (D-173): after a rule change, a membership change, or as
+     * a policy's expiry nears. {@code tenantId} limits it to one tenant, or null for all of them.
+     */
+    synchronized void refreshPolicy(String tenantId) {
+        java.util.Set<WorkerHandle> bound = new java.util.HashSet<>(activeWorkers.values());
+        for (List<WorkerHandle> warm : tenantWarmQueue.values()) {
+            bound.addAll(warm);
+        }
+        for (WorkerHandle worker : bound) {
+            if (tenantId == null || tenantId.equals(worker.boundTenantId())) {
+                sendPolicy(worker, worker.boundTenantId());
+            }
+        }
     }
 
     /**

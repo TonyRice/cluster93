@@ -1,5 +1,7 @@
 package cluster93.runner.protocol.pool;
 
+import cluster93.runner.protocol.message.PolicyMessage;
+
 /**
  * Decides which tenant gets a freed worker when the node's capacity is contended (D-161).
  *
@@ -24,6 +26,15 @@ interface NodeArbiter {
      * that accepts worker containers implements it; one that only spawns leaves it null, which is why it defaults.
      */
     default WorkerHandle takeOpenWorker(String tenantId) {
+        return null;
+    }
+
+    /**
+     * The egress policy {@code tenantId}'s runs decide under, to hand a worker the moment it is bound (D-173), or null
+     * when this node sends none — a node that decides egress itself. A worker that is never given one refuses to
+     * connect anywhere on its own, so "no policy" is the safe answer, not a hole.
+     */
+    default PolicyMessage policyFor(String tenantId) {
         return null;
     }
 

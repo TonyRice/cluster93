@@ -1,6 +1,9 @@
 package cluster93.runner.protocol.pool;
 
 import cluster93.core.host.NodeHostApis;
+import cluster93.core.host.egress.Decision;
+import cluster93.core.host.egress.EgressProtocol;
+import cluster93.core.host.egress.TenantEgress;
 import cluster93.core.host.SharedDataKvStore;
 import cluster93.core.job.JobStatus;
 import cluster93.core.job.OrphanPolicy;
@@ -10,10 +13,12 @@ import cluster93.core.runtime.JobContext;
 import cluster93.core.runtime.StateSink;
 import cluster93.runner.protocol.frame.FrameCodec;
 import cluster93.runner.protocol.message.HelloMessage;
+import cluster93.runner.protocol.message.PolicyMessage;
 import cluster93.runner.protocol.server.NodeRpcAuthorizer;
 import cluster93.runner.protocol.transport.uds.UdsClientTransport;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.NetSocket;
 import org.junit.jupiter.api.AfterEach;
@@ -192,6 +197,72 @@ class WorkerSocketSourceTest {
         assertThat(output.getString("echoed")).isEqualTo("parity");
         assertThat(kvStore.get("acme", "socket", "seen").toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS))
                 .as("the worker's host call really reached this node's store").isEqualTo("parity");
+    }
+
+    @Test
+    @DisplayName("A worker is handed the egress policy it decides under when it is bound, on refresh, and on a re-bind (D-173)")
+    void aBoundWorkerIsHandedItsPolicy() throws Exception {
+        // One worker node-wide, kept warm: so the second tenant can only be served by re-binding this one (D-172).
+        java.util.concurrent.atomic.AtomicLong versions = new java.util.concurrent.atomic.AtomicLong();
+        manager = new TenantWorkerPoolManager(vertx, Map.of(), "javet", 0, 1, 1, 2, 64,
+                TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL,
+                1L * 1024 * 1024 * 1024)
+                .workerPolicy(tenant -> new PolicyMessage(tenant, PolicyMessage.WORKER, versions.incrementAndGet(),
+                        60_000L, false, List.of(),
+                        new JsonObject().put("posture", "allow-list"),
+                        new JsonObject().put("rules", new JsonArray().add(new JsonObject()
+                                .put("action", "allow").put("to", "api." + tenant + ".example")
+                                .put("ports", new JsonArray().add(443)))),
+                        List.of("10.0.0.5"), List.of(9393, 9394)));
+        await(manager.listenForWorkers(socketPath, "s3cret", 8));
+
+        // A real worker, as a container runs it.
+        NetSocket socket = await(client.connect(socketPath));
+        sockets.add(socket);
+        var connection = new cluster93.runner.protocol.client.WorkerClientConnection(socket, socket);
+        var engine = new cluster93.runtime.javet.JavetScriptRuntime(vertx, 64, 2);
+        var daemon = new cluster93.runner.protocol.client.WorkerDaemon(connection, engine, "javet", "s3cret", 64, 2);
+        await(daemon.start());
+        awaitUntil("the worker to become an open worker", () -> manager.openWorkerCount() == 1);
+
+        assertThat(daemon.egressPolicy().fresh()).as("nothing has been bound yet").isFalse();
+
+        // Bound: the policy arrives with the BIND, before any job can run.
+        WorkerHandle handle = await(manager.acquire("acme", null));
+        awaitUntil("the worker to take acme's policy", () -> daemon.egressPolicy().policy() != null);
+        PolicyMessage acme = daemon.egressPolicy().policy();
+        assertThat(acme.tenantId()).isEqualTo("acme");
+        assertThat(acme.placement()).isEqualTo(PolicyMessage.WORKER);
+        assertThat(daemon.egressPolicy().fresh()).isTrue();
+
+        // And it is the policy the *decision* runs — the same code the node runs, on the worker's own addresses.
+        java.net.InetAddress publicAddress = java.net.InetAddress.getByName("93.184.216.34");
+        java.net.InetAddress nodeAddress = java.net.InetAddress.getByName("10.0.0.5");
+        Decision.Verdict allowed = daemon.egressPolicy().nodes()
+                .compose(nodes -> daemon.egressPolicy().cluster().compose(cluster -> daemon.egressPolicy().tenant("acme")
+                        .map(tenant -> Decision.decide("api.acme.example", List.of(publicAddress), 443,
+                                EgressProtocol.HTTP, nodes, daemon.egressPolicy().allowPrivate(), cluster, tenant))))
+                .toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertThat(allowed.address()).as("acme's rule allows exactly what it names").isNotNull();
+
+        Decision.Verdict refused = daemon.egressPolicy().nodes()
+                .compose(nodes -> daemon.egressPolicy().cluster().map(cluster -> Decision.decide("node", List.of(nodeAddress),
+                        9394, EgressProtocol.HTTP, nodes, false, cluster, TenantEgress.none("acme"))))
+                .toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertThat(refused.refused()).as("the cluster's own addresses travelled with the policy")
+                .isEqualTo(Decision.Reason.CLUSTER_NODE);
+
+        // A rule change reaches a worker that is already bound, and carries a higher version.
+        long before = acme.version();
+        manager.refreshWorkerPolicies(null);
+        awaitUntil("the refreshed policy to arrive", () -> daemon.egressPolicy().policy().version() > before);
+
+        // Re-bound to another tenant (D-172): it must decide under that tenant's rules, not acme's.
+        manager.release("acme", null, handle);
+        await(manager.acquire("globex", null));
+        awaitUntil("globex's policy to replace acme's", () -> "globex".equals(daemon.egressPolicy().policy().tenantId()));
+        assertThat(daemon.egressPolicy().policy().tenantPolicy().getJsonArray("rules").getJsonObject(0).getString("to"))
+                .as("the rules the worker now holds are the bound tenant's").isEqualTo("api.globex.example");
     }
 
     private TenantWorkerPoolManager manager(long maxWorkerMemoryBytes) {

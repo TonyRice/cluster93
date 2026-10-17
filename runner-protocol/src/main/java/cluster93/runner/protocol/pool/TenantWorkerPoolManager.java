@@ -2,6 +2,7 @@ package cluster93.runner.protocol.pool;
 
 import cluster93.core.metrics.Metrics;
 import cluster93.runner.protocol.message.HelloMessage;
+import cluster93.runner.protocol.message.PolicyMessage;
 import cluster93.runner.protocol.server.NodeRpcAuthorizer;
 import cluster93.runner.protocol.server.NodeWorkerChannel;
 import cluster93.runner.protocol.transport.uds.UdsServerTransport;
@@ -338,6 +339,32 @@ public class TenantWorkerPoolManager implements NodeArbiter {
             }
         }
         return false;
+    }
+
+    /** Where a bound worker's egress policy comes from (D-173); null when this node decides egress itself. */
+    private volatile java.util.function.Function<String, PolicyMessage> workerPolicy;
+
+    /**
+     * Sets where a bound worker's egress policy comes from (D-173): one payload per tenant, handed to each worker as it
+     * is bound and refreshed with {@link #refreshWorkerPolicies(String)}. Left unset, this node decides egress itself
+     * and sends nothing — and a worker sent nothing refuses to connect anywhere on its own.
+     */
+    public TenantWorkerPoolManager workerPolicy(java.util.function.Function<String, PolicyMessage> supplier) {
+        this.workerPolicy = supplier;
+        return this;
+    }
+
+    @Override
+    public PolicyMessage policyFor(String tenantId) {
+        java.util.function.Function<String, PolicyMessage> supplier = workerPolicy;
+        return supplier == null ? null : supplier.apply(tenantId);
+    }
+
+    /** Re-sends the policy to every worker bound to a tenant, or to every bound worker when {@code tenantId} is null. */
+    public void refreshWorkerPolicies(String tenantId) {
+        for (TenantWorkerPool pool : tenantPools.values()) {
+            pool.refreshPolicy(tenantId);
+        }
     }
 
     /**
