@@ -31,6 +31,13 @@ public enum FrameType {
     /** 0x07: Final execution outcome (ExecutionResult: return value or error). Worker -> Node, Channel: Run ID. */
     RESULT_RUN(0x07),
 
+    /**
+     * 0x08: The egress policy a worker's placement enforces, with its version and expiry (D-173). Node -> Worker,
+     * Channel 0. Sent after BIND and again whenever the rules change or the previous one nears its expiry; a worker
+     * that holds none, or one that has expired, refuses to connect anywhere.
+     */
+    POLICY(0x08),
+
     /** 0x10: Host API RPC invocation ({runId, method, params}). Worker -> Node, Channel: Call ID. */
     CALL(0x10),
 

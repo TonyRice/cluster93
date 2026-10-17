@@ -12,6 +12,7 @@ import cluster93.core.runtime.StateSink;
 import cluster93.runner.protocol.frame.Frame;
 import cluster93.runner.protocol.frame.FrameType;
 import cluster93.runner.protocol.message.BindMessage;
+import cluster93.runner.protocol.message.PolicyMessage;
 import cluster93.runner.protocol.message.EventMessage;
 import cluster93.runner.protocol.message.HelloMessage;
 import cluster93.runner.protocol.message.LogMessage;
@@ -47,6 +48,11 @@ public class WorkerDaemon {
     private final int heapMb;
     private final int maxJobs;
     private String boundTenantId;
+    /**
+     * The egress policy this worker decides with when the node's placement is {@code worker} (D-173): what the node
+     * synced, and nothing else. It refuses everything until the first policy arrives, and again once one expires.
+     */
+    private final SyncedPolicySource egressPolicy = new SyncedPolicySource();
 
     private final Map<Integer, RunningExecution> activeRuns = new ConcurrentHashMap<>();
     private final Map<Integer, RemoteHostApis> hostsByChannel = new ConcurrentHashMap<>();
@@ -93,6 +99,7 @@ public class WorkerDaemon {
         switch (frame.type()) {
             case WELCOME -> LOG.info("Worker welcomed by node");
             case BIND -> onBind(frame);
+            case POLICY -> onPolicy(frame);
             case RUN -> onRun(frame);
             case STOP -> onStop(frame);
             case CANCEL -> onCancel(frame);
@@ -106,6 +113,26 @@ public class WorkerDaemon {
         BindMessage bind = BindMessage.fromFrame(frame);
         this.boundTenantId = bind.tenantId();
         LOG.info("Worker successfully bound to tenant {}", boundTenantId);
+    }
+
+    /**
+     * The node's egress policy for this worker's placement (D-173): versioned, and valid until it expires. An older
+     * version changes nothing, and a policy for another tenant is not applied — the decision reads it through
+     * {@link #egressPolicy()}.
+     */
+    private void onPolicy(Frame frame) {
+        PolicyMessage policy = PolicyMessage.fromFrame(frame);
+        if (!egressPolicy.apply(policy)) {
+            LOG.debug("Ignored egress policy v{} (tenant {})", policy.version(), policy.tenantId());
+            return;
+        }
+        LOG.info("Egress policy v{} for tenant {} (placement {}, expires in {} ms): this worker decides for itself",
+                policy.version(), policy.tenantId(), policy.placement(), policy.expiresInMs());
+    }
+
+    /** The policy this worker's own gate decides under (D-173); empty and refusing until the node sends one. */
+    public SyncedPolicySource egressPolicy() {
+        return egressPolicy;
     }
 
     private void onRun(Frame frame) {
