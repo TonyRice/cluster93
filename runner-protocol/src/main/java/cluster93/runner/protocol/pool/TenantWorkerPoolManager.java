@@ -342,22 +342,22 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     }
 
     /** Where a bound worker's egress policy comes from (D-173); null when this node decides egress itself. */
-    private volatile java.util.function.Function<String, PolicyMessage> workerPolicy;
+    private volatile java.util.function.Function<String, io.vertx.core.Future<PolicyMessage>> workerPolicy;
 
     /**
      * Sets where a bound worker's egress policy comes from (D-173): one payload per tenant, handed to each worker as it
      * is bound and refreshed with {@link #refreshWorkerPolicies(String)}. Left unset, this node decides egress itself
      * and sends nothing — and a worker sent nothing refuses to connect anywhere on its own.
      */
-    public TenantWorkerPoolManager workerPolicy(java.util.function.Function<String, PolicyMessage> supplier) {
+    public TenantWorkerPoolManager workerPolicy(java.util.function.Function<String, io.vertx.core.Future<PolicyMessage>> supplier) {
         this.workerPolicy = supplier;
         return this;
     }
 
     @Override
-    public PolicyMessage policyFor(String tenantId) {
-        java.util.function.Function<String, PolicyMessage> supplier = workerPolicy;
-        return supplier == null ? null : supplier.apply(tenantId);
+    public io.vertx.core.Future<PolicyMessage> policyFor(String tenantId) {
+        java.util.function.Function<String, io.vertx.core.Future<PolicyMessage>> supplier = workerPolicy;
+        return supplier == null ? io.vertx.core.Future.succeededFuture(null) : supplier.apply(tenantId);
     }
 
     /** Re-sends the policy to every worker bound to a tenant, or to every bound worker when {@code tenantId} is null. */

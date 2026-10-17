@@ -87,7 +87,8 @@ public class WorkerDaemon {
      */
     public Future<Void> start() {
         long pid = ProcessHandle.current().pid();
-        HelloMessage hello = new HelloMessage(engineName, "2.0.0", pid, secret, heapMb, maxJobs);
+        // It can hold and apply the egress rules the node sends (D-173): say so, so the node hands it any.
+        HelloMessage hello = new HelloMessage(engineName, "2.0.0", pid, secret, heapMb, maxJobs, true);
         return connection.send(hello.toFrame());
     }
 

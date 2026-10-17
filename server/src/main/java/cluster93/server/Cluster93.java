@@ -404,11 +404,14 @@ public final class Cluster93 {
             LOG.warn("C93_EGRESS_ALLOW_PRIVATE is on: every tenant's scripts may reach private and loopback addresses. "
                     + "It's for local development only; grant a tenant specific addresses with its egress policy instead (D-108).");
         }
+        cluster93.core.host.egress.ClusterAddresses clusterAddresses =
+                new cluster93.core.host.egress.ClusterAddresses(vertx, nodes, nodePorts(config));
         FetchClient fetch = new FetchClient(vertx, new cluster93.core.host.egress.Egress(vertx, config.egressAllowPrivate(),
-                new cluster93.core.host.egress.ClusterAddresses(vertx, nodes, nodePorts(config)), egressPolicies,
+                clusterAddresses, egressPolicies,
                 new cluster93.core.host.dns.DnsResolver(vertx, config.egressDnsServers()), config.egressInternalDomains()));
         ScriptRuntime runtime;
         java.util.concurrent.atomic.AtomicReference<cluster93.runner.protocol.pool.TenantWorkerPoolManager> workerPoolRef = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<WorkerPolicySync> workerPolicySyncRef = new java.util.concurrent.atomic.AtomicReference<>();
         java.util.concurrent.atomic.AtomicReference<cluster93.core.scheduler.NodeVerticle> nodeVerticleRef = new java.util.concurrent.atomic.AtomicReference<>();
         if ("process".equalsIgnoreCase(config.workerMode())) {
             // The node's cgroup manager (D-158): detect what this host supports, then prepare its own subtree so
@@ -454,6 +457,15 @@ public final class Cluster93 {
                     config.maxWorkerMemoryMb() * 1024L * 1024L
             );
             workerPoolRef.set(poolManager);
+            // The workers are given the rules they decide under (D-173): as each is bound, and again whenever the rules
+            // change, the cluster's addresses change, or an expiry nears. The node's own placement needs none of this —
+            // it decides itself — but a worker sent nothing refuses to connect anywhere on its own.
+            WorkerPolicySync policySync = new WorkerPolicySync(egressPolicies, clusterAddresses,
+                    config.egressAllowPrivate(), config.egressInternalDomains(),
+                    cluster93.runner.protocol.message.PolicyMessage.WORKER, poolManager::refreshWorkerPolicies);
+            policySync.start(vertx);
+            poolManager.workerPolicy(policySync::forTenant);
+            workerPolicySyncRef.set(policySync);
             // The listening end for worker containers (D-166, D-167): the deployment creates them, they connect, and
             // the pool binds each connection to whichever tenant has work. Nothing here creates a container.
             if (config.workerSocket() != null) {
@@ -622,7 +634,13 @@ public final class Cluster93 {
                     .compose(id -> serveMetrics(vertx, config, instanceId, nodes, cluster))
                     .map(metricsPort -> new RunningNode(config.nodeId(), instanceId, vertx, apiRole ? api.port() : -1,
                             ingressRole ? ingress.port() : -1, cluster, apiRole ? api.routes() : List.of(),
-                            metricsPort, endpoint.port(), workerPoolRef.get() == null ? null : workerPoolRef.get()::close));
+                            metricsPort, endpoint.port(), workerPoolRef.get() == null ? null : () -> {
+                                WorkerPolicySync sync = workerPolicySyncRef.get();
+                                if (sync != null) {
+                                    sync.close();
+                                }
+                                workerPoolRef.get().close();
+                            }));
         }).recover(err -> {
             // Not waited for: this runs on one of Vert.x's own threads, which a close can't report back to.
             vertx.close();

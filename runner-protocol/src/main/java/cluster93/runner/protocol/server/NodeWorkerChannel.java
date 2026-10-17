@@ -82,6 +82,8 @@ public class NodeWorkerChannel {
      */
     private volatile String boundTenantId;
     private final Promise<HelloMessage> helloPromise = Promise.promise();
+    /** Whether this worker announced it can apply the egress rules the node sends (D-173); false until it says so. */
+    private volatile boolean acceptsEgressPolicy;
     private final Map<String, ActiveRun> activeRuns = new ConcurrentHashMap<>();
     private final Map<String, PendingEvent> pendingEvents = new ConcurrentHashMap<>();
     private final Map<Integer, HttpExchange> pendingExchanges = new ConcurrentHashMap<>();
@@ -220,6 +222,15 @@ public class NodeWorkerChannel {
         return helloPromise.future();
     }
 
+    /**
+     * Whether this worker can apply the egress rules the node sends it (D-173). A worker that did not say so in its
+     * {@code HELLO} predates them: sending it a policy frame would be a frame it cannot parse, which kills it — so the
+     * node keeps deciding egress for that worker instead.
+     */
+    public boolean acceptsEgressPolicy() {
+        return acceptsEgressPolicy;
+    }
+
     public synchronized Future<Void> send(Frame frame) {
         Buffer encoded = FrameCodec.encode(frame);
         return output.write(encoded);
@@ -303,6 +314,7 @@ public class NodeWorkerChannel {
 
     private void onHello(Frame frame) {
         HelloMessage hello = HelloMessage.fromFrame(frame);
+        this.acceptsEgressPolicy = hello.egressPolicy();
         helloPromise.tryComplete(hello);
         // Reply with WELCOME
         WelcomeMessage welcome = new WelcomeMessage(workerId, new JsonObject().put("status", "accepted"));

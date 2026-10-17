@@ -207,13 +207,13 @@ class WorkerSocketSourceTest {
         manager = new TenantWorkerPoolManager(vertx, Map.of(), "javet", 0, 1, 1, 2, 64,
                 TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL,
                 1L * 1024 * 1024 * 1024)
-                .workerPolicy(tenant -> new PolicyMessage(tenant, PolicyMessage.WORKER, versions.incrementAndGet(),
+                .workerPolicy(tenant -> Future.succeededFuture(new PolicyMessage(tenant, PolicyMessage.WORKER, versions.incrementAndGet(),
                         60_000L, false, List.of(),
                         new JsonObject().put("posture", "allow-list"),
                         new JsonObject().put("rules", new JsonArray().add(new JsonObject()
                                 .put("action", "allow").put("to", "api." + tenant + ".example")
                                 .put("ports", new JsonArray().add(443)))),
-                        List.of("10.0.0.5"), List.of(9393, 9394)));
+                        List.of("10.0.0.5"), List.of(9393, 9394))));
         await(manager.listenForWorkers(socketPath, "s3cret", 8));
 
         // A real worker, as a container runs it.
@@ -263,6 +263,27 @@ class WorkerSocketSourceTest {
         awaitUntil("globex's policy to replace acme's", () -> "globex".equals(daemon.egressPolicy().policy().tenantId()));
         assertThat(daemon.egressPolicy().policy().tenantPolicy().getJsonArray("rules").getJsonObject(0).getString("to"))
                 .as("the rules the worker now holds are the bound tenant's").isEqualTo("api.globex.example");
+    }
+
+    @Test
+    @DisplayName("A worker that predates the policy frame is sent none, so a node upgrade cannot kill it (D-173)")
+    void aWorkerThatCannotTakeAPolicyIsSentNone() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger built = new java.util.concurrent.atomic.AtomicInteger();
+        manager = manager(1L * 1024 * 1024 * 1024)
+                .workerPolicy(tenant -> {
+                    built.incrementAndGet();
+                    return Future.succeededFuture(null);
+                });
+        await(manager.listenForWorkers(socketPath, "s3cret", 8));
+
+        // A worker of the version before the policy frame: its HELLO does not advertise one.
+        await(connectAndSayHello("s3cret", 64, 4));
+        awaitUntil("the connection to become an open worker", () -> manager.openWorkerCount() == 1);
+        WorkerHandle handle = await(manager.acquire("acme", null));
+
+        assertThat(handle.channel().acceptsEgressPolicy()).as("it never said it could apply one").isFalse();
+        assertThat(built.get()).as("the node does not even build a policy for it").isZero();
+        assertThat(handle.isAlive()).as("and a frame it cannot parse was never sent to it").isTrue();
     }
 
     private TenantWorkerPoolManager manager(long maxWorkerMemoryBytes) {

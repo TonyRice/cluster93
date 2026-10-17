@@ -516,15 +516,19 @@ public class TenantWorkerPool {
      */
     private void sendPolicy(WorkerHandle worker, String tenantId) {
         NodeArbiter arbiterOf = arbiter;
-        if (arbiterOf == null || worker == null || !worker.isAlive()) {
+        if (arbiterOf == null || worker == null || !worker.isAlive() || !worker.channel().acceptsEgressPolicy()) {
+            // null arbiter: this node decides egress itself. A worker that doesn't accept a policy: it predates them,
+            // and a frame it cannot parse would kill it — the node keeps deciding egress for it.
             return;
         }
-        PolicyMessage policy = arbiterOf.policyFor(tenantId);
-        if (policy == null) {
-            return;
-        }
-        worker.channel().send(policy.toFrame()).onFailure(err ->
-                LOG.debug("Worker {} did not take its egress policy: {}", worker.workerId(), err.getMessage()));
+        arbiterOf.policyFor(tenantId)
+                .onSuccess(policy -> {
+                    if (policy != null && worker.isAlive()) {
+                        worker.channel().send(policy.toFrame()).onFailure(err -> LOG.debug(
+                                "Worker {} did not take its egress policy: {}", worker.workerId(), err.getMessage()));
+                    }
+                })
+                .onFailure(err -> LOG.debug("Could not build {}'s egress policy: {}", tenantId, err.getMessage()));
     }
 
     /**

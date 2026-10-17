@@ -17,8 +17,11 @@ public final class EgressPolicies {
     public static final Records.Kind KIND = new Records.Kind("EGRESS_POLICIES", List.of());
     public static final Records.Kind CLUSTER_KIND = new Records.Kind("EGRESS_CLUSTER", List.of());
     static final String CLUSTER_KEY = "cluster";
-    /** Where changes are announced: the tenant's name, or the empty string for the cluster's policy. */
-    static final String CHANGED = "cluster93.egress.changed";
+    /**
+     * Where changes are announced: the tenant's name, or the empty string for the cluster's policy. Public because a
+     * node has a second listener on it (D-173): a bound worker has to be told its rules changed.
+     */
+    public static final String CHANGED = "cluster93.egress.changed";
     static final long CACHE_MS = 5_000;
 
     /** No rules beyond the defaults: for nodes and tests without durable records. */
@@ -34,6 +37,12 @@ public final class EgressPolicies {
     private volatile Cached<ClusterEgress> clusterCache;
     /** Bumped by every change, so a read that started before one doesn't cache what it read. */
     private final java.util.concurrent.atomic.AtomicLong generation = new java.util.concurrent.atomic.AtomicLong();
+    /**
+     * Node-local listeners told when a policy changed, beside the cache invalidation this class does itself (D-173): a
+     * bound worker has to be re-sent its rules. Listeners rather than a second event-bus consumer on purpose — this is
+     * work for the node that changed, and a subscription on a clustered bus is a cluster-wide registration.
+     */
+    private final java.util.List<java.util.function.Consumer<String>> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** @param vertx where changes are announced and heard, or null for a node of one (tests) */
     public EgressPolicies(Records tenants, Records cluster, io.vertx.core.Vertx vertx) {
@@ -45,8 +54,16 @@ public final class EgressPolicies {
         }
     }
 
+    /** Told, on this node, when a policy changed: the tenant's name, or the empty string for the cluster's policy. */
+    public void onChange(java.util.function.Consumer<String> listener) {
+        listeners.add(listener);
+    }
+
     private void forget(String tenant) {
         generation.incrementAndGet();
+        for (java.util.function.Consumer<String> listener : listeners) {
+            listener.accept(tenant);
+        }
         if (tenant == null || tenant.isEmpty()) {
             clusterCache = null;
         } else {

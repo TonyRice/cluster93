@@ -34,8 +34,8 @@ interface NodeArbiter {
      * when this node sends none — a node that decides egress itself. A worker that is never given one refuses to
      * connect anywhere on its own, so "no policy" is the safe answer, not a hole.
      */
-    default PolicyMessage policyFor(String tenantId) {
-        return null;
+    default io.vertx.core.Future<PolicyMessage> policyFor(String tenantId) {
+        return io.vertx.core.Future.succeededFuture(null);
     }
 
     /**
