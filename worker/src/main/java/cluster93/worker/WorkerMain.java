@@ -272,7 +272,9 @@ public final class WorkerMain {
                     StreamBridge.readStream(vertx, System.in)
             );
         }
-        WorkerDaemon daemon = new WorkerDaemon(conn, runtime, engineName, secret, heapMb, threads);
+        // This worker decides egress itself, under the rules the node sends it (D-173): the node stops being in the
+        // path per connection and per byte.
+        WorkerDaemon daemon = new WorkerDaemon(conn, runtime, engineName, secret, heapMb, threads).egressLocally(vertx);
         daemon.start().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
 
         CountDownLatch latch = new CountDownLatch(1);

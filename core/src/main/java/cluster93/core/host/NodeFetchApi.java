@@ -13,13 +13,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@code fetch} through the node's {@link FetchClient}, as the job's tenant (so its egress policy applies, D-108); at
  * most {@value #MAX_CONCURRENT} bodies open at once.
  */
-final class NodeFetchApi implements FetchApi {
+public final class NodeFetchApi implements FetchApi {
 
     private final FetchClient client;
     private final String tenant;
     private final AtomicInteger inFlight = new AtomicInteger();
 
-    NodeFetchApi(FetchClient client, String tenant) {
+    public NodeFetchApi(FetchClient client, String tenant) {
         this.client = client;
         this.tenant = tenant;
     }

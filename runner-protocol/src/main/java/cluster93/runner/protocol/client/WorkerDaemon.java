@@ -53,6 +53,10 @@ public class WorkerDaemon {
      * synced, and nothing else. It refuses everything until the first policy arrives, and again once one expires.
      */
     private final SyncedPolicySource egressPolicy = new SyncedPolicySource();
+    /** Where a local gate would run: null until {@link #egressLocally}, which a real worker always calls (D-173/A4). */
+    private volatile io.vertx.core.Vertx vertx;
+    private final WorkerAccounting accounting = new WorkerAccounting();
+    private volatile cluster93.core.host.egress.Egress gate;
 
     private final Map<Integer, RunningExecution> activeRuns = new ConcurrentHashMap<>();
     private final Map<Integer, RemoteHostApis> hostsByChannel = new ConcurrentHashMap<>();
@@ -136,12 +140,54 @@ public class WorkerDaemon {
         return egressPolicy;
     }
 
+    /** What this worker refused, when it was the one deciding (D-173). */
+    public WorkerAccounting accounting() {
+        return accounting;
+    }
+
+    /**
+     * Lets this worker decide and make its own connections (D-173/A4), given the Vert.x it runs on. A real worker
+     * always calls this; left unset, every host call goes to the node, which is what a worker that cannot hold a policy
+     * (an older build, one that never advertised {@code egressPolicy}) does anyway.
+     */
+    public WorkerDaemon egressLocally(io.vertx.core.Vertx vertx) {
+        this.vertx = vertx;
+        return this;
+    }
+
+    /**
+     * The network host APIs this run serves itself, or null when the node should serve them: only when the node says
+     * the placement is the worker (D-173 item 8) <em>and</em> the policy in force is fresh — a worker without rules it
+     * can trust asks the node rather than guess.
+     */
+    private RemoteHostApis.LocalNetwork localNetwork(String tenant) {
+        io.vertx.core.Vertx vertxOn = this.vertx;
+        if (vertxOn == null
+                || !cluster93.runner.protocol.message.PolicyMessage.WORKER.equals(egressPolicy.placement())
+                || !egressPolicy.fresh()) {
+            return null;
+        }
+        cluster93.core.host.egress.Egress gateOn = gate;
+        if (gateOn == null) {
+            synchronized (this) {
+                if (gate == null) {
+                    gate = new cluster93.core.host.egress.Egress(egressPolicy, accounting,
+                            new cluster93.core.host.dns.DnsResolver(vertxOn, java.util.List.of()));
+                }
+                gateOn = gate;
+            }
+        }
+        return new RemoteHostApis.LocalNetwork(
+                new cluster93.core.host.NodeFetchApi(new cluster93.core.host.FetchClient(vertxOn, gateOn), tenant),
+                new cluster93.core.host.NodeDnsApi(gateOn, tenant));
+    }
+
     private void onRun(Frame frame) {
         RunMessage runMsg = RunMessage.fromFrame(frame);
         int channelId = runMsg.channelId();
         String runId = runMsg.runId();
 
-        RemoteHostApis hostApis = new RemoteHostApis(connection, runId, channelId);
+        RemoteHostApis hostApis = new RemoteHostApis(connection, runId, channelId, localNetwork(boundTenantId));
         LogSink logs = (level, line) -> connection.send(new LogMessage(channelId, runId, level, line).toFrame());
         StateSink state = new StateSink() {
             @Override

@@ -26,7 +26,7 @@ import java.util.function.Supplier;
  * as are records pointing into internal zones; a reverse lookup needs an address it could connect to. Servers the
  * script set go through the gate as {@code dns} connections. At most 16 queries run at once; the rest wait their turn.
  */
-final class NodeDnsApi implements DnsApi {
+public final class NodeDnsApi implements DnsApi {
 
     static final int IN_FLIGHT = 16;
 
@@ -36,7 +36,7 @@ final class NodeDnsApi implements DnsApi {
     private final Queue<Runnable> waiting = new ArrayDeque<>();
     private int running;
 
-    NodeDnsApi(Egress egress, String tenant) {
+    public NodeDnsApi(Egress egress, String tenant) {
         this.egress = egress;
         this.resolver = egress.resolver();
         this.tenant = tenant;

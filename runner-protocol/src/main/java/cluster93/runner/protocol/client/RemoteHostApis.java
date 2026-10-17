@@ -91,7 +91,22 @@ public final class RemoteHostApis implements HostApis {
         this(connection, runId, 0);
     }
 
+    /**
+     * The network host APIs this run serves <b>itself</b>, when the worker decides egress (D-173/A4), or null when every
+     * call goes to the node. Only the client half of the network surface moves: {@code kv}, files, the bus, secrets,
+     * the jobs API and the {@code node:http} <em>server</em> are the node's, because they are what the node owns.
+     */
+    public record LocalNetwork(FetchApi fetch, DnsApi dns) {
+    }
+
     public RemoteHostApis(WorkerClientConnection connection, String runId, int channelId) {
+        this(connection, runId, channelId, null);
+    }
+
+    /**
+     * @param local the network APIs this run decides and connects with itself, or null to ask the node (D-173)
+     */
+    public RemoteHostApis(WorkerClientConnection connection, String runId, int channelId, LocalNetwork local) {
         this.connection = Objects.requireNonNull(connection, "connection");
         this.runId = Objects.requireNonNull(runId, "runId");
         this.channelId = channelId;
@@ -102,9 +117,11 @@ public final class RemoteHostApis implements HostApis {
         this.jobs = new RemoteJobs();
         this.files = new RemoteFiles();
         this.fs = new RemoteFs();
-        this.fetch = new RemoteFetch();
+        // Egress in the worker (D-173): the same host-API surface, served by this process, under the rules the node
+        // synced — with the node's own implementations of the network APIs, given this worker's gate.
+        this.fetch = local == null ? new RemoteFetch() : local.fetch();
         this.sockets = new RemoteSocket();
-        this.dns = new RemoteDns();
+        this.dns = local == null ? new RemoteDns() : local.dns();
         this.secrets = new RemoteSecrets();
         this.http = new RemoteHttp();
     }
