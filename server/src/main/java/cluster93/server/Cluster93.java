@@ -462,7 +462,7 @@ public final class Cluster93 {
             // it decides itself — but a worker sent nothing refuses to connect anywhere on its own.
             WorkerPolicySync policySync = new WorkerPolicySync(egressPolicies, clusterAddresses,
                     config.egressAllowPrivate(), config.egressInternalDomains(),
-                    cluster93.runner.protocol.message.PolicyMessage.WORKER, poolManager::refreshWorkerPolicies);
+                    config.egressPlacement(), poolManager::refreshWorkerPolicies);
             policySync.start(vertx);
             poolManager.workerPolicy(policySync::forTenant);
             workerPolicySyncRef.set(policySync);

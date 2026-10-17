@@ -24,6 +24,19 @@ class ServerConfigTest {
     }
 
     @Test
+    @DisplayName("A worker decides egress by default, and the node can be asked to instead (D-173)")
+    void egressPlacementIsItsOwnSetting() {
+        // The default is the worker (D-173): it connects under the rules the node sends it, so the node stops being in
+        // the path per connection and per byte. `node` keeps the older shape, where the node dials for every worker.
+        assertThat(ServerConfig.fromEnv(Map.of()).egressPlacement()).isEqualTo("worker");
+        assertThat(ServerConfig.fromEnv(Map.of("C93_EGRESS_PLACEMENT", "node")).egressPlacement()).isEqualTo("node");
+        assertThat(ServerConfig.fromEnv(Map.of("C93_EGRESS_PLACEMENT", " WORKER ")).egressPlacement())
+                .as("an operator writing it by hand is not punished for the case or the spaces").isEqualTo("worker");
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_EGRESS_PLACEMENT", "nowhere")))
+                .hasMessageContaining("C93_EGRESS_PLACEMENT");
+    }
+
+    @Test
     @DisplayName("The per-tenant job cap is its own env, defaulting to the whole node (D-156)")
     void maxJobsPerTenantIsItsOwnSetting() {
         // Not a fraction of capacity: one tenant is not throttled by default, and an operator lowers it for
