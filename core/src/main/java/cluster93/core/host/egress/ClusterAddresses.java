@@ -22,29 +22,10 @@ public final class ClusterAddresses {
 
     static final long REFRESH_MS = 10_000;
 
-    /**
-     * @param addresses the nodes' addresses
-     * @param ports     this node's own ports; with the development switch on, a node is refused only on these
-     */
-    public record Snapshot(Set<InetAddress> addresses, Set<Integer> ports) {
-
-        public static final Snapshot EMPTY = new Snapshot(Set.of(), Set.of());
-
-        public Snapshot {
-            addresses = Set.copyOf(addresses);
-            ports = Set.copyOf(ports);
-        }
-
-        /** Whether the address is a node's: any of them, or this machine's wildcard and loopback addresses. */
-        public boolean isNode(InetAddress address) {
-            return address.isAnyLocalAddress() || address.isLoopbackAddress() || addresses.contains(address);
-        }
-    }
-
     private final Vertx vertx;
     private final NodeRegistry nodes;
     private final Set<Integer> ports;
-    private volatile Snapshot snapshot;
+    private volatile NodeAddresses snapshot;
     private volatile long refreshedAt;
 
     /**
@@ -57,8 +38,8 @@ public final class ClusterAddresses {
         this.ports = Set.copyOf(ports);
     }
 
-    public Future<Snapshot> current() {
-        Snapshot known = snapshot;
+    public Future<NodeAddresses> current() {
+        NodeAddresses known = snapshot;
         if (known != null && System.currentTimeMillis() - refreshedAt < REFRESH_MS) {
             return Future.succeededFuture(known);
         }
@@ -76,7 +57,7 @@ public final class ClusterAddresses {
                     // A node whose name doesn't resolve can't be reached by that name either.
                 }
             }
-            Snapshot fresh = new Snapshot(addresses, ports);
+            NodeAddresses fresh = new NodeAddresses(addresses, ports);
             snapshot = fresh;
             refreshedAt = System.currentTimeMillis();
             return fresh;

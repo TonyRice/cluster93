@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class EgressTest {
 
-    private static final ClusterAddresses.Snapshot NO_NODES = ClusterAddresses.Snapshot.EMPTY;
+    private static final NodeAddresses NO_NODES = NodeAddresses.EMPTY;
 
     private static InetAddress ip(String literal) throws Exception {
         return InetAddress.getByName(literal);
@@ -139,7 +139,7 @@ class EgressTest {
 
     @Test
     void clusterNodesAreRefusedEvenOnPublicAddressesAndByAnyRule() throws Exception {
-        ClusterAddresses.Snapshot nodes = new ClusterAddresses.Snapshot(Set.of(ip("93.184.216.34"), ip("10.0.5.20")), Set.of(8080));
+        NodeAddresses nodes = new NodeAddresses(Set.of(ip("93.184.216.34"), ip("10.0.5.20")), Set.of(8080));
         TenantEgress everything = policy("{\"allow\": [{\"to\": \"10.0.0.0/8\", \"ports\": [\"1-65535\"]}, {\"to\": \"node.example\", \"ports\": [\"1-65535\"]}]}");
         Egress.Verdict publicNode = Egress.decide("node.example", List.of(ip("93.184.216.34")), 3000, nodes, false, everything);
         assertThat(publicNode.address()).isNull();
@@ -155,7 +155,7 @@ class EgressTest {
 
     @Test
     void theDevelopmentSwitchOpensPrivateAddressesButNeverANodesOwnPorts() throws Exception {
-        ClusterAddresses.Snapshot nodes = new ClusterAddresses.Snapshot(Set.of(ip("10.0.5.20")), Set.of(8080, 8090));
+        NodeAddresses nodes = new NodeAddresses(Set.of(ip("10.0.5.20")), Set.of(8080, 8090));
         TenantEgress none = TenantEgress.none("acme");
         assertThat(Egress.decide("db", List.of(ip("10.9.9.9")), 5432, nodes, true, none).address()).isNotNull();
         assertThat(Egress.decide("localhost", List.of(ip("127.0.0.1")), 3000, nodes, true, none).address()).isNotNull();

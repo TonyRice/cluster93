@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Configurable address spaces (D-111): rules at two levels, named sets, protocols, and the posture. */
 class EgressRulesTest {
 
-    private static final ClusterAddresses.Snapshot NO_NODES = ClusterAddresses.Snapshot.EMPTY;
+    private static final NodeAddresses NO_NODES = NodeAddresses.EMPTY;
     private static final String PUBLIC_IP = "93.184.216.34";
 
     private static InetAddress ip(String literal) throws Exception {
@@ -118,7 +118,7 @@ class EgressRulesTest {
 
     @Test
     void nothingReachesAClusterNodeAndTheDevelopmentSwitchStillHonoursDenies() throws Exception {
-        ClusterAddresses.Snapshot nodes = new ClusterAddresses.Snapshot(Set.of(ip(PUBLIC_IP)), Set.of(8080));
+        NodeAddresses nodes = new NodeAddresses(Set.of(ip(PUBLIC_IP)), Set.of(8080));
         ClusterEgress everything = cluster("{\"rules\": [{\"to\": \"*\", \"ports\": [\"1-65535\"]}]}");
         TenantEgress all = tenant("{\"posture\": \"public\", \"rules\": [{\"to\": \"@public\", \"ports\": [\"1-65535\"]}]}");
         assertThat(Egress.decide("node", List.of(ip(PUBLIC_IP)), 3000, EgressProtocol.HTTP, nodes, false, everything, all).refused())

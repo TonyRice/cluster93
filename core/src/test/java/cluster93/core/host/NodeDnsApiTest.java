@@ -6,6 +6,7 @@ import cluster93.core.host.egress.ClusterAddresses;
 import cluster93.core.host.egress.ClusterEgress;
 import cluster93.core.host.egress.Egress;
 import cluster93.core.host.egress.EgressPolicies;
+import cluster93.core.host.egress.NodeAddresses;
 import cluster93.core.host.egress.TenantEgress;
 import cluster93.core.runtime.HostException;
 import io.vertx.core.Future;
@@ -137,7 +138,7 @@ class NodeDnsApiTest {
     void visibilityFollowsTheRulesWhateverTheirPortsAndProtocols() throws Exception {
         InetAddress db = InetAddress.getByName("10.0.0.5");
         InetAddress site = InetAddress.getByName("93.184.216.34");
-        ClusterAddresses.Snapshot nodes = ClusterAddresses.Snapshot.EMPTY;
+        NodeAddresses nodes = NodeAddresses.EMPTY;
         // An allow rule for one port and protocol is enough to see the address.
         TenantEgress postgres = TenantEgress.fromJson("acme", new JsonObject("{\"rules\":[{\"action\":\"allow\",\"to\":\"10.0.0.5/32\",\"ports\":[5432],\"protocols\":[\"tcp\"]}]}"));
         assertThat(Egress.visible("db.example.test", db, nodes, false, ClusterEgress.DEFAULT, postgres)).isTrue();

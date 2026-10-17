@@ -48,29 +48,21 @@ public final class Egress {
     /** Names no script may resolve unless a rule names them (§8.2): special-use and conventional internal zones. */
     public static final List<String> INTERNAL_SUFFIXES = List.of("local", "internal", "lan", "home.arpa", "localhost", "cluster.local", "svc");
 
-    private final Vertx vertx;
-    private final boolean allowPrivate;
-    private final ClusterAddresses cluster;
-    private final EgressPolicies policies;
+    private final PolicySource source;
+    private final AccountingSink accounting;
     private final cluster93.core.host.dns.DnsResolver resolver;
     private final List<String> internalSuffixes;
 
     /**
-     * @param allowPrivate the development switch, {@code C93_EGRESS_ALLOW_PRIVATE}
+     * The seam (D-173): the decision's inputs come from {@code source}, its outcomes go to {@code accounting}, and the
+     * gate itself is the same code in either placement.
      */
-    public Egress(Vertx vertx, boolean allowPrivate, ClusterAddresses cluster, EgressPolicies policies) {
-        this(vertx, allowPrivate, cluster, policies, new cluster93.core.host.dns.DnsResolver(vertx, List.of()), List.of());
-    }
-
-    /**
-     * @param resolver the one resolver for scripts (D-122)
-     * @param internalDomains {@code C93_EGRESS_INTERNAL_DOMAINS}: more internal zones, as {@code corp.example}
-     */
-    public Egress(Vertx vertx, boolean allowPrivate, ClusterAddresses cluster, EgressPolicies policies,
-                  cluster93.core.host.dns.DnsResolver resolver, List<String> internalDomains) {
+    public Egress(PolicySource source, AccountingSink accounting, cluster93.core.host.dns.DnsResolver resolver) {
+        this.source = source;
+        this.accounting = accounting;
         this.resolver = resolver;
         List<String> suffixes = new java.util.ArrayList<>(INTERNAL_SUFFIXES);
-        for (String domain : internalDomains) {
+        for (String domain : source.internalDomains()) {
             String lower = domain.trim().toLowerCase(java.util.Locale.ROOT);
             lower = lower.startsWith("*.") ? lower.substring(2) : lower.startsWith(".") ? lower.substring(1) : lower;
             if (!lower.isEmpty()) {
@@ -78,24 +70,42 @@ public final class Egress {
             }
         }
         this.internalSuffixes = List.copyOf(suffixes);
-        this.vertx = vertx;
-        this.allowPrivate = allowPrivate;
-        this.cluster = cluster;
-        this.policies = policies;
+    }
+
+    /**
+     * The node's placement, with the node's own resolver and no extra internal zones.
+     *
+     * @param allowPrivate the development switch, {@code C93_EGRESS_ALLOW_PRIVATE}
+     */
+    public Egress(Vertx vertx, boolean allowPrivate, ClusterAddresses cluster, EgressPolicies policies) {
+        this(vertx, allowPrivate, cluster, policies, new cluster93.core.host.dns.DnsResolver(vertx, List.of()), List.of());
+    }
+
+    /**
+     * The node's placement: the durable records, the live registry and this node's configuration (D-173).
+     *
+     * @param resolver the one resolver for scripts (D-122)
+     * @param internalDomains {@code C93_EGRESS_INTERNAL_DOMAINS}: more internal zones, as {@code corp.example}
+     */
+    public Egress(Vertx vertx, boolean allowPrivate, ClusterAddresses cluster, EgressPolicies policies,
+                  cluster93.core.host.dns.DnsResolver resolver, List<String> internalDomains) {
+        this(new NodePolicySource(cluster, policies, allowPrivate, internalDomains), new MetricsAccounting(vertx), resolver);
     }
 
     /** A gate that knows this node only, by its loopback and wildcard addresses, and the default policies: for tests. */
     public static Egress standalone(Vertx vertx, EgressPolicy policy) {
-        return new Egress(vertx, policy.allowPrivate(), new ClusterAddresses(vertx, null, Set.of()), EgressPolicies.NONE);
+        return new Egress(new NodePolicySource(new ClusterAddresses(vertx, null, Set.of()), EgressPolicies.NONE,
+                policy.allowPrivate(), List.of()), new MetricsAccounting(vertx),
+                new cluster93.core.host.dns.DnsResolver(vertx, List.of()));
     }
 
     public boolean allowPrivate() {
-        return allowPrivate;
+        return source.allowPrivate();
     }
 
     /** The cluster's egress policy, for its limits (D-116). */
     public Future<ClusterEgress> cluster() {
-        return policies.cluster();
+        return source.cluster();
     }
 
     /** As {@link #address(String, String, int, EgressProtocol, String)} for an HTTP request. */
@@ -109,10 +119,10 @@ public final class Egress {
      * message ("fetch", "http.request" and so on).
      */
     public Future<InetAddress> address(String tenant, String host, int port, EgressProtocol protocol, String what) {
-        return cluster.current().compose(nodes -> policies.cluster().compose(clusterPolicy -> policies.of(tenant)
+        return source.nodes().compose(nodes -> source.cluster().compose(clusterPolicy -> source.tenant(tenant)
                 .compose(tenantPolicy -> resolver.addresses(host)
                         .recover(err -> Future.failedFuture(new HostException("TypeError", "dns_failed", "Could not resolve " + host)))
-                        .compose(addresses -> settle(decide(host, addresses, port, protocol, nodes, allowPrivate, clusterPolicy,
+                        .compose(addresses -> settle(decide(host, addresses, port, protocol, nodes, source.allowPrivate(), clusterPolicy,
                                 tenantPolicy), tenant, host, port, what)))));
     }
 
@@ -125,8 +135,8 @@ public final class Egress {
      * What {@code tenant}'s {@code dns} may show, under the policies as they are now (D-122): which addresses and names.
      */
     public Future<DnsView> dnsView(String tenant) {
-        return cluster.current().compose(nodes -> policies.cluster().compose(clusterPolicy -> policies.of(tenant)
-                .map(tenantPolicy -> new DnsView(nodes, allowPrivate, clusterPolicy, tenantPolicy, internalSuffixes))));
+        return source.nodes().compose(nodes -> source.cluster().compose(clusterPolicy -> source.tenant(tenant)
+                .map(tenantPolicy -> new DnsView(nodes, source.allowPrivate(), clusterPolicy, tenantPolicy, internalSuffixes))));
     }
 
     /**
@@ -139,7 +149,7 @@ public final class Egress {
     }
 
     /** What one tenant's {@code dns} may show (§8.2, D-122). */
-    public record DnsView(ClusterAddresses.Snapshot nodes, boolean allowPrivate, ClusterEgress cluster, TenantEgress tenant,
+    public record DnsView(NodeAddresses nodes, boolean allowPrivate, ClusterEgress cluster, TenantEgress tenant,
                           List<String> internalSuffixes) {
 
         /** Whether {@code address} (answered for {@code host}) may be shown: the tenant could connect to it somewhere. */
@@ -188,7 +198,7 @@ public final class Egress {
      * applies on every port to every protocol or to dns; an allow rule shows it whatever its ports and protocols; then
      * the development switch and the posture, as for connections.
      */
-    public static boolean visible(String host, InetAddress address, ClusterAddresses.Snapshot nodes, boolean allowPrivate,
+    public static boolean visible(String host, InetAddress address, NodeAddresses nodes, boolean allowPrivate,
                                   ClusterEgress cluster, TenantEgress tenant) {
         InetAddress checked = checked(address);
         if (nodes.isNode(address) || nodes.isNode(checked)) {
@@ -221,7 +231,7 @@ public final class Egress {
         if (verdict.address() != null) {
             return Future.succeededFuture(verdict.address());
         }
-        cluster93.core.metrics.Metrics.of(vertx).egressDenied(tenant == null ? "-" : tenant, verdict.refused().code);
+        accounting.denied(tenant, verdict.refused().code);
         String rule = verdict.rule() == null ? "" : " (rule \"" + verdict.rule().to() + "\""
                 + (verdict.rule().note() == null ? "" : ": " + verdict.rule().note()) + ")";
         return Future.failedFuture(new HostException("TypeError", "egress_denied", what + " to " + host + ":" + port
@@ -234,16 +244,16 @@ public final class Egress {
         return embedded == null ? address : embedded;
     }
 
-    /** As {@link #decide(String, List, int, EgressProtocol, ClusterAddresses.Snapshot, boolean, ClusterEgress, TenantEgress)}
+    /** As {@link #decide(String, List, int, EgressProtocol, NodeAddresses, boolean, ClusterEgress, TenantEgress)}
      * for an HTTP request under the default cluster policy. */
-    public static Verdict decide(String host, List<InetAddress> addresses, int port, ClusterAddresses.Snapshot nodes,
+    public static Verdict decide(String host, List<InetAddress> addresses, int port, NodeAddresses nodes,
                                  boolean allowPrivate, TenantEgress policy) {
         return decide(host, addresses, port, EgressProtocol.HTTP, nodes, allowPrivate, ClusterEgress.DEFAULT, policy);
     }
 
     /** The first address of {@code addresses} that may be reached, in their order; pure, for testing. */
     public static Verdict decide(String host, List<InetAddress> addresses, int port, EgressProtocol protocol,
-                                 ClusterAddresses.Snapshot nodes, boolean allowPrivate, ClusterEgress cluster, TenantEgress tenant) {
+                                 NodeAddresses nodes, boolean allowPrivate, ClusterEgress cluster, TenantEgress tenant) {
         AddressSets sets = cluster.sets();
         Posture posture = tenant.posture() != null ? tenant.posture() : cluster.posture();
         Verdict refused = null;
@@ -260,7 +270,7 @@ public final class Egress {
     }
 
     private static Verdict judge(String host, InetAddress address, InetAddress checked, int port, EgressProtocol protocol,
-                                 ClusterAddresses.Snapshot nodes, boolean allowPrivate, ClusterEgress cluster, TenantEgress tenant,
+                                 NodeAddresses nodes, boolean allowPrivate, ClusterEgress cluster, TenantEgress tenant,
                                  AddressSets sets, Posture posture) {
         if ((nodes.isNode(address) || nodes.isNode(checked)) && (!allowPrivate || nodes.ports().contains(port))) {
             return new Verdict(null, Reason.CLUSTER_NODE, null);
