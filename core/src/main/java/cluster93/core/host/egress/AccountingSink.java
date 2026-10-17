@@ -13,7 +13,7 @@ public interface AccountingSink {
      * One refused connection.
      *
      * @param tenant the tenant it was refused for
-     * @param reason the {@link Egress.Reason#code} that refused it
+     * @param reason the {@link Decision.Reason#code} that refused it
      */
     void denied(String tenant, String reason);
 }

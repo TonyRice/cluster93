@@ -28,7 +28,7 @@ class EgressTest {
 
     private static boolean allows(TenantEgress policy, String host, InetAddress address, int port) {
         return policy.rules().stream().anyMatch(rule -> rule.action() == EgressRule.Action.ALLOW
-                && rule.matches(host, address, Egress.checked(address), port, EgressProtocol.HTTP, AddressSets.builtInOnly()));
+                && rule.matches(host, address, Decision.checked(address), port, EgressProtocol.HTTP, AddressSets.builtInOnly()));
     }
 
     @ParameterizedTest
@@ -115,25 +115,25 @@ class EgressTest {
     @Test
     void publicAddressesAreAllowedAndPrivateOnesNeedARule() throws Exception {
         TenantEgress none = TenantEgress.none("acme");
-        assertThat(Egress.decide("example.com", List.of(ip("93.184.216.34")), 443, NO_NODES, false, none).address()).isEqualTo(ip("93.184.216.34"));
-        Egress.Verdict refused = Egress.decide("db", List.of(ip("10.0.5.20")), 5432, NO_NODES, false, none);
+        assertThat(Decision.decide("example.com", List.of(ip("93.184.216.34")), 443, NO_NODES, false, none).address()).isEqualTo(ip("93.184.216.34"));
+        Decision.Verdict refused = Decision.decide("db", List.of(ip("10.0.5.20")), 5432, NO_NODES, false, none);
         assertThat(refused.address()).isNull();
-        assertThat(refused.refused()).isEqualTo(Egress.Reason.PRIVATE);
+        assertThat(refused.refused()).isEqualTo(Decision.Reason.PRIVATE);
         TenantEgress rule = policy("{\"allow\": [{\"to\": \"10.0.5.20/32\", \"ports\": [5432]}]}");
-        assertThat(Egress.decide("db", List.of(ip("10.0.5.20")), 5432, NO_NODES, false, rule).address()).isEqualTo(ip("10.0.5.20"));
-        assertThat(Egress.decide("db", List.of(ip("10.0.5.20")), 22, NO_NODES, false, rule).address()).isNull();
+        assertThat(Decision.decide("db", List.of(ip("10.0.5.20")), 5432, NO_NODES, false, rule).address()).isEqualTo(ip("10.0.5.20"));
+        assertThat(Decision.decide("db", List.of(ip("10.0.5.20")), 22, NO_NODES, false, rule).address()).isNull();
     }
 
     @Test
     void aRuleCoversTheIpv4AddressAnIpv6FormCarries() throws Exception {
         TenantEgress rule = policy("{\"allow\": [{\"to\": \"10.0.5.20/32\", \"ports\": [5432]}]}");
-        assertThat(Egress.decide("db", List.of(ip("64:ff9b::a00:514")), 5432, NO_NODES, false, rule).address()).isNotNull();
-        assertThat(Egress.decide("db", List.of(ip("64:ff9b::a00:515")), 5432, NO_NODES, false, rule).address()).isNull();
+        assertThat(Decision.decide("db", List.of(ip("64:ff9b::a00:514")), 5432, NO_NODES, false, rule).address()).isNotNull();
+        assertThat(Decision.decide("db", List.of(ip("64:ff9b::a00:515")), 5432, NO_NODES, false, rule).address()).isNull();
     }
 
     @Test
     void theFirstReachableAddressIsTheOneUsed() throws Exception {
-        Egress.Verdict verdict = Egress.decide("mixed", List.of(ip("10.0.0.1"), ip("93.184.216.34")), 443, NO_NODES, false, TenantEgress.none("acme"));
+        Decision.Verdict verdict = Decision.decide("mixed", List.of(ip("10.0.0.1"), ip("93.184.216.34")), 443, NO_NODES, false, TenantEgress.none("acme"));
         assertThat(verdict.address()).isEqualTo(ip("93.184.216.34"));
     }
 
@@ -141,27 +141,27 @@ class EgressTest {
     void clusterNodesAreRefusedEvenOnPublicAddressesAndByAnyRule() throws Exception {
         NodeAddresses nodes = new NodeAddresses(Set.of(ip("93.184.216.34"), ip("10.0.5.20")), Set.of(8080));
         TenantEgress everything = policy("{\"allow\": [{\"to\": \"10.0.0.0/8\", \"ports\": [\"1-65535\"]}, {\"to\": \"node.example\", \"ports\": [\"1-65535\"]}]}");
-        Egress.Verdict publicNode = Egress.decide("node.example", List.of(ip("93.184.216.34")), 3000, nodes, false, everything);
+        Decision.Verdict publicNode = Decision.decide("node.example", List.of(ip("93.184.216.34")), 3000, nodes, false, everything);
         assertThat(publicNode.address()).isNull();
-        assertThat(publicNode.refused()).isEqualTo(Egress.Reason.CLUSTER_NODE);
-        assertThat(Egress.decide("x", List.of(ip("10.0.5.20")), 5432, nodes, false, everything).refused()).isEqualTo(Egress.Reason.CLUSTER_NODE);
+        assertThat(publicNode.refused()).isEqualTo(Decision.Reason.CLUSTER_NODE);
+        assertThat(Decision.decide("x", List.of(ip("10.0.5.20")), 5432, nodes, false, everything).refused()).isEqualTo(Decision.Reason.CLUSTER_NODE);
         // Its NAT64 and IPv4-mapped forms are the same node.
-        assertThat(Egress.decide("x", List.of(ip("64:ff9b::a00:514")), 5432, nodes, false, everything).refused()).isEqualTo(Egress.Reason.CLUSTER_NODE);
-        assertThat(Egress.decide("x", List.of(ip("::ffff:10.0.5.20")), 5432, nodes, false, everything).refused()).isEqualTo(Egress.Reason.CLUSTER_NODE);
+        assertThat(Decision.decide("x", List.of(ip("64:ff9b::a00:514")), 5432, nodes, false, everything).refused()).isEqualTo(Decision.Reason.CLUSTER_NODE);
+        assertThat(Decision.decide("x", List.of(ip("::ffff:10.0.5.20")), 5432, nodes, false, everything).refused()).isEqualTo(Decision.Reason.CLUSTER_NODE);
         // Loopback and the wildcard address are this node, always.
-        assertThat(Egress.decide("localhost", List.of(ip("127.0.0.2")), 3000, NO_NODES, false, everything).address()).isNull();
-        assertThat(Egress.decide("zero", List.of(ip("0.0.0.0")), 8080, NO_NODES, false, everything).address()).isNull();
+        assertThat(Decision.decide("localhost", List.of(ip("127.0.0.2")), 3000, NO_NODES, false, everything).address()).isNull();
+        assertThat(Decision.decide("zero", List.of(ip("0.0.0.0")), 8080, NO_NODES, false, everything).address()).isNull();
     }
 
     @Test
     void theDevelopmentSwitchOpensPrivateAddressesButNeverANodesOwnPorts() throws Exception {
         NodeAddresses nodes = new NodeAddresses(Set.of(ip("10.0.5.20")), Set.of(8080, 8090));
         TenantEgress none = TenantEgress.none("acme");
-        assertThat(Egress.decide("db", List.of(ip("10.9.9.9")), 5432, nodes, true, none).address()).isNotNull();
-        assertThat(Egress.decide("localhost", List.of(ip("127.0.0.1")), 3000, nodes, true, none).address()).isNotNull();
-        assertThat(Egress.decide("localhost", List.of(ip("127.0.0.1")), 8080, nodes, true, none).refused()).isEqualTo(Egress.Reason.CLUSTER_NODE);
-        assertThat(Egress.decide("node", List.of(ip("10.0.5.20")), 8090, nodes, true, none).refused()).isEqualTo(Egress.Reason.CLUSTER_NODE);
-        assertThat(Egress.decide("node", List.of(ip("10.0.5.20")), 5432, nodes, true, none).address()).isNotNull();
+        assertThat(Decision.decide("db", List.of(ip("10.9.9.9")), 5432, nodes, true, none).address()).isNotNull();
+        assertThat(Decision.decide("localhost", List.of(ip("127.0.0.1")), 3000, nodes, true, none).address()).isNotNull();
+        assertThat(Decision.decide("localhost", List.of(ip("127.0.0.1")), 8080, nodes, true, none).refused()).isEqualTo(Decision.Reason.CLUSTER_NODE);
+        assertThat(Decision.decide("node", List.of(ip("10.0.5.20")), 8090, nodes, true, none).refused()).isEqualTo(Decision.Reason.CLUSTER_NODE);
+        assertThat(Decision.decide("node", List.of(ip("10.0.5.20")), 5432, nodes, true, none).address()).isNotNull();
     }
 
     @Test

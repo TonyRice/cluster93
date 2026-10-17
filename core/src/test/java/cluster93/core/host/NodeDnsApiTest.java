@@ -4,6 +4,7 @@ import cluster93.core.host.dns.DnsResolver;
 import cluster93.core.host.dns.TestDnsServer;
 import cluster93.core.host.egress.ClusterAddresses;
 import cluster93.core.host.egress.ClusterEgress;
+import cluster93.core.host.egress.Decision;
 import cluster93.core.host.egress.Egress;
 import cluster93.core.host.egress.EgressPolicies;
 import cluster93.core.host.egress.NodeAddresses;
@@ -141,19 +142,19 @@ class NodeDnsApiTest {
         NodeAddresses nodes = NodeAddresses.EMPTY;
         // An allow rule for one port and protocol is enough to see the address.
         TenantEgress postgres = TenantEgress.fromJson("acme", new JsonObject("{\"rules\":[{\"action\":\"allow\",\"to\":\"10.0.0.5/32\",\"ports\":[5432],\"protocols\":[\"tcp\"]}]}"));
-        assertThat(Egress.visible("db.example.test", db, nodes, false, ClusterEgress.DEFAULT, postgres)).isTrue();
-        assertThat(Egress.visible("db.example.test", db, nodes, false, ClusterEgress.DEFAULT, TenantEgress.none("acme"))).isFalse();
+        assertThat(Decision.visible("db.example.test", db, nodes, false, ClusterEgress.DEFAULT, postgres)).isTrue();
+        assertThat(Decision.visible("db.example.test", db, nodes, false, ClusterEgress.DEFAULT, TenantEgress.none("acme"))).isFalse();
         // A deny rule hides an address only if it covers every port and dns.
         TenantEgress denyHttps = TenantEgress.fromJson("acme", new JsonObject("{\"rules\":[{\"action\":\"deny\",\"to\":\"93.184.216.34/32\",\"ports\":[443]}]}"));
-        assertThat(Egress.visible("example.test", site, nodes, false, ClusterEgress.DEFAULT, denyHttps)).isTrue();
+        assertThat(Decision.visible("example.test", site, nodes, false, ClusterEgress.DEFAULT, denyHttps)).isTrue();
         TenantEgress denyDns = TenantEgress.fromJson("acme", new JsonObject("{\"rules\":[{\"action\":\"deny\",\"to\":\"93.184.216.34/32\",\"protocols\":[\"dns\"]}]}"));
-        assertThat(Egress.visible("example.test", site, nodes, false, ClusterEgress.DEFAULT, denyDns)).isFalse();
+        assertThat(Decision.visible("example.test", site, nodes, false, ClusterEgress.DEFAULT, denyDns)).isFalse();
         // Under allow-list, only what a rule allows.
         TenantEgress allowList = TenantEgress.fromJson("acme", new JsonObject("{\"posture\":\"allow-list\",\"rules\":[]}"));
-        assertThat(Egress.visible("example.test", site, nodes, false, ClusterEgress.DEFAULT, allowList)).isFalse();
+        assertThat(Decision.visible("example.test", site, nodes, false, ClusterEgress.DEFAULT, allowList)).isFalse();
         // A rule naming an internal name lets it resolve.
         TenantEgress named = TenantEgress.fromJson("acme", new JsonObject("{\"rules\":[{\"action\":\"allow\",\"to\":\"*.corp.internal\",\"ports\":[443]}]}"));
-        Egress.DnsView view = new Egress.DnsView(nodes, false, ClusterEgress.DEFAULT, named, Egress.INTERNAL_SUFFIXES);
+        Decision.DnsView view = new Decision.DnsView(nodes, false, ClusterEgress.DEFAULT, named, Decision.INTERNAL_SUFFIXES);
         assertThat(view.hidden("db.corp.internal")).isFalse();
         assertThat(view.hidden("db.other.internal")).isTrue();
         assertThat(view.hidden("example.com")).isFalse();

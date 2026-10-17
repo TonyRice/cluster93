@@ -1,6 +1,7 @@
 package cluster93.core.host;
 
 import cluster93.core.host.dns.DnsResolver;
+import cluster93.core.host.egress.Decision;
 import cluster93.core.host.egress.Egress;
 import cluster93.core.runtime.HostException;
 import cluster93.core.runtime.api.DnsApi;
@@ -153,7 +154,7 @@ final class NodeDnsApi implements DnsApi {
     }
 
     /** Whether a record may be shown: addresses the tenant could reach, and no name pointing into an internal zone. */
-    private static boolean shows(Egress.DnsView view, String name, JsonObject record) {
+    private static boolean shows(Decision.DnsView view, String name, JsonObject record) {
         String type = record.getString("type");
         try {
             return switch (type) {
