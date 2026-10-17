@@ -3563,3 +3563,118 @@ worker is a reuse opportunity, and the reason it was not reused was a rule about
   refused and no network in the container — so the container path is unchanged by the re-bind.
 - The touched-module gate: `./mvnw -o verify -pl cli,runner-protocol,server -am -DskipITs` (server 230, runner-protocol 96,
   cli 114/2 skipped, plus core/runtime).
+
+### D-173 — Egress runs in the worker; the node keeps the rules
+**Date:** 2026-10-16 · **Status:** Accepted (the design; **nothing is built**). Running the policy **in the worker is a requirement**, and **the worker is the default placement** — the node stays the authority (it is where the rules, cluster membership and budgets come from) without being in the path per connection or per byte. Extends D-108/D-111; relates to D-126, D-166, D-167, D-172.
+
+**Context:**
+Every outbound connection tenant code makes is made by the node: a worker's `fetch`/`http`/`https`/`net`/`tls` are
+host calls (D-108), so the node resolves, applies the egress gate, dials and streams the body back to the worker.
+Measured on the build host (2026-10-16, means over four repeats — see the draft in `docs/benchmarks.md`) that
+boundary costs **+55–75 µs per host-call round trip** (~4.5× the in-process path) and about **half the throughput**
+of a streamed 64 MB body (240 → 117 MB/s, and ~1.5× the stream chunks). Crypto and zlib are *not* in that cost: they
+run in the worker (D-126). Two different arguments follow, and they are not the same one. **Latency:** the hop is
+~0.1% of the RTT to a public endpoint, and the 2× was measured against a *loopback* server — the best case for the
+other side — so "hit public HTTP without the hop" is not what this is about. **Node capacity** (Tony's argument):
+the node relays every tenant's outbound bytes, so its CPU, event loops and bandwidth are the cluster's egress
+ceiling, on the same process that schedules, serves the ingress, stores data and answers the API. Fanning the bytes
+out to the workers is the point.
+
+**Decision:**
+1. **The egress policy runs in the worker, and that is the default placement.** One module holds the policy *and* the
+   code that governs outbound connections, and it can run on **both** sides: an `egress` core that is pure (normalize
+   the address → static deny blocks → tenant rules → allow/deny) plus a **policy source** (the rules synced to a
+   worker, or the node's own configuration) and an **accounting sink** (a budget the worker enforces, or the node's
+   counters). Placement is configuration rather than a second implementation, so the same checks run in both places, a
+   node or tenant can be placed either way, and the two can be parity-tested against each other. The node stays the
+   **authority** — it is where the rules, cluster membership and budgets come from — it is simply not in the path per
+   connection or per byte. Javet and GraalJS are the *same* worker binary, so the worker side is one artifact today;
+   the core stays language-neutral (or hosted on the worker's Java side) so a future Python worker does not fork the
+   rules.
+2. **Deny is CIDR-shaped, static, and needs no DNS:** loopback, `169.254.0.0/16` (cloud metadata), `10/8`,
+   `172.16/12`, `192.168/16`, CGNAT `100.64/10`, ULA `fc00::/7`, the documentation ranges, and the IPv4-in-IPv6
+   forms (IPv4-mapped, NAT64, 6to4). Ports appear only on the **allow** side. Static means it cannot go stale, so it
+   can live in the core — and be mirrored into nftables for free if the extra floor is wanted.
+3. **Rules are synced over the existing worker↔node connection** (the connection already exists), **versioned** and
+   with a **TTL: a worker that cannot refresh fails closed.** The cluster's own addresses and ports ride in the same
+   payload as deny entries and are refreshed when membership changes, so holding that rule does not require the worker
+   to derive cluster knowledge. This is load-bearing in the default placement: it is what lets the worker decide
+   without asking.
+4. **TLS comes from the image** (`ca-certificates` or whatever provides them): whoever connects must verify the peer.
+   That is a dependency, not a secret and not an authority handed over.
+5. **Resolve → check → connect to the address that was checked.** The node does exactly this today; a gap between the
+   check and the connect is DNS rebinding.
+6. **The cluster's edge refuses worker-source connections** as a second layer, so "a worker cannot reach the cluster"
+   holds even if the worker's own core is wrong. Container mode only: a *spawned* worker's connections come from the
+   host itself, so no source-IP rule can tell them apart.
+7. **Per-tenant connect accounting moves with the policy** — a budget the node allocates and the worker enforces, or
+   a report per connection (one hop per connection, nothing next to a body). The D-156/D-165 idiom: the node
+   allocates, the pool enforces.
+8. **Placement is per node and per tenant, delivered with the binding, and the worker is the default.** Per-tenant
+   placement is consistent with D-172: a worker serves one tenant at a time and is re-bound when idle, so the mode can
+   arrive in the `BIND` payload and change when the worker is re-bound to another tenant. The default decides what the
+   isolation check asserts: today `node` keeps a container's *"no route"* as the verified property; with `worker` as
+   the default, every container gets a route and the *static deny blocks* become the property we verify instead. So
+   the check grows a variant, and "no route" becomes the property of the placements that still want it.
+9. **Resolution is the worker's, in the default placement — the node does not approve per name.** The worker owns
+   the decision end to end: it resolves, checks the resolved address against the static blocks and the synced rules
+   (cluster addresses included) and connects to *that* address with the SNI of the name. Nobody asks the node per
+   name, per connection or per byte; the node's part is the rules, membership and budgets. The **node-approves-per-
+   name** lookaside stays available in the same module — resolution and the check on the node, the approved address
+   returned to the worker for a TTL — which is the placement to reach for when a workload resolves thousands of
+   distinct hosts (where the node would otherwise be a DNS proxy) or when a tenant wants DNS gated and will not have
+   a resolver in its container.
+
+**Alternatives considered:**
+- **The node dials and then hands the worker the connection** (fd passing over the Unix socket, or a kernel splice).
+  Removes the byte relay but keeps the node's per-connection work — resolve, gate, dial, TLS — and puts fd passing
+  into a Java runtime. Rejected as still too expensive for the node-capacity goal; kept as the smallest change if
+  bytes are the only concern.
+- **The node approves, per name or per connection** (the worker asks "may I reach `api.stripe.com:443`?", the node
+  applies the rules, resolves, and answers with the approved address for a TTL; the worker connects and does TLS).
+  One source of truth for the check, cluster knowledge applied at approval time so nothing has to be synced, DNS
+  never in the container, accounting observed rather than reported. Rejected as the default: it keeps a round trip in
+  the name path for a decision the worker can make from synced rules, and the point is that the worker owns it. It
+  stays available in the same module for high name cardinality (where the node would otherwise be a DNS proxy) and for
+  a tenant that wants DNS gated without a resolver in its container — a configuration change, not a rewrite.
+- **Worker-side *ingress*.** Rejected as a category error: ingress is clients → the node → a service, where the node
+  is the door and the switchboard (Host → tenant + service out of the service store, `C93_MAX_REQUEST_BYTES`, idle
+  timeouts) and a worker has no route to be reached at.
+- **Kernel default-deny in the container's namespace** (nftables/BPF). The right belt for the static set, but the
+  deployment owns it (the node creates no containers, D-167) — the same trade as cgroups (D-171 item 10). Optional,
+  not required.
+
+**Consequences:**
+- **Nothing is built.** This decides the shape and the default placement, not that it is switched on today.
+- **The default placement is the worker**, so a container is expected to have a route and the *static deny set* is
+  what carries the catastrophic cases for every tenant. "No route" does not disappear — it becomes the property of
+  the placements (per node, per tenant) that still want it, and the isolation check asserts whichever property the
+  placement in force implies.
+- **One new residual channel, in a restrictive posture:** with a route and a resolver, a worker whose policy allows
+  only a few hosts can still put data in DNS query names. With an allow-public posture that changes nothing (a route
+  already permits an HTTP exfiltration); for a deny-most tenant, point the container's resolver at the node or accept
+  the hole — the node resolves today, so this is new when the worker owns it.
+- **Revocation latency is the rules TTL.** A worker that cannot refresh must deny rather than serve stale rules,
+  which means egress is coupled to node connectivity — the same coupling the node-approval placement has, so it is
+  not a reason to prefer one over the other.
+- **What the one measurement decides is urgency, not shape:** how many MB/s one node can relay with many workers
+  fetching concurrently before its CPU saturates. If a node relays far more than a site's link, this is architecture
+  to build when convenient; if it caps in the low hundreds of MB/s, it is the next thing after Stage 3.
+- **An engine escape in a worker with a route is a network client** bounded only by the kernel floor, where today it
+  can at most make calls the node authorises. That is the standing cost of the default placement — and it is why the
+  static deny set (item 2) and the cluster edge (item 6) have to carry the catastrophic cases on their own, without
+  relying on the policy core being correct.
+- Corrections from the discussion, recorded so they are not re-argued: a check inside the worker is **not** reachable
+  by the guest (the engine is the boundary, and the Java beside it is not guest-reachable) — the difference is what a
+  checker bug or an engine escape *reaches*, not who can edit the rules; the node's gate is authoritative because of
+  *cluster* facts and accounting, not reachability; and crypto/zlib already run in the worker, so they were never part
+  of the hop.
+
+**Evidence:**
+- The measurement: `docs/benchmarks.md`'s "What the worker boundary costs" (draft, 2026-10-16) with the harness
+  (`proxy-cost.sh`, to be committed beside it).
+- The full discussion and its reasoning: `~/.opencode/plan/worker-egress-design.md`.
+- The code the policy core would come from: `core/src/main/java/cluster93/core/host/egress/Egress.java` and
+  `EgressPolicy`, used by `FetchClient`/`SocketClient`. The worker binary already links them — `WorkerMain` builds a
+  `FetchClient` for its standalone/benchmark modes — so the missing part is the policy plumbing and the posture, not
+  the code.
