@@ -19,6 +19,11 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
   - `server/.../PerTenantEgressPlacementTest` (D-178) now asserts the two tenants' refusals carry the **same code** and
     the **same words** — its wrapper-stripping helper is gone — while the counters still say which side refused;
     `runner-protocol/.../NodeWorkerChannelTest` pins the shape at the protocol level.
+  - `scripts/worker-isolation-check.sh --case C5` asserts it where it counts, in a real container over the worker
+    socket: a connect the **node** makes and refuses (one of its own ports, refused before any rule, so the
+    `--network none` container needs no route) must reach the script as `egress_denied` carrying the gate's words, with
+    no `Stream reset` wrapper. The new column fails against the old code with exactly that wrapper, so it is the shape
+    being asserted and not the refusal's presence.
 
 - **Placement is per tenant as well as per node: one tenant can be decided the other way** (D-178, the per-tenant half
   of D-173 item 8):

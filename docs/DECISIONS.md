@@ -4094,8 +4094,12 @@ same refusal made in the worker arrived as `TypeError/egress_denied`. D-178's te
   the same `code` (`egress_denied`) and the identical message, and the helper that stripped the node's wrapper is
   gone — the test that found the asymmetry now asserts it is not there. The counters are unchanged, so it still proves
   **who** refused: the node's own count for one tenant, the worker's report for the other.
-- **Container evidence is unaffected:** C5 of `scripts/worker-isolation-check.sh` asserts who reaches whom and what
-  the node's counters do, not how a refusal is worded.
+- **Container evidence** (this entry first recorded C5 as asserting who reaches whom and what the node's counters do,
+  **not how a refusal is worded** — true when it was written): C5 now asserts the wording as well. A connect the
+  **node** makes and refuses — one of its own ports, refused before any rule, so the `--network none` container needs
+  no route — must reach the script as `egress_denied` carrying the gate's words, with no `Stream reset` wrapper. Run
+  against the node code from before this decision, the new column fails with exactly that wrapper, so it is the shape
+  being asserted and not the refusal's presence.
 
 **Rejected:**
 - **Carrying the name and code in the `RESET` frame.** It would change the framing for every stream to fix one call,

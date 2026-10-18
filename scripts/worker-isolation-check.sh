@@ -145,7 +145,8 @@ describe_cases() {
   say "  C4  wrong identity, refused                  whenever any engine is available"
   say "  C5  the worker decides egress (D-173/A4)      rootful docker; gives the worker a route (A7)"
   say "      and the node counts what it refused, from the worker's own report (D-176). The same job runs under both"
-  say "      placements: the node's own counters move when IT connects, and do not when the worker does."
+  say "      placements: the node's own counters move when IT connects, and do not when the worker does. A refused"
+  say "      connect the NODE makes reaches the script in the gate's own shape (D-179), not as a stream reset."
 }
 
 # ---------------------------------------------------------------------------------------
@@ -724,8 +725,10 @@ job_ran() {  # job_ran <id> <substring of the record>
 
 # C5: the worker's own placement (D-173/A4), with a route (A7), in a real container.
 #
-# Four things are asserted, and the first is what makes the second worth anything:
-#   1. under the NODE's placement the node makes the connection, and its own socket counter moves (the baseline);
+# Five things are asserted, and the first is what makes the second worth anything:
+#   1. under the NODE's placement the node makes the connection, and its own socket counter moves (the baseline) —
+#      and a connect the node REFUSES reaches the script in the gate's own shape, code and words (D-179), not as a
+#      stream reset whose wrapper hides them;
 #   2. under the WORKER's placement the same job succeeds while those counters stand still — the worker's own route;
 #   3. the static set the worker holds still refuses metadata, RFC1918 and the cluster's own port;
 #   4. the node counts what the worker refused, because the worker reported it (D-176).
@@ -738,8 +741,8 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
   ENGINE="$engine"
   IMAGE="$(image_for "$engine")"
 
-  local joined=no nodeRan=n/a reached=n/a refused=no blocks=no localOnly=no reported=no
-  local jobOut="" blocksOut="" refusedOut=""
+  local joined=no nodeRan=n/a nodeShape=n/a reached=n/a refused=no blocks=no localOnly=no reported=no
+  local jobOut="" blocksOut="" refusedOut="" nodeShapeOut=""
 
   # --- The target and the tenant's rule for it: private, so the node's gate would refuse it and only the rule lets
   #     either end through, and a sibling rather than the node, so it is not one of the node's own addresses. ---
@@ -785,6 +788,27 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
         [ "$before" != "$after" ] && nodeRan=yes
       else
         say "  the baseline job did not reach the target through the node: $(job_json "${base_id:-x}")"
+      fi
+
+      # …and the other half of the node's path: a connect the NODE refuses, where the failure — not a body — crosses
+      # the socket. It must reach the script in the gate's own shape (D-179): the code and the words a worker-side
+      # gate gives, with no "Stream reset" wrapper standing between the two. One of the node's own ports, which every
+      # placement refuses before any rule can be consulted (D-108), so this needs no route in the container.
+      local shape_id shape_json shape_ok=yes
+      shape_id="$(refused_job 127.0.0.1 "$INTERNAL_PORT")"
+      [ -n "$shape_id" ] && await_job "$shape_id" >/dev/null
+      shape_json="$(job_json "${shape_id:-x}")"
+      case "$shape_json" in
+        *'"reached":false'*'"code":"egress_denied"'*'resolves to one of the cluster'*) ;;
+        *) shape_ok=no ;;
+      esac
+      # The wrapper is the whole point of D-179: it is what used to stand between the gate's words and the script.
+      case "$shape_json" in *'Stream reset'*) shape_ok=no ;; esac
+      nodeShape=no
+      if [ "$shape_ok" = yes ]; then
+        nodeShape=yes
+      else
+        nodeShapeOut="$shape_json"
       fi
     fi
     "$engine" rm -f "$RUN_ID-base" >/dev/null 2>&1 || true
@@ -890,6 +914,12 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
     printf '%s' "$blocksOut" | head -c 1200 | sed 's/^/    /'
     say ""
   fi
+  if [ "$nodeShape" != yes ] && [ -n "$nodeShapeOut" ]; then
+    say "  a refused connect the NODE made did not reach the script in the gate's own shape (D-179) — it wants"
+    say "  \"code\":\"egress_denied\" with the gate's words, and no \"Stream reset\" wrapper:"
+    printf '%s' "$nodeShapeOut" | head -c 1200 | sed 's/^/    /'
+    say ""
+  fi
   if [ "$refused" != yes ]; then
     say "  the job's own record (what the worker's decision produced):"
     printf '%s' "$refusedOut" | head -c 1200 | sed 's/^/    /'
@@ -917,13 +947,14 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
   "$engine" rm -f "$RUN_ID-w" >/dev/null 2>&1 || true
   local result=FAIL
   [ "$joined" = yes ] && [ "$reached" != no ] && [ "$refused" = yes ] && [ "$blocks" = yes ] \
-    && [ "$localOnly" = yes ] && [ "$reported" = yes ] && result=PASS
+    && [ "$localOnly" = yes ] && [ "$reported" = yes ] && [ "$nodeShape" != no ] && result=PASS
   printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-7s | %-6s | %-7s | %-10s | %-8s | %s\n' \
     case engine rootless identity joined node-ran reached refused blocked local-only reported result
   printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-7s | %-6s | %-7s | %-10s | %-8s | %s\n' \
     "C5" "$label" "$(rootless_podman && echo rootless-podman || echo rootful)" "--user $(id -u):$(id -g)" \
     "$joined" "$nodeRan" "$reached" "$refused" "$blocks" "$localOnly" "$reported" "$result"
   say "     the baseline (node placement): the node made the connection and its own socket counter moved — $nodeRan"
+  say "     a refused connect it made, in the gate's own shape (D-179): $nodeShape"
   say "     the worker reached an allowed target with its own route, node counters still: $reached"
   say "     refused by the worker itself=$refused  its static set still refuses metadata and RFC1918=$blocks  (the node's own egress counter unmoved: $localOnly)"
   say "     the node counted what the worker refused because the worker reported it (D-176): $reported"
