@@ -142,6 +142,8 @@ final class EgressRoutes {
                 .put("rules", rules)
                 .put("addressSets", sets)
                 .put("developmentSwitch", allowPrivate)
+                // A tenant's own grant (D-174): it reaches this machine's loopback, and nothing more of private.
+                .put("allowLocal", policy.allowLocal())
                 .put("limits", new JsonObject()
                         .put("concurrentRequests", FetchApi.MAX_CONCURRENT)
                         .put("requestBodyBytes", FetchClient.MAX_REQUEST_BYTES)

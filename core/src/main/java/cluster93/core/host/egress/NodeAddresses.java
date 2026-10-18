@@ -21,8 +21,17 @@ public record NodeAddresses(Set<InetAddress> addresses, Set<Integer> ports) {
         ports = Set.copyOf(ports);
     }
 
-    /** Whether the address is a node's: any of them, or this machine's wildcard and loopback addresses. */
+    /** Whether the address is one the cluster advertises: a node's own address, as the policy named it. */
     public boolean isNode(InetAddress address) {
-        return address.isAnyLocalAddress() || address.isLoopbackAddress() || addresses.contains(address);
+        return addresses.contains(address);
+    }
+
+    /**
+     * Whether the address is <b>here</b> — this machine's wildcard or loopback, which is the node's own address on a
+     * node and the container's own on a worker (D-174). Kept apart from {@link #isNode} because the two are decided
+     * differently: the cluster's addresses are refused whatever a tenant grants, and "here" is a tenant's choice.
+     */
+    public static boolean isLocal(InetAddress address) {
+        return address.isAnyLocalAddress() || address.isLoopbackAddress();
     }
 }

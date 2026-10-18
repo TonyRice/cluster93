@@ -3678,3 +3678,61 @@ out to the workers is the point.
   `EgressPolicy`, used by `FetchClient`/`SocketClient`. The worker binary already links them — `WorkerMain` builds a
   `FetchClient` for its standalone/benchmark modes — so the missing part is the policy plumbing and the posture, not
   the code.
+
+### D-174 — A tenant may be allowed *here*, which is not the same as *private*
+**Date:** 2026-10-17 · **Status:** Accepted. Refines D-108; follows from D-173 (a worker decides, on its own machine).
+
+**Context:**
+"The cluster's own nodes are refused, on every port, whatever their address, and no rule can allow them" (D-108) is the
+SSRF guarantee: the node's API, ingress, internal endpoint, metrics and cluster ports all live at the node's own
+addresses. It is enforced before any rule, and `EgressPolicy`'s node set includes **loopback and the wildcard** — so a
+script's `fetch` to `127.0.0.1` is refused and no rule can open it. The only way through was
+`C93_EGRESS_ALLOW_PRIVATE=true`, a **node-wide development switch** that opens *every* non-public address — including
+**link-local, i.e. the cloud metadata endpoint at `169.254.169.254`**, which is the classic SSRF target.
+
+Two things made that insufficient. Operators wanted a *tenant-scoped* grant (one tenant allowed its own local
+services, not everyone), and D-173 changed what "loopback" means: with egress decided in a worker, `127.0.0.1` is the
+**worker's** own machine — a helper or sidecar in the same container — not the node. The old rule over-blocked that
+legitimate case while protecting nothing extra (reaching the *node's* loopback from a container needs host networking,
+which the isolation check exists to prevent).
+
+**Decision:**
+1. **A per-tenant grant, `allowLocal`, in the tenant's policy** (so it travels to workers in the synced policy like
+   every other rule, and needs no protocol of its own). It opens **"here"**: this machine's loopback and wildcard.
+2. **"Here" is not "private".** The grant opens loopback and the wildcard only. Link-local (cloud metadata), RFC1918,
+   CGNAT and ULA stay refused exactly as they were — a tenant that needs a LAN address still names it in a rule.
+3. **The node's own ports stay shut, always.** A local address on a port this node is listening on is refused as a
+   cluster address whether the grant or the development switch is on: those ports are the cluster's own services.
+4. **The cluster's own addresses stay absolute.** They are refused whatever a tenant grants — in the worker placement
+   they now come from the payload (the node's own addresses, its loopback included), so a worker cannot reach the
+   node's loopback even if its container were given host networking.
+5. **A deny rule still wins.** The grant is a default, not an override: the cluster's and the tenant's deny rules are
+   consulted first, so an operator can allow a tenant "here" in general and deny it a specific port.
+6. **The placement decides which machine "here" is** — the node's on the node's placement, the container's on a
+   worker's — and that is documented rather than hidden, since it is the one thing the same policy means differently
+   in the two placements.
+
+**Alternatives considered:**
+- **A per-tenant `allowPrivate`.** Rejected: it opens link-local, so it hands the tenant the metadata endpoint. The
+  narrower grant is the whole point.
+- **Keep only the node-wide development switch.** Rejected: it cannot grant one tenant without granting all, and it
+  opens far more than "here".
+- **Let a *rule* name loopback.** Rejected: the cluster-node refusal must stay ahead of rules, or an ordinary-looking
+  allow rule becomes a route to the node's own services.
+
+**Consequences:**
+- The grant is visible where an operator looks: `GET /v1/egress-policy` (and `c93 egress`) reports `allowLocal` beside
+  the posture and the switch.
+- `C93_EGRESS_ALLOW_PRIVATE` keeps working and keeps meaning "everything non-public, development only"; the new grant
+  is the scoped, docile version of it.
+- A tenant with the grant in the node placement reaches the *node's* loopback (minus the node's ports). That is
+  deliberately the same switch semantics at a smaller scope, and it is documented as such.
+
+**Evidence:**
+- `EgressTest.aTenantMayBeAllowedHere` — the grant opens a loopback port, never the node's own port, never a cluster
+  address, never a LAN address, never the metadata endpoint; a tenant without it is refused; and a cluster deny rule
+  still refuses what the grant would otherwise allow.
+- `WorkerLocalEgressTest.theLocalGrantOpensTheWorkersOwnLoopback` and `withoutTheGrantTheWorkersOwnLoopbackIsRefused`
+  — in the worker placement, the grant arrives in the synced policy (no rules, no protocol of its own) and the fetch
+  reaches the worker's own loopback; without it, the worker refuses its own loopback as a cluster address and counts
+  `cluster_node` in its own accounting.

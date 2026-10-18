@@ -48,3 +48,38 @@ Before V8's code cache was used for the prelude and built-ins, these were 4.9, 7
 - **Density is the resident memory of the Java processes**, with a fixed, pre-touched Java heap so that growth is
   native memory. An idle isolate costs that much; a busy one can grow to `C93_MAX_HEAP_MB` (64 MB here).
   The node's capacity setting, not memory, limits how many isolates run.
+
+## What the worker boundary costs (draft, 2026-10-16 — not committed yet)
+
+The numbers above are all `C93_WORKER_MODE=embedded`: the engine runs **in the node's own JVM**, so a host call is a
+direct Java call and there is no worker process at all (`docker-compose.yml` sets exactly that). A node that runs
+workers instead (`C93_WORKER_MODE=process`, or worker containers over `C93_WORKER_SOCKET`) puts a process boundary in
+the path of everything that is not pure computation — every host API call, every body, every service request — and
+that boundary is what these measure.
+
+**Method.** One node as a process, one native `worker-javet`, the same workloads twice, on an 8-CPU desktop at load
+~5 (browser and a `c93 node` install also running — see the caveat at the top of this page). The micro numbers are 4
+repeats each; the system numbers are single samples from `benchmarks/cluster/Bench.java` against the local node.
+Harness: `proxy-cost.sh` (draft, `/tmp/opencode/proxy-cost.sh` — to be committed beside these numbers).
+
+| Workload | embedded (no hop) | worker (proxied) | cost of the boundary |
+|---|---|---|---|
+| Host call (`kv` get/set round trip), 20,000 calls | ~20 µs/call (19.6–21.1) | ~95 µs/call (74–124) | **+55–75 µs per call**, ~4.5× |
+| 64 MB body, fetched by the node and streamed to the run | ~240 MB/s (208–275) | ~117 MB/s (111–124) | **~2× slower** |
+| …the chunks the script sees | ~8,200 (8 KiB max) | ~12,300 (8 KiB max) | ~1.5× the chunks, ~5.4 KiB average |
+| Cold start (submit → finished), 60 sequential | p50 17.5 ms | p50 19.3 ms | indistinguishable |
+| Job throughput, 16 concurrent clients | 236 jobs/s | 302 jobs/s | indistinguishable |
+| Files, 128 MB, one stream each way | 245 up / 505 down MB/s | 214 up / 493 down MB/s | noise |
+| Ingress → service, 64 concurrent clients | 4,924 req/s, p50 9.5 ms, p99 49.5 ms | 3,749 req/s, p50 14.1 ms, p99 66.3 ms | **−24% req/s, +2–5 ms p50** |
+
+**Reading it.** Crypto and zlib are *not* in that table because they don't cross: `RemoteHostApis` runs them in the
+worker (§6, D-126), so hashing and compression cost nothing extra. What crosses is anything with authority or
+node-owned state (`kv`, `fs`/`files`, `bus`, `secrets`, `jobs`, `packages`, `log`, `timers`) and all I/O (`fetch`,
+`http`, `net`, `tls`, ingress requests, events, streams). So: a CPU-bound script pays nothing; a script that hits
+state in a loop pays ~55–75 µs per call (20k `kv` calls: 0.65 s → 1.9 s); a body pays ~2×; a service pays roughly one
+crossing per request. "Run a script" — the common case — doesn't move, because isolate start, HTTP and the cluster
+store dominate it. The first job on a node or tenant additionally pays the worker's start (this harness warms up
+first, so it is not in the table); `REUSE_SAME_TENANT` and D-172 are what amortise that.
+
+The ingress line repeated across three runs (embedded 4.5–4.9k req/s, worker 3.5–4.0k, p50 +1.5 to +4.6 ms), and the
+µs and MB/s lines were stable across four repeats. Everything else on this page is inside this machine's noise.

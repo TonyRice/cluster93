@@ -6,6 +6,14 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A tenant can be allowed *here* without being allowed *private*** (D-174, refines D-108):
+  - `allowLocal` in a tenant's egress policy opens **this machine's loopback** — useful in the worker placement, where
+    that is the worker container's own machine (a sidecar or helper) — while link-local (**cloud metadata**), RFC1918,
+    CGNAT and ULA stay refused, and so do the node's own ports, always. It rides the synced policy to workers, so it
+    needs no protocol of its own, and `GET /v1/egress-policy` / `c93 egress` reports it beside the posture.
+  - It is the scoped answer to `C93_EGRESS_ALLOW_PRIVATE`, which stays as the development switch and still opens every
+    non-public address. A deny rule still wins: the grant is a default, not an override.
+
 - **A worker is re-bound when it goes idle, instead of being kept for one tenant for life** (D-172, refines D-155/D-166):
   - A worker still serves **one tenant at a time** — every host-API call is authorised against the tenant the run belongs
     to, and the worker sits in that tenant's cgroup — but the binding is no longer permanent. When a worker has nothing

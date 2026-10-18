@@ -98,19 +98,15 @@ class WorkerLocalEgressTest {
         }
     }
 
-    /** A node whose policy for this test is exactly one rule: the loopback echo server, on its port. */
-    private void startNodeWithDivergentPolicy() throws Exception {
+    /** A node that hands the worker {@code tenantPolicy} and no cluster rules of its own. */
+    private void startNode(JsonObject tenantPolicy) throws Exception {
         manager = new TenantWorkerPoolManager(vertx, Map.of(), "javet", 0, 2, 2, 2, 64,
                 TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL,
                 512L * 1024 * 1024)
                 .workerPolicy(tenant -> Future.succeededFuture(new PolicyMessage(tenant, PolicyMessage.WORKER, 1L,
                         60_000L, false, List.of(),
                         // Default-deny posture: nothing is reachable that a rule doesn't name.
-                        new JsonObject().put("posture", "allow-list"),
-                        new JsonObject().put("rules", new JsonArray().add(new JsonObject()
-                                .put("action", "allow").put("to", echoHost + "/32")
-                                .put("ports", new JsonArray().add(echoPort)))),
-                        List.of(), List.of())));
+                        new JsonObject().put("posture", "allow-list"), tenantPolicy, List.of(), List.of())));
         await(manager.listenForWorkers(socketPath, "s3cret", 8));
 
         // A real worker, as a container runs one — and one that decides egress itself.
@@ -136,7 +132,8 @@ class WorkerLocalEgressTest {
     @Test
     @DisplayName("A worker fetches with its own rules and its own connection, and the node is not in the path (D-173)")
     void theWorkerMakesTheConnection() throws Exception {
-        startNodeWithDivergentPolicy();
+        startNode(new JsonObject().put("rules", new JsonArray().add(new JsonObject()
+                .put("action", "allow").put("to", echoHost + "/32").put("ports", new JsonArray().add(echoPort)))));
 
         ExecutionResult result = run("""
                 export default async () => {
@@ -161,7 +158,7 @@ class WorkerLocalEgressTest {
     @Test
     @DisplayName("A worker refuses what its own rules refuse, in the node's error shape (D-173)")
     void theWorkerRefusesWhatItsRulesRefuse() throws Exception {
-        startNodeWithDivergentPolicy();
+        startNode(new JsonObject().put("rules", new JsonArray()));
 
         // Nothing allows example.com, and the posture is default-deny: the worker's own decision, not the node's —
         // this node has no fetch client, so the node could not have produced `egress_denied` at all.
@@ -183,6 +180,48 @@ class WorkerLocalEgressTest {
         assertThat(output.getString("message")).contains("not allowed");
         assertThat(daemon.accounting().denials()).as("and the worker counted its own refusal")
                 .containsEntry("not_allowed", 1L);
+    }
+
+    @Test
+    @DisplayName("A tenant's local grant reaches the worker's own loopback, and without it the worker refuses its own (D-174)")
+    void theLocalGrantOpensTheWorkersOwnLoopback() throws Exception {
+        // The grant travels in the policy the node syncs: no protocol work, and no rule needed.
+        startNode(new JsonObject().put("allowLocal", true));
+
+        ExecutionResult allowed = run("""
+                export default async () => {
+                  const response = await fetch('http://127.0.0.1:%d/ping');
+                  return { body: await response.text() };
+                };
+                """.formatted(echoPort));
+
+        assertThat(allowed.status()).as(String.valueOf(allowed.error())).isEqualTo(JobStatus.SUCCEEDED);
+        assertThat(((JsonObject) allowed.output()).getString("body"))
+                .as("its own loopback, which is the machine the connection comes from")
+                .isEqualTo("pong-from-the-worker");
+    }
+
+    @Test
+    @DisplayName("Without the grant, a worker refuses its own loopback as a cluster address (D-174)")
+    void withoutTheGrantTheWorkersOwnLoopbackIsRefused() throws Exception {
+        startNode(new JsonObject().put("rules", new JsonArray()));
+
+        ExecutionResult refused = run("""
+                export default async () => {
+                  try {
+                    await fetch('http://127.0.0.1:%d/ping');
+                    return { reached: true };
+                  } catch (e) {
+                    return { reached: false, code: e.cause ? e.cause.code : e.code };
+                  }
+                };
+                """.formatted(echoPort));
+
+        assertThat(refused.status()).as(String.valueOf(refused.error())).isEqualTo(JobStatus.SUCCEEDED);
+        JsonObject output = (JsonObject) refused.output();
+        assertThat(output.getBoolean("reached")).isFalse();
+        assertThat(output.getString("code")).isEqualTo("egress_denied");
+        assertThat(daemon.accounting().denials()).containsEntry("cluster_node", 1L);
     }
 
     @Test

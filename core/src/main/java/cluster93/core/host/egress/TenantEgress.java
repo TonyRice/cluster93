@@ -11,8 +11,11 @@ import java.util.List;
  * own instead of the cluster's. Empty unless an operator sets it. Nothing in it reaches the cluster's own nodes.
  *
  * @param posture null to follow the cluster's
+ * @param allowLocal whether this tenant's scripts may reach <b>here</b> — the machine the connection would come from
+ *                   (D-174). It is not the same as allowing private networks: link-local (cloud metadata), RFC1918,
+ *                   CGNAT and ULA stay refused, and so do the node's own ports.
  */
-public record TenantEgress(String tenant, Posture posture, List<EgressRule> rules) {
+public record TenantEgress(String tenant, Posture posture, List<EgressRule> rules, boolean allowLocal) {
 
     public static final int MAX_RULES = 100;
 
@@ -21,11 +24,11 @@ public record TenantEgress(String tenant, Posture posture, List<EgressRule> rule
     }
 
     public static TenantEgress none(String tenant) {
-        return new TenantEgress(tenant, null, List.of());
+        return new TenantEgress(tenant, null, List.of(), false);
     }
 
     public boolean isEmpty() {
-        return posture == null && rules.isEmpty();
+        return posture == null && rules.isEmpty() && !allowLocal;
     }
 
     public JsonObject toJson() {
@@ -34,6 +37,9 @@ public record TenantEgress(String tenant, Posture posture, List<EgressRule> rule
         JsonObject json = new JsonObject().put("tenant", tenant).put("rules", list);
         if (posture != null) {
             json.put("posture", posture.code);
+        }
+        if (allowLocal) {
+            json.put("allowLocal", true);
         }
         return json;
     }
@@ -50,7 +56,8 @@ public record TenantEgress(String tenant, Posture posture, List<EgressRule> rule
             throw new IllegalArgumentException("At most " + MAX_RULES + " rules per tenant");
         }
         Object posture = json.getValue("posture");
-        return new TenantEgress(tenant, posture == null || "inherit".equals(posture) ? null : Posture.parse(posture), rules);
+        return new TenantEgress(tenant, posture == null || "inherit".equals(posture) ? null : Posture.parse(posture), rules,
+                json.getBoolean("allowLocal", false));
     }
 
     static void read(JsonObject json, String field, EgressRule.Action forced, List<EgressRule> into) {

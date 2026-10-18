@@ -223,6 +223,7 @@ const data = await res.json();      // or res.text(), res.bytes(), or stream res
   - **Private and reserved addresses are refused by default:** loopback, 10/8, 172.16/12, 192.168/16, link-local (including the 169.254.169.254 cloud metadata endpoint), CGNAT, unique-local IPv6, the documentation ranges, and IPv6 forms that carry one of these (NAT64, 6to4, IPv4-mapped and IPv4-compatible).
   - **Operators can change both** (D-111): allow and deny rules for the whole cluster and for your tenant, and an "allow-list" posture under which only what a rule allows is reachable.
   - **The cluster's own nodes are always refused,** on every port and whatever their address, and no rule can allow them.
+  - **Your own machine is refused too, unless an operator grants it:** loopback belongs to the cluster's own addresses, so no rule opens it. `allowLocal` in your tenant's policy opens *this machine's* loopback (in a worker, the container's own), and nothing else of private — a LAN address still needs a rule naming it.
   - **See your tenant's policy** with `GET /v1/egress-policy` or `c93 egress`: each step in the order it's applied, with why; the cluster's rules and yours; the posture; and the limits. A refusal by a rule names that rule and its note.
 - The connection goes to the exact address that was checked, so DNS tricks can't get around this.
 - Redirects are **not followed**: a 3xx comes back as is.

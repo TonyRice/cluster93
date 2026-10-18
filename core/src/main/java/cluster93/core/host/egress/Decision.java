@@ -76,7 +76,16 @@ public final class Decision {
     private static Verdict judge(String host, InetAddress address, InetAddress checked, int port, EgressProtocol protocol,
                                  NodeAddresses nodes, boolean allowPrivate, ClusterEgress cluster, TenantEgress tenant,
                                  AddressSets sets, Posture posture) {
-        if ((nodes.isNode(address) || nodes.isNode(checked)) && (!allowPrivate || nodes.ports().contains(port))) {
+        boolean local = NodeAddresses.isLocal(address) || NodeAddresses.isLocal(checked);
+        boolean nodeAddress = nodes.isNode(address) || nodes.isNode(checked);
+        boolean nodePort = nodes.ports().contains(port);
+        if (local) {
+            // Here: refused by default, and a tenant may be allowed it (D-174) — but never on this node's own ports,
+            // which are the cluster's own services (the API, the ingress, the internal endpoint, metrics, Ignite).
+            if (nodePort || !(tenant.allowLocal() || allowPrivate)) {
+                return new Verdict(null, Reason.CLUSTER_NODE, null);
+            }
+        } else if (nodeAddress && (!allowPrivate || nodePort)) {
             return new Verdict(null, Reason.CLUSTER_NODE, null);
         }
         EgressRule rule = first(cluster.rules(), EgressRule.Action.DENY, host, address, checked, port, protocol, sets);
@@ -92,7 +101,9 @@ public final class Decision {
             return new Verdict(address, null, null);
         }
         boolean isPublic = AddressSets.isPublic(checked);
-        if (allowPrivate && !isPublic) {
+        // The development switch opens every private address; a tenant's own grant opens only "here" (D-174), which is
+        // still a private address, so it needs this line too — and nothing else.
+        if ((allowPrivate || (local && tenant.allowLocal())) && !isPublic) {
             return new Verdict(address, null, null);
         }
         if (posture == Posture.ALLOW_LIST) {
@@ -164,6 +175,9 @@ public final class Decision {
     public static boolean visible(String host, InetAddress address, NodeAddresses nodes, boolean allowPrivate,
                                   ClusterEgress cluster, TenantEgress tenant) {
         InetAddress checked = checked(address);
+        if (NodeAddresses.isLocal(address) || NodeAddresses.isLocal(checked)) {
+            return tenant.allowLocal() || allowPrivate;
+        }
         if (nodes.isNode(address) || nodes.isNode(checked)) {
             return allowPrivate;
         }
