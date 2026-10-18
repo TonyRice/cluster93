@@ -79,6 +79,15 @@ GET /v1/egress-policy                     (the tenant, read-only)
 
 **`C93_EGRESS_ALLOW_PRIVATE`:** stays for local development, and now logs a warning on every start.
 
+**Where it runs, in a container (D-177, A7).** Because the decision is the worker's by default, a `worker`-placement
+container **makes the tenant's connections itself**, so it needs a **route** and a **resolver** — where the `node`
+placement's container is best left with `network_mode: none`. What bounds it is the same gate, inside it: the static
+set and the synced rules, with its refusals reported and counted as above. The **cluster's edge is the deployment's**,
+not the gate's: a container reaches its host at an address the node cannot recognise as its own — Docker's bridge
+gateway is a node interface, pasta's `169.254.1.2` under rootless podman is not — so a tenant rule naming that address
+would otherwise open the node. Publish the node's ports on **loopback** only, or keep the workers off its network;
+`scripts/worker-isolation-check.sh --case C5` reports, per port, what a worker's network can actually reach.
+
 **`fetch`'s request bodies become bytes.** Today a `Uint8Array` body is decoded as UTF-8, which corrupts binary uploads; this was found while designing B2. The 1 MB cap stays for `fetch` until B2's streaming.
 
 ## 4. B2: `http` and `https` as clients (accepted: no new reach)

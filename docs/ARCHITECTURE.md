@@ -141,8 +141,8 @@ Frame Header (12 Bytes)
 ```
 
 ### Authority Partitioning
-- **Worker (Compute Domain):** Polyfills, JS event loop, user code execution, pure crypto, zlib, text encoding.
-- **Node (Authority Domain):** KV persistence, VFS file storage, egress network gate, tenant secrets, HTTP ingress, durable job queues.
+- **Worker (Compute Domain):** Polyfills, JS event loop, user code execution, pure crypto, zlib, text encoding, and the **egress gate** — the decision is the worker's in the default placement (D-173).
+- **Node (Authority Domain):** KV persistence, VFS file storage, tenant secrets, HTTP ingress, durable job queues, and the **egress rules and budgets** the worker enforces.
 
 ### Multiplexing & Flow Control (`StreamMultiplexer`)
 - Streaming channels (file downloads/uploads, HTTP streaming request/response bodies, TCP/TLS sockets) multiplex over the shared framed connection via `0x30 OPEN`, `0x31 DATA`, `0x32 END`, `0x33 RESET`, and `0x34 CREDIT`.

@@ -3678,6 +3678,16 @@ out to the workers is the point.
   `EgressPolicy`, used by `FetchClient`/`SocketClient`. The worker binary already links them — `WorkerMain` builds a
   `FetchClient` for its standalone/benchmark modes — so the missing part is the policy plumbing and the posture, not
   the code.
+- **Built since (2026-10-18), and where the real numbers are:** every item above is implemented and `worker` is the
+  default — the seam and a pure `Decision` (A1), the static set as a shared tested component (A2), rules synced,
+  versioned and **fail-closed** (A3), the worker-side client so `net`/`tls`/`http` are the worker's too (A4), the
+  placement as a setting (A5, `C93_EGRESS_PLACEMENT`), the allocation and the report (A6 → **D-176**), the container
+  side and the edge (**D-177**) and the per-tenant local allowance (**D-174**). The boundary's measured numbers are
+  D-176's (a tenant's workers together stay inside the node's allowance; one `FetchClient` per worker) and D-177's (in
+  a real container the node's `c93.egress.sockets` **moves** when the node makes the connection and **stands still**
+  when the worker does). The one thing still unmeasured is item 8's **relay ceiling** (A0): it sets how urgent the
+  node's own path is, not the shape of the work, and the harness (`proxy-cost.sh`) and the draft it fed were never
+  committed.
 
 ### D-174 — A tenant may be allowed *here*, which is not the same as *private*
 **Date:** 2026-10-17 · **Status:** Accepted. Refines D-108; follows from D-173 (a worker decides, on its own machine).
