@@ -132,22 +132,35 @@ describe_cases() {
   say "  C2  rootless docker, container uid 0         $( { have_docker && rootless_docker; } && echo AVAILABLE || echo 'SKIP (needs dockerd-rootless-setuptool.sh install)')"
   say "  C3  rootful docker, --user <uid>:<gid>       $( { have_docker && ! rootless_docker; } && echo AVAILABLE || echo 'SKIP (pose: rootful docker is not in use)')"
   say "  C4  wrong identity, refused                  whenever any engine is available"
+  say "  C5  the worker decides egress (D-173/A4)      rootful docker; needs no route in the container"
 }
 
 # ---------------------------------------------------------------------------------------
 # The node: a process, always (D-167). It is the only end that listens.
 # ---------------------------------------------------------------------------------------
-start_node() {
+start_node() {  # start_node [worker|node]: where the workers decide egress (D-173)
+  local placement="${1:-node}"
   local node_jar="$ROOT/server/target/c93.jar"
   [ -f "$node_jar" ] || { say "Missing $node_jar — build it: ./mvnw -q -pl server -am package -DskipTests"; exit 1; }
   install -d -m 0700 "$TMP/sockets"
   install -d -m 0700 "$TMP/secrets"
   install -d -m 0700 "$TMP/scratch"
-  od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$TMP/secrets/secret"
-  chmod 0400 "$TMP/secrets/secret"
+  # Created once: the node is restarted with another placement by C5, and a 0400 file cannot be rewritten by the shell
+  # that created it. Keeping them also keeps "the secret survives a restart" true, which is what a deployment does.
+  if [ ! -f "$TMP/secrets/secret" ]; then
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$TMP/secrets/secret"
+    chmod 0400 "$TMP/secrets/secret"
+  fi
   # A secret that is NOT the node's, for the refusal check: same shape, wrong value.
-  od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$TMP/secrets/wrong"
-  chmod 0400 "$TMP/secrets/wrong"
+  if [ ! -f "$TMP/secrets/wrong" ]; then
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$TMP/secrets/wrong"
+    chmod 0400 "$TMP/secrets/wrong"
+  fi
+  # A parameter, not an env the caller sets: `VAR=x f` does not reliably reach the `java` f starts. The cases assert
+  # what the NODE does on the worker's behalf (the `node` placement, D-173); a worker that decides for itself needs a
+  # route from its deployment — the deployment's job, A7 — and that is what C5 exercises, needing no route.
+  # (Note for whoever edits this: no comments inside the `env \` list below. A `#` after a line continuation ends the
+  # command, and the node starts without its socket and secret.)
   env \
     C93_NODE_ID="$NODE_ID" \
     C93_DATA_DIR="$TMP/data" \
@@ -165,6 +178,7 @@ start_node() {
     C93_RATE_LIMIT_PER_MINUTE=0 \
     C93_INGRESS_DOMAIN=idcheck.test \
     C93_EGRESS_ALLOW_PRIVATE=true \
+    C93_EGRESS_PLACEMENT="$placement" \
     C93_ADMIN_TOKEN="$ADMIN_TOKEN" \
     C93_WORKER_SOCKET="$TMP/sockets/node.sock" \
     C93_WORKER_SECRET_FILE="$TMP/secrets/secret" \
@@ -182,6 +196,16 @@ mint_job_token() {  # mint_job_token <tenant>
   curl -s -m 10 -X POST "http://127.0.0.1:$HTTP_PORT/v1/tenants/$1/tokens" -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H 'Content-Type: application/json' -d '{"name":"idcheck","scopes":["*"]}' \
     | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+# Stops the node this check started, so another can take its ports (C5 restarts it with another placement).
+stop_node() {
+  if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
+    kill "$NODE_PID" 2>/dev/null || true
+    for _ in $(seq 1 40); do kill -0 "$NODE_PID" 2>/dev/null || break; sleep 0.25; done
+    kill -9 "$NODE_PID" 2>/dev/null || true
+  fi
+  NODE_PID=""
 }
 
 # A tiny HTTP server on the host, outside every container: the one thing a container worker cannot reach by itself,
@@ -205,6 +229,9 @@ start_echo_server() {
 }
 
 metric() { curl -sf -m 2 "http://127.0.0.1:$METRICS_PORT/metrics" 2>/dev/null | awk -v k="$1" '$1 ~ "^"k"\\{" { print $NF }' | head -1; }
+
+# Every series of a metric, sorted: for a counter with tags, "it did not move" has to compare the whole set.
+metric_all() { curl -sf -m 2 "http://127.0.0.1:$METRICS_PORT/metrics" 2>/dev/null | awk -v k="$1" '$1 ~ "^"k"\\{" { print }' | sort; }
 
 # Waits for a metric to reach a value, **re-reading it each turn**. (Passing `test "$(metric …)" = …` to wait_for
 # instead would expand the metric once, before the loop, and test that frozen value over and over.)
@@ -564,6 +591,78 @@ run_case_if() {  # run_case_if <available> <case id> <engine> <rootless> <flag> 
   check_case "$@" || FAILED=1
 }
 
+# The worker's own placement (D-173/A4), in a real container: the node hands it the rules, and it decides. Two things
+# are asserted, and neither needs the container to have a route — which it does not yet: its deployment gives it one.
+check_worker_placement() {  # check_worker_placement <engine> <label>
+  local engine="$1" label="$2"
+  ENGINE="$engine"
+  IMAGE="$(image_for "$engine")"
+  # A node that lets the worker decide, on the same data directory (the tenant and its token survive the restart).
+  stop_node
+  start_node worker || { say "  could not restart the node for the worker placement"; return 1; }
+  # A restart is a new node process: mint as an operator would rather than rely on a token from the first one.
+  JOB_TOKEN="$(mint_job_token "$TENANT")"
+  [ -n "$JOB_TOKEN" ] || { say "  no job token after the restart"; return 1; }
+
+  run_worker w --user "$(id -u):$(id -g)"
+  local joined=no
+  for _ in $(seq 1 60); do
+    [ "$(metric c93_workers_connected)" = "1.0" ] && joined=yes && break
+    sleep 0.5
+  done
+
+  # A worker is given its rules when it is *bound*, not when it connects, so give it something to do first (D-166
+  # binds a connection to the tenant that has work). Then ask it to do something only its own rules can refuse.
+  #
+  # The evidence is behavioural on purpose. A worker container's own log is not available: the native worker image has
+  # no SLF4J provider, so its logger is a no-op and every line it "logs" is discarded — a finding in its own right.
+  # And a log line would be weaker evidence anyway: it says a worker was handed rules, not that it applied them. A
+  # refusal it makes itself, with the node's own counter NOT moving, says both.
+  if [ "$joined" = yes ]; then
+    local warmup
+    warmup=$(submit_job "export default () => ({ warmed: true })")
+    [ -n "$warmup" ] && await_job "$warmup" >/dev/null
+  fi
+
+  local refused=no localOnly=no jobOut=""
+  if [ "$joined" = yes ]; then
+    local before after id
+    before="$(metric_all c93_egress_denied_total)"
+    # The node's own internal port: a cluster address on a node port is refused before any rule and before any
+    # connection, so this needs no route — and the address is the *worker's* own loopback, which only a worker that
+    # holds the rules can know to refuse.
+    id=$(submit_job "export default async () => { try { await fetch('http://127.0.0.1:$INTERNAL_PORT/health'); return { reached: true }; } catch (e) { return { reached: false, code: e.cause ? e.cause.code : e.code, why: e.cause ? e.cause.message : null }; } }")
+    [ -n "$id" ] || say "  the job was not accepted (no id came back)"
+    if [ -n "$id" ]; then
+      await_job "$id" >/dev/null
+      jobOut="$(job_json "$id")"
+      case "$jobOut" in
+        *'"reached":false'*'"code":"egress_denied"'*'resolves to one of the cluster'*) refused=yes ;;
+      esac
+      after="$(metric_all c93_egress_denied_total)"
+      [ "$before" = "$after" ] && localOnly=yes
+    fi
+  fi
+
+  if [ "$refused" != yes ]; then
+    say "  the job's own record (what the worker's decision produced):"
+    printf '%s' "$jobOut" | head -c 1200 | sed 's/^/    /'
+    say ""
+    say "  the worker container's own log (a no-op logger, so this is usually empty — D-175 records why):"
+    "$engine" logs "$RUN_ID-w" 2>&1 | tail -6 | sed 's/^/    /'
+  fi
+  "$engine" rm -f "$RUN_ID-w" >/dev/null 2>&1 || true
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-10s | %s\n' \
+    case engine rootless identity joined refused local-only result
+  local result=FAIL
+  [ "$joined" = yes ] && [ "$refused" = yes ] && [ "$localOnly" = yes ] && result=PASS
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-10s | %s\n' \
+    "C5" "$label" "$(rootless_podman && echo rootless-podman || echo rootful)" "--user $(id -u):$(id -g)" \
+    "$joined" "$refused" "$localOnly" "$result"
+  say "     joined=$joined  refused by the worker itself=$refused  (the node's own egress counter did not move: $localOnly)"
+  [ "$result" = PASS ]
+}
+
 # Podman rootless (D-149): the image's own user (c93, 10001:999) is mapped to the invoking host uid, which is what makes
 # the node's files — the 0600 socket and the 0400 secret — belong to the container's process. Plain `keep-id` does NOT
 # do that: it leaves the container running as the image's user while the host files appear as the invoking uid, so the
@@ -579,6 +678,18 @@ if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C4" ]; then
     check_identity_refused docker 12345:12345 || FAILED=1
   else
     printf '%-3s | %-16s | %s\n' "C4" docker "SKIP (needs a rootful engine to run a foreign uid)"
+    SKIPPED=$((SKIPPED + 1))
+  fi
+fi
+
+if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C5" ]; then
+  if [ "$WORKERS_OK" != 1 ]; then
+    printf '%-3s | %-16s | %s\n' "C5" docker "SKIP (needs the worker image — see the note above)"
+    SKIPPED=$((SKIPPED + 1))
+  elif have_docker && ! rootless_docker; then
+    check_worker_placement docker rootful || FAILED=1
+  else
+    printf '%-3s | %-16s | %s\n' "C5" docker "SKIP (needs a rootful engine to run a container as this user)"
     SKIPPED=$((SKIPPED + 1))
   fi
 fi

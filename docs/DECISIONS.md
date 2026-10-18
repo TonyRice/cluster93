@@ -3736,3 +3736,46 @@ which the isolation check exists to prevent).
   — in the worker placement, the grant arrives in the synced policy (no rules, no protocol of its own) and the fetch
   reaches the worker's own loopback; without it, the worker refuses its own loopback as a cluster address and counts
   `cluster_node` in its own accounting.
+
+### D-175 — A worker container's own log is empty, and the check proves delivery behaviourally instead
+**Date:** 2026-10-17 · **Status:** Accepted (a finding, recorded; the fix is a candidate, not taken). Relates to D-167, D-173.
+
+**Context:**
+Writing C5 — the container-level case for the worker's own egress — the first version asserted delivery by reading the
+worker's log for the line it prints when a policy arrives. It failed, and the container's log said why:
+`SLF4J(W): No SLF4J providers were found. Defaulting to no-operation (NOP) logger implementation`. The worker is a
+native image built without a logging binding, so **every line a worker logs is discarded** — in every container, since
+the worker existed. Only the JVM's own warnings (netty's, for instance) reach `docker logs`.
+
+Nothing depended on a worker's log before, because everything the check asserts is asserted from the node's side: the
+worker's arrival, its job, its refusals and its death are all visible to the node (D-159's stderr tail is the JVM's,
+not the logger's). The gap is real but operational: **an operator debugging a worker container sees nothing of what the
+worker thinks**, and the worker has no channel for its own logs (the `LOG` frame carries *script* logs to the node,
+not the worker's).
+
+**Decision:**
+1. **Record it, and do not paper over it.** This is the third container-level pass over the worker (D-171 item 7/10,
+   D-173, here) and the first time the gap mattered; it is written down rather than left as a surprise.
+2. **The isolation check asserts delivery *behaviourally*.** C5 does not look for a log line — it asks a worker to do
+   something only its own rules can refuse: a `fetch` to the node's own internal port, which is a cluster address on a
+   node port, refused before any rule and before any connection (so the container needs no route, which A7 will give
+   it). The refusal comes back as `egress_denied` naming the cluster's own nodes, **and the node's own
+   `c93_egress_denied_total` does not move** — had the node been deciding, it would have counted that refusal.
+3. **That assertion is kept even if worker logging is fixed later**, because it is stronger than a log line: a line
+   says a worker was handed rules, while a refusal plus a still node counter says it *applied* them.
+
+**Alternatives considered:**
+- **Fix the logging now** (ship `slf4j-simple` in the worker image, or forward the worker's own logs over the
+  connection as another frame). Deferred: it is a change to the worker image and its size, and nothing needs it yet.
+  It stays the right fix for debugging a container, and this note is the reason it will not be forgotten.
+
+**Consequences:**
+- A worker container's log is expected to be empty, and nothing may assert on it: the check says why in a comment
+  beside the case, so the next person does not rediscover this by writing a failing assertion.
+- Diagnosing a worker means diagnosing it from the node (its connection, its runs, its refusals, its death) — which is
+  where the node's side already has the detail (D-159, D-171 item 5).
+
+**Evidence:**
+- `scripts/worker-isolation-check.sh` case **C5** against a real container, both engines: joined, refused by the worker
+  itself, and the node's own egress counter unmoved — **PASS on podman rootless and docker rootful**, with the
+  worker's log printed on failure and showing only the NOP-logger warning.

@@ -6,6 +6,16 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **The worker's own egress is verified in a container, and a worker container's log is emptier than it looks**
+  (D-173, D-175):
+  - `scripts/worker-isolation-check.sh` now pins the placement per case — the C1–C4 cases assert what the **node** does
+    on the worker's behalf — and adds **C5**: a node that lets the worker decide, a container worker that joins, and a
+    job fetching the node's own internal port. The refusal comes back `egress_denied` naming the cluster's own nodes
+    **from the worker**, while the node's own egress counter does not move, which is what says the worker decided.
+  - That assertion is behavioural because a worker container has **no usable log**: the native worker image has no
+    SLF4J provider, so its logger is a no-op and everything it logs is discarded (D-175). The fix is recorded as a
+    candidate, not taken.
+
 - **A tenant can be allowed *here* without being allowed *private*** (D-174, refines D-108):
   - `allowLocal` in a tenant's egress policy opens **this machine's loopback** — useful in the worker placement, where
     that is the worker container's own machine (a sidecar or helper) — while link-local (**cloud metadata**), RFC1918,
