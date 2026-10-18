@@ -150,12 +150,14 @@ may share one. Guests stay separated by the engine — a fresh context per job �
    `0600`, and the file's mode matters. The node warns when it finds the file looser than `0400`.
 
 3. Restart the node, then start worker containers. `install/docker/compose.workers.tmpl` is a complete sketch (a
-   supervisor keeping N workers alive, `--network none`, the hardening set, labels for a sweep, and the identity
-   flag for each engine — D-149); by hand it is one line:
+   supervisor keeping N workers alive, the network the placement needs, the hardening set, labels for a sweep, and
+   the identity flag for each engine — D-149); by hand it is one line — here with the default `worker` placement,
+   which is the one that needs a route (see [The worker's network](#the-workers-network)):
 
    ```bash
+   docker network create c93-egress       # once: what the workers may reach (skip it for the `node` placement)
    mkdir -p /var/lib/cluster93-worker-scratch/w1/{tmp,home}     # this worker's own scratch, see below
-   docker run --rm --network none \
+   docker run --rm --network c93-egress \                       # `--network none` for the `node` placement
      --cap-drop=ALL --security-opt no-new-privileges --read-only \
      --entrypoint /opt/cluster93/bin/worker-javet \
      -v /var/lib/cluster93-worker-scratch/w1/tmp:/tmp \
@@ -186,6 +188,33 @@ may share one. Guests stay separated by the engine — a fresh context per job �
    A worker that starts **before** the node retries the connect with backoff for about two minutes and then exits,
    so start order does not matter, and a worker that cannot connect says so in its own log.
 
+### The worker's network
+
+Where egress is decided decides what the container needs (D-173), and `C93_EGRESS_PLACEMENT` on the node says which.
+**`worker` is the default**:
+
+- **`worker`** — the worker holds the rules the node synced to it and makes the tenant's connections **itself**. It
+  needs a **route** (a network with egress; not `--network none`) and a **resolver** (its network's, or `dns:` in
+  compose). What bounds it is those rules: the static set refuses loopback, link-local (cloud metadata), RFC1918,
+  CGNAT, ULA and the cluster's own addresses whatever the route allows (D-174). Give it a network that reaches what
+  tenants need and nothing else — a route is reachability, the rules are permission.
+- **`node`** — the node makes every connection on the worker's behalf over the socket, so give the container **no
+  network at all**. `--network none` is strictly better there, and it is what the node-placement cases in
+  `scripts/worker-isolation-check.sh` assert.
+
+**The cluster edge is yours to arrange.** Whatever rules a worker holds, its host must not be reachable from its
+network:
+
+- Publish the node's ports on **loopback** only — `127.0.0.1:9493:9493`, as `c93 node install --docker` does — so the
+  worker's network has no route to the API, the ingress or metrics. Or put the workers on a network the node is not
+  on, and firewall the rest.
+- Do **not** rely on the node's own gate for this. A container reaches its host at an address the node cannot
+  recognise as its own — the bridge gateway on Docker, pasta's `169.254.1.2` under rootless podman — so "the node's
+  own addresses" is not a complete deny list from inside a container. The network is the first line; the gate is the
+  second.
+- Watch the **internal endpoint** and the **metrics port** in particular: neither is meant for anyone. `--case C5`
+  reports which of the node's ports a worker's network can actually reach.
+
 ### What it looks like from here
 
 - `c93 node status` and `GET /metrics` report the connections: `c93_workers_connected` counts them, while
@@ -211,10 +240,21 @@ may share one. Guests stay separated by the engine — a fresh context per job �
 ### Verifying it on a real engine
 
 `scripts/worker-isolation-check.sh` runs the cases only a real engine can decide — whether a container reaches the
-`0600` socket as the right identity, whether a job round-trips on it, whether the wrong secret is refused, whether the
-worker container genuinely has no network — and prints a matrix: **C3 (rootful Docker, `--user`) passes**, C4 (a
-foreign uid) is refused, and C1/C2 print `SKIP` until podman or rootless Docker exists. It is safe to re-run: everything it creates is labelled with its run id, it uses
-its own ports and temp directories under `mktemp -d`, and it never touches anything it did not create.
+`0600` socket as the right identity, whether a job round-trips on it, whether the wrong secret is refused, and which
+network property the placement's own container has — and prints a matrix: **C3 (rootful Docker, `--user`) and C5 (the
+`worker` placement) pass**, C4 (a foreign uid) is refused, and C1/C2 print `SKIP` until podman or rootless Docker
+exists.
+
+C5 is the one that decides the `worker` placement, in a real container with a real route: it starts a sibling target
+and runs the same job twice. Under `node` the node makes the connection and **its own socket counter moves**; under
+`worker` the same job succeeds with that counter **standing still**, so the worker connected over the route its
+deployment gave it and the node was never in the path. It also shows the static set still refusing metadata, RFC1918
+and the cluster's own port, that the node's own refusal counter does not move, and that the node learns about the
+worker's refusals only from the worker's report (D-176).
+
+It is safe to re-run: everything it creates is labelled with its run id, it uses its own ports and temp directories
+under `mktemp -d`, it removes the images it builds, and it never touches anything it did not create. (It keeps one
+cached helper image, `cluster93-idcheck-target:py3`, for the sibling target above — safe to remove any time.)
 
 ## Join a cluster
 

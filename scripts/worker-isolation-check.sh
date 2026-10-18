@@ -2,10 +2,13 @@
 #
 # worker-isolation-check.sh — does a worker container actually join a node over the node's worker socket (D-166)?
 #
-# The two things that decide it differ per engine and per kernel, and no unit test can catch a mismatch:
+# The things that decide it differ per engine and per kernel, and no unit test can catch a mismatch:
 #   * D-149's identity mapping — a worker must present the node's host identity, or the 0700 socket dir / 0600 socket
 #     refuses it;
-#   * S10's no-network property — a worker container must have no route off the host, probed from INSIDE it.
+#   * the placement's own network property, probed from INSIDE a container: under the `node` placement the container
+#     has NO route off the host (S10), and under the `worker` placement — the default since D-173 — it has one,
+#     because a worker that decides egress makes the tenant's connections itself (A7). Both are asserted, and which
+#     one applies is pinned per case rather than assumed.
 # So this runs the real thing: a node as a process, a worker container from a node image, and one job over the socket.
 #
 # It is meant to be run repeatedly on a real machine, and it is careful to be safe to run:
@@ -75,8 +78,11 @@ hr() { printf '%s\n' "----------------------------------------------------------
 TMP=""
 NODE_PID=""
 ENGINE=""
-declare -a PREPARED_IMAGES=()
 declare -a CONTAINERS=()
+# Images this run built are listed in a FILE, not an array: `image_for` is called in a command substitution (to
+# capture the tag it prints), so it runs in a subshell, and an array it appends to there never reaches the trap —
+# which is how this check came to leave a 1.4 GB image behind on every run.
+declare -a NETWORKS=()
 
 cleanup() {
   local status=$?
@@ -85,11 +91,16 @@ cleanup() {
     while IFS= read -r id; do
       [ -n "$id" ] && "$ENGINE" rm -f "$id" >/dev/null 2>&1 || true
     done < <("$ENGINE" ps -aq --filter "label=$LABEL" 2>/dev/null || true)
-    for entry in ${PREPARED_IMAGES[@]+"${PREPARED_IMAGES[@]}"}; do
-      # Only the images this run built, each removed by the engine that built it.
-      set -- $entry
-      "$1" image rm -f "$2" >/dev/null 2>&1 || true
+    # A network this run created, once its containers are gone.
+    for net in ${NETWORKS[@]+"${NETWORKS[@]}"}; do
+      "$ENGINE" network rm "$net" >/dev/null 2>&1 || true
     done
+    if [ -n "$TMP" ] && [ -f "$TMP/prepared-images" ]; then
+      while read -r built tag; do
+        # Only the images this run built, each removed by the engine that built it.
+        [ -n "${built:-}" ] && "$built" image rm -f "$tag" >/dev/null 2>&1 || true
+      done < "$TMP/prepared-images"
+    fi
   fi
   if [ -n "$ECHO_PID" ] && kill -0 "$ECHO_PID" 2>/dev/null; then
     kill "$ECHO_PID" 2>/dev/null || true
@@ -132,15 +143,17 @@ describe_cases() {
   say "  C2  rootless docker, container uid 0         $( { have_docker && rootless_docker; } && echo AVAILABLE || echo 'SKIP (needs dockerd-rootless-setuptool.sh install)')"
   say "  C3  rootful docker, --user <uid>:<gid>       $( { have_docker && ! rootless_docker; } && echo AVAILABLE || echo 'SKIP (pose: rootful docker is not in use)')"
   say "  C4  wrong identity, refused                  whenever any engine is available"
-  say "  C5  the worker decides egress (D-173/A4)      rootful docker; needs no route in the container"
-  say "      and the node counts what it refused, from the worker's own report (D-176)"
+  say "  C5  the worker decides egress (D-173/A4)      rootful docker; gives the worker a route (A7)"
+  say "      and the node counts what it refused, from the worker's own report (D-176). The same job runs under both"
+  say "      placements: the node's own counters move when IT connects, and do not when the worker does."
 }
 
 # ---------------------------------------------------------------------------------------
 # The node: a process, always (D-167). It is the only end that listens.
 # ---------------------------------------------------------------------------------------
-start_node() {  # start_node [worker|node]: where the workers decide egress (D-173)
+start_node() {  # start_node [worker|node] [true|false]: where the workers decide egress, and the dev switch
   local placement="${1:-node}"
+  local allow_private="${2:-true}"
   local node_jar="$ROOT/server/target/c93.jar"
   [ -f "$node_jar" ] || { say "Missing $node_jar — build it: ./mvnw -q -pl server -am package -DskipTests"; exit 1; }
   install -d -m 0700 "$TMP/sockets"
@@ -157,9 +170,10 @@ start_node() {  # start_node [worker|node]: where the workers decide egress (D-1
     od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$TMP/secrets/wrong"
     chmod 0400 "$TMP/secrets/wrong"
   fi
-  # A parameter, not an env the caller sets: `VAR=x f` does not reliably reach the `java` f starts. The cases assert
-  # what the NODE does on the worker's behalf (the `node` placement, D-173); a worker that decides for itself needs a
-  # route from its deployment — the deployment's job, A7 — and that is what C5 exercises, needing no route.
+  # A parameter, not an env the caller sets: `VAR=x f` does not reliably reach the `java` f starts. The cases on the
+  # `node` placement assert what the NODE does on a worker's behalf; C5 starts this same node again on the `worker`
+  # placement, where the worker decides and connects — and with the development switch OFF, so what is under test is
+  # the static set (A2, D-174) rather than the switch that opens it.
   # (Note for whoever edits this: no comments inside the `env \` list below. A `#` after a line continuation ends the
   # command, and the node starts without its socket and secret.)
   env \
@@ -178,7 +192,7 @@ start_node() {  # start_node [worker|node]: where the workers decide egress (D-1
     C93_ADVERTISE_HOST=127.0.0.1 \
     C93_RATE_LIMIT_PER_MINUTE=0 \
     C93_INGRESS_DOMAIN=idcheck.test \
-    C93_EGRESS_ALLOW_PRIVATE=true \
+    C93_EGRESS_ALLOW_PRIVATE="$allow_private" \
     C93_EGRESS_PLACEMENT="$placement" \
     C93_ADMIN_TOKEN="$ADMIN_TOKEN" \
     C93_WORKER_SOCKET="$TMP/sockets/node.sock" \
@@ -289,7 +303,8 @@ image_for() {  # image_for <engine>: the tag that engine has an image under, bui
     say "Building a node image with $engine (tag $tag)..." >&2
     "$engine" build -t "$tag" "$context" > "$TMP/build-$engine.log" 2>&1 \
       || { say "Image build with $engine failed: see $TMP/build-$engine.log" >&2; exit 1; }
-    PREPARED_IMAGES+=("$engine $tag")
+    # Recorded for the trap; the file is read in the parent shell, where a subshell's array would not be (see above).
+    printf '%s %s\n' "$engine" "$tag" >> "$TMP/prepared-images"
   fi
   echo "$tag"
 }
@@ -297,8 +312,9 @@ image_for() {  # image_for <engine>: the tag that engine has an image under, bui
 # ---------------------------------------------------------------------------------------
 # One case: start a worker container as the given identity, then the four assertions.
 # ---------------------------------------------------------------------------------------
-run_worker() {  # run_worker <name> <identity args...>
+run_worker() {  # run_worker <name> <network> <identity args...>
   local name="$1"; shift
+  local network="$1"; shift
   # A worker engine unpacks a native library and dlopens it: Javet under /tmp/javet/..., GraalJS under the user's home
   # ($HOME/.cache is not what decides it — a native image bakes java.io.tmpdir, and user.home comes from passwd). So the
   # deployment gives it a directory of its own AT those paths: a plain directory is executable by default (no `exec`
@@ -309,7 +325,7 @@ run_worker() {  # run_worker <name> <identity args...>
   "$ENGINE" run -d \
     --name "$RUN_ID-$name" \
     --label "$LABEL" \
-    --network none \
+    --network "$network" \
     --cap-drop=ALL \
     --security-opt no-new-privileges \
     --read-only \
@@ -373,7 +389,7 @@ check_case() {  # check_case <id> <engine> <rootless> <identity flag> <identity 
   before_connected="$(metric c93_workers_connected)"
   want_connected="$(( ${before_connected%.*} + 1 )).0"
 
-  run_worker "ok" "$@" || { say "  $case_id: the worker container did not start"; return 1; }
+  run_worker "ok" none "$@" || { say "  $case_id: the worker container did not start"; return 1; }
   # A container worker's cold start is seconds, but a loaded host (a concurrent build, a cold image cache) is where the
   # margin matters: the worker retries for ~2 minutes by design, so wait for it rather than calling it a failure.
   if wait_for_metric c93_workers_connected "$want_connected" 360; then hello=yes; fi
@@ -601,79 +617,315 @@ run_case_if() {  # run_case_if <available> <case id> <engine> <rootless> <flag> 
   check_case "$@" || FAILED=1
 }
 
-# The worker's own placement (D-173/A4), in a real container: the node hands it the rules, and it decides. Two things
-# are asserted, and neither needs the container to have a route — which it does not yet: its deployment gives it one.
+# ---------------------------------------------------------------------------------------
+# A7: the worker placement's target, and what makes it evidence.
+#
+# The node can reach this target too, so reachability cannot say who made a connection. The node's OWN counters can:
+# c93.egress.sockets/bytes are counted by the socket path wherever the socket is opened (D-116, D-173), so the same
+# job is run under both placements — under `node` the node's counters move, under `worker` they do not — and the first
+# run is what gives the second one its meaning.
+# ---------------------------------------------------------------------------------------
+TARGET_IMAGE=""
+TARGET_IP=""
+TARGET_PORT=18080
+
+# The sibling's image: the node image's own base plus python3, built once and kept under a stable tag, so a run does
+# not rebuild it and an operator can remove it by that name whenever. The node image has no shell server of its own,
+# and python3 is the dependency this check already leans on for a local server (start_echo_server).
+target_image() {  # target_image <engine>: the tag on stdout, or nothing if it cannot be built
+  local engine="$1" tag="cluster93-idcheck-target:py3"
+  if "$engine" image inspect "$tag" >/dev/null 2>&1; then
+    echo "$tag"
+    return 0
+  fi
+  local context="$TMP/target-image"
+  install -d "$context"
+  cat > "$context/Dockerfile" <<'DOCKERFILE'
+FROM docker.io/library/eclipse-temurin:21-jre
+LABEL c93.idcheck.target="a sibling HTTP target for worker-isolation-check.sh; safe to remove any time"
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
+ && rm -rf /var/lib/apt/lists/*
+DOCKERFILE
+  say "Building the check's target image with $engine (tag $tag)..." >&2
+  "$engine" build -t "$tag" "$context" > "$TMP/build-$engine-target.log" 2>&1 || return 1
+  echo "$tag"
+}
+
+# A sibling container serving one file, on a network of this run's own: a target that is an allowed address and not
+# the node, and that the worker cannot reach until its deployment gives it a route (A7).
+start_target() {  # start_target <engine> <net>: sets TARGET_IP, or returns 1
+  local engine="$1" net="$2"
+  install -d "$TMP/target"
+  printf 'pong-from-a-sibling' > "$TMP/target/ping.txt"
+  "$engine" run -d --name "$RUN_ID-target" --label "$LABEL" --network "$net" \
+    --read-only --cap-drop=ALL --security-opt no-new-privileges --pids-limit 64 \
+    -v "$TMP/target:/srv:ro" \
+    --entrypoint python3 "$TARGET_IMAGE" -m http.server "$TARGET_PORT" --bind 0.0.0.0 --directory /srv \
+    >/dev/null 2>&1 || return 1
+  TARGET_IP="$("$engine" inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$RUN_ID-target" 2>/dev/null)"
+  [ -n "$TARGET_IP" ] || return 1
+  for _ in $(seq 1 40); do
+    "$engine" run --rm --network "$net" --entrypoint curl "$IMAGE" -sf -m 2 "http://$TARGET_IP:$TARGET_PORT/ping.txt" \
+      >/dev/null 2>&1 && return 0
+    sleep 0.5
+  done
+  return 1
+}
+
+# The tenant's rule for the target, set before a worker is bound: a policy is built and sent at bind (D-173/A3). Loud
+# on failure: a rule that silently did not store would look exactly like a worker that ignored it.
+tenant_allow() {  # tenant_allow <address> <port>
+  local body code
+  body="$(curl -s -m 10 -X PUT "http://127.0.0.1:$HTTP_PORT/v1/tenants/$TENANT/egress-policy" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+    -w '\n%{http_code}' \
+    -d "{\"allow\":[{\"to\":\"$1/32\",\"ports\":[$2]}]}")"
+  code="${body##*$'\n'}"
+  if [ "$code" != "200" ]; then
+    say "  the tenant's egress rule was not stored (HTTP $code): $(printf '%s' "$body" | head -c 300)"
+    return 1
+  fi
+}
+
+# A job that opens a real TCP socket (D-116) and reads the target's marker: a socket, not `fetch`, because the node
+# counts its own sockets and bytes and `fetch` is not counted there.
+socket_job() {  # socket_job <address> <port>: the job's id
+  submit_job "import net from 'node:net';
+export default () => new Promise((resolve) => {
+  const socket = net.connect($2, '$1');
+  let text = '';
+  socket.setEncoding('utf8');
+  socket.on('connect', () => socket.write('GET /ping.txt HTTP/1.0\r\nHost: target\r\n\r\n'));
+  socket.on('data', (chunk) => { text += chunk; });
+  socket.on('end', () => { socket.destroy(); resolve({ body: text }); });
+  socket.on('error', (e) => resolve({ reached: false, code: e.code, why: e.message }));
+});"
+}
+
+# A job that tries an address the static set must refuse, before any connection is made.
+refused_job() {  # refused_job <address> <port>: the job's id
+  submit_job "import net from 'node:net';
+export default () => new Promise((resolve) => {
+  const socket = net.connect($2, '$1');
+  socket.on('connect', () => { socket.destroy(); resolve({ reached: true }); });
+  socket.on('error', (e) => resolve({ reached: false, code: e.code, why: e.message }));
+});"
+}
+
+# Whether a job finished and its own record contains what was expected.
+job_ran() {  # job_ran <id> <substring of the record>
+  local id="$1" want="$2"
+  [ -n "$id" ] || return 1
+  [ "$(await_job "$id")" = "SUCCEEDED" ] || return 1
+  case "$(job_json "$id")" in *"$want"*) return 0 ;; esac
+  return 1
+}
+
+# C5: the worker's own placement (D-173/A4), with a route (A7), in a real container.
+#
+# Four things are asserted, and the first is what makes the second worth anything:
+#   1. under the NODE's placement the node makes the connection, and its own socket counter moves (the baseline);
+#   2. under the WORKER's placement the same job succeeds while those counters stand still — the worker's own route;
+#   3. the static set the worker holds still refuses metadata, RFC1918 and the cluster's own port;
+#   4. the node counts what the worker refused, because the worker reported it (D-176).
+#
+# The evidence is behavioural on purpose: a worker container's log is a no-op — the native worker image has no SLF4J
+# provider, so its logger discards every line (D-175) — and a log line would be weaker anyway, since it would say a
+# worker was handed rules, not that it applied them.
 check_worker_placement() {  # check_worker_placement <engine> <label>
   local engine="$1" label="$2"
   ENGINE="$engine"
   IMAGE="$(image_for "$engine")"
-  # A node that lets the worker decide, on the same data directory (the tenant and its token survive the restart).
+
+  local joined=no nodeRan=n/a reached=n/a refused=no blocks=no localOnly=no reported=no
+  local jobOut="" blocksOut="" refusedOut=""
+
+  # --- The target and the tenant's rule for it: private, so the node's gate would refuse it and only the rule lets
+  #     either end through, and a sibling rather than the node, so it is not one of the node's own addresses. ---
+  TARGET_IMAGE="$(target_image "$engine" || true)"
+  TARGET_IP=""
+  local net="c93-idcheck-$RUN_ID" have_net=no worker_net=none
+  if [ -n "$TARGET_IMAGE" ] && "$engine" network create "$net" >/dev/null 2>&1; then
+    NETWORKS+=("$net")
+    have_net=yes
+    worker_net="$net"
+    if start_target "$engine" "$net"; then
+      # Present for both phases, though only the worker placement needs it: the node that runs the baseline still has
+      # the development switch on (the node-placement cases need it to fetch the echo server on loopback), so there
+      # the rule is redundant. Under the worker placement the switch is off and the rule is the only thing that lets
+      # this address through.
+      tenant_allow "$TARGET_IP" "$TARGET_PORT" || true
+    else
+      say "  the sibling target container did not come up: the positive column is reported as n/a"
+    fi
+  else
+    say "  no sibling target (the check's target image or its own network could not be made): the positive column"
+    say "  is reported as n/a. It wants one build with network access (apt, once) and a network of the run's own."
+  fi
+
+  # --- Under the NODE's placement, on the node start_node already brought up: the node is in the path here, so ITS
+  #     counters move. The container has no network (S10), exactly as the other cases assert. ---
+  if [ -n "$TARGET_IP" ]; then
+    local base_before_connected base_want
+    base_before_connected="$(metric c93_workers_connected)"
+    base_want="$(( ${base_before_connected%.*} + 1 )).0"
+    run_worker base none --user "$(id -u):$(id -g)" || say "  the baseline worker container did not start"
+    local base_joined=no
+    for _ in $(seq 1 120); do
+      [ "$(metric c93_workers_connected)" = "$base_want" ] && base_joined=yes && break
+      sleep 0.5
+    done
+    if [ "$base_joined" = yes ]; then
+      local before after base_id
+      before="$(metric_all c93_egress_sockets_total)"
+      base_id="$(socket_job "$TARGET_IP" "$TARGET_PORT")"
+      if job_ran "$base_id" "pong-from-a-sibling"; then
+        after="$(metric_all c93_egress_sockets_total)"
+        [ "$before" != "$after" ] && nodeRan=yes
+      else
+        say "  the baseline job did not reach the target through the node: $(job_json "${base_id:-x}")"
+      fi
+    fi
+    "$engine" rm -f "$RUN_ID-base" >/dev/null 2>&1 || true
+    if [ "$nodeRan" != yes ]; then
+      say "  the baseline (node placement) did not show the node's own socket counter moving, so what the next"
+      say "  phase measures would mean nothing: the positive column stays n/a rather than claim the route."
+    fi
+  fi
+
+  # --- Under the WORKER's placement: a node that lets the worker decide, with the development switch OFF, so what the
+  #     refusals below come from is the static set (A2, D-174) and not the switch that opens private addresses. ---
   stop_node
-  start_node worker || { say "  could not restart the node for the worker placement"; return 1; }
+  start_node worker false || { say "  could not restart the node for the worker placement"; return 1; }
   # A restart is a new node process: mint as an operator would rather than rely on a token from the first one.
   JOB_TOKEN="$(mint_job_token "$TENANT")"
   [ -n "$JOB_TOKEN" ] || { say "  no job token after the restart"; return 1; }
+  # …and re-apply the tenant's rule, because this check's node keeps its records in MEMORY: the restart empties them,
+  # the tenant list comes back empty, and minting above re-creates the tenant without its rule. (Measured, not
+  # assumed: the old comment here claimed the tenant survived the restart, and nothing had ever tested it.) A
+  # deployment that wants rules to outlive a node configures persistence; the check assumes neither, so it sets the
+  # rule on whichever node process is about to be asked. A worker is handed its rules at bind, which is still ahead.
+  if [ -n "$TARGET_IP" ]; then
+    tenant_allow "$TARGET_IP" "$TARGET_PORT" || true
+  fi
 
-  run_worker w --user "$(id -u):$(id -g)"
-  local joined=no
+  run_worker w "$worker_net" --user "$(id -u):$(id -g)"
   for _ in $(seq 1 60); do
     [ "$(metric c93_workers_connected)" = "1.0" ] && joined=yes && break
     sleep 0.5
   done
-
   # A worker is given its rules when it is *bound*, not when it connects, so give it something to do first (D-166
-  # binds a connection to the tenant that has work). Then ask it to do something only its own rules can refuse.
-  #
-  # The evidence is behavioural on purpose. A worker container's own log is not available: the native worker image has
-  # no SLF4J provider, so its logger is a no-op and every line it "logs" is discarded — a finding in its own right.
-  # And a log line would be weaker evidence anyway: it says a worker was handed rules, not that it applied them. A
-  # refusal it makes itself, with the node's own counter NOT moving, says both.
+  # binds a connection to the tenant that has work).
   if [ "$joined" = yes ]; then
     local warmup
     warmup=$(submit_job "export default () => ({ warmed: true })")
     [ -n "$warmup" ] && await_job "$warmup" >/dev/null
   fi
 
-  local refused=no localOnly=no reported=no jobOut=""
   if [ "$joined" = yes ]; then
-    local before after id workerBefore
-    before="$(metric_all c93_egress_denied_total)"
+    # 1. A route, and the worker's own connection: the same job as the baseline, succeeding while the node's socket
+    #    counters — which moved when the node made it — stay exactly where they are.
+    if [ -n "$TARGET_IP" ] && [ "$nodeRan" = yes ]; then
+      local before after id
+      before="$(metric_all c93_egress_sockets_total)"
+      id="$(socket_job "$TARGET_IP" "$TARGET_PORT")"
+      if job_ran "$id" "pong-from-a-sibling"; then
+        after="$(metric_all c93_egress_sockets_total)"
+        if [ "$before" = "$after" ]; then reached=yes; else reached=no; fi
+      else
+        reached=no
+        jobOut="$(job_json "${id:-x}")"
+      fi
+    fi
+
+    # 2. The floor is the worker's own: metadata (link-local) and an RFC1918 address are refused before any
+    #    connection, on a container that has just been shown to have a route.
+    local meta private
+    meta="$(refused_job 169.254.169.254 80)"
+    private="$(refused_job 10.0.0.1 80)"
+    if job_ran "$meta" '"code":"egress_denied"' && job_ran "$private" '"code":"egress_denied"'; then
+      blocks=yes
+    else
+      blocksOut="metadata: $(job_json "${meta:-x}")  private: $(job_json "${private:-x}")"
+    fi
+
+    # 3. A cluster address on one of the node's own ports: refused before any rule and before any connection, so it
+    #    needs no route — and the address is the *worker's* own loopback, which only a worker holding the rules can
+    #    know to refuse. The node makes none of these connections, so its own counter must not move either.
+    local before_d after_d workerBefore did
+    before_d="$(metric_all c93_egress_denied_total)"
     workerBefore="$(metric_all c93_worker_egress_denied_total)"
-    # The node's own internal port: a cluster address on a node port is refused before any rule and before any
-    # connection, so this needs no route — and the address is the *worker's* own loopback, which only a worker that
-    # holds the rules can know to refuse.
-    id=$(submit_job "export default async () => { try { await fetch('http://127.0.0.1:$INTERNAL_PORT/health'); return { reached: true }; } catch (e) { return { reached: false, code: e.cause ? e.cause.code : e.code, why: e.cause ? e.cause.message : null }; } }")
-    [ -n "$id" ] || say "  the job was not accepted (no id came back)"
-    if [ -n "$id" ]; then
-      await_job "$id" >/dev/null
-      jobOut="$(job_json "$id")"
-      case "$jobOut" in
+    did=$(submit_job "export default async () => { try { await fetch('http://127.0.0.1:$INTERNAL_PORT/health'); return { reached: true }; } catch (e) { return { reached: false, code: e.cause ? e.cause.code : e.code, why: e.cause ? e.cause.message : null }; } }")
+    [ -n "$did" ] || say "  the job was not accepted (no id came back)"
+    if [ -n "$did" ]; then
+      await_job "$did" >/dev/null
+      refusedOut="$(job_json "$did")"
+      case "$refusedOut" in
         *'"reached":false'*'"code":"egress_denied"'*'resolves to one of the cluster'*) refused=yes ;;
       esac
-      after="$(metric_all c93_egress_denied_total)"
-      [ "$before" = "$after" ] && localOnly=yes
+      after_d="$(metric_all c93_egress_denied_total)"
+      [ "$before_d" = "$after_d" ] && localOnly=yes
       # The node is not in the path of these connections, so its own metrics can show this refusal only because the
       # worker said so (D-176) — and the worker batches that, so wait for it rather than assume it lands at once.
       wait_for 20 "the node to be told what the worker refused" worker_reported_refusal "$workerBefore" && reported=yes
     fi
   fi
 
+  if [ "$reached" = no ] && [ -n "$jobOut" ]; then
+    say "  the socket job's own record (why the positive column did not pass):"
+    printf '%s' "$jobOut" | head -c 1200 | sed 's/^/    /'
+    say ""
+    say "  what the server holds for $TENANT — empty here means the rule never stored; present here means the node"
+    say "  sent the worker a policy without it:"
+    curl -s -m 5 "http://127.0.0.1:$HTTP_PORT/v1/tenants/$TENANT/egress-policy" -H "Authorization: Bearer $ADMIN_TOKEN" \
+      | head -c 600 | sed 's/^/    /'
+    say ""
+    say "  what the node said about egress policies:"
+    grep -ai egress "$TMP/node.log" | tail -5 | sed 's/^/    /'
+    say ""
+  fi
+  if [ "$blocks" != yes ] && [ -n "$blocksOut" ]; then
+    say "  the refusals the static set should have made:"
+    printf '%s' "$blocksOut" | head -c 1200 | sed 's/^/    /'
+    say ""
+  fi
   if [ "$refused" != yes ]; then
     say "  the job's own record (what the worker's decision produced):"
-    printf '%s' "$jobOut" | head -c 1200 | sed 's/^/    /'
+    printf '%s' "$refusedOut" | head -c 1200 | sed 's/^/    /'
     say ""
     say "  the worker container's own log (a no-op logger, so this is usually empty — D-175 records why):"
     "$engine" logs "$RUN_ID-w" 2>&1 | tail -6 | sed 's/^/    /'
   fi
+
+  # What the deployment owes a worker placement (A7): the node's own ports must not be reachable from the worker's
+  # network. The check's node binds the API to loopback, and the rest of its ports are reported here as they are: the
+  # gate is a second line, not the first, because a container reaches its host at an address the node cannot
+  # recognise as its own — a bridge gateway, or pasta's 169.254.1.2 under rootless podman (found building this).
+  local gw=""
+  if [ "$have_net" = yes ]; then
+    gw="$("$engine" network inspect "$net" -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null)"
+  fi
+  if [ -n "$gw" ]; then
+    say "     the node's own ports, probed from the worker's network at the host ($gw):"
+    "$engine" run --rm --network "$net" -e GW="$gw" -e PORTS="$HTTP_PORT $METRICS_PORT $INTERNAL_PORT" \
+      --entrypoint /bin/bash "$IMAGE" -c \
+      'for p in $PORTS; do (exec 3<>/dev/tcp/$GW/$p) >/dev/null 2>&1 && echo "       $p OPEN — the deployment must not let a worker reach the node" || echo "       $p shut"; done' \
+      2>&1 | tail -4 | sed 's/^/    /'
+  fi
+
   "$engine" rm -f "$RUN_ID-w" >/dev/null 2>&1 || true
-  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-10s | %-8s | %s\n' \
-    case engine rootless identity joined refused local-only reported result
   local result=FAIL
-  [ "$joined" = yes ] && [ "$refused" = yes ] && [ "$localOnly" = yes ] && [ "$reported" = yes ] && result=PASS
-  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-10s | %-8s | %s\n' \
+  [ "$joined" = yes ] && [ "$reached" != no ] && [ "$refused" = yes ] && [ "$blocks" = yes ] \
+    && [ "$localOnly" = yes ] && [ "$reported" = yes ] && result=PASS
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-7s | %-6s | %-7s | %-10s | %-8s | %s\n' \
+    case engine rootless identity joined node-ran reached refused blocked local-only reported result
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-7s | %-6s | %-7s | %-10s | %-8s | %s\n' \
     "C5" "$label" "$(rootless_podman && echo rootless-podman || echo rootful)" "--user $(id -u):$(id -g)" \
-    "$joined" "$refused" "$localOnly" "$reported" "$result"
-  say "     joined=$joined  refused by the worker itself=$refused  (the node's own egress counter did not move: $localOnly)"
+    "$joined" "$nodeRan" "$reached" "$refused" "$blocks" "$localOnly" "$reported" "$result"
+  say "     the baseline (node placement): the node made the connection and its own socket counter moved — $nodeRan"
+  say "     the worker reached an allowed target with its own route, node counters still: $reached"
+  say "     refused by the worker itself=$refused  its static set still refuses metadata and RFC1918=$blocks  (the node's own egress counter unmoved: $localOnly)"
   say "     the node counted what the worker refused because the worker reported it (D-176): $reported"
   [ "$result" = PASS ]
 }

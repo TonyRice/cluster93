@@ -3866,3 +3866,79 @@ is a no-op, so a refusal would have no other way out.
 - `EgressMetricsTest`: a worker's refusals land in `c93.worker.egress.denied`, apart from the node's own.
 - `scripts/worker-isolation-check.sh` case **C5**: in a real container, the worker's refusal *and* the node's count of
   it, with the node's own egress series still unmoved.
+
+### D-177 — A worker container's network is the deployment's, and its edge cannot be the gate
+
+**Date:** 2026-10-18 · **Status:** Accepted. A7 of the egress plan. Refines D-173 and D-176, and supersedes the
+"a worker container needs no network" reading of D-166/D-171/D-172 now that `worker` is the default placement.
+
+**Context:**
+D-173 made `worker` the default placement and A6 gave it the allocation and the report, but nothing had done the
+arithmetic that default implies for a deployment. The template and the guide still said a worker container needs **no
+network at all** — true, and strictly best, when the *node* decides: the socket is then the only link. A worker that
+decides makes the tenant's connections **itself**, so it needs a route off its host and a resolver to name anything.
+The same change gives that container a route *to its host*, which is a security property no one had owned yet.
+
+**Decision:**
+1. **The deployment artifacts follow the placement.** The compose template and the node guide give the `worker`
+   placement a **network with egress** and a **resolver**, and keep `network_mode: none` as the `node` placement's
+   configuration — with the template's default matching the node's default. A route is reachability; the rules are
+   permission.
+2. **The cluster edge is the deployment's, and the node's own gate is not it.** The address a container uses for its
+   host is not an address the node can recognise. Measured: on rootful Docker the gateway is the host's own bridge
+   (`172.17.0.1`) — a node interface, so the floor refuses it, correctly; under rootless podman the host is
+   `host.containers.internal` = **`169.254.1.2`**, a pasta address that is on no interface of the node, so the floor
+   cannot know it at all. "Every address of this node's network interfaces" (D-108) is therefore **not a complete deny
+   list from inside a container**. Publish the node's ports on **loopback** only (as `c93 node install --docker`
+   does), or keep the workers off the node's network, or firewall it. The gate stays the second line.
+   - Measured on the check's node, from the worker's network: the API (`9493`) and metrics (`9495`) shut, the
+     **internal endpoint (`9496`) open**, because that node binds it to `0.0.0.0`. The check now **reports** this per
+     port rather than asserting it — which ports a node exposes is its own bind configuration.
+3. **The check proves the placement by the node's own counters, not by reachability.** C5 runs the same job twice: on
+   `node` the node makes the connection and **its own socket counters move**; on `worker` the same job succeeds with
+   those counters **standing still**. Reachability cannot be the proof (the node reaches the target too), so the
+   counters are — and the first run is what gives the second its meaning. The target is a **sibling container** on a
+   network of the run's own (a check-only image, `cluster93-idcheck-target:py3`, the node image's base plus python3,
+   built once and kept): a public target would put the internet in the way of a placement assertion, and the **host is
+   not usable** as a positive target on Docker because its gateway is a node address (item 2). The tenant's rule for
+   the sibling is what lets the worker through with the **development switch off** — which is what also lets the same
+   case assert the **static set** (metadata, an RFC1918 address, the cluster's own port) on a container that
+   demonstrably has a route. Those refusals need no route: the gate decides before connecting.
+4. **The check re-applies the tenant's rule on the restarted node.** This node keeps its records in **memory**: start
+   → create a tenant and set its rule → restart ⇒ the tenant list comes back empty and the rule is gone. (The comment
+   that claimed the tenant survived the restart had never been tested — the token only "survives" because minting
+   re-creates the tenant.) A deployment that wants rules to outlive a node configures persistence; the check assumes
+   neither, so it sets the rule on whichever process is about to be asked.
+5. **The check no longer leaks an image per run.** `image_for` was called in a command substitution, so it ran in a
+   **subshell** and the array it recorded its prepared images in never reached the trap: one 1.4 GB image per run, ~40
+   GB accumulated. The list is a **file** now, read by the trap. The one cached helper image (item 3) is deliberate,
+   named, and documented where the check's guarantees are stated.
+
+**Consequences:**
+- A `worker`-placement container has a route and a resolver by design, and keeping the node unreachable from it is the
+  deployment's job; `--network none` becomes the `node` placement's configuration rather than the default.
+- The nftables mirror of the static set stays what D-173 called it: an optional belt the deployment owns.
+- **C5 is the container evidence for the worker placement end to end**: it reaches an allowed target with its own
+  route, refuses metadata, RFC1918 and the cluster's own port, and the node learns of those refusals only from the
+  worker's report (D-176).
+- The "no network" statements in the D-166/D-171/D-172 records describe the **`node`** placement, which still behaves
+  exactly that way. Nothing in the tenant container's own design changes: the sandbox still has no network beyond
+  loopback (`node-runtime.md` §6).
+
+**Evidence:**
+- `scripts/worker-isolation-check.sh --case C5` on rootful Docker, every column yes — `joined | node-ran | reached |
+  refused | blocked | local-only | reported` — with the node's `c93.egress.sockets` moving under `node` (the baseline)
+  and standing still under `worker`.
+- The restart measurement: tenant created and rule set → restart → `rules: null`, `tenants: []`.
+- The probe from the worker's network: `9493 shut`, `9495 shut`, `9496 OPEN`.
+- Per engine: Docker's gateway `172.17.0.1` reachable and a node interface; podman rootless'
+  `host.containers.internal` = `169.254.1.2` reachable and **not** a node interface; `--add-host <name>:host-gateway`
+  resolving on both.
+
+**Rejected:**
+- **Relying on the gate for the edge** (item 2). It cannot know the address a container reaches its host by, and a
+  tenant rule naming that address would defeat it.
+- **A public address as the positive target**, and **the host itself**: one puts the internet in the way, the other is
+  a node address on Docker.
+- **Making the edge a hard column.** Which ports a node exposes is its bind configuration, not the check's business.
+- **Building the nftables mirror now:** D-173 already calls it optional, and it is the deployment's.

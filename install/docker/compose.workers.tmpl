@@ -11,12 +11,35 @@
 #     /run/cluster93/workers, so nothing has to be translated.
 #   * the worker secret, mounted READ-ONLY at 0400 on the host, owned by the node's user (S5). Both sides read it;
 #     the worker presents it in HELLO and the node checks it (D-147, D-168).
-# It needs no network at all: everything a script reaches goes through the node (S10).
+#
+# WHAT ITS NETWORK MUST BE DEPENDS ON WHERE EGRESS IS DECIDED (D-173, A7). `C93_EGRESS_PLACEMENT` on the node says
+# which, and this file's default below matches the node's default:
+#
+#   * `worker` — THE DEFAULT. The worker makes the tenant's outbound connections itself, so it needs a ROUTE (a
+#     network with egress; NOT `network_mode: none`) and a RESOLVER. What bounds it is the rules the node synced to
+#     it, which it holds and enforces — the static set among them (loopback, link-local including cloud metadata,
+#     RFC1918, CGNAT, ULA, the cluster's own addresses) — so give the container a network that reaches what tenants
+#     need and nothing more. A route is reachability; the rules are permission.
+#   * `node` — the node makes every connection on the worker's behalf over the socket, so the container needs NO
+#     network at all. `network_mode: none` is strictly better there, and it is what the node-placement cases in
+#     scripts/worker-isolation-check.sh assert (S10). Swap the `networks:` key below for `network_mode: none`.
+#
+# THE CLUSTER EDGE IS PART OF THE `worker` PLACEMENT'S DEPLOYMENT (A7). Whatever rules a worker holds, its host must
+# not be reachable from its network:
+#   * Publish the node's ports on LOOPBACK only — `127.0.0.1:9493:9493`, as `c93 node install --docker` does — so
+#     the worker's network has no route to the API, the ingress, the internal endpoint or metrics.
+#   * Or put the workers on a network the node is not on, and firewall the rest.
+#   * Do NOT rely on the node's own gate for this. A container reaches its host at an address the node cannot
+#     recognise as its own — a bridge gateway on Docker, or pasta's 169.254.1.2 under rootless podman (measured while
+#     building A7) — so "the node's own addresses" is not a complete deny list from inside a container.
+#   * The internal endpoint and the metrics port are the ones to watch, since they are not meant for anyone. The
+#     check reports which of a worker's network can reach them (scripts/worker-isolation-check.sh --case C5).
 #
 # What the node needs (node.env, see docs/guides/node.md):
 #   C93_WORKER_SOCKET=/run/cluster93/workers/node.sock     the node listens here (uncommented, once enabled)
 #   C93_WORKER_SECRET_FILE=/run/secrets/c93-worker-secret  the node reads the secret from here
 #   C93_WORKER_CONNECTIONS_MAX=...                         how many connections it accepts (defaults to its workers)
+#   C93_EGRESS_PLACEMENT=worker|node                       the default; the worker placement needs the network below
 #
 # Identity (D-149) — a worker must present the node's host identity, so the 0700 socket dir / 0600 socket stay tight:
 #   rootless podman:  userns_mode: "keep-id:uid=10001,gid=999"
@@ -33,14 +56,13 @@
 # and the node refuses a connection that presents no secret when one is configured.
 #
 # Verify the whole thing with scripts/worker-isolation-check.sh, which runs these cases against a real engine and
-# prints a matrix (hello | job | wrong secret refused | no network reachability).
+# prints a matrix (hello | job | the gate | the ingress | wrong secret refused | and, for the placement, either a
+# route the worker uses or none at all).
 
 x-worker: &worker
   # Pin by DIGEST, not tag: a tag is mutable, and the deployment is what pulls it (S7).
   image: cluster93-node@sha256:REPLACE_WITH_THE_NODE_IMAGE_DIGEST
   restart: unless-stopped
-  # No network: a worker reaches the node only over the mounted socket, so there is no route to misconfigure (S10).
-  network_mode: none
   # S4: no capabilities, no setuid escalation, no writable root, a bounded process table, and the pool's bounds —
   # --memory/--cpus bound the POOL this container holds, not one tenant (D-166).
   cap_drop: [ALL]
@@ -71,6 +93,17 @@ services:
   # speaks no protocol and configures no tenant, and the node binds every connection to whichever tenant has work.
   workers:
     <<: *worker
+    # The `worker` placement (the node's default): a route with egress, so a worker can make the tenant's
+    # connections itself. The node must NOT be reachable from it — see the edge note at the top.
+    networks:
+      - egress
+    # Pin the resolver if the network's own is not what tenants should see (a split-horizon system resolver, say).
+    # The worker asks it, and the rules it holds still filter what the answers may be (D-122).
+    # dns:
+    #   - 1.1.1.1
+    #
+    # For the `node` placement instead, drop `networks:` above and give the container no network at all:
+    # network_mode: none
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
@@ -87,3 +120,10 @@ services:
         exit 1
     # Scale the SUPPLY by running more of these containers, or more workers in each. The node accepts whatever
     # connects, up to C93_WORKER_CONNECTIONS_MAX and its worker memory ceiling (D-169).
+
+networks:
+  # Egress for the worker placement: a network that reaches what tenants need. The node is not a member of it, and
+  # its own published ports stay on loopback, so a worker cannot reach the cluster's services — only the internet,
+  # or whatever this network is allowed to reach.
+  egress:
+    driver: bridge

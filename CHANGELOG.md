@@ -6,6 +6,26 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A worker container's network is the deployment's, and the check proves the worker uses it** (D-177, plan A7;
+  refines D-173/D-176):
+  - Since D-173 made `worker` the placement default, a worker container **makes the tenant's connections itself**, so
+    it needs a **route** and a **resolver**. `install/docker/compose.workers.tmpl` and the node guide now say so, and
+    keep `network_mode: none` as the `node` placement's configuration — where it is still strictly best. A route is
+    reachability, not permission: the static set (loopback, link-local including cloud metadata, RFC1918, CGNAT, ULA,
+    the cluster's own addresses) still refuses whatever the route allows (D-174).
+  - **The cluster edge is the deployment's, not the node's gate.** A container reaches its host at an address the node
+    cannot recognise as its own — the bridge gateway on Docker, or pasta's `169.254.1.2` under rootless podman — so
+    "the node's own addresses" is not a complete deny list from inside a container. Publish the node's ports on
+    loopback only, or keep the workers off the node's network. The check reports which of a node's ports a worker's
+    network can reach; the internal endpoint is the one to watch.
+  - `scripts/worker-isolation-check.sh --case C5` now decides the placement by the node's **own counters**: the same job
+    runs under both, with the node's `c93.egress.sockets` moving when the node makes the connection and standing still
+    when the worker does — against a sibling target container, under the tenant's own rule with the development switch
+    off, so the static set is asserted on a container that demonstrably has a route.
+  - Fixed in the same pass: the check left **one image per run** behind (`image_for` ran in a subshell, so its list of
+    prepared images never reached the trap; ~40 GB had accumulated), and it no longer assumes a node's records survive
+    a restart (this node keeps them in memory: the tenant list and any egress rule are gone).
+
 - **The node divides its egress allowance among a tenant's workers, and a worker tells it what it refused**
   (D-176, refines D-173):
   - `limits` in the cluster's egress policy are **per node** (D-116), so a worker enforcing them for itself would hand
