@@ -617,7 +617,7 @@ public class NodeWorkerChannel {
         var inStream = streamMultiplexer.createInputStream(streamId);
         run.hostApis().sockets().connect(request).onComplete(arSocket -> {
             if (arSocket.failed()) {
-                streamMultiplexer.resetStream(streamId, arSocket.cause().getMessage(), 502);
+                pipeSocketError(run, streamId, arSocket.cause());
                 return;
             }
             OutgoingSocket socket = arSocket.result();
@@ -685,6 +685,32 @@ public class NodeWorkerChannel {
             if (arOpen.succeeded()) {
                 streamMultiplexer.resetStream(dataStreamId, "error", 502);
             }
+        });
+    }
+
+    /**
+     * Signals a refused socket connect to the worker the way {@link #pipeError} signals a refused fetch: the failure
+     * travels as a {@code socket.data} stream carrying its name and code, so the worker rebuilds the same
+     * {@link HostException} and a script sees {@code TypeError/egress_denied} rather than a generic failure (D-132's
+     * shape; the connect a socket starts with, D-179). A failure the host didn't classify keeps the worker's own
+     * default ({@code Error/host_error}) — what {@code JsError} would have made of it had the connect been made there.
+     * The connect stream the worker opened is released afterwards: the socket it was for will never exist.
+     */
+    private void pipeSocketError(ActiveRun run, int requestStreamId, Throwable error) {
+        int dataStreamId = nodeStreamSeq.getAndAdd(2);
+        JsonObject meta = new JsonObject()
+                .put("runId", run.runId())
+                .put("requestStreamId", requestStreamId)
+                .put("errorName", error instanceof HostException host ? host.errorName() : "Error")
+                .put("errorCode", error instanceof HostException host ? host.code() : "host_error")
+                .put("error", error != null && error.getMessage() != null ? error.getMessage() : "the connection failed");
+        // Open before releasing the connect stream: the failure must be what the worker sees first, or the release
+        // would fail the connect with a bare StreamResetException instead.
+        streamMultiplexer.openStream(dataStreamId, "socket.data", meta).onComplete(arOpen -> {
+            if (arOpen.succeeded()) {
+                streamMultiplexer.resetStream(dataStreamId, "error", 502);
+            }
+            streamMultiplexer.resetStream(requestStreamId, "error", 502);
         });
     }
 

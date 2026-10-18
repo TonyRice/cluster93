@@ -6,6 +6,20 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A refused socket connect reaches a script in the same shape wherever it was decided** (D-179, fixes the finding
+  D-178 recorded):
+  - A refused `net.connect` used to arrive on the side that did **not** make the connection as `host_error`, with the
+    gate's words inside `"Stream reset (code 502): …"`, while the side that made it reported `egress_denied` — so a
+    script could see where its egress was placed, which is exactly what D-173 promised it could not. The node now sends
+    the failure the way it already sends a refused `fetch` (D-132): on a `socket.data` stream carrying the error's
+    **name and code**, which the worker rebuilds into the same `HostException` before the socket is handed over.
+  - The name and code are the failure's own, not a constant, so a gate refusal reads `TypeError/egress_denied` and a
+    peer's refused dial reads `Error/ECONNREFUSED` on either side — with the identical message, and no wrapper. An
+    unexpected failure keeps the worker's own default (`Error/host_error`), which is what it would have been there.
+  - `server/.../PerTenantEgressPlacementTest` (D-178) now asserts the two tenants' refusals carry the **same code** and
+    the **same words** — its wrapper-stripping helper is gone — while the counters still say which side refused;
+    `runner-protocol/.../NodeWorkerChannelTest` pins the shape at the protocol level.
+
 - **Placement is per tenant as well as per node: one tenant can be decided the other way** (D-178, the per-tenant half
   of D-173 item 8):
   - `C93_EGRESS_PLACEMENT` is the node's **default**; a tenant's own egress policy may now name the other one for
@@ -21,10 +35,10 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
   - `server/src/test/.../PerTenantEgressPlacementTest.java` proves it on one node with one worker connection and two
     tenants on opposite sides: the same job, refused with the same words, is counted as **the node's** refusal for one
     tenant and arrives as the worker's **report** for the other (D-176), so which of the two said no is visible per
-    tenant. Found in the same pass, and recorded rather than fixed (D-178): a refused `net.connect` reaches a script as
-    `egress_denied` in the worker but as `host_error` carrying the gate's words on the node, because a stream reset
-    (D-132) keeps the reason and not the error's name or code — the placement is observable there, which D-173 says it
-    should not be.
+    tenant. Found in the same pass and fixed immediately after (D-178, D-179): a refused `net.connect` reached a script
+    as `egress_denied` in the worker but as `host_error` carrying the gate's words on the node, because a stream reset
+    kept the reason and not the error's name or code — the placement was observable there, which D-173 says it should
+    not be.
 
 - **A worker container's network is the deployment's, and the check proves the worker uses it** (D-177, plan A7;
   refines D-173/D-176):

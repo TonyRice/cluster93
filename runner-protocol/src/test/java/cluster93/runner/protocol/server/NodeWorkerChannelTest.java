@@ -1,9 +1,12 @@
 package cluster93.runner.protocol.server;
 
+import cluster93.core.host.EgressPolicy;
+import cluster93.core.host.FetchClient;
 import cluster93.core.host.NodeHostApis;
 import cluster93.core.host.SharedDataKvStore;
 import cluster93.core.runtime.Execution;
 import cluster93.core.runtime.ExecutionResult;
+import cluster93.core.runtime.HostException;
 import cluster93.core.runtime.JobContext;
 import cluster93.core.runtime.RunningExecution;
 import cluster93.core.runtime.ScriptRuntime;
@@ -27,9 +30,11 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class NodeWorkerChannelTest {
 
@@ -143,6 +148,56 @@ class NodeWorkerChannelTest {
         // 3. Pure local crypto execution on worker (0 RPCs, fast)
         byte[] hash = remoteHost.crypto().digest("sha256", "test".getBytes());
         assertThat(hash).isNotNull().hasSize(32);
+    }
+
+    @Test
+    void aRefusedConnectReachesTheWorkerInTheNodesErrorShape() throws Exception {
+        DuplexPipe pipe = new DuplexPipe();
+        NodeWorkerChannel nodeChannel = new NodeWorkerChannel("worker-1", pipe.nodeToWorker, pipe.workerToNode);
+        WorkerClientConnection workerConn = new WorkerClientConnection(pipe.workerToNode, pipe.nodeToWorker);
+
+        // The worker's side as a daemon runs it, with a runtime that hands the test the host APIs the daemon built for
+        // the run, so the connect can be made the way a script makes it.
+        java.util.concurrent.atomic.AtomicReference<HostApis> workerHostApis = new java.util.concurrent.atomic.AtomicReference<>();
+        ScriptRuntime mockRuntime = (execution, logs, state, host) -> {
+            workerHostApis.set(host);
+            return new RunningExecution() {
+                @Override public Future<ExecutionResult> result() { return Promise.<ExecutionResult>promise().future(); }
+                @Override public void stop(String reason, Duration grace) {}
+                @Override public void cancel(String reason) {}
+            };
+        };
+        new WorkerDaemon(workerConn, mockRuntime, "mock-engine").start();
+        nodeChannel.awaitHello().toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+        nodeChannel.bind("tenant-a", new JsonObject(), new JsonObject()).toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+        // A node that decides this tenant's egress itself (the `node` placement, D-178) and refuses loopback. Its
+        // refusal has to reach the worker as the same TypeError/egress_denied a gate on the worker's side produces —
+        // not as a bare stream reset with the gate's words buried in it, which is how it read before D-179 and which
+        // made the placement observable from a script (D-173).
+        NodeHostApis hostApis = new NodeHostApis(new NodeHostApis.Node(vertx, new SharedDataKvStore(vertx),
+                new FetchClient(vertx, new EgressPolicy(false)), null), "tenant-a", "job-1", false);
+        Execution execution = new Execution("job-1", "tenant-a", "export default () => 42;", new JsonObject(),
+                Duration.ofMinutes(1), JobContext.firstAttempt("job-1", cluster93.core.job.OrphanPolicy.FAIL));
+        // Not awaited: the runtime above holds the run open, which is what a run is — and the RUN frame is handled
+        // synchronously over this in-memory pipe.
+        nodeChannel.run(1, execution, hostApis, (level, line) -> { }, cluster93.core.runtime.StateSink.DISCARD);
+
+        HostApis worker = workerHostApis.get();
+        assertThat(worker).as("the node asked this worker to run the job").isNotNull();
+        var refused = worker.sockets().connect(new JsonObject().put("host", "127.0.0.1").put("port", 9));
+
+        assertThatThrownBy(() -> refused.toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .cause().isInstanceOf(HostException.class)
+                .satisfies(failure -> {
+                    HostException refusal = (HostException) failure;
+                    assertThat(refusal.errorName()).as("the gate's error name, not the adapter's default")
+                            .isEqualTo("TypeError");
+                    assertThat(refusal.code()).as("and the code a script reads").isEqualTo("egress_denied");
+                    assertThat(refusal.getMessage()).as("the gate's own words, unwrapped").contains("is not allowed")
+                            .doesNotContain("Stream reset");
+                });
     }
 
     @Test

@@ -2581,7 +2581,7 @@ Prior to this decision, `ServerConfig` defaulted `C93_WORKER_MODE` to `embedded`
 D-131 made `C93_WORKER_MODE=process` the default, but out-of-process execution was only partially implemented: `RemoteHostApis` threw `UnsupportedOperationException` for `ctx.serve`, `fetch`, `net`/`tls` and `files.open`; bus/queue/job listeners had no delivery path; the worker rebuilt a stripped `ctx` (no packages, env, carried steps or service flag); and several failure modes hung instead of failing — a stream could exhaust the 4 MiB connection window (only stream credit was replenished), a worker EOF left the run promise unresolved, blocking state writes ran on the event loop, a full 64 KiB stderr pipe deadlocked workers, and a stopped node left worker processes running. With the default flipped, the whole host-API surface had to behave as it does embedded.
 
 **Decision:**
-1. **Bridge the streaming host APIs over the multiplexer.** The node side (`NodeWorkerChannel`) owns the request/response stream pairs: `http.request` → `http.response` (with `upgrade` for WebSockets), `fetch.request` → `fetch.response`, `socket.connect` → `socket.data`, and `files.open` → `files.data`; `files.create` and `files.respond` complete the file API. Response streams are opened before the peer can answer, and a fetch whose body already ended signals failure on the response stream rather than a reset that no longer has a stream to reach.
+1. **Bridge the streaming host APIs over the multiplexer.** The node side (`NodeWorkerChannel`) owns the request/response stream pairs: `http.request` → `http.response` (with `upgrade` for WebSockets), `fetch.request` → `fetch.response`, `socket.connect` → `socket.data`, and `files.open` → `files.data`; `files.create` and `files.respond` complete the file API. Response streams are opened before the peer can answer, and a fetch whose body already ended signals failure on the response stream rather than a reset that no longer has a stream to reach. (**D-179** later gave a refused `socket.connect` the same shape — its own stream carrying the failure's name and code — so that the code and message a script reads do not depend on where the connection was made.)
 2. **Deliver listeners as events.** `serve.listen/unlisten`, `bus.subscribe/handle/unsubscribe/unhandle`, `queue.consume/unconsume` and `jobs.events/unevents` register the run's real node-side listener; each delivery travels as an `EVENT` frame carrying an `eventId` and is answered with a `REPLY` for listeners that expect one (bus requests, queue acks). This is the async half of the protocol that D-128 framed but did not implement.
 3. **Restore the whole execution context.** `Packages.toJson`/`fromJson` and `JobContext.toJson`/`fromJson` serialize the lock, the previous attempt, carried steps and the service descriptor; `RunMessage` carries packages, `process.env`, `longRunning` and the serialized `ctx`. The worker rebuilds the same `Execution` an embedded run would see.
 4. **Fail fast and stay off the event loop.** `NodeWorkerChannel` fails every active run with `ExecutionResult.failed("Worker process died: …")` on EOF or transport error; connection-level credit is replenished with stream credit; state commits run on a worker thread; the worker exits explicitly on EOF; the pool drains stderr and records exit codes 137/139; `RunningNode.stop()` closes the pool; and the worker's logging is pinned to stderr so it cannot corrupt the stdout frame channel (the child-JVM classpath puts the worker's own resources first).
@@ -4022,6 +4022,8 @@ code — D-132 kept those for a fetch response and a file finish, and not for `s
 had, so this predates the placement; but it means **the placement is observable from a script**, which is what D-173
 says must not happen. It is written down here rather than fixed in this change, which is about where the decision is
 made, not how a failure is carried; the test compares the words, which match, and the counters, which do not.
+**Resolved in D-179**, which gave the socket path the failure shape a fetch and a file finish already had, so the two
+sides are now indistinguishable from a script and this test asserts that instead of working around it.
 
 **Rejected:**
 - **A second endpoint or a per-tenant setting of its own** (`/v1/tenants/<t>/placement`): the placement is a property
@@ -4034,4 +4036,74 @@ made, not how a failure is carried; the test compares the words, which match, an
 - **Refusing a tenant override that disagrees with the node's default** on a node that has no worker socket: a
   deployment may set overrides before it starts supplying workers, and the payload is where the value belongs.
 - **Fixing the streamed-refusal code here** (see the finding above): it belongs with the protocol's failure shape, not
-  with where the decision is made.
+  with where the decision is made. **It was fixed there instead, in D-179.**
+
+### D-179 — A refused socket connect carries the host failure's name and code to the worker
+**Date:** 2026-10-18 · **Status:** Accepted. Fixes the finding D-178 recorded; extends D-132's failure shape to
+`socket.connect`, and completes what D-173 promised — that a script cannot tell the placement apart.
+
+**Context:**
+D-173 moved egress into the worker with one requirement: the placement is an operator's decision, not something a
+script can observe. D-132 had already built that for the two host calls that stream, by letting a failure travel on
+its own stream with `errorName` and `errorCode` in the meta: a refused **fetch** and a failed **file finish** reach the
+worker as the same `HostException` the worker's own gate would have raised. The **socket connect** was the call left
+out. The node answered a refused `net.connect` by resetting the stream the worker had opened, and a reset carries only
+a reason and a numeric code — the `StreamResetException` the worker's multiplexer makes of it is not a host failure, so
+`JsError` handed the script `Error/host_error` with the gate's words buried in `"Stream reset (code 502): …"` while the
+same refusal made in the worker arrived as `TypeError/egress_denied`. D-178's test found it and asserted around it
+(the words match, the counters differ); this closes it.
+
+**Decision:**
+1. **A refused connect travels as a `socket.data` stream, the way a refused fetch travels as a `fetch.response`.** The
+   node opens it with `requestStreamId`, `errorName`, `errorCode` and `error` in the meta, then releases both that
+   stream and the `socket.connect` stream the worker opened — the socket it was for will never exist, and that stream
+   is what the reset used to say so. Open first, release second: the failure has to be what the worker reads first, or
+   the release would win the race and fail the connect with the very `StreamResetException` this removes.
+2. **The worker rebuilds it as a `HostException`**, in its `socket.data` handler, exactly where it already rebuilds
+   `fetch.response` and `files.finish`: name, code and message from the node. The connect promise fails there, so
+   `net`'s own error mapping (`socketError`) sees the code it would have seen had the connection been made in the
+   worker — including for a dial the peer refused or a name that does not resolve.
+3. **The name and code are the failure's, not a constant.** The same `Egress`/`SocketClient` code decides on either
+   side, so forwarding what it raised is what makes the two sides equal rather than similar: a gate refusal is
+   `TypeError/egress_denied`, a dial the peer refused is `Error/ECONNREFUSED`, a name that does not resolve is
+   `Error/dns_failed`, a spent allowance is `Error/egress_denied` with the limit's words. A failure the host did not
+   classify keeps this side's own default (`Error/host_error`), which is exactly what `JsError` makes of any failure
+   that is not a `HostException` — so even that reads the same either way.
+4. **Nothing else moves.** The connection is still made where the placement says, the node still keeps the rules and
+   the cluster membership, the report (D-176) and the counters are untouched. This is the failure's **shape**, not
+   where the decision is made — which is why D-178 was right to leave it for a change of its own.
+
+**Consequences:**
+- **The placement is invisible from a script again**, which is what D-173 said it must be: the same job, refused for
+  the same reason, produces the same `code`, name and message whichever side decided. An operator can still tell them
+  apart, and only an operator, by the counters — the node's own `c93.egress.denied` against the worker's report.
+- **The node's socket path now has the shape its fetch path has had since D-132**, so "a failure that has to be
+  described travels on a stream of its own" is the protocol's rule wherever a call can fail before it streams.
+- **A `files.open` failure keeps the shape it always had** (a reset), and that is correct rather than a gap: files are
+  the node's property in **both** placements, so there is no placement for that shape to show through — it is a
+  fidelity wart of an old path, not an asymmetry this work introduced.
+- **The fallback is one-directional and deliberate:** an unexpected node-side failure is forwarded as
+  `Error/host_error`, so the node never invents a code of its own and a script never reads one.
+
+**Evidence:**
+- `runner-protocol/.../NodeWorkerChannelTest.aRefusedConnectReachesTheWorkerInTheNodesErrorShape`: a real
+  `NodeWorkerChannel` and a real worker daemon over an in-memory duplex pipe, a node-side gate that refuses
+  `127.0.0.1:9`, and the connect made exactly as a script makes it: it fails with **`TypeError`, `egress_denied`**,
+  the gate's own message, and no `Stream reset` wrapper.
+- `server/.../PerTenantEgressPlacementTest` (D-178) **tightened, not replaced**: the two tenants' refusals now report
+  the same `code` (`egress_denied`) and the identical message, and the helper that stripped the node's wrapper is
+  gone — the test that found the asymmetry now asserts it is not there. The counters are unchanged, so it still proves
+  **who** refused: the node's own count for one tenant, the worker's report for the other.
+- **Container evidence is unaffected:** C5 of `scripts/worker-isolation-check.sh` asserts who reaches whom and what
+  the node's counters do, not how a refusal is worded.
+
+**Rejected:**
+- **Carrying the name and code in the `RESET` frame.** It would change the framing for every stream to fix one call,
+  and a reset is the right shape for a stream that has nothing further to say; D-132's separate stream already exists
+  for a failure that must be *described* rather than just signalled.
+- **Reporting `egress_denied` as a constant on the node's side of a socket refusal.** The gate's name and code vary
+  with the reason (`egress_denied`, `ECONNREFUSED`, `dns_failed`, the limit code), and a script reading `e.code` is
+  entitled to the same value it would have got had the connection been made where it is placed.
+- **Doing it in D-178.** That change was about *where* the decision is made; this one is about *how a failure is
+  carried*, and it touches the protocol's stream handling rather than the placement. Mixing the two would have made
+  the placement change's diff carry a change to a shape every host call shares.

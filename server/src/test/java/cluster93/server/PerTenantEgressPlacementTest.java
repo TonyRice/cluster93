@@ -27,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Placement is per tenant (D-173 item 8): one node whose default is the worker, one worker connection, and two tenants
- * decided on opposite sides. The same job, refused for the same reason with the same message, is refused by
+ * decided on opposite sides. The same job, refused for the same reason with the same code and message, is refused by
  * <b>different sides</b> — and the metrics say which, because a node counts its own refusals in
  * {@code c93_egress_denied} while a worker's reach it only as the report D-176 added
  * ({@code c93_worker_egress_denied}).
@@ -41,14 +41,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * tenant asked for it or follows the node, and a worker re-bound between the two tenants (D-172) switches sides,
  * because the placement arrives with the binding.
  *
- * <p><b>Found while writing this, and left as a finding rather than policy:</b> the same refusal does not reach a
- * script identically from the two sides. In the worker the gate fails the call itself, so the script sees
- * {@code egress_denied}. On the node a refused {@code net.connect} is a <em>stream</em>: the node resets it, and the
- * reset carries the gate's reason but not the error's name or code — D-132 kept those for a fetch response and a file
- * finish, not for a socket — so the script sees {@code host_error} with the gate's words inside
- * {@code "Stream reset (code 502): ..."}. The node path is the shape host calls always had, so this is older than the
- * placement; but it is the placement showing through, which is what D-173 says must not happen. This test therefore
- * compares the <em>words</em>, which match, and the counters, which do not.
+ * <p><b>The asymmetry this test found is fixed (D-179).</b> Before it, the same refusal did not reach a script
+ * identically from the two sides: in the worker the gate failed the call itself, so the script saw {@code egress_denied},
+ * while on the node a refused {@code net.connect} was a <em>stream</em> the node reset — and a reset carries the gate's
+ * reason but not the error's name or code, so the script saw {@code host_error} with the gate's words inside
+ * {@code "Stream reset (code 502): ..."}. D-132 had kept the name and code for a fetch response and a file finish, not
+ * for a socket connect; D-179 gave the socket path the same shape. This test therefore now asserts <b>both</b>: the code
+ * and the words are identical on either side, so the placement is invisible to a script, and only the counters say which
+ * side refused.
  */
 class PerTenantEgressPlacementTest {
 
@@ -143,18 +143,21 @@ class PerTenantEgressPlacementTest {
                 .isEqualTo(new JsonObject().put("value", "worker").put("from", "node")
                         .put("why", "The node's C93_EGRESS_PLACEMENT, which this tenant follows."));
 
-        // The same job for both: nothing allows this address, so whoever decides refuses it — with the same words.
+        // The same job for both: nothing allows this address, so whoever decides refuses it — in the same shape.
         JsonObject onTheNode = run(ON_THE_NODE, refusedScript());
         JsonObject inTheWorker = run(IN_THE_WORKER, refusedScript());
         assertThat(onTheNode.getBoolean("reached")).isFalse();
         assertThat(inTheWorker.getBoolean("reached")).isFalse();
-        assertThat(refusal(onTheNode)).as("the node refused, and said exactly why: %s", onTheNode.encode())
+        assertThat(onTheNode.getString("code")).as("the node refused, in the gate's own shape: %s", onTheNode.encode())
+                .isEqualTo("egress_denied");
+        assertThat(onTheNode.getString("message")).as("and said exactly why, without a wrapper")
                 .isEqualTo("net.connect to " + targetHost + ":9 is not allowed: it resolves to one of the cluster's own"
                         + " nodes, which scripts can never reach");
-        assertThat(refusal(inTheWorker)).as("the worker said the same thing, because it is the same gate: %s",
+        assertThat(inTheWorker.getString("code")).as("the worker said the same thing, because it is the same gate: %s",
                         inTheWorker.encode())
-                .as("the same refusal, word for word, on either side (D-173)")
-                .isEqualTo(refusal(onTheNode));
+                .as("the same code and the same refusal, word for word, on either side (D-173, D-179)")
+                .isEqualTo(onTheNode.getString("code"));
+        assertThat(inTheWorker.getString("message")).isEqualTo(onTheNode.getString("message"));
 
         // Who said no. The node decided for the tenant it was asked to decide for, and made nothing for the other.
         assertThat(counter("c93_egress_denied_total", "tenant=\"" + ON_THE_NODE + "\""))
@@ -219,19 +222,6 @@ class PerTenantEgressPlacementTest {
     private static JsonObject policyOf(String tenant) throws Exception {
         return await(client.get(node.httpPort(), "localhost", "/v1/tenants/" + tenant + "/egress-policy")
                 .putHeader("Authorization", TestAuth.ADMIN).send()).bodyAsJsonObject();
-    }
-
-    /**
-     * The gate's own words, without whatever the node's path wraps them in: a socket the node makes fails the connect
-     * and reaches the script as a stream reset, so the refusal arrives as {@code "Stream reset (code 502): <the gate>"}
-     * (see the class comment — the wrapper, and the lost error code, are properties of the node path, not of the
-     * placement). What has to match is what the gate said, and stripping the wrapper is what makes that comparison
-     * stand: if the node ever keeps the code and drops the wrapper, this returns the message unchanged and still holds.
-     */
-    private static String refusal(JsonObject output) {
-        String message = output.getString("message", "");
-        int marker = message.indexOf("): ");
-        return message.startsWith("Stream reset (code ") && marker > 0 ? message.substring(marker + 3) : message;
     }
 
     /** Runs the script as the tenant and returns its output, once the job is terminal. */

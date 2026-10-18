@@ -138,6 +138,8 @@ Messages are encoded as length-prefixed binary frames. Large binaries (ArrayBuff
 | `0x51` | `PONG` | Both | 0 | Heartbeat response. |
 | `0x5F` | `GOODBYE` | Both | 0 | Orderly shutdown handshake before connection close. |
 
+**Signalling a failure: `RESET` vs. an error stream.** A `RESET` ends a stream abruptly and carries only a reason and a numeric code, which is the right shape for a stream that has nothing further to say. A failure a **script** must be able to read — a refused `fetch`, a refused `socket.connect`, a failed file commit — therefore travels as an **`OPEN` stream of its own** whose meta carries `requestStreamId` and the error's `errorName`, `errorCode` and `error` (D-132, D-179). The receiver rebuilds the same `HostException`, so `net.connect` refused in a worker and `net.connect` refused on the node reach the script as the same `TypeError/egress_denied`, with the same message — the placement is not observable from a script.
+
 ---
 
 ## 5. Flow Control & Backpressure (Credit Windows)

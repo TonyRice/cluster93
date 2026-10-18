@@ -271,6 +271,16 @@ public final class RemoteHostApis implements HostApis {
                     connection.streamMultiplexer().resetStream(open.streamId(), "UNKNOWN_SOCKET", 404);
                     return;
                 }
+                if (meta.containsKey("error")) {
+                    // A refused connect: rebuild the node's failure, name and code included, so a script sees the same
+                    // TypeError/egress_denied a worker-side gate gives it — the placement must not show through (D-179).
+                    // An unclassified failure keeps this side's own default, which is what it would have been here.
+                    String name = meta.getString("errorName", "Error");
+                    String code = meta.getString("errorCode", "host_error");
+                    pending.promise().tryFail(new HostException(name, code, meta.getString("error")));
+                    connection.streamMultiplexer().resetStream(open.streamId(), "error", 502);
+                    return;
+                }
                 pending.promise().complete(socket(meta.getJsonObject("info", new JsonObject()), requestStreamId, open.streamId(), pending.request()));
             }
             case "http.request", "http.request.upgrade" -> {
