@@ -133,6 +133,7 @@ describe_cases() {
   say "  C3  rootful docker, --user <uid>:<gid>       $( { have_docker && ! rootless_docker; } && echo AVAILABLE || echo 'SKIP (pose: rootful docker is not in use)')"
   say "  C4  wrong identity, refused                  whenever any engine is available"
   say "  C5  the worker decides egress (D-173/A4)      rootful docker; needs no route in the container"
+  say "      and the node counts what it refused, from the worker's own report (D-176)"
 }
 
 # ---------------------------------------------------------------------------------------
@@ -252,6 +253,15 @@ wait_for() {
   done
   say "  TIMED OUT waiting for $what"
   return 1
+}
+
+# Whether the node has been told what a worker refused (D-176) — and whether that is *new* since the series it had
+# before. The worker batches its reports, so the caller waits; comparing against what was there before the job is what
+# makes "told" mean "told about this". The node makes none of these connections, so a report is the only way it knows.
+worker_reported_refusal() {  # worker_reported_refusal <the worker series as it stood before the job>
+  local seen="$1" now
+  now="$(metric_all c93_worker_egress_denied_total)"
+  [ -n "$now" ] && [ "$now" != "$seen" ]
 }
 
 # ---------------------------------------------------------------------------------------
@@ -624,10 +634,11 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
     [ -n "$warmup" ] && await_job "$warmup" >/dev/null
   fi
 
-  local refused=no localOnly=no jobOut=""
+  local refused=no localOnly=no reported=no jobOut=""
   if [ "$joined" = yes ]; then
-    local before after id
+    local before after id workerBefore
     before="$(metric_all c93_egress_denied_total)"
+    workerBefore="$(metric_all c93_worker_egress_denied_total)"
     # The node's own internal port: a cluster address on a node port is refused before any rule and before any
     # connection, so this needs no route — and the address is the *worker's* own loopback, which only a worker that
     # holds the rules can know to refuse.
@@ -641,6 +652,9 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
       esac
       after="$(metric_all c93_egress_denied_total)"
       [ "$before" = "$after" ] && localOnly=yes
+      # The node is not in the path of these connections, so its own metrics can show this refusal only because the
+      # worker said so (D-176) — and the worker batches that, so wait for it rather than assume it lands at once.
+      wait_for 20 "the node to be told what the worker refused" worker_reported_refusal "$workerBefore" && reported=yes
     fi
   fi
 
@@ -652,14 +666,15 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
     "$engine" logs "$RUN_ID-w" 2>&1 | tail -6 | sed 's/^/    /'
   fi
   "$engine" rm -f "$RUN_ID-w" >/dev/null 2>&1 || true
-  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-10s | %s\n' \
-    case engine rootless identity joined refused local-only result
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-10s | %-8s | %s\n' \
+    case engine rootless identity joined refused local-only reported result
   local result=FAIL
-  [ "$joined" = yes ] && [ "$refused" = yes ] && [ "$localOnly" = yes ] && result=PASS
-  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-10s | %s\n' \
+  [ "$joined" = yes ] && [ "$refused" = yes ] && [ "$localOnly" = yes ] && [ "$reported" = yes ] && result=PASS
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-10s | %-8s | %s\n' \
     "C5" "$label" "$(rootless_podman && echo rootless-podman || echo rootful)" "--user $(id -u):$(id -g)" \
-    "$joined" "$refused" "$localOnly" "$result"
+    "$joined" "$refused" "$localOnly" "$reported" "$result"
   say "     joined=$joined  refused by the worker itself=$refused  (the node's own egress counter did not move: $localOnly)"
+  say "     the node counted what the worker refused because the worker reported it (D-176): $reported"
   [ "$result" = PASS ]
 }
 

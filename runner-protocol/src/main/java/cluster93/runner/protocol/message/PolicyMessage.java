@@ -27,17 +27,28 @@ import java.util.List;
  * @param tenantPolicy    the tenant's egress policy as stored
  * @param nodeAddresses   the cluster's own node addresses, which a script may never reach (D-108)
  * @param nodePorts       this node's own listening ports, which the development switch still refuses
+ * @param budget          this worker's share of the node's per-node limits (D-176), or null when the node allocated
+ *                        none — then the cluster's own limits stand, which is what a node that predates the
+ *                        allocation would mean
  */
 public record PolicyMessage(String tenantId, String placement, long version, long expiresInMs, boolean allowPrivate,
                             List<String> internalDomains, JsonObject clusterPolicy, JsonObject tenantPolicy,
-                            List<String> nodeAddresses, List<Integer> nodePorts) {
+                            List<String> nodeAddresses, List<Integer> nodePorts, JsonObject budget) {
 
     /** Where egress is decided for a tenant (D-173 item 8). */
     public static final String NODE = "node";
     public static final String WORKER = "worker";
 
+    /** A policy with no budget: the cluster's own limits stand (an older node allocates none, D-176). */
+    public PolicyMessage(String tenantId, String placement, long version, long expiresInMs, boolean allowPrivate,
+                         List<String> internalDomains, JsonObject clusterPolicy, JsonObject tenantPolicy,
+                         List<String> nodeAddresses, List<Integer> nodePorts) {
+        this(tenantId, placement, version, expiresInMs, allowPrivate, internalDomains, clusterPolicy, tenantPolicy,
+                nodeAddresses, nodePorts, null);
+    }
+
     public Frame toFrame() {
-        return Frame.control(FrameType.POLICY, new JsonObject()
+        JsonObject json = new JsonObject()
                 .put("tenantId", tenantId)
                 .put("placement", placement)
                 .put("version", version)
@@ -47,7 +58,11 @@ public record PolicyMessage(String tenantId, String placement, long version, lon
                 .put("clusterPolicy", clusterPolicy != null ? clusterPolicy : new JsonObject())
                 .put("tenantPolicy", tenantPolicy != null ? tenantPolicy : new JsonObject())
                 .put("nodeAddresses", new JsonArray(nodeAddresses == null ? List.of() : nodeAddresses))
-                .put("nodePorts", new JsonArray(nodePorts == null ? List.of() : nodePorts)));
+                .put("nodePorts", new JsonArray(nodePorts == null ? List.of() : nodePorts));
+        if (budget != null) {
+            json.put("budget", budget);
+        }
+        return Frame.control(FrameType.POLICY, json);
     }
 
     public static PolicyMessage fromFrame(Frame frame) {
@@ -65,7 +80,8 @@ public record PolicyMessage(String tenantId, String placement, long version, lon
                 json.getJsonObject("clusterPolicy", new JsonObject()),
                 json.getJsonObject("tenantPolicy", new JsonObject()),
                 strings(json.getJsonArray("nodeAddresses")),
-                ints(json.getJsonArray("nodePorts")));
+                ints(json.getJsonArray("nodePorts")),
+                json.getJsonObject("budget"));
     }
 
     private static List<String> strings(JsonArray array) {

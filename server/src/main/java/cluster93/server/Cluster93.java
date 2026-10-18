@@ -425,6 +425,12 @@ public final class Cluster93 {
                 throw new IllegalStateException("C93_REQUIRE_CGROUP_LIMITS=true but C93_CGROUP_PREPARE=off — enable "
                         + "preparation or drop the requirement");
             }
+            // A tenant takes as many workers as its jobs need at maxJobsPerWorker each, so its concurrency is
+            // maxJobsPerTenant whatever the two knobs are set to: 8 jobs at 4 per worker is two workers, not eight
+            // (D-155). The caps are independent env vars; this is the arithmetic that joins them — and it is also what
+            // the node divides its per-node egress limits by, since a worker enforces its own share (D-176).
+            int workersPerTenant = Math.max(1,
+                    (config.maxJobsPerTenant() + config.maxJobsPerWorker() - 1) / config.maxJobsPerWorker());
             var poolManager = new cluster93.runner.protocol.pool.TenantWorkerPoolManager(
                     vertx,
                     config.workerBinaries(),
@@ -433,10 +439,7 @@ public final class Cluster93 {
                     // the node-wide allowance and deadlocked it. A worker is spawned when a job needs one — and it is
                     // kept warm after its last job (REUSE_SAME_TENANT), so a busy tenant still avoids cold starts.
                     0,
-                    // A tenant takes as many workers as its jobs need at maxJobsPerWorker each, so its concurrency is
-                    // maxJobsPerTenant whatever the two knobs are set to: 8 jobs at 4 per worker is two workers, not
-                    // eight (D-155). The caps are independent env vars; this is the arithmetic that joins them.
-                    Math.max(1, (config.maxJobsPerTenant() + config.maxJobsPerWorker() - 1) / config.maxJobsPerWorker()),
+                    workersPerTenant,
                     // The node-wide worker cap (D-156): how many worker processes this node may run, shared by
                     // every tenant's pool.
                     config.maxWorkers(),
@@ -462,10 +465,17 @@ public final class Cluster93 {
             // it decides itself — but a worker sent nothing refuses to connect anywhere on its own.
             WorkerPolicySync policySync = new WorkerPolicySync(egressPolicies, clusterAddresses,
                     config.egressAllowPrivate(), config.egressInternalDomains(),
-                    config.egressPlacement(), poolManager::refreshWorkerPolicies);
+                    config.egressPlacement(), workersPerTenant, poolManager::refreshWorkerPolicies);
             policySync.start(vertx);
             poolManager.workerPolicy(policySync::forTenant);
             workerPolicySyncRef.set(policySync);
+            // What a worker refused on its own is only visible if the worker says so (D-176): this node counts what its
+            // own gate refused, and in the worker placement that is no longer the whole picture. It lands in its own
+            // series, so an operator can still tell which of the two said no — the distinction the placement trades.
+            poolManager.egressReports((workerId, tenant, reason, count) -> {
+                Metrics.of(vertx).workerEgressDenied(tenant == null ? "-" : tenant, reason, count);
+                LOG.info("Worker {} refused {} connection(s) for tenant {}: {}", workerId, count, tenant, reason);
+            });
             // The listening end for worker containers (D-166, D-167): the deployment creates them, they connect, and
             // the pool binds each connection to whichever tenant has work. Nothing here creates a container.
             if (config.workerSocket() != null) {

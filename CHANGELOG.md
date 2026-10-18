@@ -6,6 +6,22 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **The node divides its egress allowance among a tenant's workers, and a worker tells it what it refused**
+  (D-176, refines D-173):
+  - `limits` in the cluster's egress policy are **per node** (D-116), so a worker enforcing them for itself would hand
+    the tenant its full allowance *per worker* — two workers, twice the connects. The node now computes each worker's
+    **share** (its per-node numbers divided by how many workers the tenant may run here — the same arithmetic the pools
+    are sized by, D-155 — floored at one as the first worker is, D-165) and sends it in the policy as a `budget`;
+    `SyncedPolicySource` puts it in place of the cluster's numbers, so the network clients enforce the worker's own
+    share with the same `egress_denied` code and reason a node uses **without a line changed in them**.
+  - The worker also holds **one network client, not one per run**: the counters and rate bucket that make an allowance
+    real used to restart with every run, so a tenant's every run had a full allowance of its own. A worker's second run
+    now meets its first run's bucket.
+  - New **`ACCOUNT` frame (0x09)**: a worker reports what it refused, by reason, in batched deltas (5 s, and once on
+    `GOODBYE`), and the node counts them into `c93.worker.egress.denied` — deliberately *not* into
+    `c93.egress.denied`, because which of the two said no is exactly what a worker placement trades away. The node's own
+    counter stays unmoved for a refusal a worker made, which is what the container check asserts.
+
 - **The worker's own egress is verified in a container, and a worker container's log is emptier than it looks**
   (D-173, D-175):
   - `scripts/worker-isolation-check.sh` now pins the placement per case — the C1–C4 cases assert what the **node** does

@@ -3779,3 +3779,90 @@ not the worker's).
 - `scripts/worker-isolation-check.sh` case **C5** against a real container, both engines: joined, refused by the worker
   itself, and the node's own egress counter unmoved — **PASS on podman rootless and docker rootful**, with the
   worker's log printed on failure and showing only the NOP-logger warning.
+
+### D-176 — The node allocates a worker its share, and the worker reports what it refused
+**Date:** 2026-10-17 · **Status:** Accepted. Implements A6 of the egress plan; refines D-173, and follows the D-156/D-165
+idiom of a node-wide allowance divided among the things that draw on it.
+
+**Context:**
+D-173 moved egress into the worker and left one thing behind it: the counts in `EgressLimits` (D-116) are **per node** —
+"120 new connections a minute and 256 open sockets per tenant on each node" — while the code that enforces them lives
+in the client the placement runs. A worker enforcing the cluster's numbers for itself would give the tenant its whole
+allowance **per worker**, and a tenant with two workers could open 240 connections a minute while the cluster said 120.
+The enforcement also had no teeth in a second way: the worker built its network client **per run**, so a tenant's four
+concurrent runs each held a full allowance of their own and the client's counters and rate bucket restarted every time.
+
+And a worker's refusals were invisible to the node. It counts what *it* refuses (`c93.egress.denied`, D-108), but in
+the worker placement it makes none of these connections — so a refusal a worker enforced would reach an operator only
+inside the job that provoked it, if the script chose to surface it. D-175 makes that sharper: a worker container's log
+is a no-op, so a refusal would have no other way out.
+
+**Decision:**
+1. **The node allocates; the worker enforces.** `EgressLimits.perWorker(n)` divides the per-node numbers by how many
+   workers one tenant may run on this node — the same `ceil(maxJobsPerTenant / maxJobsPerWorker)` the pools are sized by
+   (D-155) — and the node puts the result in the policy as its `budget`. `socketsPerExecution` is not divided: a script
+   never spans workers. Each share floors at 1, as the first worker does (D-165): a worker that may open nothing cannot
+   do its work at all, so an allowance below the tenant's worker count is divided thin and slightly overshot rather than
+   turned into a refusal-to-work.
+2. **The worker's limits *are* its share.** `SyncedPolicySource` substitutes the allocation into the cluster policy it
+   hands its gate, so the clients — unchanged, and still placement-neutral (D-173) — enforce exactly what the node
+   allowed this worker, with the same `egress_denied` code and the same reason a node refusing for itself uses. A
+   policy with no allocation, or one this worker cannot read, leaves the cluster's own limits standing: that is what a
+   node predating the allocation means, and it is never wider than the cluster's policy.
+3. **One client per worker, not one per run.** The worker builds its `FetchClient` once and shares it across its runs,
+   because the counters and rate bucket that make the allowance real are its. This is the half that turned the budget
+   from a number into an enforcement: proved by a second run of the same worker meeting the first run's bucket.
+4. **The worker reports what it refused, and the node counts it in its own series.** A new `ACCOUNT` frame (0x09)
+   carries the worker's refusals by reason **as deltas since its last report**; the node adds them to
+   `c93.worker.egress.denied`. Deliberately *not* `c93.egress.denied`: which of the two said no is exactly what a
+   worker placement trades away, and it is what an operator needs to keep. The node's own counter stays unmoved for a
+   worker's refusal — which is also the reason C5 remains a proof that the worker decided.
+5. **Reports are batched, not per refusal.** A script looping on a refused address would otherwise turn its own
+   refusals into protocol traffic, which is the last thing a node at the ceiling needs. The worker flushes on its own
+   interval (5 s; shorter in tests) and once more on `GOODBYE`, while the connection it is about to lose still exists.
+6. **The tally is never cleared by reporting.** `drainDenials()` advances a watermark; the counts stay the worker's own
+   record. A report lost with a connection loses visibility, not the number.
+
+**Alternatives considered:**
+- **One allowance per worker (no division).** What the code did by omission. Rejected: n workers would hand the tenant
+  n × the cluster's per-node limit, and the number an operator set would mean nothing.
+- **Dividing by the workers a tenant is *currently* running.** Rejected: workers come and go, so a share would change
+  under a running script, and the pool would have to re-send a policy on every spawn and reap for a number that only
+  ever needs to be an upper bound.
+- **A new env var for the worker's share.** Rejected: the share is derived from two numbers the operator already sets,
+  and a second knob could contradict them.
+- **Counting worker refusals into `c93.egress.denied`.** Rejected: it would erase the distinction between "this node
+  refused it" and "a worker refused it", which is the only thing that makes the worker placement auditable — and it
+  would break C5, whose evidence is precisely that the node's own counter does not move.
+- **Enforcing the allowance in the node, per connection.** Rejected in D-173 and still rejected: that is the per-name
+  round trip the placement exists to remove.
+- **Reporting every refusal immediately.** Rejected: it makes refusals, which a hostile script can generate at will,
+  into a way to load the node's connection.
+- **Closing `fetch`'s own gap here.** `fetch` does not consult these limits at all — it is bounded by concurrent
+  requests per script (D-116, D-117). That is a pre-existing property of the node's socket limits, not something the
+  allocation introduces, and it is left as it is rather than widened into this decision.
+
+**Consequences:**
+- The cluster's `limits` in the policy mean what they always meant — per node — and a worker's copy is its share of
+  them; `GET /v1/egress-policy` and `c93 egress` are unchanged, since the operator still sets one set of numbers.
+- A tenant's total connects and sockets across its workers on a node stay inside the cluster's allowance whenever the
+  allowance is at least the tenant's worker count, and are bounded by the worker count when it is below it.
+- An operator watching `c93_worker_egress_denied_total` sees the refusals the node did not make, by tenant and reason,
+  and `c93_egress_denied_total` keeps its old meaning: this node refused these itself.
+- A worker placement is now auditable end to end: the worker refuses with the node's own code, counts it, and the node
+  counts it because the worker said so.
+
+**Evidence:**
+- `EgressLimitsTest`: the share, the floor of one, and that a tenant's workers together get the node's allowance.
+- `SyncedPolicySourceTest`: the allocation is what the worker's limits are, while the policy on the wire is still the
+  cluster's; no allocation leaves the cluster's numbers; an unreadable one neither kills the worker nor widens it.
+- `WorkerLocalEgressTest`, against a real engine over a real socket: a worker that opens its second connection on a
+  one-connect allowance is refused with `egress_denied` / `connect_rate` — the node's code and reason — and its
+  **next run** meets the same bucket, which is what proves the client is the worker's rather than the run's; the node
+  is told `acme connect_rate x1` through the report.
+- `WorkerPolicySyncTest`: a two-worker tenant's payload carries half of 120/16/256, while the cluster's own policy still
+  says what the cluster set. `NodeWorkerChannelTest`: a report reaches the node's sink, a report for another tenant is
+  ignored. `WorkerAccountingTest`: a report carries only what is new and does not clear the tally.
+- `EgressMetricsTest`: a worker's refusals land in `c93.worker.egress.denied`, apart from the node's own.
+- `scripts/worker-isolation-check.sh` case **C5**: in a real container, the worker's refusal *and* the node's count of
+  it, with the node's own egress series still unmoved.

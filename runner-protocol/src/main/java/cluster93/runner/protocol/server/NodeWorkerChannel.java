@@ -18,6 +18,7 @@ import cluster93.runner.protocol.flow.CreditManager;
 import cluster93.runner.protocol.frame.Frame;
 import cluster93.runner.protocol.frame.FrameCodec;
 import cluster93.runner.protocol.frame.FrameType;
+import cluster93.runner.protocol.message.AccountMessage;
 import cluster93.runner.protocol.message.BindMessage;
 import cluster93.runner.protocol.message.CallMessage;
 import cluster93.runner.protocol.message.ErrorMessage;
@@ -165,6 +166,11 @@ public class NodeWorkerChannel {
     }
 
     private final NodeRpcAuthorizer authorizer;
+    /**
+     * Where a report of what this worker refused goes (D-176). Set by whoever built the channel, because only the
+     * node knows what to do with it; a channel with no node behind it (a test) drops it.
+     */
+    private volatile EgressReportSink egressReports = EgressReportSink.NONE;
 
     public NodeWorkerChannel(String workerId, WriteStream<Buffer> output, ReadStream<Buffer> input) {
         this(workerId, output, input, new CreditManager(), NodeRpcAuthorizer.ALLOW_ALL, null);
@@ -229,6 +235,28 @@ public class NodeWorkerChannel {
      */
     public boolean acceptsEgressPolicy() {
         return acceptsEgressPolicy;
+    }
+
+    /**
+     * Where this worker's reports of what it refused go (D-176). The worker's own gate is the only thing that knows,
+     * so the node listens; a channel built without a sink drops them, which is what a test's channel wants.
+     */
+    public NodeWorkerChannel egressReports(EgressReportSink sink) {
+        this.egressReports = sink == null ? EgressReportSink.NONE : sink;
+        return this;
+    }
+
+    /** What a worker refused on its own, reported by the worker (D-176). It counts nothing locally: the node does. */
+    private void onAccount(Frame frame) {
+        AccountMessage report = AccountMessage.fromFrame(frame);
+        // The worker says what tenant it was bound to; the binding in force here is what it was told, so use it when
+        // the report carries none, and drop a report that contradicts it — a worker cannot refuse for another tenant.
+        String tenant = report.tenantId() == null || report.tenantId().isEmpty() ? boundTenantId : report.tenantId();
+        if (tenant == null || (boundTenantId != null && !boundTenantId.equals(tenant))) {
+            LOG.warn("Worker {}: ignoring an egress report for tenant {} (bound to {})", workerId, tenant, boundTenantId);
+            return;
+        }
+        report.denied().forEach((reason, count) -> egressReports.refused(workerId, tenant, reason, count));
     }
 
     public synchronized Future<Void> send(Frame frame) {
@@ -305,6 +333,7 @@ public class NodeWorkerChannel {
             case REPLY -> onReply(frame);
             case LOG -> onLog(frame);
             case STATE -> onState(frame);
+            case ACCOUNT -> onAccount(frame);
             case RESULT_RUN -> onResultRun(frame);
             case PING -> send(Frame.pong());
             case GOODBYE -> onGoodbye(frame);

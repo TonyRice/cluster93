@@ -214,7 +214,9 @@ public class WorkerProcessRuntime implements ScriptRuntime {
         ReadStream<io.vertx.core.buffer.Buffer> input = StreamBridge.readStream(vertx, process.getInputStream());
 
         String workerId = "worker-" + process.pid();
-        NodeWorkerChannel channel = new NodeWorkerChannel(workerId, output, input);
+        NodeWorkerChannel channel = new NodeWorkerChannel(workerId, output, input)
+                // A process worker decides egress itself too, and reports what it refused to the same place (D-176).
+                .egressReports(poolManager == null ? null : poolManager.egressReports());
 
         // A worker that never says hello (it died, or stalled) must not leave the run pending forever (D-135).
         AtomicBoolean settled = new AtomicBoolean(false);

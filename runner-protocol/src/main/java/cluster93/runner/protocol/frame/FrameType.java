@@ -38,6 +38,13 @@ public enum FrameType {
      */
     POLICY(0x08),
 
+    /**
+     * 0x09: What a worker's own egress gate refused, by reason, since its last report (D-176). Worker -> Node,
+     * Channel 0. The node is not in the path of a worker's connections any more, so this is the only way its metrics
+     * can show a connection a worker turned away.
+     */
+    ACCOUNT(0x09),
+
     /** 0x10: Host API RPC invocation ({runId, method, params}). Worker -> Node, Channel: Call ID. */
     CALL(0x10),
 

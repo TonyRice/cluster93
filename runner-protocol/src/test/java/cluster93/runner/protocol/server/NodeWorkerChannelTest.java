@@ -170,6 +170,55 @@ class NodeWorkerChannelTest {
     }
 
     @Test
+    void reportsWhatAWorkerRefusedOnItsOwnToTheNodeSink() throws Exception {
+        DuplexPipe pipe = new DuplexPipe();
+        List<String> refusals = new ArrayList<>();
+        NodeWorkerChannel nodeChannel = new NodeWorkerChannel("worker-7", pipe.nodeToWorker, pipe.workerToNode)
+                .egressReports((workerId, tenant, reason, count) ->
+                        refusals.add(workerId + " " + tenant + " " + reason + " x" + count));
+        WorkerClientConnection workerConn = new WorkerClientConnection(pipe.workerToNode, pipe.nodeToWorker);
+        nodeChannel.bind("acme", new JsonObject(), new JsonObject()).toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+        // A worker that decided egress itself says what it turned away (D-176): the node made none of these connections.
+        workerConn.send(new cluster93.runner.protocol.message.AccountMessage("acme",
+                java.util.Map.of("connect_rate", 3L, "not_allowed", 1L)).toFrame());
+
+        assertThat(refusals).containsExactlyInAnyOrder("worker-7 acme connect_rate x3", "worker-7 acme not_allowed x1");
+    }
+
+    @Test
+    void ignoresAnEgressReportForATenantTheWorkerIsNotBoundTo() throws Exception {
+        DuplexPipe pipe = new DuplexPipe();
+        List<String> refusals = new ArrayList<>();
+        NodeWorkerChannel nodeChannel = new NodeWorkerChannel("worker-7", pipe.nodeToWorker, pipe.workerToNode)
+                .egressReports((workerId, tenant, reason, count) -> refusals.add(tenant + " " + reason));
+        WorkerClientConnection workerConn = new WorkerClientConnection(pipe.workerToNode, pipe.nodeToWorker);
+        nodeChannel.bind("acme", new JsonObject(), new JsonObject()).toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+        // A re-bound worker (D-172) could still be finishing a run under the tenant it just left. Its refusals must not
+        // be counted against whoever holds it now.
+        workerConn.send(new cluster93.runner.protocol.message.AccountMessage("globex",
+                java.util.Map.of("connect_rate", 3L)).toFrame());
+
+        assertThat(refusals).isEmpty();
+    }
+
+    @Test
+    void dropsReportsWhenNoSinkIsSet() throws Exception {
+        DuplexPipe pipe = new DuplexPipe();
+        NodeWorkerChannel nodeChannel = new NodeWorkerChannel("worker-7", pipe.nodeToWorker, pipe.workerToNode);
+        WorkerClientConnection workerConn = new WorkerClientConnection(pipe.workerToNode, pipe.nodeToWorker);
+        nodeChannel.bind("acme", new JsonObject(), new JsonObject()).toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+        // The channel's default: a worker's report is data off a connection, and a node with nothing listening for it
+        // must be unbothered rather than die on it.
+        workerConn.send(new cluster93.runner.protocol.message.AccountMessage("acme",
+                java.util.Map.of("connect_rate", 1L)).toFrame());
+
+        assertThat(nodeChannel.boundTenantId()).isEqualTo("acme");
+    }
+
+    @Test
     void runsFullDaemonExecutionRoundtrip() throws Exception {
         DuplexPipe pipe = new DuplexPipe();
         NodeWorkerChannel nodeChannel = new NodeWorkerChannel("worker-1", pipe.nodeToWorker, pipe.workerToNode);

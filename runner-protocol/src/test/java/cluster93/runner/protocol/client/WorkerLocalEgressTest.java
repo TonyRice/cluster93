@@ -62,6 +62,8 @@ class WorkerLocalEgressTest {
      * ever consulted, which is exactly what the first version of this test got wrong.
      */
     private String echoHost;
+    /** What the node was told this worker refused (D-176): the only way it can see a refusal it did not make. */
+    private final List<String> refusals = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -106,32 +108,46 @@ class WorkerLocalEgressTest {
 
     /** A node that hands the worker {@code tenantPolicy} and no cluster rules of its own. */
     private void startNode(JsonObject tenantPolicy) throws Exception {
+        startNode(tenantPolicy, null);
+    }
+
+    /** The same, with the share of the node's limits the worker is to enforce (D-176), or none. */
+    private void startNode(JsonObject tenantPolicy, JsonObject budget) throws Exception {
         manager = new TenantWorkerPoolManager(vertx, Map.of(), "javet", 0, 2, 2, 2, 64,
                 TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL,
                 512L * 1024 * 1024)
                 .workerPolicy(tenant -> Future.succeededFuture(new PolicyMessage(tenant, PolicyMessage.WORKER, 1L,
                         60_000L, false, List.of(),
                         // Default-deny posture: nothing is reachable that a rule doesn't name.
-                        new JsonObject().put("posture", "allow-list"), tenantPolicy, List.of(), List.of())));
+                        new JsonObject().put("posture", "allow-list"), tenantPolicy, List.of(), List.of(), budget)))
+                // What the worker refuses reaches the node only because the worker reports it (D-176).
+                .egressReports((workerId, tenant, reason, count) ->
+                        refusals.add(workerId + " " + tenant + " " + reason + " x" + count));
         await(manager.listenForWorkers(socketPath, "s3cret", 8));
 
         // A real worker, as a container runs one — and one that decides egress itself.
         daemonSocket = await(client.connect(socketPath));
         WorkerClientConnection connection = new WorkerClientConnection(daemonSocket, daemonSocket);
         daemon = new WorkerDaemon(connection, new JavetScriptRuntime(vertx, 64, 2), "javet", "s3cret", 64, 2)
-                .egressLocally(vertx);
+                // A short report interval: a test cannot wait the production one out.
+                .egressLocally(vertx, 25);
         await(daemon.start());
         awaitUntil("the worker to become an open worker", () -> manager.openWorkerCount() == 1);
     }
 
     /** Runs a job on the bound worker, with the node side unable to fetch at all: only the worker can reach out. */
     private ExecutionResult run(String script) throws Exception {
+        return run("job-egress", script);
+    }
+
+    /** The same, for a test that runs more than one job: each needs its own id. */
+    private ExecutionResult run(String jobId, String script) throws Exception {
         WorkerHandle handle = await(manager.acquire("acme", null));
         // No FetchClient on this node's host APIs: the remote path cannot fetch, so a body can only come from the worker.
         NodeHostApis nodeHostApis = new NodeHostApis(new NodeHostApis.Node(vertx, new SharedDataKvStore(vertx), null, null),
-                "acme", "job-egress", false);
-        Execution execution = new Execution("job-egress", "acme", script, new JsonObject(), Duration.ofSeconds(20),
-                JobContext.firstAttempt("job-egress", OrphanPolicy.FAIL));
+                "acme", jobId, false);
+        Execution execution = new Execution(jobId, "acme", script, new JsonObject(), Duration.ofSeconds(20),
+                JobContext.firstAttempt(jobId, OrphanPolicy.FAIL));
         return await(handle.run(1, execution, nodeHostApis, (level, line) -> { }, StateSink.DISCARD));
     }
 
@@ -257,6 +273,97 @@ class WorkerLocalEgressTest {
         assertThat(((JsonObject) result.output()).getString("echoed"))
                 .as("the echo came back, so the worker opened the socket").isEqualTo("ping-over-the-worker");
         assertThat(daemon.accounting().denied()).isZero();
+    }
+
+    @Test
+    @DisplayName("A worker refuses past the allowance the node gave it, in the node's own error shape (D-176)")
+    void theWorkerRefusesPastItsOwnAllowance() throws Exception {
+        // One new connection a minute is this worker's share of the node's allowance, and the target is allowed: the
+        // only thing that can refuse the second connection is the limit. The limits are the socket path's (D-116): a
+        // connection through `net`, `tls`, `http` or `http2`.
+        startNode(allowTheEcho(), new JsonObject().put("connectsPerMinute", 1).put("socketsPerExecution", 16)
+                .put("socketsPerTenantPerNode", 8));
+
+        ExecutionResult result = run("""
+                import net from 'node:net';
+                export default async () => {
+                  const open = () => new Promise((resolve, reject) => {
+                    const socket = net.connect({ host: '%s', port: %d });
+                    socket.once('connect', () => socket.write('ping-over-the-worker'));
+                    socket.once('data', (data) => { socket.end(); resolve(data.toString()); });
+                    socket.once('error', reject);
+                  });
+                  const first = await open();
+                  try {
+                    await open();
+                    return { first, second: 'reached' };
+                  } catch (e) {
+                    return { first, second: 'refused', code: e.code || (e.cause && e.cause.code) || null,
+                             message: e.message || (e.cause && e.cause.message) || null };
+                  }
+                };
+                """.formatted(echoHost, tcpPort));
+
+        assertThat(result.status()).as(String.valueOf(result.error())).isEqualTo(JobStatus.SUCCEEDED);
+        JsonObject output = (JsonObject) result.output();
+        assertThat(output.getString("first")).as("the first connection is inside the allowance: %s", output.encode())
+                .isEqualTo("ping-over-the-worker");
+        assertThat(output.getString("second")).as("the second is past it, refused by the worker").isEqualTo("refused");
+        assertThat(output.getString("code")).as("the code a script sees when the node enforces the same limit")
+                .isEqualTo("egress_denied");
+        assertThat(output.getString("message")).contains("more than 1");
+        assertThat(daemon.accounting().denials()).as("and the worker counted the exhaustion it enforced")
+                .containsEntry("connect_rate", 1L);
+        // And the node heard about it, which is the only reason an operator can see a refusal the node never made.
+        awaitUntil("the node to be told what the worker refused",
+                () -> refusals.stream().anyMatch(line -> line.endsWith("acme connect_rate x1")));
+    }
+
+    @Test
+    @DisplayName("The allowance is the worker's, not each run's: a second run meets the same budget (D-176)")
+    void theAllowanceSpansTheWorkersRuns() throws Exception {
+        // A client per run would start every run with a fresh bucket, so a tenant with n runs would get n times the
+        // allowance the node divided for it. One run proves the refusal; two prove *where* the allowance lives.
+        startNode(allowTheEcho(), new JsonObject().put("connectsPerMinute", 1).put("socketsPerExecution", 16)
+                .put("socketsPerTenantPerNode", 8));
+
+        String oneSocket = """
+                import net from 'node:net';
+                export default async () => {
+                  try {
+                    const echoed = await new Promise((resolve, reject) => {
+                      const socket = net.connect({ host: '%s', port: %d });
+                      socket.once('connect', () => socket.write('ping-over-the-worker'));
+                      socket.once('data', (data) => { socket.end(); resolve(data.toString()); });
+                      socket.once('error', reject);
+                    });
+                    return { echoed };
+                  } catch (e) {
+                    return { refused: true, code: e.code || (e.cause && e.cause.code) || null };
+                  }
+                };
+                """.formatted(echoHost, tcpPort);
+
+        ExecutionResult first = run("job-one", oneSocket);
+        assertThat(first.status()).as(String.valueOf(first.error())).isEqualTo(JobStatus.SUCCEEDED);
+        assertThat(((JsonObject) first.output()).getString("echoed"))
+                .as("the first run is inside the allowance: %s", first.output()).isEqualTo("ping-over-the-worker");
+
+        ExecutionResult second = run("job-two", oneSocket);
+
+        assertThat(second.status()).as(String.valueOf(second.error())).isEqualTo(JobStatus.SUCCEEDED);
+        JsonObject output = (JsonObject) second.output();
+        assertThat(output.getBoolean("refused")).as("the same worker's next run is on the same budget: %s", output.encode())
+                .isTrue();
+        assertThat(output.getString("code")).isEqualTo("egress_denied");
+    }
+
+    /** A tenant policy that allows this test's echo server, on both paths it is served on. */
+    private JsonObject allowTheEcho() {
+        return new JsonObject().put("rules", new JsonArray().add(new JsonObject()
+                .put("action", "allow").put("to", echoHost + "/32")
+                .put("ports", new JsonArray().add(echoPort).add(tcpPort))
+                .put("protocols", new JsonArray().add("tcp"))));
     }
 
     @Test

@@ -8,6 +8,7 @@ import cluster93.core.host.egress.Posture;
 import cluster93.core.host.egress.TenantEgress;
 import cluster93.runner.protocol.message.PolicyMessage;
 import io.vertx.core.Future;
+import io.vertx.core.json.JsonObject;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -26,6 +27,10 @@ import java.util.function.LongSupplier;
  *
  * <p>An update older than the one in force is ignored, and a policy addressed to another tenant is refused, so a
  * re-bound worker (D-172) cannot be left deciding under the previous tenant's rules.
+ *
+ * <p>Its limits are the ones the node allocated it (D-176), not the cluster's own per-node numbers: the clients read
+ * them from {@link #cluster()}, so a worker enforces its own share of the node's allowance with the same code a node
+ * uses to enforce the whole of it.
  */
 public final class SyncedPolicySource implements PolicySource {
 
@@ -39,6 +44,8 @@ public final class SyncedPolicySource implements PolicySource {
     private volatile ClusterEgress cluster = REFUSING;
     private volatile TenantEgress tenant;
     private volatile NodeAddresses nodes = NodeAddresses.EMPTY;
+    /** This worker's share of the node's per-node limits, or null when the node allocated none (D-176). */
+    private volatile EgressLimits budget;
 
     public SyncedPolicySource() {
         this(System::currentTimeMillis);
@@ -62,7 +69,10 @@ public final class SyncedPolicySource implements PolicySource {
         if (inForce != null && message.version() <= inForce.version()) {
             return false;
         }
-        this.cluster = ClusterEgress.fromJson(message.clusterPolicy());
+        // The limits a client enforces come from the policy the node sent, with the node's allocation in place of the
+        // cluster's own per-node numbers (D-176): resolved once here, so the hot path (every connection) reads a field.
+        this.budget = budgetOf(message.budget());
+        this.cluster = effective(ClusterEgress.fromJson(message.clusterPolicy()), budget);
         this.tenant = TenantEgress.fromJson(message.tenantId(), message.tenantPolicy());
         this.nodes = addresses(message.nodeAddresses(), message.nodePorts());
         // A policy with no expiry is not usable: fail closed rather than trust a ruleset that can never go stale.
@@ -85,6 +95,14 @@ public final class SyncedPolicySource implements PolicySource {
     public String placement() {
         PolicyMessage inForce = policy;
         return inForce == null ? PolicyMessage.WORKER : inForce.placement();
+    }
+
+    /**
+     * This worker's share of the node's per-node limits (D-176), or null when the node allocated none — in which case
+     * the cluster's own limits stand, which is what a node that predates the allocation means.
+     */
+    public EgressLimits budget() {
+        return budget;
     }
 
     @Override
@@ -117,6 +135,29 @@ public final class SyncedPolicySource implements PolicySource {
     @Override
     public Future<NodeAddresses> nodes() {
         return Future.succeededFuture(nodes);
+    }
+
+    /**
+     * The cluster's policy as this worker enforces it (D-176): the cluster's rules and posture, with the limits the
+     * node allocated this worker in place of the cluster's per-node ones. With no allocation, the cluster's own limits
+     * are what a client reads — the same numbers a node enforcing them itself would apply.
+     */
+    private static ClusterEgress effective(ClusterEgress cluster, EgressLimits budget) {
+        return budget == null ? cluster : cluster.withLimits(budget);
+    }
+
+    /** The allocation a policy carries, or null when it carries none — or one this worker cannot read. */
+    private static EgressLimits budgetOf(JsonObject json) {
+        if (json == null) {
+            return null;
+        }
+        try {
+            return EgressLimits.fromJson(json);
+        } catch (IllegalArgumentException e) {
+            // A policy is data: an unreadable allocation must not kill the worker, and must not widen what it may do.
+            // The cluster's own limits stand, which is what the node's gate would enforce for it anyway.
+            return null;
+        }
     }
 
     /** The addresses a policy named, ignoring any that no longer parse. */

@@ -57,6 +57,16 @@ public class WorkerDaemon {
     private volatile io.vertx.core.Vertx vertx;
     private final WorkerAccounting accounting = new WorkerAccounting();
     private volatile cluster93.core.host.egress.Egress gate;
+    /**
+     * The network client this worker makes its own connections with (D-176): one per worker, not one per run. The
+     * cluster's per-node limits are enforced through the client's own counters and rate bucket, so a client per run
+     * would hand every run of the tenant a fresh allowance — the node divides its allowance by the worker, so the
+     * worker has to be the thing that holds it.
+     */
+    private volatile cluster93.core.host.FetchClient localFetch;
+    /** How often a worker tells the node what it refused on its own (D-176), unless a test says otherwise. */
+    static final long REPORT_INTERVAL_MS = 5_000L;
+    private long reportTimer = -1L;
 
     private final Map<Integer, RunningExecution> activeRuns = new ConcurrentHashMap<>();
     private final Map<Integer, RemoteHostApis> hostsByChannel = new ConcurrentHashMap<>();
@@ -109,7 +119,11 @@ public class WorkerDaemon {
             case STOP -> onStop(frame);
             case CANCEL -> onCancel(frame);
             case EVENT -> onEvent(frame);
-            case GOODBYE -> LOG.info("Worker received GOODBYE from node");
+            case GOODBYE -> {
+                // The node is going away; tell it what it has not been told yet while there is still a connection (D-176).
+                reportRefusals();
+                LOG.info("Worker received GOODBYE from node");
+            }
             default -> LOG.warn("Worker received unhandled frame {}", frame.type());
         }
     }
@@ -151,8 +165,38 @@ public class WorkerDaemon {
      * (an older build, one that never advertised {@code egressPolicy}) does anyway.
      */
     public WorkerDaemon egressLocally(io.vertx.core.Vertx vertx) {
+        return egressLocally(vertx, REPORT_INTERVAL_MS);
+    }
+
+    /** @param reportIntervalMs how often the worker tells the node what it refused (D-176); short in tests */
+    public WorkerDaemon egressLocally(io.vertx.core.Vertx vertx, long reportIntervalMs) {
         this.vertx = vertx;
+        long interval = Math.max(1L, reportIntervalMs);
+        if (reportTimer == -1L) {
+            // Batched rather than one frame per refusal: a script looping on a refused address would otherwise turn
+            // its own refusals into protocol traffic, which is the last thing a node at its ceiling needs.
+            reportTimer = vertx.setPeriodic(interval, id -> reportRefusals());
+        }
         return this;
+    }
+
+    /**
+     * Tells the node what this worker refused on its own (D-176). The node is not in the path of these connections, so
+     * without this its metrics would show only what it refused itself — and a worker that loses its connection loses
+     * the report with it, which is why the tally is not cleared by sending it.
+     */
+    private void reportRefusals() {
+        WorkerClientConnection connectionOn = connection;
+        String tenant = boundTenantId;
+        if (connectionOn == null || tenant == null) {
+            return;
+        }
+        Map<String, Long> denied = accounting.drainDenials();
+        if (denied.isEmpty()) {
+            return;
+        }
+        connectionOn.send(new cluster93.runner.protocol.message.AccountMessage(tenant, denied).toFrame())
+                .onFailure(err -> LOG.debug("Could not report egress refusals to the node: {}", String.valueOf(err.getMessage())));
     }
 
     /**
@@ -177,7 +221,17 @@ public class WorkerDaemon {
                 gateOn = gate;
             }
         }
-        cluster93.core.host.FetchClient client = new cluster93.core.host.FetchClient(vertxOn, gateOn);
+        // One client for the whole worker (D-176): its tallies and its rate bucket are what make the node's allocation
+        // real, and they have to span this worker's runs, not restart with each of them.
+        cluster93.core.host.FetchClient client = localFetch;
+        if (client == null) {
+            synchronized (this) {
+                if (localFetch == null) {
+                    localFetch = new cluster93.core.host.FetchClient(vertxOn, gateOn);
+                }
+                client = localFetch;
+            }
+        }
         cluster93.core.host.NodeFetchApi fetchApi = new cluster93.core.host.NodeFetchApi(client, tenant);
         // The socket path too (D-116, D-117): `net`, `tls`, the WebSocket client and `node:http`'s client half ride it,
         // and it shares the script's concurrent-request places with the fetches.

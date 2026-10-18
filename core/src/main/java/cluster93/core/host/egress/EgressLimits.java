@@ -18,8 +18,31 @@ public record EgressLimits(int connectsPerMinute, int socketsPerExecution, int s
                 .put("socketsPerTenantPerNode", socketsPerTenantPerNode);
     }
 
+    /**
+     * One worker's share of a per-node allowance (D-176): what the node hands a worker in its policy, so <em>n</em>
+     * workers of one tenant together stay inside the limits the cluster set for that tenant on this node.
+     *
+     * <p>{@code socketsPerExecution} is untouched: a script never spans workers, so that one is one worker's already.
+     * The other two are per node, and a worker enforcing the full standing number would give the tenant its allowance
+     * once per worker — two workers at 120 connects a minute is 240.
+     *
+     * <p>A share floors at one, as the first worker does (D-165): a worker that may open nothing cannot do its work at
+     * all. An allowance below the tenant's worker count is therefore divided thin and slightly overshot; a node is
+     * sized so that it isn't.
+     *
+     * @param workersPerTenant how many workers one tenant may run on this node at once
+     */
+    public EgressLimits perWorker(int workersPerTenant) {
+        int workers = Math.max(1, workersPerTenant);
+        if (workers == 1) {
+            return this;
+        }
+        return new EgressLimits(Math.max(1, connectsPerMinute / workers), socketsPerExecution,
+                Math.max(1, socketsPerTenantPerNode / workers));
+    }
+
     /** Parses the policy's {@code limits}, each field optional; throws {@link IllegalArgumentException} for the API. */
-    static EgressLimits fromJson(Object value) {
+    public static EgressLimits fromJson(Object value) {
         if (value == null) {
             return DEFAULT;
         }

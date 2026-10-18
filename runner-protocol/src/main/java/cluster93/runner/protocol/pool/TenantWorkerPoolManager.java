@@ -62,6 +62,11 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     private final TenantWorkerPool.ReusePolicy reusePolicy;
     private final WorkerCgroups cgroupLimiter;
     private final NodeRpcAuthorizer authorizer;
+    /**
+     * Where a worker's report of what it refused goes (D-176). The node sets it once, and every channel this manager
+     * builds — a connection it accepted, or one a tenant's pool spawned — reports to it.
+     */
+    private volatile cluster93.runner.protocol.server.EgressReportSink egressReports = cluster93.runner.protocol.server.EgressReportSink.NONE;
 
     private final Map<String, TenantWorkerPool> tenantPools = new ConcurrentHashMap<>();
 
@@ -142,7 +147,8 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         return tenantPools.computeIfAbsent(tenantId, t -> {
             String binary = resolveModeBinary(defaultMode);
             TenantWorkerPool pool = new TenantWorkerPool(vertx, binary, defaultMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker, memoryBudget)
-                    .arbiter(this);
+                    .arbiter(this)
+                    .egressReports(egressReports);
             return registerTenantGauges(t, pool);
         });
     }
@@ -167,7 +173,8 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         TenantWorkerPool pool = tenantPools.computeIfAbsent(poolKey, k -> {
             String binary = resolveModeBinary(effectiveMode);
             TenantWorkerPool created = new TenantWorkerPool(vertx, binary, effectiveMode, minWarmPerTenant, maxTotalPerTenant, heapMb, reusePolicy, cgroupLimiter, authorizer, nodeBudget, maxJobsPerWorker, memoryBudget)
-                    .arbiter(this);
+                    .arbiter(this)
+                    .egressReports(egressReports);
             return registerTenantGauges(tenantId, created);
         });
         return pool.acquire(tenantId);
@@ -360,6 +367,21 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         return supplier == null ? io.vertx.core.Future.succeededFuture(null) : supplier.apply(tenantId);
     }
 
+    /**
+     * Sets where a worker's report of what it refused goes (D-176): the node's metrics, in the placement where the
+     * worker decides egress itself and the node therefore cannot see what it turned away. Left unset, reports are
+     * dropped — which is what a node that decides egress itself needs, since its workers decide nothing.
+     */
+    public TenantWorkerPoolManager egressReports(cluster93.runner.protocol.server.EgressReportSink sink) {
+        this.egressReports = sink == null ? cluster93.runner.protocol.server.EgressReportSink.NONE : sink;
+        return this;
+    }
+
+    /** The sink workers' reports go to (D-176), for the runtimes that build their own channels. */
+    public cluster93.runner.protocol.server.EgressReportSink egressReports() {
+        return egressReports;
+    }
+
     /** Re-sends the policy to every worker bound to a tenant, or to every bound worker when {@code tenantId} is null. */
     public void refreshWorkerPolicies(String tenantId) {
         for (TenantWorkerPool pool : tenantPools.values()) {
@@ -481,7 +503,7 @@ public class TenantWorkerPoolManager implements NodeArbiter {
             return;
         }
         NodeWorkerChannel channel = new NodeWorkerChannel(workerId, socket, socket,
-                new cluster93.runner.protocol.flow.CreditManager(), authorizer);
+                new cluster93.runner.protocol.flow.CreditManager(), authorizer).egressReports(egressReports);
         long helloTimeoutMs = Math.max(1L, Long.getLong("cluster93.worker.helloTimeoutMs", TenantWorkerPool.DEFAULT_HELLO_TIMEOUT_MS));
         AtomicBoolean settled = new AtomicBoolean(false);
         long timerId = vertx.setTimer(helloTimeoutMs, timer -> {

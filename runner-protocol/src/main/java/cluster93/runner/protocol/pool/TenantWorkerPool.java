@@ -67,6 +67,11 @@ public class TenantWorkerPool {
     private final WorkerMemoryBudget memoryBudget;
     /** Who arbitrates between tenants when capacity is contended (D-161); null when this pool is the only one. */
     private NodeArbiter arbiter;
+    /**
+     * Where a worker's report of what it refused goes (D-176). Set by the manager that built this pool, which is the
+     * only thing that knows what the node does with it.
+     */
+    private volatile cluster93.runner.protocol.server.EgressReportSink egressReports = cluster93.runner.protocol.server.EgressReportSink.NONE;
 
     private final Queue<WorkerHandle> warmUnboundQueue = new ArrayDeque<>();
     private final Map<String, List<WorkerHandle>> tenantWarmQueue = new ConcurrentHashMap<>();
@@ -726,7 +731,8 @@ public class TenantWorkerPool {
             ReadStream<io.vertx.core.buffer.Buffer> input = StreamBridge.readStream(vertx, process.getInputStream());
 
             String workerId = "worker-" + pid;
-            NodeWorkerChannel channel = new NodeWorkerChannel(workerId, output, input, new cluster93.runner.protocol.flow.CreditManager(), authorizer);
+            NodeWorkerChannel channel = new NodeWorkerChannel(workerId, output, input, new cluster93.runner.protocol.flow.CreditManager(), authorizer)
+                    .egressReports(egressReports);
             ProcessWorkerHandle handle = new ProcessWorkerHandle(process, channel, maxJobsPerWorker, cgroupLimiter, workerBytes);
             // Drain stderr immediately: the OS pipe buffer is 64 KiB, and a worker that logs more than that before
             // its first run would block forever writing to a full pipe (D-128). The tail is kept so a worker that
@@ -866,6 +872,15 @@ public class TenantWorkerPool {
     /** The arbiter that decides between tenants (D-161); set once, by the manager that owns this pool. */
     TenantWorkerPool arbiter(NodeArbiter arbiter) {
         this.arbiter = arbiter;
+        return this;
+    }
+
+    /**
+     * Where this pool's workers report what they refused on their own (D-176). The manager hands its own sink down, so
+     * every channel a pool builds for a tenant reports to the same place.
+     */
+    TenantWorkerPool egressReports(cluster93.runner.protocol.server.EgressReportSink sink) {
+        this.egressReports = sink == null ? cluster93.runner.protocol.server.EgressReportSink.NONE : sink;
         return this;
     }
 

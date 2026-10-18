@@ -35,6 +35,14 @@ public record ClusterEgress(Posture posture, List<EgressRule> rules, Map<String,
         return new AddressSets(addressSets);
     }
 
+    /**
+     * The same policy with other limits: what one placement may use (D-176). The rules and posture are the cluster's
+     * and stay the cluster's; only the numbers a worker enforces locally are its own share of the node's allowance.
+     */
+    public ClusterEgress withLimits(EgressLimits other) {
+        return new ClusterEgress(posture, rules, addressSets, other);
+    }
+
     public JsonObject toJson() {
         JsonArray list = new JsonArray();
         rules.forEach(rule -> list.add(rule.toJson()));

@@ -133,6 +133,28 @@ class WorkerPolicySyncTest {
         assertThat(refreshed).as("a closed sync stops refreshing").hasSize(seen);
     }
 
+    @Test
+    @DisplayName("A payload carries the share of the node's limits one of that tenant's workers may use (D-176)")
+    void thePayloadCarriesTheWorkersShare() throws Exception {
+        // Two workers for a tenant, so each enforces half: one worker's full allowance would be twice the cluster's.
+        WorkerPolicySync forTwo = new WorkerPolicySync(policies, cluster, false, List.of("corp.example"),
+                PolicyMessage.WORKER, 2, WorkerPolicySync.TTL_MS, WorkerPolicySync.REFRESH_MS, tenant -> { });
+        PolicyMessage shared = forTwo.forTenant("acme").toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertThat(cluster93.core.host.egress.EgressLimits.fromJson(shared.budget()))
+                .as("the cluster's default 120/16/256, halved for each of the tenant's two workers")
+                .isEqualTo(new cluster93.core.host.egress.EgressLimits(60, 16, 128));
+        assertThat(cluster93.core.host.egress.ClusterEgress.fromJson(shared.clusterPolicy()).limits())
+                .as("the cluster's own policy still says what the cluster set, which is what the next reader needs")
+                .isEqualTo(cluster93.core.host.egress.EgressLimits.DEFAULT);
+
+        // One worker for a tenant: no division, and the worker enforces exactly what the cluster set for the node.
+        PolicyMessage whole = sync(WorkerPolicySync.TTL_MS, WorkerPolicySync.REFRESH_MS).forTenant("acme")
+                .toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertThat(cluster93.core.host.egress.EgressLimits.fromJson(whole.budget()))
+                .isEqualTo(cluster93.core.host.egress.EgressLimits.DEFAULT);
+    }
+
     private static void waitFor(String what, java.util.function.BooleanSupplier condition) throws InterruptedException {
         long deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
         while (System.nanoTime() < deadline) {

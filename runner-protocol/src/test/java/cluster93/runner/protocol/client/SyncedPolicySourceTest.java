@@ -1,6 +1,7 @@
 package cluster93.runner.protocol.client;
 
 import cluster93.core.host.egress.Decision;
+import cluster93.core.host.egress.EgressLimits;
 import cluster93.core.host.egress.EgressProtocol;
 import cluster93.runner.protocol.message.PolicyMessage;
 import io.vertx.core.json.JsonArray;
@@ -36,11 +37,18 @@ class SyncedPolicySourceTest {
 
     /** A node's policy: default-deny cluster posture, one tenant rule for a public API, and the cluster's own nodes. */
     private static PolicyMessage aPolicy(long version, long expiresInMs) {
+        return aPolicy(version, expiresInMs, null);
+    }
+
+    /** The same, with the node's allocation for this worker (D-176), or none. */
+    private static PolicyMessage aPolicy(long version, long expiresInMs, JsonObject budget) {
         return new PolicyMessage(TENANT, PolicyMessage.WORKER, version, expiresInMs, false, List.of("corp.example"),
-                new JsonObject().put("posture", "allow-list").put("rules", new JsonArray()),
+                new JsonObject().put("posture", "allow-list").put("rules", new JsonArray())
+                        .put("limits", new JsonObject().put("connectsPerMinute", 120).put("socketsPerExecution", 16)
+                                .put("socketsPerTenantPerNode", 256)),
                 new JsonObject().put("rules", new JsonArray()
                         .add(new JsonObject().put("action", "allow").put("to", "api.stripe.com").put("ports", new JsonArray().add(443)))),
-                List.of("10.0.0.5"), List.of(9393, 9394));
+                List.of("10.0.0.5"), List.of(9393, 9394), budget);
     }
 
     /** The decision a worker's gate would make with this source, for a host that resolves to {@code address}. */
@@ -129,8 +137,7 @@ class SyncedPolicySourceTest {
 
     @Test
     @DisplayName("A policy for another tenant is refused, so a re-bound worker cannot keep the old tenant's rules (D-173)")
-    void anotherTenantsPolicyIsRefused() {
-        SyncedPolicySource source = new SyncedPolicySource(now::get);
+    void anotherTenantsPolicyIsRefused() {        SyncedPolicySource source = new SyncedPolicySource(now::get);
         source.apply(new PolicyMessage("globex", PolicyMessage.WORKER, 1L, 60_000L, false, List.of(),
                 new JsonObject().put("posture", "allow-list"), new JsonObject().put("rules", new JsonArray()
                 .add(new JsonObject().put("action", "allow").put("to", "api.stripe.com").put("ports", new JsonArray().add(443)))),
@@ -140,5 +147,45 @@ class SyncedPolicySourceTest {
         Decision.Verdict verdict = decide(source, "api.stripe.com", PUBLIC_IP, 443);
         assertThat(verdict.address()).as("globex's rules must not authorise acme's run").isNull();
         assertThat(verdict.refused()).isEqualTo(Decision.Reason.NOT_ALLOWED);
+    }
+
+    @Test
+    @DisplayName("The limits this worker enforces are the share the node allocated it (D-176)")
+    void theAllocationIsWhatTheWorkerEnforces() {
+        SyncedPolicySource source = new SyncedPolicySource(now::get);
+        JsonObject allocation = new JsonObject().put("connectsPerMinute", 60).put("socketsPerExecution", 16)
+                .put("socketsPerTenantPerNode", 128);
+        source.apply(aPolicy(1L, 60_000L, allocation));
+
+        assertThat(source.cluster().result().limits()).as("a client reads its limits from the cluster policy it is given")
+                .isEqualTo(new EgressLimits(60, 16, 128));
+        assertThat(source.budget()).isEqualTo(new EgressLimits(60, 16, 128));
+        assertThat(source.policy().clusterPolicy().getJsonObject("limits"))
+                .as("what the node sent is still the cluster's own policy: only the worker's enforcement is divided")
+                .isEqualTo(new EgressLimits(120, 16, 256).toJson());
+    }
+
+    @Test
+    @DisplayName("With no allocation, the cluster's own limits stand: what a node that predates one means (D-176)")
+    void noAllocationLeavesTheClustersLimits() {
+        SyncedPolicySource source = new SyncedPolicySource(now::get);
+        source.apply(aPolicy(1L, 60_000L));
+
+        assertThat(source.budget()).as("nothing was allocated").isNull();
+        assertThat(source.cluster().result().limits()).isEqualTo(new EgressLimits(120, 16, 256));
+    }
+
+    @Test
+    @DisplayName("An allocation this worker cannot read neither kills it nor widens what it may do (D-176)")
+    void anUnreadableAllocationIsIgnored() {
+        SyncedPolicySource source = new SyncedPolicySource(now::get);
+        source.apply(aPolicy(1L, 60_000L, new JsonObject().put("connectsPerMinute", 0)));
+
+        assertThat(source.fresh()).as("the policy itself was applied").isTrue();
+        assertThat(source.budget()).as("the unreadable share is no share").isNull();
+        assertThat(source.cluster().result().limits()).as("the cluster's numbers are what is left standing")
+                .isEqualTo(new EgressLimits(120, 16, 256));
+        assertThat(decide(source, "api.stripe.com", PUBLIC_IP, 443).address()).as("and its rules still decide")
+                .isEqualTo(PUBLIC_IP);
     }
 }

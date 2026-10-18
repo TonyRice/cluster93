@@ -117,6 +117,17 @@ public final class Metrics implements Shareable {
                 .tag("tenant", tenant).tag("reason", reason).register(registry).increment();
     }
 
+    /**
+     * Connections a worker refused on its own and reported to this node (D-176). Kept in its own series, apart from
+     * {@link #egressDenied}: that one counts what <em>this node</em> refused, and which of the two said no is exactly
+     * what a worker placement trades away when the node stops being in the path — so the operator has to be able to
+     * see it here, or a worker's refusals would be invisible except in the job that provoked them.
+     */
+    public void workerEgressDenied(String tenant, String reason, long count) {
+        Counter.builder("c93.worker.egress.denied").description("Script connections a worker refused on its own")
+                .tag("tenant", tenant).tag("reason", reason).register(registry).increment(count);
+    }
+
     /** Bytes a script's socket sent or received (D-116); {@code direction} is {@code out} or {@code in}. */
     public void egressBytes(String tenant, String direction, long bytes) {
         Counter.builder("c93.egress.bytes").description("Bytes scripts' sockets sent and received").baseUnit("bytes")
