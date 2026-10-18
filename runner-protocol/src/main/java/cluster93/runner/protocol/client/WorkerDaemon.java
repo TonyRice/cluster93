@@ -1,5 +1,6 @@
 package cluster93.runner.protocol.client;
 
+import cluster93.core.host.egress.Placement;
 import cluster93.core.job.OrphanPolicy;
 import cluster93.core.runtime.Execution;
 import cluster93.core.runtime.ExecutionResult;
@@ -146,7 +147,7 @@ public class WorkerDaemon {
             return;
         }
         LOG.info("Egress policy v{} for tenant {} (placement {}, expires in {} ms): this worker decides for itself",
-                policy.version(), policy.tenantId(), policy.placement(), policy.expiresInMs());
+                policy.version(), policy.tenantId(), policy.placement().code, policy.expiresInMs());
     }
 
     /** The policy this worker's own gate decides under (D-173); empty and refusing until the node sends one. */
@@ -201,13 +202,13 @@ public class WorkerDaemon {
 
     /**
      * The network host APIs this run serves itself, or null when the node should serve them: only when the node says
-     * the placement is the worker (D-173 item 8) <em>and</em> the policy in force is fresh — a worker without rules it
-     * can trust asks the node rather than guess.
+     * the placement is the worker (D-173 item 8, per tenant since A5) <em>and</em> the policy in force is fresh — a
+     * worker without rules it can trust asks the node rather than guess.
      */
     private RemoteHostApis.LocalNetwork localNetwork(String tenant) {
         io.vertx.core.Vertx vertxOn = this.vertx;
         if (vertxOn == null
-                || !cluster93.runner.protocol.message.PolicyMessage.WORKER.equals(egressPolicy.placement())
+                || !Placement.WORKER.equals(egressPolicy.placement())
                 || !egressPolicy.fresh()) {
             return null;
         }

@@ -1,5 +1,6 @@
 package cluster93.server;
 
+import cluster93.core.host.egress.Placement;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -28,11 +29,14 @@ class ServerConfigTest {
     void egressPlacementIsItsOwnSetting() {
         // The default is the worker (D-173): it connects under the rules the node sends it, so the node stops being in
         // the path per connection and per byte. `node` keeps the older shape, where the node dials for every worker.
-        assertThat(ServerConfig.fromEnv(Map.of()).egressPlacement()).isEqualTo("worker");
-        assertThat(ServerConfig.fromEnv(Map.of("C93_EGRESS_PLACEMENT", "node")).egressPlacement()).isEqualTo("node");
+        assertThat(ServerConfig.fromEnv(Map.of()).egressPlacement()).isEqualTo(Placement.WORKER);
+        assertThat(ServerConfig.fromEnv(Map.of("C93_EGRESS_PLACEMENT", "node")).egressPlacement()).isEqualTo(Placement.NODE);
         assertThat(ServerConfig.fromEnv(Map.of("C93_EGRESS_PLACEMENT", " WORKER ")).egressPlacement())
-                .as("an operator writing it by hand is not punished for the case or the spaces").isEqualTo("worker");
+                .as("an operator writing it by hand is not punished for the case or the spaces").isEqualTo(Placement.WORKER);
         assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_EGRESS_PLACEMENT", "nowhere")))
+                .hasMessageContaining("C93_EGRESS_PLACEMENT");
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_EGRESS_PLACEMENT", "inherit")))
+                .as("a node has no other node to inherit a placement from (D-173 item 8) — only a tenant does")
                 .hasMessageContaining("C93_EGRESS_PLACEMENT");
     }
 

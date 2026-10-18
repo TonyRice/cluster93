@@ -3,6 +3,7 @@ package cluster93.runner.protocol.client;
 import cluster93.core.host.egress.ClusterEgress;
 import cluster93.core.host.egress.EgressLimits;
 import cluster93.core.host.egress.NodeAddresses;
+import cluster93.core.host.egress.Placement;
 import cluster93.core.host.egress.PolicySource;
 import cluster93.core.host.egress.Posture;
 import cluster93.core.host.egress.TenantEgress;
@@ -92,9 +93,9 @@ public final class SyncedPolicySource implements PolicySource {
     }
 
     /** Where egress is decided for the bound tenant, as the node last said; the worker is the default (D-173 item 8). */
-    public String placement() {
+    public Placement placement() {
         PolicyMessage inForce = policy;
-        return inForce == null ? PolicyMessage.WORKER : inForce.placement();
+        return inForce == null ? Placement.WORKER : inForce.placement();
     }
 
     /**

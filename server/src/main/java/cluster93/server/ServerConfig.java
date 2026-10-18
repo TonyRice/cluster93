@@ -1,5 +1,6 @@
 package cluster93.server;
 
+import cluster93.core.host.egress.Placement;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.file.Path;
@@ -43,8 +44,9 @@ import java.util.UUID;
  * @param ingressPort   where services' HTTP traffic arrives (routed by Host)
  * @param ingressDomain services get automatic hosts {@code <service>--<tenant>.<ingressDomain>}
  * @param egressAllowPrivate let scripts' fetch reach private and loopback addresses (local development only)
- * @param egressPlacement     where a worker decides egress: {@code worker} (the worker connects, under the rules the
- *                            node sends it, D-173) or {@code node} (the node does, as it always did)
+ * @param egressPlacement     where a worker decides egress by default: {@link Placement#WORKER} (the worker connects,
+ *                            under the rules the node sends it, D-173) or {@link Placement#NODE} (the node does, as it
+ *                            always did). One tenant's own policy can name the other one for itself (D-173 item 8)
  * @param egressPolicyFile   a JSON cluster egress policy stored at the cluster's first start, or null (D-111)
  * @param egressDnsServers   DNS servers that answer every script lookup and query, instead of the system's (D-122)
  * @param egressInternalDomains more internal zones whose names scripts can't resolve unless a rule names them (D-122)
@@ -104,7 +106,7 @@ public record ServerConfig(
         int ingressPort,
         String ingressDomain,
         boolean egressAllowPrivate,
-        String egressPlacement,
+        Placement egressPlacement,
         Path egressPolicyFile,
         List<java.net.InetSocketAddress> egressDnsServers,
         List<String> egressInternalDomains,
@@ -157,8 +159,6 @@ public record ServerConfig(
 
     public static final java.util.List<String> FILES_BACKENDS = java.util.List.of("cluster", "disk", "s3");
     public static final java.util.List<String> WORKER_MODES = java.util.List.of("embedded", "process");
-    /** Where a worker decides egress (D-173): in the worker, or in the node as it always did. */
-    public static final java.util.List<String> EGRESS_PLACEMENTS = java.util.List.of("worker", "node");
     /** The personas a node can play (docs/design/node-roles.md): every role is on by default, as in development. */
     public static final java.util.List<String> ROLES = java.util.List.of("api", "ingress", "worker", "data", "console");
 
@@ -168,10 +168,6 @@ public record ServerConfig(
         }
         if (!WORKER_MODES.contains(workerMode)) {
             throw new IllegalArgumentException("C93_WORKER_MODE must be one of " + WORKER_MODES + " (it was " + workerMode + ")");
-        }
-        if (!EGRESS_PLACEMENTS.contains(egressPlacement)) {
-            throw new IllegalArgumentException("C93_EGRESS_PLACEMENT must be one of " + EGRESS_PLACEMENTS
-                    + " (it was " + egressPlacement + ")");
         }
         if (roles.isEmpty()) {
             throw new IllegalArgumentException("C93_ROLES must name at least one of " + ROLES);
@@ -284,7 +280,7 @@ public record ServerConfig(
                 Integer.parseInt(env.getOrDefault("C93_INGRESS_PORT", "9394")),
                 env.getOrDefault("C93_INGRESS_DOMAIN", "localhost"),
                 Boolean.parseBoolean(env.getOrDefault("C93_EGRESS_ALLOW_PRIVATE", "false")),
-                env.getOrDefault("C93_EGRESS_PLACEMENT", "worker").trim().toLowerCase(java.util.Locale.ROOT),
+                placementOf(env),
                 // Seeds the cluster's egress policy at its first start only (D-111); the API changes it after that.
                 blankToNull(env.get("C93_EGRESS_POLICY_FILE")) == null ? null : Path.of(env.get("C93_EGRESS_POLICY_FILE").trim()),
                 // Split-horizon resolvers: these servers answer scripts instead of the system's (§8.2, D-122).
@@ -473,6 +469,21 @@ public record ServerConfig(
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /**
+     * {@code C93_EGRESS_PLACEMENT}: the node's default, refused by name so a typo is reported as the setting it is
+     * (D-173). {@code inherit} is refused here — a node has nothing to inherit from.
+     */
+    private static Placement placementOf(Map<String, String> env) {
+        String value = env.getOrDefault("C93_EGRESS_PLACEMENT", Placement.WORKER.code)
+                .trim().toLowerCase(java.util.Locale.ROOT);
+        try {
+            return Placement.parse(value);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("C93_EGRESS_PLACEMENT must be one of "
+                    + Placement.CODES + " (it was " + value + ")");
+        }
     }
 
     private static String defaultAdvertiseHost() {

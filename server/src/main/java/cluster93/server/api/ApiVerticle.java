@@ -179,7 +179,7 @@ public final class ApiVerticle extends VerticleBase {
                 .compose(v -> egressPolicies.put(cluster93.core.host.egress.TenantEgress.none(tenant)))).mount(router);
         new IdentityRoutes(identity, audit, authStore, authenticator, auditIds, config.secretsKey()).mount(router);
         new StorageApi(storage, files, authStore, quota).mount(router);
-        new EgressRoutes(egressPolicies, authStore, config.egressAllowPrivate()).mount(router);
+        new EgressRoutes(egressPolicies, authStore, config.egressAllowPrivate(), config.egressPlacement()).mount(router);
         new FilesRoutes(files, quota, room, fileTree, fileLinks).mount(router);
         new BusRoutes(vertx).mount(router);
         new QueueRoutes(queues).mount(router);

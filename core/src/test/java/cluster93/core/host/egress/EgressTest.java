@@ -3,6 +3,7 @@ package cluster93.core.host.egress;
 import cluster93.core.host.EgressPolicy;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -123,6 +124,31 @@ class EgressTest {
             rules.add(new JsonObject().put("to", "10.0.0." + (i % 250) + "/32").put("ports", new JsonArray().add(80)));
         }
         assertThatThrownBy(() -> TenantEgress.fromJson("acme", new JsonObject().put("allow", rules))).hasMessageContaining("At most 100");
+    }
+
+    @Test
+    @DisplayName("A tenant can name its own placement, and a placement on its own is a policy an operator meant to keep (D-173 item 8)")
+    void aTenantCanNameItsOwnPlacement() {
+        assertThat(policy("{\"placement\": \"node\"}").placement())
+                .as("this tenant, decided on the node, whatever the node's own default is").isEqualTo(Placement.NODE);
+        assertThat(policy("{\"placement\": \" WORKER \"}").placement())
+                .as("written by hand, like every other operator value").isEqualTo(Placement.WORKER);
+        assertThat(policy("{\"placement\": \"inherit\"}").placement()).as("follow the node").isNull();
+        assertThat(TenantEgress.none("acme").placement()).as("nothing set means no opinion of its own").isNull();
+
+        // It round-trips: the node stores this JSON and sends the same object to a worker.
+        assertThat(policy("{\"placement\": \"node\"}").toJson().getString("placement")).isEqualTo("node");
+        assertThat(TenantEgress.none("acme").toJson().containsKey("placement"))
+                .as("a tenant that follows the node stores no placement of its own").isFalse();
+
+        // A policy that reads as empty is removed rather than stored (EgressPolicies.put), so a placement alone has to
+        // count: "this tenant is decided on the node" is exactly the kind of thing an operator would lose silently.
+        assertThat(policy("{\"placement\": \"node\"}").isEmpty()).isFalse();
+        assertThat(TenantEgress.none("acme").isEmpty()).isTrue();
+
+        assertThatThrownBy(() -> policy("{\"placement\": \"nowhere\"}"))
+                .hasMessageContaining("placement").hasMessageContaining("worker or node");
+        assertThatThrownBy(() -> policy("{\"placement\": \"inherit-x\"}")).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

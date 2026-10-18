@@ -3,6 +3,7 @@ package cluster93.runner.protocol.client;
 import cluster93.core.host.egress.Decision;
 import cluster93.core.host.egress.EgressLimits;
 import cluster93.core.host.egress.EgressProtocol;
+import cluster93.core.host.egress.Placement;
 import cluster93.runner.protocol.message.PolicyMessage;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -42,7 +43,7 @@ class SyncedPolicySourceTest {
 
     /** The same, with the node's allocation for this worker (D-176), or none. */
     private static PolicyMessage aPolicy(long version, long expiresInMs, JsonObject budget) {
-        return new PolicyMessage(TENANT, PolicyMessage.WORKER, version, expiresInMs, false, List.of("corp.example"),
+        return new PolicyMessage(TENANT, Placement.WORKER, version, expiresInMs, false, List.of("corp.example"),
                 new JsonObject().put("posture", "allow-list").put("rules", new JsonArray())
                         .put("limits", new JsonObject().put("connectsPerMinute", 120).put("socketsPerExecution", 16)
                                 .put("socketsPerTenantPerNode", 256)),
@@ -72,7 +73,7 @@ class SyncedPolicySourceTest {
         SyncedPolicySource source = new SyncedPolicySource(now::get);
 
         assertThat(source.fresh()).isFalse();
-        assertThat(source.placement()).isEqualTo(PolicyMessage.WORKER);
+        assertThat(source.placement()).isEqualTo(Placement.WORKER);
         assertThat(source.allowPrivate()).as("the development switch is part of the policy, not of the worker").isFalse();
         Decision.Verdict verdict = decide(source, "api.stripe.com", PUBLIC_IP, 443);
         assertThat(verdict.address()).isNull();
@@ -128,7 +129,7 @@ class SyncedPolicySourceTest {
         SyncedPolicySource source = new SyncedPolicySource(now::get);
         assertThat(source.apply(aPolicy(5L, 60_000L))).isTrue();
         assertThat(source.apply(aPolicy(4L, 60_000L))).as("not newer").isFalse();
-        assertThat(source.apply(new PolicyMessage(TENANT, PolicyMessage.WORKER, 5L, 60_000L, false, List.of(),
+        assertThat(source.apply(new PolicyMessage(TENANT, Placement.WORKER, 5L, 60_000L, false, List.of(),
                 new JsonObject().put("posture", "allow-list"), new JsonObject(), List.of(), List.of())))
                 .as("the same version is not newer either").isFalse();
         assertThat(decide(source, "api.stripe.com", PUBLIC_IP, 443).address())
@@ -138,7 +139,7 @@ class SyncedPolicySourceTest {
     @Test
     @DisplayName("A policy for another tenant is refused, so a re-bound worker cannot keep the old tenant's rules (D-173)")
     void anotherTenantsPolicyIsRefused() {        SyncedPolicySource source = new SyncedPolicySource(now::get);
-        source.apply(new PolicyMessage("globex", PolicyMessage.WORKER, 1L, 60_000L, false, List.of(),
+        source.apply(new PolicyMessage("globex", Placement.WORKER, 1L, 60_000L, false, List.of(),
                 new JsonObject().put("posture", "allow-list"), new JsonObject().put("rules", new JsonArray()
                 .add(new JsonObject().put("action", "allow").put("to", "api.stripe.com").put("ports", new JsonArray().add(443)))),
                 List.of(), List.of()));
@@ -147,6 +148,24 @@ class SyncedPolicySourceTest {
         Decision.Verdict verdict = decide(source, "api.stripe.com", PUBLIC_IP, 443);
         assertThat(verdict.address()).as("globex's rules must not authorise acme's run").isNull();
         assertThat(verdict.refused()).isEqualTo(Decision.Reason.NOT_ALLOWED);
+    }
+
+    @Test
+    @DisplayName("The placement is the tenant's, and it changes when the node says so — a re-bound worker switches sides (D-173 item 8)")
+    void thePlacementFollowsThePolicyInForce() {
+        SyncedPolicySource source = new SyncedPolicySource(now::get);
+        assertThat(source.fresh()).as("nothing has been synced yet, so the worker decides nothing by itself").isFalse();
+
+        // A tenant the node decides for: the worker is told so, and hands its network calls up.
+        source.apply(new PolicyMessage(TENANT, Placement.NODE, 1L, 60_000L, false, List.of(),
+                new JsonObject().put("posture", "allow-list"), new JsonObject(), List.of(), List.of()));
+        assertThat(source.placement()).as("the node decides for this tenant").isEqualTo(Placement.NODE);
+        assertThat(source.fresh()).as("and it is still a policy the worker holds, fresh and readable").isTrue();
+
+        // The same connection re-bound to a tenant it decides for (D-172): the next payload is what moves it back.
+        source.apply(new PolicyMessage(TENANT, Placement.WORKER, 2L, 60_000L, false, List.of(),
+                new JsonObject().put("posture", "allow-list"), new JsonObject(), List.of(), List.of()));
+        assertThat(source.placement()).as("re-bound, and deciding again").isEqualTo(Placement.WORKER);
     }
 
     @Test

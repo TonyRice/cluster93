@@ -14,8 +14,12 @@ import java.util.List;
  * @param allowLocal whether this tenant's scripts may reach <b>here</b> — the machine the connection would come from
  *                   (D-174). It is not the same as allowing private networks: link-local (cloud metadata), RFC1918,
  *                   CGNAT and ULA stay refused, and so do the node's own ports.
+ * @param placement where this tenant's connections are decided (D-173 item 8), or null to follow the node's
+ *                  {@code C93_EGRESS_PLACEMENT}. One tenant at a time can be placed the other way, which is what a
+ *                  node-level default cannot express.
  */
-public record TenantEgress(String tenant, Posture posture, List<EgressRule> rules, boolean allowLocal) {
+public record TenantEgress(String tenant, Posture posture, List<EgressRule> rules, boolean allowLocal,
+                           Placement placement) {
 
     public static final int MAX_RULES = 100;
 
@@ -24,11 +28,15 @@ public record TenantEgress(String tenant, Posture posture, List<EgressRule> rule
     }
 
     public static TenantEgress none(String tenant) {
-        return new TenantEgress(tenant, null, List.of(), false);
+        return new TenantEgress(tenant, null, List.of(), false, null);
     }
 
+    /**
+     * Whether an operator has set nothing at all here. A policy that is empty is <b>removed</b> rather than stored, so
+     * a placement on its own counts: "this tenant is decided on the node" is a policy an operator meant to keep.
+     */
     public boolean isEmpty() {
-        return posture == null && rules.isEmpty() && !allowLocal;
+        return posture == null && rules.isEmpty() && !allowLocal && placement == null;
     }
 
     public JsonObject toJson() {
@@ -40,6 +48,9 @@ public record TenantEgress(String tenant, Posture posture, List<EgressRule> rule
         }
         if (allowLocal) {
             json.put("allowLocal", true);
+        }
+        if (placement != null) {
+            json.put("placement", placement.code);
         }
         return json;
     }
@@ -57,7 +68,7 @@ public record TenantEgress(String tenant, Posture posture, List<EgressRule> rule
         }
         Object posture = json.getValue("posture");
         return new TenantEgress(tenant, posture == null || "inherit".equals(posture) ? null : Posture.parse(posture), rules,
-                json.getBoolean("allowLocal", false));
+                json.getBoolean("allowLocal", false), Placement.parseOrInherit(json.getValue("placement")));
     }
 
     static void read(JsonObject json, String field, EgressRule.Action forced, List<EgressRule> into) {

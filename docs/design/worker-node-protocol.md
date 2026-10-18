@@ -118,7 +118,7 @@ Messages are encoded as length-prefixed binary frames. Large binaries (ArrayBuff
 | `0x05` | `STOP` | Node $\to$ Worker | Run ID | Graceful stop request for a running service/job. |
 | `0x06` | `CANCEL` | Node $\to$ Worker | Run ID | Forceful cancellation / interrupt of a running script. |
 | `0x07` | `RESULT_RUN` | Worker $\to$ Node | Run ID | Final execution outcome (`ExecutionResult`: return value or error). |
-| `0x08` | `POLICY` | Node $\to$ Worker | 0 | The egress policy a worker's placement enforces, with its version and expiry (D-173). |
+| `0x08` | `POLICY` | Node $\to$ Worker | 0 | The egress policy a worker's placement enforces, with its version and expiry (D-173) — **and that tenant's placement**, which the node resolves against its own default (D-178), so a worker re-bound to another tenant switches sides with the binding (D-172). |
 | `0x09` | `ACCOUNT` | Worker $\to$ Node | 0 | What the worker's own egress gate refused, by reason, since its last report (D-176). |
 | `0x10` | `CALL` | Worker $\to$ Node | Call ID | Host API RPC invocation (`{runId, method, params}`). |
 | `0x11` | `RESULT` | Node $\to$ Worker | Call ID | Successful answer to a host API RPC. |

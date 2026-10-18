@@ -6,6 +6,7 @@ import cluster93.core.host.egress.AddressSets;
 import cluster93.core.host.egress.ClusterEgress;
 import cluster93.core.host.egress.EgressPolicies;
 import cluster93.core.host.egress.EgressRule;
+import cluster93.core.host.egress.Placement;
 import cluster93.core.host.egress.Posture;
 import cluster93.core.host.egress.TenantEgress;
 import cluster93.core.runtime.api.FetchApi;
@@ -26,11 +27,15 @@ final class EgressRoutes {
     private final EgressPolicies policies;
     private final AuthStore auth;
     private final boolean allowPrivate;
+    /** The node's default placement (D-173): what a tenant follows unless its own policy names one (item 8). */
+    private final Placement nodePlacement;
 
-    EgressRoutes(EgressPolicies policies, AuthStore auth, boolean allowPrivate) {
+    EgressRoutes(EgressPolicies policies, AuthStore auth, boolean allowPrivate,
+                 Placement nodePlacement) {
         this.policies = policies;
         this.auth = auth;
         this.allowPrivate = allowPrivate;
+        this.nodePlacement = nodePlacement;
     }
 
     void mount(Router router) {
@@ -87,7 +92,8 @@ final class EgressRoutes {
     }
 
     private void view(RoutingContext ctx, String tenant) {
-        policies.loadCluster().compose(cluster -> policies.load(tenant).map(policy -> view(cluster, policy, allowPrivate)))
+        policies.loadCluster().compose(cluster -> policies.load(tenant)
+                        .map(policy -> view(cluster, policy, allowPrivate, nodePlacement)))
                 .onFailure(ctx::fail).onSuccess(ctx::json);
     }
 
@@ -105,9 +111,11 @@ final class EgressRoutes {
 
     /**
      * The policy as the tenant sees it (D-111): each step in the order the gate applies it, with why, then the sets its
-     * rules can name and the limits.
+     * rules can name and the limits. The placement is not a step — it decides <em>where</em> the steps run (D-173) — so
+     * it is reported beside them, with where its value came from.
      */
-    static JsonObject view(ClusterEgress cluster, TenantEgress policy, boolean allowPrivate) {
+    static JsonObject view(ClusterEgress cluster, TenantEgress policy, boolean allowPrivate,
+                           Placement nodePlacement) {
         boolean own = policy.posture() != null;
         Posture posture = own ? policy.posture() : cluster.posture();
         JsonArray clusterRules = new JsonArray();
@@ -134,9 +142,17 @@ final class EgressRoutes {
                         "The " + (own ? "tenant's" : "cluster's") + " posture is \"allow-list\": only what a rule allows can be reached."));
         JsonObject sets = builtInSets();
         cluster.addressSets().forEach((name, ranges) -> sets.put(name, new JsonArray(ranges.stream().map(Object::toString).toList())));
+        boolean ownPlacement = policy.placement() != null;
+        Placement placement = ownPlacement ? policy.placement() : nodePlacement;
         return new JsonObject()
                 .put("tenant", policy.tenant())
                 .put("posture", new JsonObject().put("value", posture.code).put("from", own ? "tenant" : "cluster"))
+                // Where the connection is made (D-173 item 8), and whether this tenant asked for it or follows the node.
+                .put("placement", new JsonObject().put("value", placement.code)
+                        .put("from", ownPlacement ? "tenant" : "node")
+                        .put("why", ownPlacement
+                                ? "This tenant's policy names it."
+                                : "The node's C93_EGRESS_PLACEMENT, which this tenant follows."))
                 .put("steps", steps)
                 .put("clusterRules", clusterRules)
                 .put("rules", rules)

@@ -202,6 +202,12 @@ Where egress is decided decides what the container needs (D-173), and `C93_EGRES
   network at all**. `--network none` is strictly better there, and it is what the node-placement cases in
   `scripts/worker-isolation-check.sh` assert.
 
+`C93_EGRESS_PLACEMENT` is the node's **default**, and **one tenant can be placed the other way in its own egress policy**
+(D-173 item 8, D-178) — `c93 tenants egress <tenant> --placement node`, or `--placement inherit` to follow the node
+again. That is how a tenant with no resolver in its container, or one resolving thousands of distinct names, is moved
+to the node without moving every other tenant; `c93 tenants egress <tenant>` prints which side decides and whether the
+tenant asked for it.
+
 **The cluster edge is yours to arrange.** Whatever rules a worker holds, its host must not be reachable from its
 network:
 

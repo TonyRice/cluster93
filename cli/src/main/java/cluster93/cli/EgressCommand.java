@@ -73,6 +73,13 @@ final class EgressCommand extends Base {
         JsonNode posture = policy.path("posture");
         out.println("Network access for " + Json.text(policy, "tenant") + " (posture: " + Json.text(posture, "value")
                 + (Json.text(posture, "from").equals("tenant") ? ", set for this tenant" : ", the cluster's") + "):");
+        JsonNode placement = policy.path("placement");
+        if (!placement.isMissingNode()) {
+            out.println("Connections are made " + ("node".equals(Json.text(placement, "value"))
+                    ? "by the node, on this tenant's behalf"
+                    : "by the worker, which resolves and connects itself")
+                    + " (" + (Json.text(placement, "from").equals("tenant") ? "set for this tenant" : "the node's default") + ").");
+        }
         out.println("Applied in this order:");
         int n = 1;
         for (JsonNode step : policy.path("steps")) {

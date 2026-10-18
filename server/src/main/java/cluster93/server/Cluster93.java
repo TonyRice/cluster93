@@ -461,8 +461,10 @@ public final class Cluster93 {
             );
             workerPoolRef.set(poolManager);
             // The workers are given the rules they decide under (D-173): as each is bound, and again whenever the rules
-            // change, the cluster's addresses change, or an expiry nears. The node's own placement needs none of this —
-            // it decides itself — but a worker sent nothing refuses to connect anywhere on its own.
+            // change, the cluster's addresses change, or an expiry nears. A worker sent nothing refuses to connect
+            // anywhere on its own. It is built even on a node that decides everything itself, because a tenant's own
+            // policy can place that tenant on the worker — or on the node, on a node whose default is the worker
+            // (D-173 item 8): the payload carries the placement that applies to the tenant it is for.
             WorkerPolicySync policySync = new WorkerPolicySync(egressPolicies, clusterAddresses,
                     config.egressAllowPrivate(), config.egressInternalDomains(),
                     config.egressPlacement(), workersPerTenant, poolManager::refreshWorkerPolicies);

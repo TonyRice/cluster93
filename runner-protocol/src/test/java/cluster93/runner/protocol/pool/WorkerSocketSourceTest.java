@@ -3,6 +3,7 @@ package cluster93.runner.protocol.pool;
 import cluster93.core.host.NodeHostApis;
 import cluster93.core.host.egress.Decision;
 import cluster93.core.host.egress.EgressProtocol;
+import cluster93.core.host.egress.Placement;
 import cluster93.core.host.egress.TenantEgress;
 import cluster93.core.host.SharedDataKvStore;
 import cluster93.core.job.JobStatus;
@@ -207,7 +208,7 @@ class WorkerSocketSourceTest {
         manager = new TenantWorkerPoolManager(vertx, Map.of(), "javet", 0, 1, 1, 2, 64,
                 TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL,
                 1L * 1024 * 1024 * 1024)
-                .workerPolicy(tenant -> Future.succeededFuture(new PolicyMessage(tenant, PolicyMessage.WORKER, versions.incrementAndGet(),
+                .workerPolicy(tenant -> Future.succeededFuture(new PolicyMessage(tenant, Placement.WORKER, versions.incrementAndGet(),
                         60_000L, false, List.of(),
                         new JsonObject().put("posture", "allow-list"),
                         new JsonObject().put("rules", new JsonArray().add(new JsonObject()
@@ -232,7 +233,7 @@ class WorkerSocketSourceTest {
         awaitUntil("the worker to take acme's policy", () -> daemon.egressPolicy().policy() != null);
         PolicyMessage acme = daemon.egressPolicy().policy();
         assertThat(acme.tenantId()).isEqualTo("acme");
-        assertThat(acme.placement()).isEqualTo(PolicyMessage.WORKER);
+        assertThat(acme.placement()).isEqualTo(Placement.WORKER);
         assertThat(daemon.egressPolicy().fresh()).isTrue();
 
         // And it is the policy the *decision* runs — the same code the node runs, on the worker's own addresses.

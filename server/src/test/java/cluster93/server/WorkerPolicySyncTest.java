@@ -3,6 +3,7 @@ package cluster93.server;
 import cluster93.core.host.egress.ClusterAddresses;
 import cluster93.core.host.egress.EgressPolicies;
 import cluster93.core.host.egress.EgressRule;
+import cluster93.core.host.egress.Placement;
 import cluster93.core.host.egress.TenantEgress;
 import cluster93.core.identity.SharedDataRecords;
 import cluster93.runner.protocol.message.PolicyMessage;
@@ -50,7 +51,7 @@ class WorkerPolicySyncTest {
     }
 
     private WorkerPolicySync sync(long ttlMs, long refreshMs) {
-        return new WorkerPolicySync(policies, cluster, false, List.of("corp.example"), PolicyMessage.WORKER, ttlMs,
+        return new WorkerPolicySync(policies, cluster, false, List.of("corp.example"), Placement.WORKER, ttlMs,
                 refreshMs, tenant -> refreshed.add(tenant == null ? "*" : tenant));
     }
 
@@ -66,7 +67,7 @@ class WorkerPolicySyncTest {
         PolicyMessage policy = sync.forTenant("acme").toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
 
         assertThat(policy.tenantId()).isEqualTo("acme");
-        assertThat(policy.placement()).as("the worker is the placement the node tells a worker about").isEqualTo(PolicyMessage.WORKER);
+        assertThat(policy.placement()).as("the worker is the placement the node tells a worker about").isEqualTo(Placement.WORKER);
         assertThat(policy.version()).as("a version to ignore stale updates by").isPositive();
         assertThat(policy.expiresInMs()).isEqualTo(WorkerPolicySync.TTL_MS);
         assertThat(policy.allowPrivate()).isFalse();
@@ -134,11 +135,45 @@ class WorkerPolicySyncTest {
     }
 
     @Test
+    @DisplayName("One tenant can be placed the other way, while the node's default stays what it is (D-173 item 8)")
+    void aTenantCanBePlacedAgainstTheNodesDefault() throws Exception {
+        policies.put(TenantEgress.fromJson("on-node", new JsonObject().put("placement", "node")))
+                .toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        policies.put(TenantEgress.fromJson("in-worker", new JsonObject().put("placement", "worker")))
+                .toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        // The node decides its tenants in their workers, and one tenant asks for the node instead.
+        WorkerPolicySync workerByDefault = sync(WorkerPolicySync.TTL_MS, WorkerPolicySync.REFRESH_MS);
+        assertThat(placed(workerByDefault, "on-node")).as("the tenant's own choice wins over the node's")
+                .isEqualTo(Placement.NODE);
+        assertThat(placed(workerByDefault, "in-worker")).isEqualTo(Placement.WORKER);
+        assertThat(placed(workerByDefault, "silent")).as("a tenant that names none follows the node's")
+                .isEqualTo(Placement.WORKER);
+
+        // The other direction: a node that decides everything itself, with one tenant placed in its worker. The sync
+        // has to exist for this, which is why a node builds it whatever its own placement is.
+        WorkerPolicySync nodeByDefault = new WorkerPolicySync(policies, cluster, false, List.of("corp.example"),
+                Placement.NODE, WorkerPolicySync.TTL_MS, WorkerPolicySync.REFRESH_MS, tenant -> { });
+        assertThat(placed(nodeByDefault, "in-worker")).as("and the same override the other way round")
+                .isEqualTo(Placement.WORKER);
+        assertThat(placed(nodeByDefault, "silent")).isEqualTo(Placement.NODE);
+
+        // Read per payload rather than remembered, so an operator's change arrives with the next bind (D-172).
+        policies.put(TenantEgress.fromJson("in-worker", new JsonObject().put("placement", "node")))
+                .toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertThat(placed(nodeByDefault, "in-worker")).isEqualTo(Placement.NODE);
+    }
+
+    private static Placement placed(WorkerPolicySync sync, String tenant) throws Exception {
+        return sync.forTenant(tenant).toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS).placement();
+    }
+
+    @Test
     @DisplayName("A payload carries the share of the node's limits one of that tenant's workers may use (D-176)")
     void thePayloadCarriesTheWorkersShare() throws Exception {
         // Two workers for a tenant, so each enforces half: one worker's full allowance would be twice the cluster's.
         WorkerPolicySync forTwo = new WorkerPolicySync(policies, cluster, false, List.of("corp.example"),
-                PolicyMessage.WORKER, 2, WorkerPolicySync.TTL_MS, WorkerPolicySync.REFRESH_MS, tenant -> { });
+                Placement.WORKER, 2, WorkerPolicySync.TTL_MS, WorkerPolicySync.REFRESH_MS, tenant -> { });
         PolicyMessage shared = forTwo.forTenant("acme").toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
 
         assertThat(cluster93.core.host.egress.EgressLimits.fromJson(shared.budget()))

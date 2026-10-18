@@ -2,6 +2,7 @@ package cluster93.runner.protocol.client;
 
 import cluster93.core.host.NodeHostApis;
 import cluster93.core.host.SharedDataKvStore;
+import cluster93.core.host.egress.Placement;
 import cluster93.core.job.JobStatus;
 import cluster93.core.job.OrphanPolicy;
 import cluster93.core.runtime.Execution;
@@ -116,7 +117,7 @@ class WorkerLocalEgressTest {
         manager = new TenantWorkerPoolManager(vertx, Map.of(), "javet", 0, 2, 2, 2, 64,
                 TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL,
                 512L * 1024 * 1024)
-                .workerPolicy(tenant -> Future.succeededFuture(new PolicyMessage(tenant, PolicyMessage.WORKER, 1L,
+                .workerPolicy(tenant -> Future.succeededFuture(new PolicyMessage(tenant, Placement.WORKER, 1L,
                         60_000L, false, List.of(),
                         // Default-deny posture: nothing is reachable that a rule doesn't name.
                         new JsonObject().put("posture", "allow-list"), tenantPolicy, List.of(), List.of(), budget)))

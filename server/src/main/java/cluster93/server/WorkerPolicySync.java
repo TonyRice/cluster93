@@ -2,6 +2,8 @@ package cluster93.server;
 
 import cluster93.core.host.egress.ClusterAddresses;
 import cluster93.core.host.egress.EgressPolicies;
+import cluster93.core.host.egress.Placement;
+import cluster93.core.host.egress.TenantEgress;
 import cluster93.runner.protocol.message.PolicyMessage;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -35,7 +37,8 @@ final class WorkerPolicySync {
     private final ClusterAddresses cluster;
     private final boolean allowPrivate;
     private final List<String> internalDomains;
-    private final String placement;
+    /** The node's default: where a tenant's connections are decided unless that tenant's own policy says otherwise. */
+    private final Placement defaultPlacement;
     private final long ttlMs;
     private final long refreshMs;
     /**
@@ -52,28 +55,30 @@ final class WorkerPolicySync {
     private long timerId = -1L;
 
     WorkerPolicySync(EgressPolicies policies, ClusterAddresses cluster, boolean allowPrivate, List<String> internalDomains,
-                     String placement, int workersPerTenant, Consumer<String> refresh) {
+                     Placement placement, int workersPerTenant, Consumer<String> refresh) {
         this(policies, cluster, allowPrivate, internalDomains, placement, workersPerTenant, TTL_MS, REFRESH_MS, refresh);
     }
 
     /** @param refreshMs for tests: the interval the refresh runs on */
     WorkerPolicySync(EgressPolicies policies, ClusterAddresses cluster, boolean allowPrivate, List<String> internalDomains,
-                     String placement, long ttlMs, long refreshMs, Consumer<String> refresh) {
+                     Placement placement, long ttlMs, long refreshMs, Consumer<String> refresh) {
         this(policies, cluster, allowPrivate, internalDomains, placement, 1, ttlMs, refreshMs, refresh);
     }
 
     /**
+     * @param placement       the node's default (D-173 item 8); one tenant's own policy may override it for itself
      * @param workersPerTenant how many workers one tenant may run here, which is what the node divides its per-node
      *                        limits by (D-176); one means a tenant's worker enforces the cluster's own numbers
      * @param refreshMs       for tests: the interval the refresh runs on
      */
     WorkerPolicySync(EgressPolicies policies, ClusterAddresses cluster, boolean allowPrivate, List<String> internalDomains,
-                     String placement, int workersPerTenant, long ttlMs, long refreshMs, Consumer<String> refresh) {
+                     Placement placement, int workersPerTenant, long ttlMs, long refreshMs,
+                     Consumer<String> refresh) {
         this.policies = policies;
         this.cluster = cluster;
         this.allowPrivate = allowPrivate;
         this.internalDomains = List.copyOf(internalDomains == null ? List.of() : internalDomains);
-        this.placement = placement;
+        this.defaultPlacement = placement;
         this.workersPerTenant = Math.max(1, workersPerTenant);
         this.ttlMs = ttlMs;
         this.refreshMs = refreshMs;
@@ -83,13 +88,22 @@ final class WorkerPolicySync {
     /** The payload for one tenant: what the manager hands a worker when it is bound. */
     Future<PolicyMessage> forTenant(String tenant) {
         return cluster.current().compose(nodes -> policies.cluster().compose(clusterPolicy -> policies.of(tenant)
-                .map(tenantPolicy -> new PolicyMessage(tenant == null ? "" : tenant, placement, version.incrementAndGet(),
-                        ttlMs, allowPrivate, internalDomains, clusterPolicy.toJson(), tenantPolicy.toJson(),
+                .map(tenantPolicy -> new PolicyMessage(tenant == null ? "" : tenant, placementOf(tenantPolicy),
+                        version.incrementAndGet(), ttlMs, allowPrivate, internalDomains, clusterPolicy.toJson(),
+                        tenantPolicy.toJson(),
                         nodes.addresses().stream().map(java.net.InetAddress::getHostAddress).sorted().toList(),
                         nodes.ports().stream().sorted().toList(),
                         // The cluster's limits are per node; a worker enforces what this node allows one of the
                         // tenant's workers (D-176), or n workers would give the tenant n times its allowance.
                         clusterPolicy.limits().perWorker(workersPerTenant).toJson()))));
+    }
+
+    /**
+     * Where this tenant's connections are decided: what its own policy names, or the node's default (D-173 item 8).
+     * Read per payload, so changing a tenant's override takes effect the next time one of its workers is bound.
+     */
+    private Placement placementOf(TenantEgress tenantPolicy) {
+        return tenantPolicy.placement() == null ? defaultPlacement : tenantPolicy.placement();
     }
 
     /** Starts refreshing: the change announcements, and the interval that covers membership, time and a lost policy. */

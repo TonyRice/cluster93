@@ -77,6 +77,14 @@ GET /v1/egress-policy                     (the tenant, read-only)
 
 **Where the limits are enforced (D-176).** The socket limits (D-116) are **per node**, and the client that enforces them lives where the connection is made, so in the worker placement the node gives each worker a **share** of its allowance: the per-node numbers divided by how many workers the tenant may run on this node (the same arithmetic the pools are sized by, D-155), floored at one as the first worker is (D-165). A worker's copy of the policy carries that share as its `budget`, and its gate enforces it with the same `egress_denied` code and reason a node uses. The node counts what **it** refused in `c93_egress_denied_total`; a worker's own refusals reach it as a report — batched, over the worker's connection — and are counted in `c93_worker_egress_denied_total{tenant,reason}`, so which of the two said no stays legible. `fetch` is not one of these: it is bounded by concurrent requests per script (D-117).
 
+**Where the decision is made, and per tenant (D-173 item 8, D-178).** `C93_EGRESS_PLACEMENT` is the **node's default**
+(`worker`). A tenant's own policy may name the other one for itself — `"placement": "worker" | "node"` in
+`PUT /v1/tenants/<tenant>/egress-policy`, `--placement` on `c93 tenants egress`, and reported back as `placement.value`
+with `from` (`tenant` or `node`). That is how one tenant is decided on the node while the node's default is the worker,
+or the reverse, without moving anyone else. It travels in the `POLICY` payload the node sends when a worker is **bound**
+(D-172), so a worker re-bound to another tenant switches sides with the binding, and nothing is asked per connection or
+per name either way.
+
 **`C93_EGRESS_ALLOW_PRIVATE`:** stays for local development, and now logs a warning on every start.
 
 **Where it runs, in a container (D-177, A7).** Because the decision is the worker's by default, a `worker`-placement

@@ -6,6 +6,26 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **Placement is per tenant as well as per node: one tenant can be decided the other way** (D-178, the per-tenant half
+  of D-173 item 8):
+  - `C93_EGRESS_PLACEMENT` is the node's **default**; a tenant's own egress policy may now name the other one for
+    itself — `"placement": "worker" | "node"`, with absent/`"inherit"` meaning "follow the node". Until now the only
+    way to decide one tenant on the node was to move the whole node, which is the reverse of what that tenant needed.
+  - It is carried in the tenant's policy, so it is stored where the rules are, set with `c93 tenants egress <tenant>
+    --placement node|worker|inherit`, kept when a command changes only the rules, cleared by `--none`, and reported by
+    `GET /v1/tenants/<tenant>/egress-policy` beside the posture, with `from` = `tenant` or `node` and a `why`. A
+    placement on its own is a policy an operator meant to keep, so it is stored rather than read as empty and dropped.
+  - It travels in the `POLICY` payload a worker is handed when it is **bound** (D-172), so a worker re-bound to
+    another tenant switches sides with the binding, and nothing is asked per connection or per name. The node builds
+    that payload whatever its own default is, because either direction of the override needs it.
+  - `server/src/test/.../PerTenantEgressPlacementTest.java` proves it on one node with one worker connection and two
+    tenants on opposite sides: the same job, refused with the same words, is counted as **the node's** refusal for one
+    tenant and arrives as the worker's **report** for the other (D-176), so which of the two said no is visible per
+    tenant. Found in the same pass, and recorded rather than fixed (D-178): a refused `net.connect` reaches a script as
+    `egress_denied` in the worker but as `host_error` carrying the gate's words on the node, because a stream reset
+    (D-132) keeps the reason and not the error's name or code — the placement is observable there, which D-173 says it
+    should not be.
+
 - **A worker container's network is the deployment's, and the check proves the worker uses it** (D-177, plan A7;
   refines D-173/D-176):
   - Since D-173 made `worker` the placement default, a worker container **makes the tenant's connections itself**, so

@@ -1,5 +1,6 @@
 package cluster93.runner.protocol.message;
 
+import cluster93.core.host.egress.Placement;
 import cluster93.runner.protocol.frame.Frame;
 import cluster93.runner.protocol.frame.FrameCodec;
 import cluster93.runner.protocol.frame.FrameType;
@@ -21,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PolicyMessageTest {
 
     private static PolicyMessage sample() {
-        return new PolicyMessage("acme", PolicyMessage.WORKER, 7L, 90_000L, false, List.of("corp.example", "svc"),
+        return new PolicyMessage("acme", Placement.WORKER, 7L, 90_000L, false, List.of("corp.example", "svc"),
                 new JsonObject().put("posture", "allow-list")
                         .put("rules", new io.vertx.core.json.JsonArray().add(new JsonObject().put("to", "api.stripe.com").put("ports", new io.vertx.core.json.JsonArray().add(443)))),
                 new JsonObject().put("posture", "public").put("rules", new io.vertx.core.json.JsonArray()),
@@ -52,7 +53,7 @@ class PolicyMessageTest {
     void absentFieldsAreEmpty() {
         PolicyMessage got = PolicyMessage.fromFrame(Frame.control(FrameType.POLICY, new JsonObject()));
         assertThat(got.tenantId()).isNull();
-        assertThat(got.placement()).as("a worker is the default placement").isEqualTo(PolicyMessage.WORKER);
+        assertThat(got.placement()).as("a worker is the default placement").isEqualTo(Placement.WORKER);
         assertThat(got.version()).isZero();
         assertThat(got.expiresInMs()).as("no expiry means the worker must not trust it").isZero();
         assertThat(got.allowPrivate()).isFalse();
@@ -61,6 +62,15 @@ class PolicyMessageTest {
         assertThat(got.tenantPolicy()).isNotNull();
         assertThat(got.nodeAddresses()).isEmpty();
         assertThat(got.nodePorts()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("The placement crosses the wire too, so a per-tenant override arrives with the binding (D-173 item 8)")
+    void thePlacementCrossesTheWire() {
+        PolicyMessage sent = new PolicyMessage("acme", Placement.NODE, 1L, 90_000L, false, List.of(),
+                new JsonObject().put("posture", "allow-list"), new JsonObject(), List.of(), List.of());
+        PolicyMessage got = PolicyMessage.fromFrame(sent.toFrame());
+        assertThat(got.placement()).as("a tenant the node decides for").isEqualTo(Placement.NODE);
     }
 
     @Test

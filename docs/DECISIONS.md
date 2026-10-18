@@ -3681,7 +3681,7 @@ out to the workers is the point.
 - **Built since (2026-10-18), and where the real numbers are:** every item above is implemented and `worker` is the
   default — the seam and a pure `Decision` (A1), the static set as a shared tested component (A2), rules synced,
   versioned and **fail-closed** (A3), the worker-side client so `net`/`tls`/`http` are the worker's too (A4), the
-  placement as a setting (A5, `C93_EGRESS_PLACEMENT`), the allocation and the report (A6 → **D-176**), the container
+  placement as a setting (A5, `C93_EGRESS_PLACEMENT`, and per tenant in **D-178**), the allocation and the report (A6 → **D-176**), the container
   side and the edge (**D-177**) and the per-tenant local allowance (**D-174**). The boundary's measured numbers are
   D-176's (a tenant's workers together stay inside the node's allowance; one `FetchClient` per worker) and D-177's (in
   a real container the node's `c93.egress.sockets` **moves** when the node makes the connection and **stands still**
@@ -3952,3 +3952,86 @@ The same change gives that container a route *to its host*, which is a security 
   a node address on Docker.
 - **Making the edge a hard column.** Which ports a node exposes is its bind configuration, not the check's business.
 - **Building the nftables mirror now:** D-173 already calls it optional, and it is the deployment's.
+
+### D-178 — One tenant's egress policy can place that tenant the other way
+**Date:** 2026-10-18 · **Status:** Accepted. The per-tenant half of D-173 item 8 (the node's half is `C93_EGRESS_PLACEMENT`); relates to D-172, D-174, D-176, D-177.
+
+**Context:**
+D-173 item 8 decided the placement was **per node and per tenant**, delivered with the binding. A5 built the node's
+half — `C93_EGRESS_PLACEMENT` (`worker`, the default, or `node`) — and left the per-tenant half designed but not
+expressible: the only way to decide one tenant on the node was to move the whole node onto the node, which is the
+opposite of what the tenant needed. A worker is a live connection serving **one tenant at a time** (D-172), so the
+payload the node hands it at bind time is the natural carrier, and the worker's policy source already re-read it.
+
+**Decision:**
+1. **The tenant's own egress policy carries it: `"placement": "worker" | "node"`; absent or `"inherit"` follows the
+   node's.** `TenantEgress` gains the field, so it is one policy per tenant in one place, stored where the rules are
+   (`PUT /v1/tenants/<tenant>/egress-policy`), synced the same way, and read back with them. A new `Placement` enum in
+   the egress core is the one vocabulary — the node's setting, the stored policy, the `POLICY` payload and the
+   worker's policy source all use it, so the strings `worker`/`node` exist once.
+2. **A placement on its own is a policy, not an empty one.** An empty tenant policy is **removed** rather than stored,
+   so `isEmpty()` counts the placement: "this tenant is decided on the node" is a decision an operator loses silently
+   otherwise. `--none` clears it with the rules and the posture; a `PUT` that changes only the rules carries it
+   forward, because a `PUT` replaces the policy whole.
+3. **The node resolves it per payload, at bind time.** `WorkerPolicySync.forTenant` takes the tenant's own placement
+   when it names one and the node's default otherwise, so a worker **re-bound** to another tenant (D-172) switches
+   sides with the binding — no restart, and nothing per connection. The node builds the sync **whatever its own
+   default** is, because either direction of the override needs it.
+4. **Nothing else moves.** The node's gate still decides for whatever is placed on it, the worker's for whatever is
+   placed on it, `allowLocal` (D-174) and the budget (D-176) stay per tenant, and the node stays the authority either
+   way. A worker whose policy is stale hands its calls up rather than guessing, whatever its placement says (D-173
+   item 3).
+
+**Consequences:**
+- **The two settings often want to be read together, and now they can be:** `GET /v1/tenants/<tenant>/egress-policy`
+  reports the effective placement beside the posture, with `from` = `tenant` or `node` and a `why`, and `c93 tenants
+  egress` prints it in the same sentence as the posture. The node's default stays the one setting an operator changes
+  for the whole node.
+- **A placement override is per tenant, so it is also per *job*:** a worker serving two tenants over its lifetime is
+  told each tenant's placement when it is bound. A deployment that wants a whole node on the node sets the node's
+  setting and writes no overrides at all.
+- **The CLI has to carry it, and now does:** a rules-only change (`--allow`/`--deny`) preserves a tenant's own
+  placement instead of dropping it, which is what a caller reading the API's replace-whole semantics would get wrong
+  by hand.
+- **`inherit` is refused on the node and accepted on a tenant.** A node has nothing to inherit from, so
+  `C93_EGRESS_PLACEMENT=inherit` is a startup error; a tenant writing it is saying "follow the node", which is also
+  what naming nothing says.
+
+**Evidence:**
+- `server/src/test/java/cluster93/server/PerTenantEgressPlacementTest.java`: **one real node, one real worker
+  connection, two tenants on opposite sides.** The same job (a refused `net.connect`) is refused by **different
+  sides** — the node's own `c93_egress_denied_total{tenant}` counts one and not the other, and the worker's refusal
+  reaches the node as the D-176 report, counted in `c93_worker_egress_denied_total{tenant}` — while the words the
+  script is given are identical. It also asserts the operator's view: `placement.value`/`from` per tenant, and that a
+  worker re-bound between the two tenants switches sides.
+- `WorkerPolicySyncTest`: a tenant's own placement wins over the node's default **in both directions** (a
+  `worker`-default node with one tenant on the node; a `node`-default node with one on the worker), read per payload so
+  a change arrives with the next bind. `EgressTest`: the policy round-trips, a placement alone is not empty, an
+  unknown value is refused. `SyncedPolicySourceTest`: the worker's placement follows the policy in force and changes on
+  the next `apply`.
+- The refusal is the honest half to assert on one machine: **a node's own addresses are refused by both sides**
+  (D-108), so no address of the build host can show a connection the worker *succeeded* in making. That column stays
+  the container check's (`scripts/worker-isolation-check.sh --case C5`, a sibling target container), which is where the
+  placement's byte path is measured.
+
+**Found while testing this, not fixed, not policy —** the same refusal does **not** reach a script identically from the
+two sides. In the worker the gate fails the call, and the script sees `egress_denied`. On the node a refused
+`net.connect` is a **stream**: the node resets it, and the reset carries the gate's reason but not the error's name or
+code — D-132 kept those for a fetch response and a file finish, and not for `socket.connect` — so the script sees
+`host_error` with the gate's words inside `"Stream reset (code 502): …"`. The node path is the shape host calls always
+had, so this predates the placement; but it means **the placement is observable from a script**, which is what D-173
+says must not happen. It is written down here rather than fixed in this change, which is about where the decision is
+made, not how a failure is carried; the test compares the words, which match, and the counters, which do not.
+
+**Rejected:**
+- **A second endpoint or a per-tenant setting of its own** (`/v1/tenants/<t>/placement`): the placement is a property
+  of the egress policy, and a second store would make two things to keep in sync and two places to look.
+- **Deciding it on the node per connection.** That is D-173's rejected per-name round trip, and it would put the node
+  back in the path for exactly the tenants the override moves off it.
+- **Making the placement re-resolve without a re-bind.** A worker serves one tenant at a time; the placement arrives
+  with the binding by design. A live change for the *bound* tenant already works — the node re-sends the policy and the
+  worker re-reads it — and that is the same path a rule change takes.
+- **Refusing a tenant override that disagrees with the node's default** on a node that has no worker socket: a
+  deployment may set overrides before it starts supplying workers, and the payload is where the value belongs.
+- **Fixing the streamed-refusal code here** (see the finding above): it belongs with the protocol's failure shape, not
+  with where the decision is made.

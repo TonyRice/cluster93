@@ -135,7 +135,7 @@ final class TenantsCommand extends Base {
     }
 
     @Command(name = "egress", description = "Show where a tenant's scripts may connect, or replace its rules with --allow, --deny or --none, "
-            + "or set its --posture.")
+            + "or set its --posture or --placement.")
     static final class Egress extends Base {
         @Parameters(paramLabel = "TENANT")
         String tenant;
@@ -151,20 +151,25 @@ final class TenantsCommand extends Base {
         @Option(names = "--posture", paramLabel = "POSTURE", description = "public, allow-list (only what rules allow), or inherit (the cluster's).")
         String posture;
 
-        @Option(names = "--none", description = "Remove every rule and the tenant's own posture: the cluster's policy alone again.")
+        @Option(names = "--placement", paramLabel = "WHERE", description = "Where this tenant's connections are decided: worker "
+                + "(the worker resolves and connects, the node's default), node (the node connects for it), or inherit (follow the node).")
+        String placement;
+
+        @Option(names = "--none", description = "Remove every rule, the tenant's own posture and its placement: the node's policy and placement alone again.")
         boolean none;
 
         @Override
         int execute() {
             String path = "/v1/tenants/" + Api.segment(tenant) + "/egress-policy";
             JsonNode policy;
-            if (allow == null && deny == null && posture == null && !none) {
+            if (allow == null && deny == null && posture == null && placement == null && !none) {
                 policy = api().get(path);
             } else {
+                JsonNode current = api().get(path);
                 com.fasterxml.jackson.databind.node.ArrayNode rules = Json.array();
                 if (allow == null && deny == null && !none) {
-                    // Only the posture changes: keep the rules.
-                    api().get(path).path("rules").forEach(rules::add);
+                    // Only the posture or the placement changes: keep the rules.
+                    current.path("rules").forEach(rules::add);
                 }
                 for (String rule : none || allow == null ? List.<String>of() : allow) {
                     com.fasterxml.jackson.databind.node.ObjectNode entry = rule("allow", rule, true);
@@ -182,8 +187,16 @@ final class TenantsCommand extends Base {
                 }
                 com.fasterxml.jackson.databind.node.ObjectNode body = Json.object();
                 body.set("rules", rules);
-                if (posture != null && !none) {
-                    body.put("posture", posture);
+                if (!none) {
+                    if (posture != null) {
+                        body.put("posture", posture);
+                    }
+                    // A PUT replaces the policy whole, so carry the placement this tenant had unless this command is
+                    // what changes it. "inherit" is written by leaving it out, which is what following the node means.
+                    String kept = placement != null ? placement : ownPlacement(current);
+                    if (kept != null && !"inherit".equals(kept) && !kept.isEmpty()) {
+                        body.put("placement", kept);
+                    }
                 }
                 policy = api().put(path, body);
             }
@@ -191,6 +204,12 @@ final class TenantsCommand extends Base {
                 EgressCommand.print(this, policy);
             }
             return 0;
+        }
+
+        /** This tenant's own placement, or null when it follows the node's — what a PUT has to carry to keep it. */
+        private static String ownPlacement(JsonNode current) {
+            JsonNode placement = current.path("placement");
+            return "tenant".equals(Json.text(placement, "from")) ? Json.text(placement, "value") : null;
         }
 
         /** {@code TO:PORTS} (or {@code TO} alone for a deny) as a rule; null, with the reason printed, if it isn't one. */

@@ -1,5 +1,6 @@
 package cluster93.runner.protocol.message;
 
+import cluster93.core.host.egress.Placement;
 import cluster93.runner.protocol.frame.Frame;
 import cluster93.runner.protocol.frame.FrameType;
 import io.vertx.core.json.JsonArray;
@@ -17,7 +18,9 @@ import java.util.List;
  * the node serialises {@code ClusterEgress}/{@code TenantEgress}, the worker parses them with the same shared code.
  *
  * @param tenantId        the tenant the policy is for; the worker refuses one that isn't the tenant it is bound to
- * @param placement       where egress is decided for this tenant: {@code node} or {@code worker} (D-173 item 8)
+ * @param placement       where egress is decided for this tenant: {@code node} or {@code worker} (D-173 item 8). The
+ *                        node's default unless that tenant's own policy names one, so it can differ from tenant to
+ *                        tenant on the same node — and change when a worker is re-bound (D-172)
  * @param version         monotonic per worker connection: an update older than the one in force is ignored
  * @param expiresInMs     how long this policy may be used without a refresh; past it a worker refuses everything
  *                        (fail closed, D-173 item 3)
@@ -31,16 +34,12 @@ import java.util.List;
  *                        none — then the cluster's own limits stand, which is what a node that predates the
  *                        allocation would mean
  */
-public record PolicyMessage(String tenantId, String placement, long version, long expiresInMs, boolean allowPrivate,
+public record PolicyMessage(String tenantId, Placement placement, long version, long expiresInMs, boolean allowPrivate,
                             List<String> internalDomains, JsonObject clusterPolicy, JsonObject tenantPolicy,
                             List<String> nodeAddresses, List<Integer> nodePorts, JsonObject budget) {
 
-    /** Where egress is decided for a tenant (D-173 item 8). */
-    public static final String NODE = "node";
-    public static final String WORKER = "worker";
-
     /** A policy with no budget: the cluster's own limits stand (an older node allocates none, D-176). */
-    public PolicyMessage(String tenantId, String placement, long version, long expiresInMs, boolean allowPrivate,
+    public PolicyMessage(String tenantId, Placement placement, long version, long expiresInMs, boolean allowPrivate,
                          List<String> internalDomains, JsonObject clusterPolicy, JsonObject tenantPolicy,
                          List<String> nodeAddresses, List<Integer> nodePorts) {
         this(tenantId, placement, version, expiresInMs, allowPrivate, internalDomains, clusterPolicy, tenantPolicy,
@@ -50,7 +49,7 @@ public record PolicyMessage(String tenantId, String placement, long version, lon
     public Frame toFrame() {
         JsonObject json = new JsonObject()
                 .put("tenantId", tenantId)
-                .put("placement", placement)
+                .put("placement", placement.code)
                 .put("version", version)
                 .put("expiresInMs", expiresInMs)
                 .put("allowPrivate", allowPrivate)
@@ -72,7 +71,7 @@ public record PolicyMessage(String tenantId, String placement, long version, lon
         JsonObject json = frame.json();
         return new PolicyMessage(
                 json.getString("tenantId"),
-                json.getString("placement", WORKER),
+                Placement.parse(json.getString("placement", Placement.WORKER.code)),
                 json.getLong("version", 0L),
                 json.getLong("expiresInMs", 0L),
                 json.getBoolean("allowPrivate", false),
