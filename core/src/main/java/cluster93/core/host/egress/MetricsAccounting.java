@@ -4,7 +4,8 @@ import io.vertx.core.Vertx;
 
 /**
  * The node's accounting placement (D-173): a refusal is counted against the tenant with its reason, as it always was
- * (D-108). A worker's placement counts against the budget the node allocated it instead (A6 of the egress plan).
+ * (D-108). A worker's placement keeps its own tally instead ({@code WorkerAccounting}), which the node is told about in
+ * batches and counts in a series of its own, so a refusal the node did not make is still visible (D-176).
  */
 public final class MetricsAccounting implements AccountingSink {
 

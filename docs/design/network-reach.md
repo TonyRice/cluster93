@@ -75,6 +75,8 @@ GET /v1/egress-policy                     (the tenant, read-only)
 
 **Seen and counted:** a refused connection fails with `egress_denied` and a reason (`private address`, `cluster node`, `not in the tenant's egress policy`). Refusals are counted per tenant, in `c93_egress_denied_total{tenant,reason}`.
 
+**Where the limits are enforced (D-176).** The socket limits (D-116) are **per node**, and the client that enforces them lives where the connection is made, so in the worker placement the node gives each worker a **share** of its allowance: the per-node numbers divided by how many workers the tenant may run on this node (the same arithmetic the pools are sized by, D-155), floored at one as the first worker is (D-165). A worker's copy of the policy carries that share as its `budget`, and its gate enforces it with the same `egress_denied` code and reason a node uses. The node counts what **it** refused in `c93_egress_denied_total`; a worker's own refusals reach it as a report — batched, over the worker's connection — and are counted in `c93_worker_egress_denied_total{tenant,reason}`, so which of the two said no stays legible. `fetch` is not one of these: it is bounded by concurrent requests per script (D-117).
+
 **`C93_EGRESS_ALLOW_PRIVATE`:** stays for local development, and now logs a warning on every start.
 
 **`fetch`'s request bodies become bytes.** Today a `Uint8Array` body is decoded as UTF-8, which corrupts binary uploads; this was found while designing B2. The 1 MB cap stays for `fetch` until B2's streaming.

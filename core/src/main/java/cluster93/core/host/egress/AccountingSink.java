@@ -1,8 +1,9 @@
 package cluster93.core.host.egress;
 
 /**
- * Where a decision's outcomes are counted (D-173). On a node that is its metrics; in a worker it is the budget the
- * node allocated and the worker enforces (so the same gate can run in either placement and still be accounted for).
+ * Where a decision's outcomes are counted (D-173, D-176). On a node that is its metrics; in a worker it is the worker's
+ * own tally, which the node is told about in batches — so the same gate can run in either placement and still be
+ * accounted for.
  */
 public interface AccountingSink {
 
