@@ -54,12 +54,12 @@ public final class Http2Client {
             "NGHTTP2_ENHANCE_YOUR_CALM", "NGHTTP2_INADEQUATE_SECURITY", "NGHTTP2_HTTP_1_1_REQUIRED");
 
     private final Vertx vertx;
-    private final Egress egress;
+    private final cluster93.core.host.egress.Gate egress;
     private final SocketClient sockets;
     private final HttpClientAgent secure;
     private final HttpClientAgent clear;
 
-    Http2Client(Vertx vertx, Egress egress, SocketClient sockets) {
+    Http2Client(Vertx vertx, cluster93.core.host.egress.Gate egress, SocketClient sockets) {
         this.vertx = vertx;
         this.egress = egress;
         this.sockets = sockets;
@@ -123,7 +123,7 @@ public final class Http2Client {
                         connection.close();
                         return Future.failedFuture(SocketClient.verifyFailure(described.getString("authorizationError")));
                     }
-                    cluster93.core.metrics.Metrics.of(vertx).socketOpened(tenant == null ? "-" : tenant, tls);
+                    egress.accounting().opened(tenant, tls);
                     return Future.<OutgoingHttp2Session>succeededFuture(new Session(connection, vertx.getOrCreateContext(), info, release,
                             requestSlot, tls, host, port, NettyHttp2.of(connection)));
                 })

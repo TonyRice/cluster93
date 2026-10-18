@@ -14,7 +14,7 @@ import java.util.Set;
  * tenant may reach, and counts a refusal. The decision itself is pure and lives in {@link Decision}; a worker's
  * placement resolves and connects itself and calls the same decision.
  */
-public final class Egress {
+public final class Egress implements Gate {
 
     private final PolicySource source;
     private final AccountingSink accounting;
@@ -67,16 +67,23 @@ public final class Egress {
                 new cluster93.core.host.dns.DnsResolver(vertx, List.of()));
     }
 
+    @Override
+    public AccountingSink accounting() {
+        return accounting;
+    }
+
     public boolean allowPrivate() {
         return source.allowPrivate();
     }
 
     /** The cluster's egress policy, for its limits (D-116). */
+    @Override
     public Future<ClusterEgress> cluster() {
         return source.cluster();
     }
 
     /** As {@link #address(String, String, int, EgressProtocol, String)} for an HTTP request. */
+    @Override
     public Future<InetAddress> address(String tenant, String host, int port, String what) {
         return address(tenant, host, port, EgressProtocol.HTTP, what);
     }
@@ -86,6 +93,7 @@ public final class Egress {
      * {@link HostException} coded {@code dns_failed} or {@code egress_denied}; {@code what} names the caller in the
      * message ("fetch", "http.request" and so on).
      */
+    @Override
     public Future<InetAddress> address(String tenant, String host, int port, EgressProtocol protocol, String what) {
         return source.nodes().compose(nodes -> source.cluster().compose(clusterPolicy -> source.tenant(tenant)
                 .compose(tenantPolicy -> resolver.addresses(host)
@@ -95,6 +103,7 @@ public final class Egress {
     }
 
     /** The resolver the gate and {@code dns} share (D-122). */
+    @Override
     public cluster93.core.host.dns.DnsResolver resolver() {
         return resolver;
     }
@@ -102,6 +111,7 @@ public final class Egress {
     /**
      * What {@code tenant}'s {@code dns} may show, under the policies as they are now (D-122): which addresses and names.
      */
+    @Override
     public Future<Decision.DnsView> dnsView(String tenant) {
         return source.nodes().compose(nodes -> source.cluster().compose(clusterPolicy -> source.tenant(tenant)
                 .map(tenantPolicy -> new Decision.DnsView(nodes, source.allowPrivate(), clusterPolicy, tenantPolicy, internalSuffixes))));
@@ -111,6 +121,7 @@ public final class Egress {
      * A DNS server a script chose ({@code setServers}): the gate checks it as a {@code dns} connection, so a public
      * resolver is fine and one on a private network needs a rule (Tony, 2026-10-09).
      */
+    @Override
     public Future<java.net.InetSocketAddress> dnsServer(String tenant, java.net.InetSocketAddress server) {
         return address(tenant, server.getAddress().getHostAddress(), server.getPort(), EgressProtocol.DNS, "dns")
                 .map(address -> new java.net.InetSocketAddress(address, server.getPort()));

@@ -72,9 +72,28 @@ class ArchitectureTest {
             .because("the decision runs in a worker too (D-173): it takes its inputs from a PolicySource and its "
                     + "outcomes through an AccountingSink, so it cannot reach node-only code");
 
+    /**
+     * The network clients run wherever the connection is made (D-173): a node's process, or a worker's. They take
+     * their policy from a `Gate`, so they must not reach the node's own machinery — that is what keeps the same
+     * client usable in both placements instead of drifting into two.
+     */
+    private static final java.util.Set<String> NETWORK_CLIENTS = java.util.Set.of(
+            "FetchClient", "SocketClient", "Http2Client", "NodeFetchApi", "NodeSocketApi", "NodeDnsApi", "NodeHttpApi");
+
+    static final ArchRule theNetworkClientsStayPlacementNeutral = noClasses()
+            .that(com.tngtech.archunit.base.DescribedPredicate.describe("serve the network host APIs (D-173)",
+                    javaClass -> NETWORK_CLIENTS.contains(javaClass.getSimpleName())
+                            || javaClass.getEnclosingClass().map(outer -> NETWORK_CLIENTS.contains(outer.getSimpleName()))
+                                    .orElse(false)))
+            .should().dependOnClassesThat().resideInAnyPackage("cluster93.core.node..", "cluster93.core.identity..",
+                    "cluster93.core.metrics..", "cluster93.core.storage..", "cluster93.core.scheduler..",
+                    "cluster93.core.service..", "cluster93.core.callback..", "cluster93.cluster..",
+                    "cluster93.server..", "cluster93.runner..")
+            .because("the same client serves the node's placement and a worker's, so it may not reach node-only code");
+
     static Stream<ArchRule> rules() {
         return Stream.of(igniteStaysInsideItsModule, noMutableStaticState, noHandRolledThreads,
-                coreDoesNotKnowAboutEnginesOrTransport, theEgressDecisionStaysPure);
+                coreDoesNotKnowAboutEnginesOrTransport, theEgressDecisionStaysPure, theNetworkClientsStayPlacementNeutral);
     }
 
     @ParameterizedTest

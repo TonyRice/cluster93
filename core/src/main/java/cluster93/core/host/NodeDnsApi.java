@@ -30,13 +30,13 @@ public final class NodeDnsApi implements DnsApi {
 
     static final int IN_FLIGHT = 16;
 
-    private final Egress egress;
+    private final cluster93.core.host.egress.Gate egress;
     private final DnsResolver resolver;
     private final String tenant;
     private final Queue<Runnable> waiting = new ArrayDeque<>();
     private int running;
 
-    public NodeDnsApi(Egress egress, String tenant) {
+    public NodeDnsApi(cluster93.core.host.egress.Gate egress, String tenant) {
         this.egress = egress;
         this.resolver = egress.resolver();
         this.tenant = tenant;

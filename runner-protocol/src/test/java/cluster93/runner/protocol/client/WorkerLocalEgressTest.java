@@ -54,6 +54,8 @@ class WorkerLocalEgressTest {
     /** The worker's side of the connection: closing it ends the worker, as it does for a real container. */
     private io.vertx.core.net.NetSocket daemonSocket;
     private int echoPort;
+    /** A raw TCP echo, for the socket path: whatever is written comes back. */
+    private int tcpPort;
     /**
      * The address the "public endpoint" is reached at. It must not be loopback: a node's own loopback is one of the
      * cluster's addresses, which no rule can open (D-108) — so a loopback target would be refused before any rule was
@@ -72,6 +74,10 @@ class WorkerLocalEgressTest {
         // allow rule can reach it (which is the point — this worker's rules do, the node's own gate does not).
         echoHost = lanAddress();
         // The "public endpoint": a server in this JVM, reachable only if someone actually connects to it.
+        tcpPort = vertx.createNetServer()
+                .connectHandler(socket -> socket.handler(socket::write))
+                .listen(0, "0.0.0.0")
+                .toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS).actualPort();
         echoPort = vertx.createHttpServer()
                 .requestHandler(request -> request.response().end("pong-from-the-worker"))
                 .listen(0, "0.0.0.0")
@@ -222,6 +228,35 @@ class WorkerLocalEgressTest {
         assertThat(output.getBoolean("reached")).isFalse();
         assertThat(output.getString("code")).isEqualTo("egress_denied");
         assertThat(daemon.accounting().denials()).containsEntry("cluster_node", 1L);
+    }
+
+    @Test
+    @DisplayName("A worker opens its own sockets, so net/tls never cross the connection (D-173/A4b)")
+    void theWorkerOpensItsOwnSockets() throws Exception {
+        startNode(new JsonObject().put("rules", new JsonArray().add(new JsonObject()
+                .put("action", "allow").put("to", echoHost + "/32")
+                .put("ports", new JsonArray().add(tcpPort).add(echoPort))
+                .put("protocols", new JsonArray().add("tcp")))));
+
+        // `net` and `tls` ride the socket path. This node has no socket client either, so a round trip proves the
+        // worker opened the connection itself.
+        ExecutionResult result = run("""
+                import net from 'node:net';
+                export default async () => {
+                  const socket = net.connect({ host: '%s', port: %d });
+                  const echoed = await new Promise((resolve, reject) => {
+                    socket.on('connect', () => socket.write('ping-over-the-worker'));
+                    socket.once('data', (data) => { socket.end(); resolve(data.toString()); });
+                    socket.once('error', reject);
+                  });
+                  return { echoed };
+                };
+                """.formatted(echoHost, tcpPort));
+
+        assertThat(result.status()).as(String.valueOf(result.error())).isEqualTo(JobStatus.SUCCEEDED);
+        assertThat(((JsonObject) result.output()).getString("echoed"))
+                .as("the echo came back, so the worker opened the socket").isEqualTo("ping-over-the-worker");
+        assertThat(daemon.accounting().denied()).isZero();
     }
 
     @Test

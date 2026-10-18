@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@code net} and {@code tls} sockets through the node's {@link SocketClient}, and {@code http2} sessions through its
  * {@link Http2Client}, as the job's tenant (D-116, D-117). A session counts as one of the script's sockets.
  */
-final class NodeSocketApi implements SocketApi {
+public final class NodeSocketApi implements SocketApi {
 
     private final SocketClient client;
     private final Http2Client http2;
@@ -22,7 +22,7 @@ final class NodeSocketApi implements SocketApi {
     /** The script's open sockets, held to the cluster policy's per-script limit. */
     private final AtomicInteger open = new AtomicInteger();
 
-    NodeSocketApi(SocketClient client, Http2Client http2, String tenant, java.util.function.Supplier<Runnable> requestSlot) {
+    public NodeSocketApi(SocketClient client, Http2Client http2, String tenant, java.util.function.Supplier<Runnable> requestSlot) {
         this.client = client;
         this.http2 = http2;
         this.tenant = tenant;

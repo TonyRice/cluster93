@@ -53,12 +53,12 @@ public final class SocketClient {
     private static final List<String> NODE_VERSIONS = List.of("TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3");
 
     private final Vertx vertx;
-    private final Egress egress;
+    private final cluster93.core.host.egress.Gate egress;
     private final NetClient client;
     private final Map<String, AtomicInteger> openByTenant = new ConcurrentHashMap<>();
     private final Map<String, Bucket> rates = new ConcurrentHashMap<>();
 
-    SocketClient(Vertx vertx, Egress egress) {
+    SocketClient(Vertx vertx, cluster93.core.host.egress.Gate egress) {
         this.vertx = vertx;
         this.egress = egress;
         // Keepalive finds dead peers, since there's no idle timeout; Nagle off, as Node's sockets default to since v18.
@@ -127,9 +127,9 @@ public final class SocketClient {
                         .compose(socket -> {
                             socket.pause();
                             return verified(socket, tls).map(info -> {
-                                cluster93.core.metrics.Metrics.of(vertx).socketOpened(tenant == null ? "-" : tenant, ssl != null);
+                                egress.accounting().opened(tenant, ssl != null);
                                 return (OutgoingSocket) new Connection(socket, vertx.getOrCreateContext(), tenant == null ? "-" : tenant, target,
-                                        release, info);
+                                        release, info, egress.accounting());
                             });
                         });
             }).onFailure(err -> release.run());
@@ -164,7 +164,7 @@ public final class SocketClient {
             };
             if (!rates.computeIfAbsent(tenant == null ? "-" : tenant, t -> new Bucket()).take(limits.connectsPerMinute())) {
                 release.run();
-                cluster93.core.metrics.Metrics.of(vertx).egressDenied(tenant == null ? "-" : tenant, "connect_rate");
+                egress.accounting().denied(tenant, "connect_rate");
                 return Future.failedFuture(new HostException("Error", "egress_denied", what + " to " + target + ":" + targetPort
                         + " is not allowed: this tenant opened more than " + limits.connectsPerMinute()
                         + " connections in the last minute on this node"));
@@ -358,14 +358,18 @@ public final class SocketClient {
         private volatile JsonObject info;
         private volatile Future<Void> lastWrite = Future.succeededFuture();
         private final BodyStream data;
+        /** Where this connection's bytes and upgrades are counted: the node's metrics, or the worker's own tallies. */
+        private final cluster93.core.host.egress.AccountingSink accounting;
 
-        Connection(NetSocket socket, Context context, String tenant, String host, Runnable release, JsonObject info) {
+        Connection(NetSocket socket, Context context, String tenant, String host, Runnable release, JsonObject info,
+                   cluster93.core.host.egress.AccountingSink accounting) {
             this.socket = socket;
             this.context = context;
             this.tenant = tenant;
             this.host = host;
             this.release = release;
             this.info = info;
+            this.accounting = accounting;
             socket.closeHandler(v -> release.run());
             BodyStream raw = new VertxBodyStream(socket, context, socket::close);
             Vertx vertx = context.owner();
@@ -373,7 +377,7 @@ public final class SocketClient {
                 @Override
                 public void handler(Consumer<Buffer> chunk, Runnable end, Consumer<Throwable> error) {
                     raw.handler(buffer -> {
-                        cluster93.core.metrics.Metrics.of(vertx).egressBytes(tenant, "in", buffer.length());
+                        accounting.bytes(tenant, "in", buffer.length());
                         chunk.accept(buffer);
                     }, end, error);
                 }
@@ -407,7 +411,7 @@ public final class SocketClient {
 
         @Override
         public Future<Void> write(Buffer chunk) {
-            cluster93.core.metrics.Metrics.of(context.owner()).egressBytes(tenant, "out", chunk.length());
+            accounting.bytes(tenant, "out", chunk.length());
             Future<Void> written = socket.write(chunk).recover(err -> Future.failedFuture(
                     new HostException("Error", "EPIPE", "This socket has been ended by the other party")));
             lastWrite = written;
@@ -450,7 +454,7 @@ public final class SocketClient {
                     socket.remoteAddress() == null ? 0 : socket.remoteAddress().port())))
                     .compose(v -> verified(socket, tls)).map(described -> {
                         info = described;
-                        cluster93.core.metrics.Metrics.of(context.owner()).socketOpened(tenant, true);
+                        accounting.opened(tenant, true);
                         return described;
                     });
         }

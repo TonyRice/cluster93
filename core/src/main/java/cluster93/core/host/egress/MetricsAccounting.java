@@ -18,4 +18,14 @@ public final class MetricsAccounting implements AccountingSink {
     public void denied(String tenant, String reason) {
         cluster93.core.metrics.Metrics.of(vertx).egressDenied(tenant == null ? "-" : tenant, reason);
     }
+
+    @Override
+    public void opened(String tenant, boolean tls) {
+        cluster93.core.metrics.Metrics.of(vertx).socketOpened(tenant == null ? "-" : tenant, tls);
+    }
+
+    @Override
+    public void bytes(String tenant, String direction, long length) {
+        cluster93.core.metrics.Metrics.of(vertx).egressBytes(tenant == null ? "-" : tenant, direction, length);
+    }
 }

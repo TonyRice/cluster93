@@ -16,4 +16,21 @@ public interface AccountingSink {
      * @param reason the {@link Decision.Reason#code} that refused it
      */
     void denied(String tenant, String reason);
+
+    /**
+     * One connection opened from a script. A node counts it as a metric; a worker tallies it locally, because the node
+     * can no longer see the connections it does not make (D-173).
+     *
+     * @param tls whether the connection was a {@code tls} one rather than a plain socket
+     */
+    default void opened(String tenant, boolean tls) {
+    }
+
+    /**
+     * Bytes moved by a script's connection.
+     *
+     * @param direction {@code in} or {@code out}
+     */
+    default void bytes(String tenant, String direction, long length) {
+    }
 }

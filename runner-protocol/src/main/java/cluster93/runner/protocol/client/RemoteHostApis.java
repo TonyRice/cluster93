@@ -96,7 +96,7 @@ public final class RemoteHostApis implements HostApis {
      * call goes to the node. Only the client half of the network surface moves: {@code kv}, files, the bus, secrets,
      * the jobs API and the {@code node:http} <em>server</em> are the node's, because they are what the node owns.
      */
-    public record LocalNetwork(FetchApi fetch, DnsApi dns) {
+    public record LocalNetwork(FetchApi fetch, DnsApi dns, SocketApi sockets) {
     }
 
     public RemoteHostApis(WorkerClientConnection connection, String runId, int channelId) {
@@ -120,7 +120,7 @@ public final class RemoteHostApis implements HostApis {
         // Egress in the worker (D-173): the same host-API surface, served by this process, under the rules the node
         // synced — with the node's own implementations of the network APIs, given this worker's gate.
         this.fetch = local == null ? new RemoteFetch() : local.fetch();
-        this.sockets = new RemoteSocket();
+        this.sockets = local == null ? new RemoteSocket() : local.sockets();
         this.dns = local == null ? new RemoteDns() : local.dns();
         this.secrets = new RemoteSecrets();
         this.http = new RemoteHttp();

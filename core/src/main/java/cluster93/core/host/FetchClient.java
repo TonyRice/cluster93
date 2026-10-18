@@ -54,14 +54,14 @@ public final class FetchClient {
     /** Connections requests have gone out on, so a script's socket can say when one was reused from the pool (D-114). */
     private final java.util.Set<io.vertx.core.http.HttpConnection> seen =
             java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>()));
-    private final cluster93.core.host.egress.Egress egress;
+    private final cluster93.core.host.egress.Gate egress;
 
     /** Through a gate that knows only this node and no tenant rules: for tests. */
     public FetchClient(Vertx vertx, EgressPolicy policy) {
         this(vertx, cluster93.core.host.egress.Egress.standalone(vertx, policy));
     }
 
-    public FetchClient(Vertx vertx, cluster93.core.host.egress.Egress egress) {
+    public FetchClient(Vertx vertx, cluster93.core.host.egress.Gate egress) {
         this.vertx = vertx;
         this.egress = egress;
         this.client = vertx.createHttpClient(clientOptions(), new PoolOptions().setHttp1MaxSize(64));
@@ -284,7 +284,7 @@ public final class FetchClient {
     }
 
     /** The egress gate, and through it the resolver, scripts' connections and {@code dns} share (D-122). */
-    public cluster93.core.host.egress.Egress egress() {
+    public cluster93.core.host.egress.Gate egress() {
         return egress;
     }
 

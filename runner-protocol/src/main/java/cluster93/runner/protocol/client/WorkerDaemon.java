@@ -177,9 +177,12 @@ public class WorkerDaemon {
                 gateOn = gate;
             }
         }
-        return new RemoteHostApis.LocalNetwork(
-                new cluster93.core.host.NodeFetchApi(new cluster93.core.host.FetchClient(vertxOn, gateOn), tenant),
-                new cluster93.core.host.NodeDnsApi(gateOn, tenant));
+        cluster93.core.host.FetchClient client = new cluster93.core.host.FetchClient(vertxOn, gateOn);
+        cluster93.core.host.NodeFetchApi fetchApi = new cluster93.core.host.NodeFetchApi(client, tenant);
+        // The socket path too (D-116, D-117): `net`, `tls`, the WebSocket client and `node:http`'s client half ride it,
+        // and it shares the script's concurrent-request places with the fetches.
+        return new RemoteHostApis.LocalNetwork(fetchApi, new cluster93.core.host.NodeDnsApi(gateOn, tenant),
+                new cluster93.core.host.NodeSocketApi(client.sockets(), client.http2(), tenant, fetchApi::take));
     }
 
     private void onRun(Frame frame) {
