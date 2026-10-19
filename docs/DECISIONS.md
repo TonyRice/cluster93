@@ -4374,3 +4374,35 @@ So one node, its own address as its only member, is enough to show it — the cl
   behaviour, and `executeBlocking` is its documented answer for blocking work inside a callback. The node was blocking
   where the contract says not to.
 
+### D-183 — The isolation check runs the engines a deployment asks for, not every engine that exists
+**Date:** 2026-10-19 · **Status:** Accepted. Removes the check's rootless-Docker case; leaves D-149's identity rule
+standing.
+
+**Context:**
+D-149 wrote the worker's identity mapping for three engine shapes — rootless Podman, rootless Docker and rootful — and
+the isolation check grew a case per shape. The rootless-Docker case (`C2`: container uid 0, because in a rootless
+daemon's userns uid 0 *is* the invoking user) has never run: there is no rootless daemon on the build host, and no
+deployment the guides or compose files describe uses one. Every run therefore printed `SKIP` in the same table that
+carries the cases which decide something, which is how a reader learns to ignore a matrix.
+
+**Decision:**
+1. **The check's cases are the two engines a deployment asks for**: rootless Podman (`C1`) and rootful Docker (`C3`),
+   with `C4`–`C6` deciding properties on the latter. `C2` is removed.
+2. **Rootlessness is still detected**, because the rootful-only cases must not run under a daemon they were not
+   written for: `docker info`'s `SecurityOptions` still gates them, and they skip with "needs a rootful engine"
+   instead of failing obscurely. The CLI keeps recording `engine_rootless` in `node.meta` — a fact about the host,
+   and the surviving half of D-145's probe.
+3. **D-149 keeps its rootless-Docker rule** (container uid 0) as the answer if that engine ever appears. What is
+   retired is the case, not the knowledge.
+4. **`--case` names are validated.** `--case C2` now exits 2 with the list of cases; before, a name no case matched
+   ran nothing and still printed "Every case this host can run passed".
+
+**Evidence:** `--dry-run` lists C1, C3, C4, C5, C6; `--case C2` exits 2; the full run on this host still passes every
+case it lists (javet and graaljs).
+
+**Rejected:**
+- **Keeping C2 "for completeness":** a case whose prerequisite is a second, rootless daemon that no deployment here
+  installs is not coverage; it is a line that costs attention every run and answers nothing.
+- **Deleting the rootless probe with it:** the probe is what makes the remaining cases honest under an engine they
+  don't target, and `node.meta` records it for the guide's advice.
+

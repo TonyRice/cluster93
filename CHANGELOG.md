@@ -6,6 +6,17 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **The isolation check runs the engines a deployment asks for, not every engine that exists** (D-183):
+  - `C2` (rootless Docker, container uid 0) is removed from `scripts/worker-isolation-check.sh`. It has never run —
+    there is no rootless daemon on the build host, and no deployment the guides or compose files describe uses one —
+    so every matrix carried a `SKIP` that could never become anything else. What runs now is what a deployment asks
+    for: rootless Podman (`C1`) or rootful Docker (`C3`), with `C4`–`C6` deciding properties on the latter.
+  - Rootlessness is still detected: it is what tells the rootful-only cases to skip with "needs a rootful engine"
+    rather than fail under a daemon they were not written for, and the CLI keeps recording `engine_rootless` in
+    `node.meta`. D-149's rule for that engine (container uid 0) stays in `DECISIONS.md` for the day it appears.
+  - `--case` now rejects a name it does not run — exit 2, with the list — instead of matching nothing and printing
+    "Every case this host can run passed".
+
 - **A clustered node can accept worker containers: the node's wiring no longer blocks an event loop** (D-182):
   - The compute tier the guides describe — clustered, `C93_ROLES=worker`, with `C93_WORKER_SOCKET` for worker
     containers — could not start at all. A clustered `Vertx` completes its creation on an event loop, so the node's

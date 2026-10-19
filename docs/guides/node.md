@@ -251,8 +251,8 @@ network:
 `0600` socket as the right identity, whether a job round-trips on it, whether the wrong secret is refused, and which
 network property the placement's own container has — and prints a matrix. On a machine with both engines available:
 **C1 (rootless podman, `--userns=keep-id`) and C3 (rootful Docker, `--user`) pass**, C4 (a foreign uid) is refused,
-C5 (the `worker` placement) passes, C6 (the cluster shape) passes, and C2 (rootless Docker) prints `SKIP` when that
-engine is not installed; every `SKIP` line says what would enable it. **Which JS engine runs makes no difference** — the matrix is the same with
+C5 (the `worker` placement) passes, and C6 (the cluster shape) passes; every `SKIP` line says what would enable it.
+**Which JS engine runs makes no difference** — the matrix is the same with
 `worker-javet` and with `worker-graaljs` (`C93_IDCHECK_WORKER=worker-graaljs`), because what the cases decide is the
 socket, the identity and the network rather than the engine.
 

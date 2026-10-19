@@ -115,6 +115,13 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# Validate the case name here, not at the end: a name no case matches would run nothing and let the summary print
+# "Every case this host can run passed" — which is the one thing a check must never say about work it did not do.
+case "$WANT_CASE" in
+  ""|C1|C3|C4|C5|C6) ;;
+  *) echo "Unknown case: ${WANT_CASE} (cases: C1, C3, C4, C5, C6)" >&2; exit 2 ;;
+esac
+
 say() { printf '%s\n' "$*"; }
 hr() { printf '%s\n' "------------------------------------------------------------------------"; }
 
@@ -192,9 +199,8 @@ describe_cases() {
   say "                      the cluster's own ports | a service answers through the ingress | the wrong secret is"
   say "                      refused | no network in the container):"
   say "  C1  rootless podman, --userns=keep-id        $(rootless_podman && echo AVAILABLE || echo 'SKIP (needs podman rootless: podman info)')"
-  say "  C2  rootless docker, container uid 0         $( { have_docker && rootless_docker; } && echo AVAILABLE || echo 'SKIP (needs dockerd-rootless-setuptool.sh install)')"
   say "  C3  rootful docker, --user <uid>:<gid>       $( { have_docker && ! rootless_docker; } && echo AVAILABLE || echo 'SKIP (pose: rootful docker is not in use)')"
-  say "  C4  wrong identity, refused                  whenever any engine is available"
+  say "  C4  wrong identity, refused                  rootful docker"
   say "  C5  the worker decides egress (D-173/A4)      rootful docker; gives the worker a route (A7)"
   say "      and the node counts what it refused, from the worker's own report (D-176). The same job runs under both"
   say "      placements: the node's own counters move when IT connects, and do not when the worker does. A refused"
@@ -1247,8 +1253,12 @@ check_cluster_placement() {  # check_cluster_placement <engine> <label> <identit
 # the node's files — the 0600 socket and the 0400 secret — belong to the container's process. Plain `keep-id` does NOT
 # do that: it leaves the container running as the image's user while the host files appear as the invoking uid, so the
 # worker cannot read the secret at all.
+#
+# The two engines here are the two a deployment actually asks for: rootless Podman and rootful Docker. Rootless Docker
+# has no case (D-183) — it is not an engine the guides or the compose files install, and a case that can only print
+# SKIP teaches a reader to ignore the matrix. The daemon is still asked whether it is rootless, because that is what
+# tells C3 (and the cases built on it) to skip instead of failing obscurely under an engine they were not written for.
 run_case_if "$(rootless_podman && echo 1 || echo 0)" C1 podman rootless-podman "--userns=keep-id:uid=10001,gid=999" --userns=keep-id:uid=10001,gid=999
-run_case_if "$( { have_docker && rootless_docker; } && echo 1 || echo 0)" C2 docker rootless-docker "container uid 0" --user 0:0
 run_case_if "$( { have_docker && ! rootless_docker; } && echo 1 || echo 0)" C3 docker rootful "--user $(id -u):$(id -g)" --user "$(id -u):$(id -g)"
 if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C4" ]; then
   if [ "$WORKERS_OK" != 1 ]; then
