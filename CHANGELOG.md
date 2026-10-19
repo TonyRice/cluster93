@@ -6,6 +6,27 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A peer that closes after writing its body no longer cuts the body short** (D-180, fixes the fetch failure A0's
+  harness surfaced):
+  - A fetch of a body larger than the host's backpressure window could fail with `network_error: fetch failed:
+    Connection was closed` while the peer had in fact written every byte and the client had read every byte — 0 to 5
+    of 8 jobs a burst in the A0 harness, in *both* placements, tracking machine load rather than the relay. Vert.x's
+    HTTP/1 client decodes a body into the **connection** and hands it to the reader afterwards, so a paused reader
+    leaves the tail inside the connection; the close is then judged as "response ended? no" and everything it was
+    holding is dropped, with the failure latched so the end can no longer be delivered.
+  - A connection that closes before its body ended is now asked for what it is holding from its own close handler,
+    which runs before Vert.x judges the close: the tail — including the end of the body — reaches the stream and the
+    close is simply how the body ended. The reader's window is untouched: the reclaimed messages arrive on the
+    reader's own schedule, as if the peer were still there.
+  - What a close cannot fix still fails, now **after** the bytes that did arrive are delivered, and "whole" is decided
+    by the framing the peer declared (`Content-Length` reached, or a body the close ends), never by a timer. A chunked
+    body's end is its terminator and only Vert.x can confirm it — which is why the reclaim happens before the close is
+    judged, and covers chunked bodies too.
+  - `core/.../FetchBodyCloseTest` pins it with a real `FetchClient` against a raw-socket peer that writes and closes:
+    HTTP/1.0, HTTP/1.1 + `Connection: close`, HTTP/1.1 keeping the connection open, the same with a pausing reader
+    (fails 1 of 1 before the change), and a chunked body — each asserting the exact byte count. The A0 harness
+    afterwards: 8/8 jobs, nothing lost.
+
 - **A refused socket connect reaches a script in the same shape wherever it was decided** (D-179, fixes the finding
   D-178 recorded):
   - A refused `net.connect` used to arrive on the side that did **not** make the connection as `host_error`, with the

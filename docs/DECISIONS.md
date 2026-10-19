@@ -4111,3 +4111,105 @@ same refusal made in the worker arrived as `TypeError/egress_denied`. D-178's te
 - **Doing it in D-178.** That change was about *where* the decision is made; this one is about *how a failure is
   carried*, and it touches the protocol's stream handling rather than the placement. Mixing the two would have made
   the placement change's diff carry a change to a shape every host call shares.
+
+### D-180 — A peer that closes after writing its body does not cut the body short
+**Date:** 2026-10-18 · **Status:** Accepted. Fixes the fetch failure A0's harness surfaced; keeps D-173's claim that a
+worker reads the network like the client it is.
+
+**Context:**
+A0 measures what one node relays: eight tenant jobs fetch a 1 MB body in parallel from python's `http.server` — the
+same target the container matrix uses — in a column where the node relays every byte and a column where the worker
+opens the connection itself. Between **0 and 5 of 8 jobs a burst** failed with
+
+```
+TypeError/network_error: fetch failed: Connection was closed
+```
+
+and the failures tracked the machine's load rather than the placement: *both* columns showed them. The body was not
+cut short. `strace` on the target shows it writing every byte and shutting down; `strace` on the worker shows its
+socket reading all **1,048,781** bytes of that response and taking a clean `read() = 0`. The failure was raised by the
+client library over a body it had already received.
+
+The cause is in Vert.x 5.2's HTTP/1 client. It reads and decodes a body **into the connection** and only then hands
+the decoded messages to the reader; while the reader has the stream paused — and a body larger than the host's
+backpressure window (`HostBridge.StreamState`, 8 outstanding, D-176) spends most of its life paused — those messages
+wait in the connection (`VertxConnection.pending`) instead. `Http1ClientConnection.handleClosed()` then fails the
+stream through `Stream.onClose()` whenever `!responseEnded`, and `responseEnded` is only set when the *last* message
+is handed over, not when it was read. So a peer that wrote its whole body and closed while the reader was paused is
+reported as a cut-short response, and everything the connection was holding dies with it. The failure is also sticky:
+`HttpClientResponseImpl.handleException` latches `ended`, after which `handleTrailers` returns immediately — so once
+the failure has been delivered to the reader, the end it already holds can never be reached, even though the tail is
+still there to be delivered.
+
+This was reproduced deterministically while diagnosing it: a 512 KB HTTP/1.0 body, a reader pausing with the host's
+own window, and the peer already gone — the failure, **1 of 1**, on every run.
+
+**Decision:**
+1. **When a connection closes before its body ended, the worker takes back what Vert.x is holding before Vert.x judges
+   the close.** It is asked from the connection's own `closeHandler`, which `ConnectionBase.handleClosed()` runs
+   *before* `Http1ClientConnection.handleClosed()` reaches `Stream.onClose()`, by resuming the HTTP/1 connection
+   (`VertxConnection.doResume()`). The holdover — including the `LastHttpContent` that carries the end of the body —
+   then reaches the stream, `responseEnded` becomes true, and the close is simply how the body ended.
+2. **That is a call into Vert.x internals, in one place, deliberately.** There is no public way to make a connection
+   hand over what it holds: the stream's `resume()` goes through `InboundMessageQueue`, whose consumer is an event-loop
+   executor that always *queues*, so the delivery can never beat the judgment inside `handleClosed()` — measured, that
+   route leaves 3 of 50 still failing. The call is made only for an HTTP/1 connection (`instanceof VertxConnection`,
+   the only image that defers this way), only from the event loop that owns it (inline in its own close handler, so
+   the connection's own thread assertion holds), and only while the body is unfinished. It is a compile-time
+   dependency, so a Vert.x release that removes or hides `doResume()` is a build failure to look at, not a silent
+   drift.
+3. **The reader's backpressure is untouched.** The reclaimed messages go into the stream's queue and reach the reader
+   on the reader's own schedule, exactly as they would have had the peer stayed connected: no burst, no window
+   bypassed, no unbounded buffer. A body as large as the connection had already read is all that can be reclaimed.
+4. **A body that really was cut short still fails — and only after the bytes that did arrive are delivered.** If a
+   close leaves the body unfinished even after the reclaim (a peer killed mid-body, or an image the reclaim does not
+   cover), the failure is reported once the released backlog has stopped arriving rather than the instant it is raised,
+   so the reader keeps the chunks that did come. What counts as whole is the framing the peer declared, never a timer:
+   a `Content-Length` reached, or a body whose end *is* the close (no length and not chunked). A chunked body's end is
+   its terminator and only Vert.x can confirm it, which is exactly why the reclaim has to happen before the close is
+   judged rather than after.
+
+**Consequences:**
+- **A job fetching a large body from a peer that closes after writing it no longer loses the body** because its reader
+  happened to be paused. The A0 harness returned **8 of 8 jobs** in every measured burst afterwards, with the same
+  target, the same window and the same worker build.
+- **This was a client bug, not a placement bug.** A fetch is `core.host.FetchClient` on both sides (D-173), so the
+  node's placement showed it too; the fix is in `VertxBodyStream`, where the stream's semantics are owned, and neither
+  `FetchClient`, `HostBridge` nor the JS prelude changed. If a later Vert.x drains the holdover on close itself, the
+  reclaim is one guarded call to delete.
+- **HTTP/1 only, on purpose.** HTTP/2 and socket bodies go through the same `VertxBodyStream` over a different
+  connection type; they keep the fallback (release, then framing) rather than a reclaim whose shape they do not have.
+  No tail has been observed lost on those paths.
+- **The worker's own client is now trustworthy for A0's numbers**, which is what the measurement needed: A0 counts
+  bytes moved per unit of CPU, and a fetch that dropped a body would have been indistinguishable from a cap.
+
+**Evidence:**
+- `core/src/test/java/cluster93/core/host/FetchBodyCloseTest.java`, five cases against a real `FetchClient` and a real
+  raw-socket peer that writes a body and closes: HTTP/1.0, HTTP/1.1 with `Connection: close`, HTTP/1.1 keeping the
+  connection open (the control that never failed), the same with a reader pausing on the host's window — the
+  deterministic regression, which fails 1 of 1 without this change — and a chunked body, where only Vert.x can say
+  where the end is. Each asserts the exact byte count, so a short body fails the test as loudly as an error does.
+- The windowed case was run 50 times per variant: **3 failures** when the tail is released through the public
+  `resume()` alone, **0** with the reclaim.
+- A0 harness (`K=8 MB_PER_JOB=1 FETCHES=12 WARM=1 REPEATS=2`, 96 fetches a burst, 8 jobs): **8/8 and 8/8**, nothing
+  lost. Before: 0–5 of 8 job failures a burst, tracking load.
+- The whole `core` suite is green (649 tests) — the change is in a class every host body path shares with sockets,
+  server request bodies and HTTP/2, so the blast radius was checked rather than assumed.
+
+**Rejected:**
+- **Releasing the tail from the close handler through the public API** (`stream.resume()`, with a guard for an empty
+  queue): the delivery lands on a later event-loop turn, so `handleClosed()` has already judged the close and latched
+  the failure; the end can never reach the reader afterwards. Measured: it improved the windowed case from 1 of 1
+  failing to 3 of 50 — better, and still wrong.
+- **Deciding completion by framing alone, without the reclaim:** sound for a `Content-Length` body and for a
+  close-delimited one, and it does deliver the tail, but a chunked body's terminator is then unreachable — its end can
+  only come through Vert.x, and the latch has closed that door. It would have fixed the reported case and left the
+  chunked one failing every time.
+- **Never pausing the reader** (dropping the window): removes the precondition by removing the backpressure, so a
+  worker would hold an entire body in memory to protect a stream a script is not reading. A0's bodies are 256 MB.
+- **Retrying the fetch:** bytes already handed to the script would arrive twice, and the body is a single-use stream,
+  not an idempotent request. D-135's "a failure is a failure" rule applies to the failure's shape, not to its
+  consequences.
+- **Fixing it with a Vert.x version bump:** this shape is in the 5.2.0 the build uses, and whether a later release
+  drains the holdover on close was not established; a bump is a build decision of its own and does not change what
+  today's workers are built against. If upstream does fix it, the reclaim is one guarded call and one case to delete.
