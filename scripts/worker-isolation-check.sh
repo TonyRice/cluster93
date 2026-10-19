@@ -46,6 +46,52 @@ INGRESS_PORT=9494
 METRICS_PORT=9495
 INTERNAL_PORT=9496
 
+# C6 starts a SECOND node on this box — a compute-tier node with its own socket, secret and ports — because that is
+# what a cluster across hosts is made of (plan B1: a compute host runs a worker-role node of its own). The edge node
+# keeps the ports above, since every helper in this script talks to it; only the compute node needs new ones.
+COMPUTE_METRICS_PORT=9498
+COMPUTE_INTERNAL_PORT=9499
+# The two nodes' discovery base ports. Each takes a 10-port range and a communication port of its own (+100), so these
+# are deliberately NOT the default 5701: another node on this host may already hold it, and Ignite does not fail when its
+# port is taken — it takes the next free port in the range, while every peer is still told to join the base address,
+# which is then that other node. Override with C93_IDCHECK_CLUSTER_PORTS=edge,compute.
+CLUSTER_PORTS="${C93_IDCHECK_CLUSTER_PORTS:-5751,5771}"
+CLUSTER_PORT_EDGE="${CLUSTER_PORTS%%,*}"
+CLUSTER_PORT_COMPUTE="${CLUSTER_PORTS##*,}"
+EDGE_NODE_ID="$NODE_ID-edge"
+COMPUTE_NODE_ID="$NODE_ID-compute"
+C6_NODE_PID=""
+
+# Apache Ignite on JDK 21 needs these module opens: without them a CLUSTERED node fails at startup with
+# InaccessibleObjectException ("java.nio.DirectByteBuffer.address field is unavailable"). The single-node cases above
+# never start Ignite — a node is clustered only when C93_CLUSTERED is set — which is why nothing here needed it before.
+# The set is scripts/local.sh's IGNITE_JVM_ARGS, the node-from-a-checkout list (the same opens pom.xml's ignite.jvm.args
+# and the node image's JDK_JAVA_OPTIONS carry), and it is passed the way the image passes it, through JDK_JAVA_OPTIONS.
+NODE_JVM_OPENS=(
+  --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED
+  --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+  --add-opens=java.management/com.sun.jmx.mbeanserver=ALL-UNNAMED
+  --add-opens=jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED
+  --add-opens=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED
+  --add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED
+  --add-opens=java.base/java.io=ALL-UNNAMED
+  --add-opens=java.base/java.nio=ALL-UNNAMED
+  --add-opens=java.base/java.net=ALL-UNNAMED
+  --add-opens=java.base/java.util=ALL-UNNAMED
+  --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+  --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED
+  --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+  --add-opens=java.base/java.lang=ALL-UNNAMED
+  --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+  --add-opens=java.base/java.math=ALL-UNNAMED
+  --add-opens=java.sql/java.sql=ALL-UNNAMED
+  --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+  --add-opens=java.base/java.time=ALL-UNNAMED
+  --add-opens=java.base/java.text=ALL-UNNAMED
+  --add-opens=java.management/sun.management=ALL-UNNAMED
+  --add-opens=java.desktop/java.awt.font=ALL-UNNAMED
+)
+
 DRY_RUN=0
 PULL=0
 WANT_CASE=""
@@ -110,6 +156,12 @@ cleanup() {
     for _ in $(seq 1 20); do kill -0 "$NODE_PID" 2>/dev/null || break; sleep 0.25; done
     kill -9 "$NODE_PID" 2>/dev/null || true
   fi
+  # C6's second node, on the same footing (only ever a process this run started).
+  if [ -n "$C6_NODE_PID" ] && kill -0 "$C6_NODE_PID" 2>/dev/null; then
+    kill "$C6_NODE_PID" 2>/dev/null || true
+    for _ in $(seq 1 20); do kill -0 "$C6_NODE_PID" 2>/dev/null || break; sleep 0.25; done
+    kill -9 "$C6_NODE_PID" 2>/dev/null || true
+  fi
   if [ -n "$TMP" ] && [ -d "$TMP" ]; then
     # The node holds the socket directory; it is gone by now. Temp dirs only — never a user or system path.
     case "$TMP" in /tmp/*|/var/folders/*|/private/var/folders/*) rm -rf "$TMP" ;; esac
@@ -147,6 +199,11 @@ describe_cases() {
   say "      and the node counts what it refused, from the worker's own report (D-176). The same job runs under both"
   say "      placements: the node's own counters move when IT connects, and do not when the worker does. A refused"
   say "      connect the NODE makes reaches the script in the gate's own shape (D-179), not as a stream reset."
+  say "  C6  a cluster across hosts is a node per host  rootful docker; two nodes on this box — an edge one"
+  say "      (api,ingress, so no worker role and capacity 0 whatever C93_CAPACITY says) and a compute one (worker,"
+  say "      capacity 2) — clustered, with the container attached to the COMPUTE node's socket and nothing attached to"
+  say "      the edge node's (it has none). The job is submitted at the edge node's API and must be placed on the"
+  say "      compute node and done by its container."
 }
 
 # ---------------------------------------------------------------------------------------
@@ -554,6 +611,10 @@ if [ "$DRY_RUN" = 1 ]; then
   say "node           : java -jar server/target/c93.jar  (a process, D-167)"
   say "  ports        : API $HTTP_PORT, ingress $INGRESS_PORT, metrics $METRICS_PORT, internal $INTERNAL_PORT"
   say "  sockets      : \$TMP/sockets/node.sock  (dir 0700, socket 0600)   secret: \$TMP/secrets/secret (0400)"
+  say "  C6's pair    : edge $EDGE_NODE_ID (api,ingress, cap 0) on those ports; compute $COMPUTE_NODE_ID (worker,"
+  say "                 cap 2) API off, metrics $COMPUTE_METRICS_PORT, internal $COMPUTE_INTERNAL_PORT, its own socket"
+  say "                 \$TMP/c6-compute/sockets/node.sock and secret; cluster ports $CLUSTER_PORT_EDGE/$CLUSTER_PORT_COMPUTE"
+  say "                 with C93_CLUSTER_TLS=off (this case asserts topology and placement, not transport crypto)"
   say "worker command : $WORKER_BIN ipc --socket …  (whichever engine bin/ holds)"
   say "worker image   : ${IMAGE:-built from the checkout, tagged cluster93-idcheck:$RUN_ID}"
   say "cleanup on exit: only objects labelled $LABEL, plus the image it built and its own temp dir"
@@ -961,6 +1022,227 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
   [ "$result" = PASS ]
 }
 
+# ---------------------------------------------------------------------------------------
+# C6: a cluster across hosts is a node per host (plan B1).
+#
+# The claim under test is a deployment claim: a worker container is per-node supply, so a compute host runs a
+# worker-role node of its own. The case therefore stands up the shape such a host would have — an EDGE node
+# (api,ingress: no worker role) and a COMPUTE node (worker only), clustered, with one container attached to the
+# COMPUTE node's socket, and nothing attached to the edge node's, which has no socket at all.
+#
+# What makes the assertion sharp is that there is exactly ONE candidate. The edge node advertises capacity 0 by the
+# role rule (Cluster93: a node without `worker` reports 0) — its C93_CAPACITY is deliberately 4, so what is asserted is
+# the rule and not a setting — and the compute node advertises 2. JobScheduler.candidates keeps nodes with capacity > 0
+# and free capacity, least loaded first, so "which node ran the job" is not a race between two eligible nodes: it is
+# the only answer, and this case cannot be flaky by construction. Nothing here is new behaviour either — if it fails,
+# it is the topology or a real bug, never a missing feature.
+#
+# The job's node comes from the job's own record (Job.toSummaryJson keeps `node` and `attempts[].node`), and the
+# container is shown to have done the work the way C1/C3 do it: the compute node reports a connected worker and no
+# spawned process. A worker container's log is a no-op in this image (D-175), so nothing here reads one.
+# ---------------------------------------------------------------------------------------
+
+# The capacity a live node advertises, out of GET /v1/nodes. NodeInfo.toJson is flat and ordered (id, instanceId,
+# capacity, running, lastSeen, endpoint), so one record can be cut out without a JSON parser.
+node_capacity() {  # node_capacity <live-nodes json> <node id>
+  printf '%s' "$1" | grep -o "\"id\":\"$2\",[^}]*" | sed -n 's/.*"capacity":\([0-9]*\).*/\1/p' | head -1 || true
+}
+
+live_nodes() {  # live_nodes: what this node's API reports about the cluster
+  curl -s -m 5 "http://127.0.0.1:$HTTP_PORT/v1/nodes" -H "Authorization: Bearer $JOB_TOKEN" -H "X-Cluster93-Tenant: $TENANT" || true
+}
+
+# One series' value from a node's own metrics endpoint: the compute node is a second process, so it is read at its own
+# port rather than through the helpers above (which all talk to the edge node).
+metric_at() {  # metric_at <port> <metric>
+  { curl -sf -m 2 "http://127.0.0.1:$1/metrics" 2>/dev/null | awk -v k="$2" '$1 ~ "^"k"\\{" { print $NF }' | head -1; } || true
+}
+
+# Ignite's discovery port is a RANGE, and it does not fail when the base of that range is taken: it takes the next free
+# port, while every peer is still told to join the address it was given — which is the node that held it. That shows up
+# as an opaque failure inside Ignite (an SSL alert, if the holder has TLS on), so it is worth saying plainly.
+require_free_cluster_port() {  # require_free_cluster_port <port> <what>
+  if (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; then
+    say "  this host already answers on cluster port $1 ($2), so C6 cannot stand its own cluster up there."
+    say "  Free that port, or point C6 elsewhere with C93_IDCHECK_CLUSTER_PORTS=edge,compute."
+    return 1
+  fi
+  return 0
+}
+
+# The edge node: the cluster's front door, on the ports every helper in this script already uses — and a node that
+# cannot accept a job whatever its capacity says. No C93_WORKER_SOCKET: a node with no compute has no pool and nothing
+# to listen for, which is the other half of "the pool belongs to the node that owns the socket".
+start_edge_node() {
+  env \
+    JDK_JAVA_OPTIONS="${NODE_JVM_OPENS[*]}" \
+    C93_NODE_ID="$EDGE_NODE_ID" \
+    C93_ROLES=api,ingress \
+    C93_CAPACITY=4 \
+    C93_WORKER_MODE=process \
+    C93_HTTP_PORT="$HTTP_PORT" \
+    C93_INGRESS_PORT="$INGRESS_PORT" \
+    C93_METRICS_PORT="$METRICS_PORT" \
+    C93_INTERNAL_PORT="$INTERNAL_PORT" \
+    C93_HTTP_BIND=127.0.0.1 \
+    C93_ADVERTISE_HOST=127.0.0.1 \
+    C93_RATE_LIMIT_PER_MINUTE=0 \
+    C93_INGRESS_DOMAIN=idcheck.test \
+    C93_ADMIN_TOKEN="$ADMIN_TOKEN" \
+    C93_CLUSTERED=true \
+    C93_CLUSTER_PORT="$CLUSTER_PORT_EDGE" \
+    C93_CLUSTER_MEMBERS="127.0.0.1:$CLUSTER_PORT_EDGE,127.0.0.1:$CLUSTER_PORT_COMPUTE" \
+    C93_CLUSTER_TLS=off \
+    java -jar "$ROOT/server/target/c93.jar" > "$TMP/edge-node.log" 2>&1 &
+  NODE_PID=$!
+  wait_for 60 "the edge node to answer /health" curl -sf -m 2 "http://127.0.0.1:$HTTP_PORT/health" >/dev/null
+}
+
+# The compute node: `worker` only — no API, no ingress — with a socket, a secret and metrics and internal ports of its
+# own. It is the node this case reads, and the only one in the cluster that advertises capacity.
+#   * C93_EGRESS_PLACEMENT=node on purpose: what decides where a JOB runs is the subject here, and the worker
+#     placement's own network needs are C5's (a worker that decides egress needs a route and a resolver). With the node
+#     placement the container needs no network at all, exactly as C1/C3/C4 assert, and no second subject is smuggled in.
+#   * C93_DATA_DIR is left unset: a clustered node without one stays in memory, which is what puts several nodes on one
+#     host (the code says so where it decides).
+start_compute_node() {
+  install -d -m 0700 "$TMP/c6-compute/sockets" "$TMP/c6-compute/secrets"
+  if [ ! -f "$TMP/c6-compute/secrets/secret" ]; then
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$TMP/c6-compute/secrets/secret"
+    chmod 0400 "$TMP/c6-compute/secrets/secret"
+  fi
+  env \
+    JDK_JAVA_OPTIONS="${NODE_JVM_OPENS[*]}" \
+    C93_NODE_ID="$COMPUTE_NODE_ID" \
+    C93_ROLES=worker \
+    C93_CAPACITY=2 \
+    C93_WORKER_MODE=process \
+    C93_WORKER_DEFAULT_MODE=javet \
+    C93_MAX_JOBS_PER_WORKER=4 \
+    C93_MAX_HEAP_MB=64 \
+    C93_METRICS_PORT="$COMPUTE_METRICS_PORT" \
+    C93_INTERNAL_PORT="$COMPUTE_INTERNAL_PORT" \
+    C93_ADVERTISE_HOST=127.0.0.1 \
+    C93_ADMIN_TOKEN="$ADMIN_TOKEN" \
+    C93_EGRESS_PLACEMENT=node \
+    C93_WORKER_SOCKET="$TMP/c6-compute/sockets/node.sock" \
+    C93_WORKER_SECRET_FILE="$TMP/c6-compute/secrets/secret" \
+    C93_WORKER_CONNECTIONS_MAX=2 \
+    C93_CLUSTERED=true \
+    C93_CLUSTER_PORT="$CLUSTER_PORT_COMPUTE" \
+    C93_CLUSTER_MEMBERS="127.0.0.1:$CLUSTER_PORT_EDGE,127.0.0.1:$CLUSTER_PORT_COMPUTE" \
+    C93_CLUSTER_TLS=off \
+    java -jar "$ROOT/server/target/c93.jar" > "$TMP/compute-node.log" 2>&1 &
+  C6_NODE_PID=$!
+  wait_for 60 "the compute node's metrics endpoint" curl -sf -m 2 "http://127.0.0.1:$COMPUTE_METRICS_PORT/metrics" >/dev/null
+}
+
+# A node that did not come up leaves its reason in its own log — and the run's temp directory is removed on exit, so the
+# tail is printed here rather than pointed at.
+show_node_log() {  # show_node_log <what> <log file>
+  say "  $1 did not start. Its last lines:"
+  tail -20 "$2" 2>/dev/null | sed 's/^/    /'
+}
+
+check_cluster_placement() {  # check_cluster_placement <engine> <label> <identity flag> <identity args...>
+  local engine="$1" label="$2" flag="$3"; shift 3
+  ENGINE="$engine"
+  IMAGE="$(image_for "$engine")"
+
+  local nodes_seen=no edge_cap=n/a compute_cap=n/a placed=no container=no nodes_json="" jobOut=""
+  local poolConnected=n/a poolSpawned=n/a
+
+  # C5 left one node running the worker placement of its own; C6 brings up its own pair (same box, different ports for
+  # the compute node — the edge node is on the ports the helpers above use).
+  require_free_cluster_port "$CLUSTER_PORT_EDGE" "the edge node's discovery port" || return 1
+  require_free_cluster_port "$CLUSTER_PORT_COMPUTE" "the compute node's discovery port" || return 1
+  stop_node
+  start_edge_node || { show_node_log "the edge node" "$TMP/edge-node.log"; return 1; }
+  JOB_TOKEN="$(mint_job_token "$TENANT")"
+  [ -n "$JOB_TOKEN" ] || { say "  no job token on the edge node (see $TMP/edge-node.log)"; return 1; }
+  start_compute_node || { show_node_log "the compute node" "$TMP/compute-node.log"; return 1; }
+
+  # Convergence, and the capacity that will decide the placement. Waited for rather than assumed: a job submitted
+  # before the two nodes found each other would queue (D-156) and be re-dispatched, and the case would then be
+  # measuring timing instead of placement.
+  for _ in $(seq 1 120); do
+    nodes_json="$(live_nodes)"
+    compute_cap="$(node_capacity "$nodes_json" "$COMPUTE_NODE_ID")"
+    if [ -n "$compute_cap" ]; then nodes_seen=yes; break; fi
+    sleep 0.5
+  done
+  edge_cap="$(node_capacity "$nodes_json" "$EDGE_NODE_ID")"
+
+  # One container, and only one: attached to the COMPUTE node's socket and secret. Nothing is attached to the edge
+  # node's — it has none. This is the deployment side of "a worker container is per-node supply".
+  local scratch="$SCRATCH/$RUN_ID-c6"
+  install -d -m 0777 "$scratch/tmp" "$scratch/home"
+  "$engine" run -d --name "$RUN_ID-c6" --label "$LABEL" --network none --cap-drop=ALL \
+    --security-opt no-new-privileges --read-only --pids-limit 512 "$@" \
+    -v "$TMP/c6-compute/sockets:/run/cluster93/workers" \
+    -v "$TMP/c6-compute/secrets/secret:/run/secrets/c93-worker-secret:ro" \
+    -v "$scratch/tmp:/tmp" -v "$scratch/home:/home" \
+    --entrypoint "/opt/cluster93/bin/$WORKER_BIN" \
+    "$IMAGE" ipc --socket /run/cluster93/workers/node.sock \
+      --secret-file /run/secrets/c93-worker-secret --heap-mb 64 --threads 4 >/dev/null \
+    || { say "  the compute node's worker container did not start (the engine said so above)"; return 1; }
+  # A worker container's cold start is seconds (the engine loads its native library), so wait for the compute node's
+  # own count rather than guess a sleep.
+  for _ in $(seq 1 240); do
+    [ "$(metric_at "$COMPUTE_METRICS_PORT" c93_workers_connected)" = "1.0" ] && break
+    sleep 0.5
+  done
+
+  local id=""
+  id="$(submit_job)"
+  if [ -n "$id" ] && [ "$(await_job "$id")" = "SUCCEEDED" ]; then
+    jobOut="$(job_json "$id")"
+    # `node` (and attempts[].node) is the job's own account of which node ran it. It must name the compute node, and
+    # must not name the edge node.
+    case "$jobOut" in
+      *"\"node\":\"$COMPUTE_NODE_ID\""*)
+        case "$jobOut" in
+          *"\"node\":\"$EDGE_NODE_ID\""*) placed=no ;;
+          *) placed=yes ;;
+        esac ;;
+    esac
+    # The container did it: the compute node counts a connected worker and has spawned no worker process of its own —
+    # C1/C3's evidence, read from the compute node's metrics rather than the edge node's. Read here and kept, because
+    # the container is removed a few lines below and its own disconnect would be what a later read saw.
+    poolConnected="$(metric_at "$COMPUTE_METRICS_PORT" c93_workers_connected)"
+    poolSpawned="$(metric_at "$COMPUTE_METRICS_PORT" c93_workers_running)"
+    if [ "$poolConnected" = "1.0" ] && [ "$poolSpawned" = "0.0" ]; then
+      container=yes
+    fi
+  fi
+
+  if [ "$placed" != yes ]; then
+    say "  what the edge node's API reports about the cluster (one record per node, with its capacity):"
+    printf '%s' "$nodes_json" | head -c 600 | sed 's/^/    /'
+    say ""
+    say "  the job's own record:"
+    printf '%s' "${jobOut:-<no job record — the job was not accepted or did not finish>}" | head -c 800 | sed 's/^/    /'
+    say ""
+    say "  what the compute node said about itself and its worker:"
+    grep -aE "roles:|Listening for worker|Worker container connected|Advertise" "$TMP/compute-node.log" | tail -5 | sed 's/^/    /'
+    say ""
+  fi
+
+  "$engine" rm -f "$RUN_ID-c6" >/dev/null 2>&1 || true
+
+  local result=FAIL
+  [ "$nodes_seen" = yes ] && [ "$edge_cap" = "0" ] && [ "$placed" = yes ] && [ "$container" = yes ] && result=PASS
+  printf '%-3s | %-6s | %-8s | %-22s | %-9s | %-8s | %-9s | %-9s | %s\n' \
+    case engine rootless identity nodes edge-cap ran-there container result
+  printf '%-3s | %-6s | %-8s | %-22s | %-9s | %-8s | %-9s | %-9s | %s\n' \
+    "C6" "$engine" "rootful" "$flag" "$nodes_seen" "$edge_cap" "$placed" "$container" "$result"
+  say "     the edge node (api,ingress, C93_CAPACITY=4) advertises capacity 0 — the role rule, not the setting: $edge_cap"
+  say "     the compute node (worker) is the only candidate (it advertises ${compute_cap:-?}) and the cluster is seen from the edge node's API: $nodes_seen"
+  say "     the job submitted at the edge node's API names the compute node, never the edge node: $placed"
+  say "     on the compute node: connected=$poolConnected spawned=$poolSpawned — its container did the work: $container"
+  [ "$result" = PASS ]
+}
+
 # Podman rootless (D-149): the image's own user (c93, 10001:999) is mapped to the invoking host uid, which is what makes
 # the node's files — the 0600 socket and the 0400 secret — belong to the container's process. Plain `keep-id` does NOT
 # do that: it leaves the container running as the image's user while the host files appear as the invoking uid, so the
@@ -988,6 +1270,18 @@ if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C5" ]; then
     check_worker_placement docker rootful || FAILED=1
   else
     printf '%-3s | %-16s | %s\n' "C5" docker "SKIP (needs a rootful engine to run a container as this user)"
+    SKIPPED=$((SKIPPED + 1))
+  fi
+fi
+
+if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C6" ]; then
+  if [ "$WORKERS_OK" != 1 ]; then
+    printf '%-3s | %-16s | %s\n' "C6" docker "SKIP (needs the worker image — see the note above)"
+    SKIPPED=$((SKIPPED + 1))
+  elif have_docker && ! rootless_docker; then
+    check_cluster_placement docker rootful "--user $(id -u):$(id -g)" --user "$(id -u):$(id -g)" || FAILED=1
+  else
+    printf '%-3s | %-16s | %s\n' "C6" docker "SKIP (needs a rootful engine to run a container as this user)"
     SKIPPED=$((SKIPPED + 1))
   fi
 fi

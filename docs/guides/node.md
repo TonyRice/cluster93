@@ -119,7 +119,9 @@ whichever tenant has work. The node never creates a container, holds no Docker s
 workers exist until they connect.
 
 This is **host isolation, not tenant isolation**: a container holds a tenant-agnostic pool, so two tenants' workers
-may share one. Guests stay separated by the engine — a fresh context per job — exactly as before.
+may share one. Guests stay separated by the engine — a fresh context per job — exactly as before. Supply is **per
+node** rather than per cluster, which is what a cluster across hosts turns into a topology question — see
+[Worker containers in a cluster](#worker-containers-in-a-cluster).
 
 ### Enabling it
 
@@ -249,8 +251,8 @@ network:
 `0600` socket as the right identity, whether a job round-trips on it, whether the wrong secret is refused, and which
 network property the placement's own container has — and prints a matrix. On a machine with both engines available:
 **C1 (rootless podman, `--userns=keep-id`) and C3 (rootful Docker, `--user`) pass**, C4 (a foreign uid) is refused,
-C5 (the `worker` placement) passes, and C2 (rootless Docker) prints `SKIP` when that engine is not installed; every
-`SKIP` line says what would enable it. **Which JS engine runs makes no difference** — the matrix is the same with
+C5 (the `worker` placement) passes, C6 (the cluster shape) passes, and C2 (rootless Docker) prints `SKIP` when that
+engine is not installed; every `SKIP` line says what would enable it. **Which JS engine runs makes no difference** — the matrix is the same with
 `worker-javet` and with `worker-graaljs` (`C93_IDCHECK_WORKER=worker-graaljs`), because what the cases decide is the
 socket, the identity and the network rather than the engine.
 
@@ -264,6 +266,16 @@ worker's refusals only from the worker's report (D-176).
 It is safe to re-run: everything it creates is labelled with its run id, it uses its own ports and temp directories
 under `mktemp -d`, it removes the images it builds, and it never touches anything it did not create. (It keeps one
 cached helper image, `cluster93-idcheck-target:py3`, for the sibling target above — safe to remove any time.)
+
+C6 is the one that decides the shape a cluster across hosts is made of
+([above](#worker-containers-in-a-cluster)): it stands up **two** nodes on the machine — an edge node
+(`api,ingress`, deliberately with `C93_CAPACITY=4`) and a compute node (`worker`, capacity 2), clustered and
+discovering each other — attaches **one** container to the **compute** node's socket, and submits a job at the edge
+node's API. It passes when the edge node advertises capacity **0** by the role rule, the compute node is the only
+candidate, the job's own record names the **compute** node, and the compute node reports a connected worker with none
+of its own spawned (the container did the work). C6 deliberately avoids the cluster's default discovery ports and
+checks that its own are free first: Ignite does not fail when a port is taken — it takes the next one in its range, and
+the peers are still told to join the first, which is whatever holds it.
 
 ## Join a cluster
 
@@ -279,6 +291,21 @@ c93 node revoke node2                                             # force it out
 ```
 
 Set `C93_CLUSTER_TLS` and `C93_CLUSTER_MEMBERS` alongside the rest in `node.env`.
+
+### Worker containers in a cluster
+
+A worker container joins the socket of the node it is mounted to, and becomes **that node's** pool — supply is per node,
+not per cluster. So every node that should accept containers needs its own `C93_WORKER_SOCKET`, its own socket
+directory and secret, and its own containers; nothing joins a socket on another node's behalf.
+
+That makes a cluster across hosts a topology question rather than a transport one. A **compute host** is an ordinary
+node of its own — `C93_CLUSTERED=true`, the cluster's members, `C93_ROLES=worker` — with the socket and the containers
+on that host, while the API and the ingress are a separate **edge** node (`C93_ROLES=api,ingress`). The edge node
+advertises **capacity 0** because it has no `worker` role, whatever its `C93_CAPACITY` says, and capacity — not
+reachability — is what makes a node a candidate, so nothing is ever placed on a node that cannot run it. Roles compose
+(`worker,data` on one host is legal), and [node roles](../design/node-roles.md) lays out the tiers.
+`install/docker/compose.workers.tmpl` is **one** node's supply: run it on each compute host, pointed at that host's own
+node socket.
 
 ## Windows and macOS
 

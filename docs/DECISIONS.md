@@ -4307,3 +4307,70 @@ TypeError: fetch failed: Connection was closed
   on across the isolate boundary, and the boundary's own `{name, code, message}` is what the two adapters already
   agree on; adding a fourth thing is the smallest change that reaches both.
 
+### D-182 — A clustered node binds its worker socket: the node's wiring runs off the event loop
+**Date:** 2026-10-19 · **Status:** Accepted. Makes D-166's worker containers usable on the tier the docs describe
+(`node-roles.md` §5); found while building B1's check case C6 against a real engine.
+
+**Context:**
+The documented compute tier is a clustered node that accepts worker containers — every node in `C93_CLUSTER_MEMBERS`
+and `C93_ROLES=worker` with a `C93_WORKER_SOCKET`. That combination could not start, and had never been run: the dev
+stack is clustered with **no** socket (`scripts/local.sh`), the check's container cases are all **unclustered**, and
+`DockerClusterIT` is clustered with **process** workers. Nothing covered clustered + socket.
+
+A clustered node with a socket died a 10 s timeout into startup:
+
+```
+IllegalStateException: Could not listen for worker containers on …/node.sock: null
+```
+
+with the socket file present but left as the kernel had made it (`0775`), so `enforceOwnerOnly` — which sets `0600` —
+had never run. The cause is a self-deadlock, and every step of it is observable:
+
+1. `Vertx.builder()…buildClustered()` completes on an event loop, so `Cluster93.start`'s `compose` callback — and
+   therefore `wire` — runs **on that loop** (its own logs, `WorkerCgroups` and `WorkerPolicySync`, come from
+   `vert.x-eventloop-thread-1`).
+2. `wire` waits for the worker socket's bind with `.get(10, SECONDS)` (`Cluster93.wire:488`). The thread dump shows
+   `vert.x-eventloop-thread-1` parked in `CompletableFuture.timedGet`.
+3. The bind is dispatched to that same, now parked, event loop. The kernel creates the socket, the listen future never
+   completes, and the node exits on the timeout.
+
+The unclustered path is unharmed because `wire` there runs on the caller's thread (`main`), which is not an event loop.
+So one node, its own address as its only member, is enough to show it — the cluster's size was never the point.
+
+**Decision:**
+1. **The node's wiring runs on a worker thread when the node is clustered** — `vertx.executeBlocking(...)` around the
+   body of that `compose` callback. A blocking step belongs on a worker thread; that is also where the unclustered path
+   already runs this same wiring, so the two paths now agree about the threading instead of differing by accident.
+2. **Nothing else changes.** One wait in `wire` blocks (the bind, before the node serves); it still does, and the node
+   still refuses to serve if it cannot hold the socket. No message, code, port or behaviour outside this changes.
+
+**Evidence:**
+- `server/src/test/java/cluster93/server/ClusteredWriterSocketTest.java`: one clustered node with a worker socket comes
+  up (2 cases, ~6.5 s). The decisive assertion is the socket's **mode**: the file exists either way, but only
+  `enforceOwnerOnly` sets `0600`, so the mode is what proves the bind's future completed rather than the bind starting.
+- **Non-vacuity:** against the unfixed `Cluster93` (the change stashed, the same test compiled) it fails in ~10 s with
+  the production error verbatim — `Could not listen for worker containers on …: null`, cause `TimeoutException` at
+  `Cluster93.wire(Cluster93.java:488)`.
+- **On a real engine**, the check's case C6 (two clustered nodes on one host — edge `api,ingress` with
+  `C93_CAPACITY=4`, compute `worker` with 2 — a real worker container attached to the **compute** node's socket): the
+  edge advertises **capacity 0** (the role rule, not the setting), the compute node advertises 2, the job submitted at
+  the edge node's API is placed on the compute node, and the compute node reports one connected worker with **no**
+  process of its own (0 spawned) — its container did the work.
+- A clustered node started from a checkout also needs Ignite's module opens; the check passes `scripts/local.sh`'s list
+  (`JDK_JAVA_OPTIONS`), as the node image does.
+
+**Rejected:**
+- **Making the bind asynchronous** (threading its future through `wire` as continuations): `wire` is a several-hundred
+  line method that would have to be split into continuations to serve one wait, and the fix would then live in the
+  shape of the wiring rather than in where the wiring runs.
+- **A longer timeout, or retrying the bind:** the loop that would complete the bind is the loop that is waiting for it,
+  so no timeout can succeed — it only makes the same failure slower.
+- **Moving only the bind to a worker thread** and leaving the rest of the wiring on the loop: it fixes today's symptom
+  and leaves the next blocking call in `wire` (it reads the secret file) to rediscover the same trap, and it splits one
+  step's threading across two places for no gain.
+- **Documenting "a clustered node cannot accept containers" instead:** that is precisely the compute tier the guides
+  describe, so the docs would be describing a deployment that cannot exist.
+- **Blaming the cluster manager or Vert.x:** completing an asynchronous builder on an event loop is ordinary Vert.x
+  behaviour, and `executeBlocking` is its documented answer for blocking work inside a callback. The node was blocking
+  where the contract says not to.
+

@@ -118,8 +118,13 @@ public final class Cluster93 {
             return Future.failedFuture(e);
         }
         PrometheusMeterRegistry registry = registry(config);
+        // The wiring blocks in one place: binding the worker socket a node waits for before it serves (line below in
+        // wire). A clustered Vert.x completes this callback on an event loop, and blocking there stops the very loop
+        // the bind has to complete on — the socket file appears, the bind never finishes, and the node dies on the
+        // listen timeout with a null cause (D-182). A worker thread is where a blocking step belongs, and it is where
+        // the unclustered path already runs this wiring (the caller's thread).
         return cluster.vertx(vertxOptions(security), new MicrometerMetricsFactory(registry))
-                .compose(vertx -> {
+                .compose(vertx -> vertx.<Future<RunningNode>>executeBlocking(() -> {
                     Metrics.install(vertx, registry);
                     io.micrometer.core.instrument.Gauge.builder("c93.ignite.data.region.used", cluster, IgniteCluster::dataRegionUsedBytes)
                             .description("Bytes used in the cluster data region on this node").baseUnit("bytes").register(registry);
@@ -139,7 +144,7 @@ public final class Cluster93 {
                             fileStore, blobs, capacity, durable.auth, durable.storage, routed, diskRootShared, durable.queues,
                             durable.records, durable.audit, durable.apps);
                     return wire(config, txt, vertx, stores, cluster, security);
-                })
+                }).compose(f -> f))
                 .recover(err -> {
                     cluster.stop();
                     return Future.failedFuture(err);

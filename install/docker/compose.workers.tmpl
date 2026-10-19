@@ -52,6 +52,12 @@
 # The node image's ENTRYPOINT is the server, so a worker container MUST replace it (the `entrypoint:` below does):
 # passing the worker command as `command:` alone would start a second node inside the worker container.
 #
+# SUPPLY IS PER NODE: a worker joins the socket of the node it is mounted to, and each node has its OWN socket directory
+# and secret. Run this file on EVERY host that should accept containers — in a cluster, a compute host runs its own node
+# (C93_ROLES=worker, in C93_CLUSTER_MEMBERS) with its own copy of these workers pointed at that node's socket. A node
+# with no `worker` role advertises no capacity, whatever C93_CAPACITY says, so nothing is placed on it. See
+# docs/guides/node.md, "Join a cluster" → "Worker containers in a cluster".
+#
 # The image's worker binaries must be this version or newer: an older `worker-javet` does not know `--secret-file`,
 # and the node refuses a connection that presents no secret when one is configured.
 #

@@ -6,6 +6,24 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A clustered node can accept worker containers: the node's wiring no longer blocks an event loop** (D-182):
+  - The compute tier the guides describe — clustered, `C93_ROLES=worker`, with `C93_WORKER_SOCKET` for worker
+    containers — could not start at all. A clustered `Vertx` completes its creation on an event loop, so the node's
+    wiring ran on that loop, and the wiring waits for the worker socket's bind before the node serves: the wait parked
+    the very loop the bind needed, so the socket file appeared while the bind never finished and the node died on its
+    listen timeout with no reason but `: null`. Single nodes were unaffected (their wiring runs on the caller's
+    thread), which is why this had never been seen: the dev stack is clustered without a socket, and every test of
+    worker containers ran unclustered.
+  - The wiring now runs on a worker thread when the node is clustered — where the unclustered path already runs it —
+    and nothing else changes: the node still waits for the bind, and still refuses to serve when it cannot hold the
+    socket. `ClusteredWriterSocketTest` pins it (the socket's `0600` mode is what proves the bind completed; it fails
+    in ~10 s against the old code with the production error verbatim). Case C6 of the isolation check runs the whole
+    shape on a real engine.
+  - Also recorded where a deployment reads it: supply is **per node**, not per cluster — each node needs its own socket,
+    secret and containers, and a node without the `worker` role advertises no capacity whatever `C93_CAPACITY` says, so
+    nothing is placed on it (`docs/guides/node.md` → "Join a cluster"; `install/docker/compose.workers.tmpl` is one
+    node's supply).
+
 - **A host failure names what failed and where, without changing what a script reads** (D-181):
   - A job that failed a host call said `TypeError/network_error: fetch failed: Connection was closed` and nothing else.
     `HostException` could not carry a cause at all, and the stream boundary kept only the message — so the Java failure
