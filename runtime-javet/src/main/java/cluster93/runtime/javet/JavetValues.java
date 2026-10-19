@@ -85,7 +85,10 @@ final class JavetValues implements AutoCloseable {
         return parse.call(json, Json.encode(value));
     }
 
-    /** A JavaScript {@code Error} with the failure's name, {@code code} and message (D-025). */
+    /**
+     * A JavaScript {@code Error} with the failure's name, {@code code} and message (D-025) and, when the host did not
+     * expect the failure, where it happened on the stack (D-181).
+     */
     V8ValueError error(JsError failure) throws JavetException {
         V8ValueErrorType type = switch (failure.name()) {
             case "TypeError" -> V8ValueErrorType.TypeError;
@@ -97,6 +100,10 @@ final class JavetValues implements AutoCloseable {
             error.set("name", failure.name());
         }
         error.set("code", failure.code());
+        if (failure.hostStack() != null) {
+            String stack = error.getStack();
+            error.set("stack", stack == null ? failure.hostStack() : stack + "\n" + failure.hostStack());
+        }
         return error;
     }
 

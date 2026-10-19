@@ -6,6 +6,18 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A host failure names what failed and where, without changing what a script reads** (D-181):
+  - A job that failed a host call said `TypeError/network_error: fetch failed: Connection was closed` and nothing else.
+    `HostException` could not carry a cause at all, and the stream boundary kept only the message — so the Java failure
+    behind it (Vert.x's stackless `HttpClosedException`) and the host code that classified it were gone by the time a
+    script saw it. D-180's cause took `strace` on two hosts; one job's failure text should have been enough.
+  - A failure the host did not expect now carries its class and the host frames that classified it, and a failure that
+    arrives on a **stream** now has the same name and `code` as the same failure arriving as a rejection — a body
+    failing mid-fetch is a `TypeError/network_error` like its twin, not a bare `Error`.
+  - The detail goes on the error's **stack**, which is what `console.error(err)` prints and what a job's failure text is
+    made of; the **message**, the name and the code a script matches on are unchanged, and expected failures (bad
+    arguments, limits) stay as cheap as they were.
+
 - **A peer that closes after writing its body no longer cuts the body short** (D-180, fixes the fetch failure A0's
   harness surfaced):
   - A fetch of a body larger than the host's backpressure window could fail with `network_error: fetch failed:

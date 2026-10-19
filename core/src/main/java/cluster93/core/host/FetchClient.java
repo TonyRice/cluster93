@@ -439,8 +439,10 @@ public final class FetchClient {
         }
         String message = err.getMessage() == null ? err.toString() : err.getMessage();
         if (err instanceof java.util.concurrent.TimeoutException || message.toLowerCase(Locale.ROOT).contains("timeout")) {
-            return new HostException("TimeoutError", "timeout", what + " timed out: " + message);
+            return HostException.host("TimeoutError", "timeout", what + " timed out: " + message, err);
         }
-        return new HostException("TypeError", "network_error", what + " failed: " + message);
+        // The script reads the same message it always did; the class behind it and the host frames go with the failure
+        // (D-181), which is all an operator has to go on when a body ends early or a peer disappears.
+        return HostException.host("TypeError", "network_error", what + " failed: " + message, err);
     }
 }

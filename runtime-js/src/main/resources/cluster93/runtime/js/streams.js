@@ -37,10 +37,20 @@ const chunk = (id, bytes) => {
   if (st.waiter) { const w = st.waiter; st.waiter = null; host.ack(id); w.resolve({ value: bytes, done: false }); }
   else st.queue.push(bytes);
 };
-const streamError = (id, message) => {
+// The error a reader gets when the host fails a stream: the same shape a failed call gets (name, code and message,
+// D-025) plus where the host failed on the stack, so a job's failure names it (D-181). The host's message is unchanged.
+const streamFailure = (name, code, message, hostStack) => {
+  const Kind = name === 'TypeError' ? TypeError : name === 'RangeError' ? RangeError : Error;
+  const error = new Kind(message);
+  if (Kind === Error && name !== 'Error') error.name = name;
+  error.code = code;
+  if (hostStack) error.stack = error.stack ? `${error.stack}\n${hostStack}` : hostStack;
+  return error;
+};
+const streamError = (id, name, code, message, hostStack) => {
   const st = streams.get(id);
   if (!st) return;
-  st.error = new Error(message);
+  st.error = streamFailure(name, code, message, hostStack);
   st.done = true;
   streams.delete(id);
   if (st.waiter) { const w = st.waiter; st.waiter = null; w.reject(st.error); }

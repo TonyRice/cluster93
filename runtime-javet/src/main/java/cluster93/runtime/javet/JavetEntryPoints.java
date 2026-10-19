@@ -139,9 +139,9 @@ final class JavetEntryPoints implements EntryPoints {
     }
 
     @Override
-    public void streamError(int streamId, String message) throws JsEngineException {
+    public void streamError(int streamId, String name, String code, String message, String hostStack) throws JsEngineException {
         try {
-            streamError.callVoid(null, streamId, message);
+            streamError.callVoid(null, streamId, name, code, message, hostStack);
         } catch (JavetException e) {
             throw JavetContext.wrap(e);
         }

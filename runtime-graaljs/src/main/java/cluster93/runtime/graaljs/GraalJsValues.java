@@ -122,6 +122,6 @@ final class GraalJsValues {
     }
 
     Value error(JsError failure) {
-        return error.execute(failure.name(), failure.code(), failure.message());
+        return error.execute(failure.name(), failure.code(), failure.message(), failure.hostStack());
     }
 }

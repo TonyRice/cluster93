@@ -27,7 +27,11 @@ public interface EntryPoints extends AutoCloseable {
     /** The next chunk of stream {@code streamId} as a {@code Uint8Array}, or the end of the stream if null. */
     void chunk(int streamId, byte[] bytes) throws JsEngineException;
 
-    void streamError(int streamId, String message) throws JsEngineException;
+    /**
+     * Fails stream {@code streamId} with the same error shape a failed call gets (name, code and message, D-025) and,
+     * when the host did not expect the failure, where it happened ({@code hostStack}, D-181).
+     */
+    void streamError(int streamId, String name, String code, String message, String hostStack) throws JsEngineException;
 
     @Override
     void close();

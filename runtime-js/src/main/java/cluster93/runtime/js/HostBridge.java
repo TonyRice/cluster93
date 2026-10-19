@@ -250,7 +250,12 @@ public final class HostBridge {
                     loop.post(js -> deliverChunk(js, id, chunk.getBytes()));
                 },
                 () -> loop.post(js -> endStream(js, id, null)),
-                err -> loop.post(js -> endStream(js, id, String.valueOf(err.getMessage()))));
+                err -> {
+                    // What the failure was is decided here, on the stream's thread: it reaches the script as the same
+                    // shape a failed call gets, with the host's part of it on the stack (D-025, D-181).
+                    JsError failure = JsError.of(err);
+                    loop.post(js -> endStream(js, id, failure));
+                });
         stream.resume();
         return id;
     }
@@ -262,15 +267,15 @@ public final class HostBridge {
         js.chunk(id, bytes);
     }
 
-    private void endStream(EntryPoints js, int id, String error) throws JsEngineException {
+    private void endStream(EntryPoints js, int id, JsError failure) throws JsEngineException {
         if (streams.remove(id) == null) {
             return;
         }
         loop.streamClosed();
-        if (error == null) {
+        if (failure == null) {
             js.chunk(id, null);
         } else {
-            js.streamError(id, error);
+            js.streamError(id, failure.name(), failure.code(), failure.message(), failure.hostStack());
         }
     }
 

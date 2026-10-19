@@ -18,12 +18,14 @@
       const promise = new PromiseClass((yes, no) => { resolve = yes; reject = no; });
       return [promise, resolve, reject];
     },
-    // As V8's own errors for these names, with Node's code (D-025).
-    error: (name, code, message) => {
+    // As V8's own errors for these names, with Node's code (D-025). A failure the host did not expect brings where it
+    // failed, which goes on the stack an operator reads while the message stays what the script reads (D-181).
+    error: (name, code, message, hostStack) => {
       const Kind = name === 'TypeError' ? TypeError : name === 'RangeError' ? RangeError : Error;
       const error = new Kind(message);
       if (Kind === Error && name !== 'Error') error.name = name;
       error.code = code;
+      if (hostStack) error.stack = error.stack ? `${error.stack}\n${hostStack}` : hostStack;
       return error;
     },
     parse: (text) => parse(text),

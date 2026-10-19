@@ -74,6 +74,8 @@ class HostBridgeTest {
         final List<Consumer<HttpExchange>> servers = new CopyOnWriteArrayList<>();
         /** What fetch returns: a status and the body chunks. */
         volatile List<String> fetchChunks = List.of("hello ", "world");
+        /** What a fetch body ends with instead of its end: a failure mid-body. */
+        volatile Throwable fetchBodyFails;
         final List<JsonObject> fetchesSent = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<String> fetchesCancelled = new CopyOnWriteArrayList<>();
 
@@ -167,7 +169,7 @@ class HostBridgeTest {
                 fetchesSent.add(args.copy().put("bytes", body == null ? null : java.util.HexFormat.of().formatHex(body)));
                 JsonObject meta = new JsonObject().put("status", 200).put("statusText", "OK").put("url", args.getString("url"))
                         .put("headers", new JsonObject().put("content-type", "text/plain"));
-                return Future.succeededFuture(new FetchedResponse(meta, new ListStream(fetchChunks, () -> fetchesCancelled.add(args.getString("url")))));
+                return Future.succeededFuture(new FetchedResponse(meta, new ListStream(fetchChunks, () -> fetchesCancelled.add(args.getString("url")), fetchBodyFails)));
             };
         }
 
@@ -285,6 +287,26 @@ class HostBridgeTest {
                 """, new FakeHost());
 
         assertThat(result.output()).isEqualTo(new JsonArray().add("Error").add("unknown").add("no such op kv.get"));
+    }
+
+    @Test
+    void aFailedCallCarriesTheHostsFailureOnItsStack() throws Exception {
+        FakeHost host = new FakeHost();
+        host.kvGet = key -> Future.failedFuture(HostException.host("Error", "ECONNREFUSED",
+                "connect ECONNREFUSED 127.0.0.1:1", new java.net.ConnectException("Connection refused")));
+
+        ExecutionResult result = run("""
+                export default async () => {
+                  try { await kv.get('anything'); } catch (e) {
+                    return [e.name, e.code, e.message, e.stack.includes('HostBridgeTest'), e.stack.includes('java.net.ConnectException')];
+                  }
+                }
+                """, host);
+
+        // The name, code and message are the host's own and unchanged; where the host classified it, and what it failed
+        // with, are on the stack — the same detail a failed fetch body gets (D-181).
+        assertThat(result.output()).isEqualTo(new JsonArray().add("Error").add("ECONNREFUSED")
+                .add("connect ECONNREFUSED 127.0.0.1:1").add(true).add(true));
     }
 
     @Test
@@ -613,6 +635,31 @@ class HostBridgeTest {
     }
 
     @Test
+    void aFailedFetchBodyCarriesTheHostsFailureToTheScript() throws Exception {
+        FakeHost host = new FakeHost();
+        host.fetchChunks = List.of("hello ");
+        // The failure the flake produced: a HostException the host classified, over a Java failure behind it (D-181).
+        host.fetchBodyFails = HostException.host("TypeError", "network_error", "fetch failed: Connection was closed",
+                new java.io.IOException("Connection was closed"));
+
+        ExecutionResult result = run("""
+                import { fetch } from 'c93:fetch';
+                export default async () => {
+                  try {
+                    for await (const part of (await fetch('https://x.test/cut')).body) { }
+                  } catch (e) {
+                    return [e.name, e.code, e.message, e.stack.includes('HostBridgeTest'), e.stack.includes('java.io.IOException')];
+                  }
+                }
+                """, host);
+
+        // The same shape a failed call gets, the message the script would have read anyway, and the host's part of it
+        // (where it was classified, and what it failed with) on the stack an operator reads.
+        assertThat(result.output()).isEqualTo(new JsonArray().add("TypeError").add("network_error")
+                .add("fetch failed: Connection was closed").add(true).add(true));
+    }
+
+    @Test
     void anUnreadFetchBodyIsCancelledWhenTheScriptEnds() throws Exception {
         FakeHost host = new FakeHost();
         host.fetchChunks = java.util.stream.IntStream.range(0, 100).mapToObj(i -> "chunk").toList();
@@ -708,22 +755,31 @@ class HostBridgeTest {
 
         private final List<String> chunks;
         private final Runnable onCancel;
+        private final Throwable failure;
         private Consumer<Buffer> chunk;
         private Runnable end;
+        private Consumer<Throwable> error;
         private int next;
         private boolean paused = true;
         private boolean cancelled;
         int maxOutstandingObserved;
 
         ListStream(List<String> chunks, Runnable onCancel) {
+            this(chunks, onCancel, null);
+        }
+
+        /** A body that ends with {@code failure} instead of its end, as a peer that goes away mid-body does. */
+        ListStream(List<String> chunks, Runnable onCancel, Throwable failure) {
             this.chunks = chunks;
             this.onCancel = onCancel;
+            this.failure = failure;
         }
 
         @Override
         public synchronized void handler(Consumer<Buffer> chunk, Runnable end, Consumer<Throwable> error) {
             this.chunk = chunk;
             this.end = end;
+            this.error = error;
         }
 
         @Override
@@ -751,7 +807,11 @@ class HostBridgeTest {
                     }
                     if (next >= chunks.size()) {
                         cancelled = true;
-                        end.run();
+                        if (failure == null) {
+                            end.run();
+                        } else {
+                            error.accept(failure);
+                        }
                         return;
                     }
                     target = chunk;

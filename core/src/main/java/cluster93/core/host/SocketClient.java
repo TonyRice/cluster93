@@ -325,7 +325,8 @@ public final class SocketClient {
         String at = (address.contains(":") ? "[" + address + "]" : address) + ":" + port;
         if (message.contains("no_application_protocol")) {
             // The server takes none of the ALPN protocols offered (an HTTP/2 client at an HTTP/1-only server).
-            return new HostException("Error", "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL", "tlsv1 alert no application protocol");
+            return HostException.host("Error", "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL",
+                    "tlsv1 alert no application protocol", err);
         }
         if (handshake || message.contains("handshake") || message.contains("certificate")) {
             String code = message.contains("expired") ? "CERT_HAS_EXPIRED"
@@ -333,18 +334,19 @@ public final class SocketClient {
                     ? "ERR_TLS_CERT_ALTNAME_INVALID"
                     : message.contains("pkix") || message.contains("certification path") ? "UNABLE_TO_GET_ISSUER_CERT_LOCALLY"
                     : "ECONNRESET";
-            return new HostException("Error", code, what + " to " + at + ": the TLS handshake failed: " + cause.getMessage());
+            return HostException.host("Error", code,
+                    what + " to " + at + ": the TLS handshake failed: " + cause.getMessage(), err);
         }
         if (message.contains("refused")) {
-            return new HostException("Error", "ECONNREFUSED", "connect ECONNREFUSED " + at);
+            return HostException.host("Error", "ECONNREFUSED", "connect ECONNREFUSED " + at, err);
         }
         if (message.contains("timed out") || message.contains("timeout") || err instanceof io.netty.channel.ConnectTimeoutException) {
-            return new HostException("Error", "ETIMEDOUT", "connect ETIMEDOUT " + at);
+            return HostException.host("Error", "ETIMEDOUT", "connect ETIMEDOUT " + at, err);
         }
         if (message.contains("unreachable")) {
-            return new HostException("Error", "EHOSTUNREACH", "connect EHOSTUNREACH " + at);
+            return HostException.host("Error", "EHOSTUNREACH", "connect EHOSTUNREACH " + at, err);
         }
-        return new HostException("Error", "ECONNRESET", what + " to " + at + " failed: " + cause.getMessage());
+        return HostException.host("Error", "ECONNRESET", what + " to " + at + " failed: " + cause.getMessage(), err);
     }
 
     /** One script's connection. */

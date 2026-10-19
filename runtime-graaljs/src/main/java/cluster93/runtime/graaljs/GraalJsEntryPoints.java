@@ -79,8 +79,8 @@ final class GraalJsEntryPoints implements EntryPoints {
     }
 
     @Override
-    public void streamError(int streamId, String message) throws JsEngineException {
-        context.guard(() -> streamError.executeVoid(streamId, message));
+    public void streamError(int streamId, String name, String code, String message, String hostStack) throws JsEngineException {
+        context.guard(() -> streamError.executeVoid(streamId, name, code, message, hostStack));
     }
 
     @Override

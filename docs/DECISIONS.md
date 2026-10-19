@@ -4213,3 +4213,97 @@ own window, and the peer already gone — the failure, **1 of 1**, on every run.
 - **Fixing it with a Vert.x version bump:** this shape is in the 5.2.0 the build uses, and whether a later release
   drains the holdover on close was not established; a bump is a build decision of its own and does not change what
   today's workers are built against. If upstream does fix it, the reclaim is one guarded call and one case to delete.
+
+### D-181 — A host failure names what failed and where, without changing what the script reads
+**Date:** 2026-10-18 · **Status:** Accepted. Answers the gap D-180 was diagnosed through; extends D-025's error shape
+to the streams a failure can also arrive on.
+
+**Context:**
+Finding D-180's cause took `strace` on two machines, and the reason is that a job said everything and nothing:
+
+```
+TypeError/network_error: fetch failed: Connection was closed
+```
+
+Nothing on either side of the run named the Java failure behind it (Vert.x's `HttpClosedException`, a stackless
+singleton) or the host code that classified it. Two places were losing it, in order:
+
+1. **`HostException` could not carry a cause at all.** Every host failure the host itself makes — a bad argument, a
+   limit, a refused address, a network error — is one class built as `super(message, null, false, false)`: no cause and
+   no stack, deliberately, because the expected ones are routine and paying for a stack walk on each would be paying
+   for it on every bad argument.
+2. **The stream boundary kept only the message.** `HostBridge` failed a stream with `String.valueOf(err.getMessage())`
+   and the prelude made a plain `Error` of it, so a failure arriving on a **stream** — a fetch body, an upload, a
+   response body — had no name, no code and no host frames, while the same failure arriving as a promise rejection got
+   all three from `JsError.of`. A job's failure report is the error's stack (`rejectionText()`), so what an operator
+   saw of a host failure was the prelude's own frames and nothing else.
+
+A worker's own log cannot be the channel that carries this: it is discarded in every container (D-175), and
+diagnosing a worker is diagnosing it from the node. The one channel that is always read is the job's own failure.
+
+**Decision:**
+1. **A failure the host did not expect carries what it failed with, and where.** `HostException.host(name, code,
+   message, cause)` keeps the name, code and message a script reads exactly as they were, and keeps the cause and the
+   host frames that classified it as `hostStack()`. `invalid` and `limit` keep the old constructor: expected failures
+   stay causeless and stackless. Frames are capped (12) and the messenger is skipped, so the first frame is the host
+   code that decided.
+2. **A stream failure is the same shape as a failed call.** The boundary passes the whole failure — `EntryPoints.
+   streamError(id, name, code, message, hostStack)`, decided on the stream's own thread — and the prelude builds the
+   error the adapters build for a failed call: `TypeError`/`RangeError` by name, its `code`, its message. A failure
+   arriving on a stream and the same failure arriving as a rejection now read alike, which is D-132's rule (a failure's
+   shape does not depend on the way it travelled) applied to the way this one was leaking.
+3. **The host's part goes on the stack, never in the message.** The detail is appended after the engine's own frames —
+   where a JavaScript stack already ends — so `err.message` is byte-for-byte what a script matched on before, while
+   `console.error(err)` and a job's failure text show the host's part. Three builders make a script's error and all
+   three append it: the V8 errors the Javet adapter creates, the GraalJS `helpers.error`, and the prelude's stream
+   builder.
+4. **Only failures the host classifies were converted.** The two places that wrap an unexpected Java failure are done
+   (`FetchClient.networkError`, `SocketClient.networkError`); everything else the host fails with is expected, and
+   stays exactly as it was.
+
+**Consequences:**
+- A failed host call now reads, in the job's own failure text:
+
+```
+TypeError: fetch failed: Connection was closed
+    at c93:streams:44:17
+    … the prelude's frames …
+    at cluster93.core.host.FetchClient.networkError(FetchClient.java:445)
+    at cluster93.core.host.FetchClient.lambda$exchange$4(FetchClient.java:412)
+    … the host frames that classified it …
+    caused by io.vertx.core.http.HttpClosedException: Connection was closed
+```
+
+- The next failure of this kind is diagnosed from one job's failure instead of `strace` on two hosts.
+- **The message is unchanged**, which is what the public shape of a failure is: the name, the code and the message are
+  what scripts and their tests match on, and the detail is what an operator reads.
+- A body failure no longer arrives as an untyped `Error` next to its typed twin: the same failure has the same name
+  and code however it arrived.
+- **Known remaining gap:** when the failure is raised on one side of the worker connection and read on the other — a
+  fetch the node placed whose body fails mid-stream — it travels as a stream reset, which carries a reason and a
+  number, not words. That is the gap D-179 closed for a refused `socket.connect` and it is still open for a body.
+
+**Evidence:**
+- `core/src/test/java/cluster93/core/runtime/HostExceptionTest.java` (3 cases): an expected failure has no host stack;
+  an unexpected one keeps its name, code and message, keeps its cause, starts its stack at the classifier (never at
+  `HostException` itself) and ends with the cause's class and message; and the frames are bounded.
+- `runtime-js/.../HostBridgeTest`, run on **both engines** (the module's tests run against each adapter): a fetch body
+  that fails mid-body reaches the script as `TypeError/network_error` with the message unchanged and the host frames
+  and the cause's class on its stack; a failed call (`kv.get`) keeps `Error`/`ECONNREFUSED` and gains the same.
+- Non-vacuity: with the fold disabled in all three builders, both tests fail — and nothing else does.
+- The whole `core` and `runtime-*` suites are green on this change alone.
+
+**Rejected:**
+- **Adding the class and frames to the message:** the message is the script's — documented in `host-apis.md`, matched
+  by scripts and their tests. `fetch failed: Connection was closed` stays exactly that.
+- **Logging the detail on the host instead:** a worker's log is nothing in a container (D-175) and a worker is
+  diagnosed from the node, so a log line would reach nobody in the deployment that needed it. The job's own failure is
+  the one channel that is always read.
+- **A new field on the error for scripts to read** (`err.hostStack`): it would be script-facing API to document,
+  freeze and support for something that is the operator's, and the stack is where an operator already looks.
+- **Capturing a stack for every `HostException`:** it would put a stack walk on every bad argument and every limit,
+  which is the common case, to serve the rare one.
+- **Carrying a cause on `HostException` and letting the engines read it:** a JavaScript error has no cause to hang it
+  on across the isolate boundary, and the boundary's own `{name, code, message}` is what the two adapters already
+  agree on; adding a fourth thing is the smallest change that reaches both.
+
