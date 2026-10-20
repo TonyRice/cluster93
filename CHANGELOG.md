@@ -6,6 +6,42 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A request whose upload dies reaches the service as a failure, not as a short body** (D-186, closes the other
+  half of D-184):
+  - A client that aborts mid-upload had its failure end the worker's request stream (`err -> out.end()`). The service
+    read a short body and no error, so a handler could not tell a truncated request from a complete one — validation,
+    storage or billing would treat half a request as the whole.
+  - The failure now resets the stream through the same path D-184 built, carrying its host classification: a failure
+    that has one keeps it, and anything else becomes `TypeError/network_error` with `request body failed: …` — the
+    same shape a worker-side fetch body gives. A cancellation still travels as a plain reset.
+  - A client that simply leaves mid-upload is the same event, and now reaches the service the same way: the request
+    stream carries the upload failure while the response stream still resets plain, so the worker's
+    `ServerResponse` emits `'close'` (D-123). The reset is registered after the stream opens — a client that had
+    already gone used to have its reset sent *ahead* of the OPEN, and the worker never dispatched the request.
+  - `NodeWorkerChannelTest.aClientUploadThatFailsMidBodyReachesTheServiceAsAFailure` delivers an exchange whose body
+    sends one chunk and then fails, and asserts the service's read fails with that name, code and words. Against the
+    old code the read completed with the short body, which is what the test rejects.
+  - `ProcessModeParityTest.aDroppedUploadReachesTheServiceAsAFailure` runs it through the real ingress and a worker
+    process: a `POST` promising 1000 bytes is cut off after four, and the service's `req.text()` rejects with the
+    D-186 failure rather than reading a short body.
+  - `NodeWorkerChannelTest.aClientThatLeavesMidUploadIsAFailureAndOneThatFinishedIsACancellation` observes both
+    `closed()` cases on the wire: mid-upload the request stream resets with `TypeError/network_error`; after a whole
+    body it resets `CLIENT_CLOSED` (499) and carries no classification.
+
+- **The isolation check runs the deployment shape, with both nodes in containers** (C7):
+  - The cases so far ran the node as a process. C7 puts the edge and compute nodes in containers on a cluster
+    network of their own and the worker on a separate network, then proves the worker reaches the node over the
+    socket directory alone.
+  - It asserts two lines that answer different questions. A script's fetch to the compute node's own address is
+    refused as a cluster node — the synced policy names the node's interfaces, so the gate does not need the network
+    to know the node. The container itself, outside the gate, must have no route to the same port; that half is the
+    deployment's.
+  - The same pair is now asserted where a script really can reach the node: C5 fetches the node's internal endpoint
+    at the worker network's gateway (an interface of the node on Docker) and requires `egress_denied` as a cluster
+    node, while its shell probe from the same container reaches that port. Before this the C5 refusal was made
+    against the worker's own loopback, which proved the port rule but not that the gate knows the address the worker
+    can actually use.
+
 - **A body that fails mid-stream says what failed, wherever it was decided** (D-184, closes D-181's remaining gap):
   - A fetch body — or a socket's data, or a service's response — that dies *after* its headers had no channel to
     report on: the node reset the data stream with `502` and the raw message, so the worker read
@@ -139,10 +175,12 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
     reachability, not permission: the static set (loopback, link-local including cloud metadata, RFC1918, CGNAT, ULA,
     the cluster's own addresses) still refuses whatever the route allows (D-174).
   - **The cluster edge is the deployment's, not the node's gate.** A container reaches its host at an address the node
-    cannot recognise as its own — the bridge gateway on Docker, or pasta's `169.254.1.2` under rootless podman — so
-    "the node's own addresses" is not a complete deny list from inside a container. Publish the node's ports on
-    loopback only, or keep the workers off the node's network. The check reports which of a node's ports a worker's
-    network can reach; the internal endpoint is the one to watch.
+    cannot recognise as its own — pasta's `169.254.1.2` under rootless podman — so "the node's own addresses" is not a
+    complete deny list from inside a container. Publish the node's ports on loopback only, or keep the workers off the
+    node's network. The check reports which of a node's ports a worker's network can reach; the internal endpoint is
+    the one to watch. *(Corrected 2026-10-20: on rootful Docker the bridge gateway **is** an interface of the node, so
+    the synced policy names it and the gate refuses a script's fetch there as a cluster node; it is only pasta's
+    address that the node cannot name. C5 and C7 now assert both halves separately.)*
   - `scripts/worker-isolation-check.sh --case C5` now decides the placement by the node's **own counters**: the same job
     runs under both, with the node's `c93.egress.sockets` moving when the node makes the connection and standing still
     when the worker does — against a sibling target container, under the tenant's own rule with the development switch

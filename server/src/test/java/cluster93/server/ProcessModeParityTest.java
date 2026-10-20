@@ -125,8 +125,69 @@ class ProcessModeParityTest {
         assertThat(echo.bodyAsJsonObject()).isEqualTo(new JsonObject().put("method", "GET").put("q", "search"));
     }
 
-    // --- fetch egress ---
+    @Test
+    @Order(7)
+    @DisplayName("A client upload that dies reaches the service as a failure, not a short body")
+    void aDroppedUploadReachesTheServiceAsAFailure() throws Exception {
+        putService("upload", """
+                let seen = 'none';
+                export default async (input, ctx) => {
+                  await ctx.serve(async (req) => {
+                    if (req.path === '/seen') return seen;
+                    if (req.method !== 'POST') return 'ready';
+                    try {
+                      const body = await req.text();
+                      seen = 'complete ' + body.length;
+                      console.log('upload-complete ' + body.length);
+                      return { status: 200, body: { complete: true, length: body.length } };
+                    } catch (e) {
+                      seen = [e.name, e.code, e.message].join(' ');
+                      console.log('upload-failed ' + seen);
+                      return { status: 500, body: { failed: true } };
+                    }
+                  });
+                  await ctx.stopRequested;
+                  return seen;
+                }
+                """);
+        awaitServiceRunning("upload");
+        assertThat(awaitServing(nodeA, "upload", "upload--" + TENANT + ".apps.test", "/").bodyAsString())
+                .isEqualTo("ready");
+        String jobId = getJson(nodeA, "/v1/services/upload").getString("currentJobId");
 
+        // Promise 1000 bytes, send four, and close: the ingress resets the upstream request, the node's request body
+        // fails, and the failure has to reach the service (D-186). The waits are what makes it the *upload* that dies
+        // rather than the whole request never arriving: the head is dispatched before the body is cut off.
+        try (java.net.Socket socket = new java.net.Socket("127.0.0.1", nodeA.ingressPort())) {
+            var out = socket.getOutputStream();
+            out.write(("POST / HTTP/1.1\r\nHost: upload--" + TENANT + ".apps.test\r\n"
+                    + "Content-Length: 1000\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            Thread.sleep(500);
+            out.write("half".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            Thread.sleep(1500);
+        }
+
+        // What the handler's body read did, asked of the service itself: job logs are kept when a run finishes.
+        String seen = awaitBody(nodeA, "upload", "upload--" + TENANT + ".apps.test", "/seen", value -> !value.equals("none"));
+        assertThat(seen).as("what the service's body read did")
+                .contains("TypeError", "network_error", "request body failed")
+                .doesNotContain("complete");
+
+        // And the failure is the one the handler then reports: stopping the service returns what it saw.
+        await(client.delete(nodeA.httpPort(), "localhost", "/v1/services/upload")
+                .putHeader("Authorization", TestAuth.bearer(TENANT)).send());
+        JsonObject finished = awaitJson(nodeA, "/v1/jobs/" + jobId,
+                j -> !List.of("QUEUED", "RUNNING").contains(j.getString("status")));
+        assertThat(finished.getString("output")).as(finished.encodePrettily())
+                .contains("TypeError", "network_error", "request body failed");
+        List<String> lines = finished.getJsonArray("logs", new io.vertx.core.json.JsonArray()).getList()
+                .stream().map(String::valueOf).toList();
+        assertThat(lines).as("the finished job's logs").anyMatch(line -> line.contains("upload-failed"));
+    }
+
+    // --- fetch egress ---
     @Test
     @Order(3)
     @DisplayName("A worker process fetches an allowed address through the egress gate")
@@ -436,6 +497,27 @@ class ProcessModeParityTest {
         String jobId = status.getString("currentJobId");
         throw new AssertionError("Service " + service + " never served; last=" + (last == null ? "timeout" : last.statusCode() + " " + last.bodyAsString())
                 + "; service=" + status.encode() + (jobId == null ? "" : "; run=" + getJson(node, "/v1/jobs/" + jobId).encode()));
+    }
+
+    private static String awaitBody(RunningNode node, String service, String host, String path,
+                                    Predicate<String> ready) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        String last = "";
+        while (System.nanoTime() < deadline) {
+            try {
+                HttpResponse<Buffer> response = await(ingress(node, host, "GET", path).timeout(5_000).send());
+                if (response.statusCode() == 200) {
+                    last = response.bodyAsString();
+                    if (ready.test(last)) {
+                        return last;
+                    }
+                }
+            } catch (Exception ignored) {
+                // Not serving yet.
+            }
+            Thread.sleep(200);
+        }
+        throw new AssertionError("Service " + service + " never reported " + path + " as expected: " + last);
     }
 
     private static String submit(String tenant, JsonObject body) throws Exception {

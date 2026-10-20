@@ -29,11 +29,17 @@
 #   * Publish the node's ports on LOOPBACK only — `127.0.0.1:9493:9493`, as `c93 node install --docker` does — so
 #     the worker's network has no route to the API, the ingress, the internal endpoint or metrics.
 #   * Or put the workers on a network the node is not on, and firewall the rest.
-#   * Do NOT rely on the node's own gate for this. A container reaches its host at an address the node cannot
-#     recognise as its own — a bridge gateway on Docker, or pasta's 169.254.1.2 under rootless podman (measured while
-#     building A7) — so "the node's own addresses" is not a complete deny list from inside a container.
+#   * Do NOT rely on the node's own gate for this. The rules the worker holds do know the node's own interface
+#     addresses and ports, so a script's fetch/net/tls is refused as `cluster_node` however the tenant is configured;
+#     but the gate is a policy on the script's host APIs, not a filter on the container's network. A shell, a native
+#     process or anything else in that container can open the connection directly, and under rootless podman an
+#     address can exist only inside the container's namespace. The network is the boundary for that traffic.
 #   * The internal endpoint and the metrics port are the ones to watch, since they are not meant for anyone. The
-#     check reports which of a worker's network can reach them (scripts/worker-isolation-check.sh --case C5).
+#     check asserts both halves: C5 fetches the internal endpoint at the worker network's gateway and requires
+#     `cluster_node`, while a shell probe from the same container reaches the port (the gate refuses the script; the
+#     deployment owes the network). --case C7 runs this shape with both nodes in containers and the worker on a
+#     network of its own, asserts the same refusal against the compute node's container address, and then proves the
+#     compute node's internal endpoint has no route from the worker's network.
 #
 # What the node needs (node.env, see docs/guides/node.md):
 #   C93_WORKER_SOCKET=/run/cluster93/workers/node.sock     the node listens here (uncommented, once enabled)

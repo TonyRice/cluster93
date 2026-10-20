@@ -680,6 +680,20 @@ public class NodeWorkerChannel {
     }
 
     /**
+     * The client's upload died before its body ended. Ending the stream would hand the service a short body and no
+     * error — it could not tell a truncated request from a complete one — so the failure travels instead, in the same
+     * {@code TypeError/network_error} shape a fetch body gets (D-186). A failure that already has a host classification
+     * keeps it.
+     */
+    private static Throwable uploadFailure(Throwable error) {
+        if (error instanceof HostException) {
+            return error;
+        }
+        String message = error != null && error.getMessage() != null ? error.getMessage() : String.valueOf(error);
+        return HostException.host("TypeError", "network_error", "request body failed: " + message, error);
+    }
+
+    /**
      * Signals a request's failure back to the worker over the response stream: a fetch whose request body already
      * ended has no stream left to reset, so the failure travels as an error response instead (D-128).
      */
@@ -904,18 +918,6 @@ public class NodeWorkerChannel {
             meta.put("port", port);
         }
         String type = upgrade ? "http.request.upgrade" : "http.request";
-        // The client left before the worker finished: reset both streams, so its ServerResponse emits 'close' (D-123).
-        exchange.closed().onSuccess(clientLeft -> {
-            if (Boolean.TRUE.equals(clientLeft)) {
-                streamMultiplexer.resetStream(streamId, "CLIENT_CLOSED", 499);
-                Integer responseStreamId = responseStreamIds.get(streamId);
-                if (responseStreamId != null) {
-                    streamMultiplexer.resetStream(responseStreamId, "CLIENT_CLOSED", 499);
-                }
-                pendingExchanges.remove(streamId);
-                responseStreamIds.remove(streamId);
-            }
-        });
         // Register the exchange before opening the stream: the worker may answer as soon as it sees the OPEN, and the
         // response stream must find this exchange. An upgrade request is registered too: a server with no 'upgrade'
         // listener answers it as an ordinary one, over an http.response stream (D-125).
@@ -941,24 +943,72 @@ public class NodeWorkerChannel {
                         chunk -> out.write(chunk),
                         () -> out.end(),
                         err -> resetBodyStream(streamId, err));
+                // An upgraded tunnel is a cancellation however it goes: its request body already ended with the head.
+                exchange.closed().onSuccess(clientLeft -> {
+                    if (Boolean.TRUE.equals(clientLeft)) {
+                        clientLeft(streamId, true);
+                    }
+                });
                 socket.data().resume();
                 return;
             }
 
             WriteStream<Buffer> out = streamMultiplexer.createOutputStream(streamId);
+            AtomicBoolean uploadEnded = new AtomicBoolean();
+            AtomicBoolean clientGone = new AtomicBoolean();
             exchange.body().handler(
                     chunk -> {
+                        if (clientGone.get()) {
+                            return;
+                        }
                         out.write(chunk);
                         // The worker isn't keeping up with the client's upload: stop reading until the queue drains.
                         if (out.writeQueueFull()) {
                             exchange.body().pause();
                         }
                     },
-                    () -> out.end(),
-                    err -> out.end());
+                    () -> {
+                        uploadEnded.set(true);
+                        out.end();
+                    },
+                    err -> {
+                        if (!clientGone.get()) {
+                            resetBodyStream(streamId, uploadFailure(err));
+                        }
+                    });
             out.drainHandler(v -> exchange.body().resume());
+            // The client left before the worker finished: reset both streams, so its ServerResponse emits 'close'
+            // (D-123). A client that left mid-upload cut the body off, and the service hears that failure rather than a
+            // cancellation (D-186). Registered after the open and the body handlers, so the reset can never overtake
+            // the OPEN that the worker would otherwise never see, and the body it resets is the one being read.
+            exchange.closed().onSuccess(left -> {
+                if (Boolean.TRUE.equals(left)) {
+                    clientGone.set(true);
+                    clientLeft(streamId, uploadEnded.get());
+                }
+            });
             exchange.body().resume();
         });
+    }
+
+    /**
+     * A client left before the worker answered: reset its request stream, so the service hears it. An upload that had
+     * not ended was cut off, and reaches the service as the failure it is (D-186); one that had ended is a plain
+     * cancellation (D-123). The response stream is reset either way, so the worker's {@code ServerResponse} emits
+     * 'close'.
+     */
+    private void clientLeft(int streamId, boolean uploadEnded) {
+        if (uploadEnded) {
+            streamMultiplexer.resetStream(streamId, "CLIENT_CLOSED", 499);
+        } else {
+            resetBodyStream(streamId, uploadFailure(new IOException("the client disconnected")));
+        }
+        Integer responseStreamId = responseStreamIds.get(streamId);
+        if (responseStreamId != null) {
+            streamMultiplexer.resetStream(responseStreamId, "CLIENT_CLOSED", 499);
+        }
+        pendingExchanges.remove(streamId);
+        responseStreamIds.remove(streamId);
     }
 
     private void onGoodbye(Frame frame) {

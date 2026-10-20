@@ -9,7 +9,8 @@
 #     has NO route off the host (S10), and under the `worker` placement — the default since D-173 — it has one,
 #     because a worker that decides egress makes the tenant's connections itself (A7). Both are asserted, and which
 #     one applies is pinned per case rather than assumed.
-# So this runs the real thing: a node as a process, a worker container from a node image, and one job over the socket.
+# So this runs the real thing: a node as a process (and, for the deployment shape, nodes as containers), a worker
+# container from a node image, and one job over the socket.
 #
 # It is meant to be run repeatedly on a real machine, and it is careful to be safe to run:
 #   1. everything it creates carries the label `c93.idcheck=<run id>`, and cleanup removes only labelled objects;
@@ -118,8 +119,8 @@ done
 # Validate the case name here, not at the end: a name no case matches would run nothing and let the summary print
 # "Every case this host can run passed" — which is the one thing a check must never say about work it did not do.
 case "$WANT_CASE" in
-  ""|C1|C3|C4|C5|C6) ;;
-  *) echo "Unknown case: ${WANT_CASE} (cases: C1, C3, C4, C5, C6)" >&2; exit 2 ;;
+  ""|C1|C3|C4|C5|C6|C7) ;;
+  *) echo "Unknown case: ${WANT_CASE} (cases: C1, C3, C4, C5, C6, C7)" >&2; exit 2 ;;
 esac
 
 say() { printf '%s\n' "$*"; }
@@ -205,11 +206,18 @@ describe_cases() {
   say "      and the node counts what it refused, from the worker's own report (D-176). The same job runs under both"
   say "      placements: the node's own counters move when IT connects, and do not when the worker does. A refused"
   say "      connect the NODE makes reaches the script in the gate's own shape (D-179), not as a stream reset."
+  say "      At the network's gateway — where the worker can actually reach the node — a script's fetch to the node's"
+  say "      internal endpoint is refused as a cluster node, while a shell probe from the same container reaches it."
   say "  C6  a cluster across hosts is a node per host  rootful docker; two nodes on this box — an edge one"
   say "      (api,ingress, so no worker role and capacity 0 whatever C93_CAPACITY says) and a compute one (worker,"
   say "      capacity 2) — clustered, with the container attached to the COMPUTE node's socket and nothing attached to"
   say "      the edge node's (it has none). The job is submitted at the edge node's API and must be placed on the"
   say "      compute node and done by its container."
+  say "  C7  the same cluster, containerized          rootful docker; both nodes as containers, the compute node's"
+  say "      worker in a container beside it on a network the cluster is not on — the deployment the compose files"
+  say "      install. The worker reaches the node only over the socket directory. A script's fetch to the compute"
+  say "      node's own endpoint is refused by the gate (cluster node), AND the worker's network cannot reach it"
+  say "      (probed from inside the worker container) — the gate's line and the deployment's, asserted separately."
 }
 
 # ---------------------------------------------------------------------------------------
@@ -797,7 +805,10 @@ job_ran() {  # job_ran <id> <substring of the record>
 #      and a connect the node REFUSES reaches the script in the gate's own shape, code and words (D-179), not as a
 #      stream reset whose wrapper hides them;
 #   2. under the WORKER's placement the same job succeeds while those counters stand still — the worker's own route;
-#   3. the static set the worker holds still refuses metadata, RFC1918 and the cluster's own port;
+#   3. the static set the worker holds still refuses metadata, RFC1918 and the cluster's own port — and a script's
+#      fetch to the node's internal endpoint is refused as a cluster node at the address the worker can actually
+#      reach (the network's gateway), while a shell probe from the same container shows that address:port IS reachable.
+#      The gate is what refuses the script; the deployment's network is what refuses everything that is not a script;
 #   4. the node counts what the worker refused, because the worker reported it (D-176).
 #
 # The evidence is behavioural on purpose: a worker container's log is a no-op — the native worker image has no SLF4J
@@ -810,16 +821,19 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
 
   local joined=no nodeRan=n/a nodeShape=n/a reached=n/a refused=no blocks=no localOnly=no reported=no
   local jobOut="" blocksOut="" refusedOut="" nodeShapeOut=""
+  local gw="" gw_ports="" gw_open=n/a
 
   # --- The target and the tenant's rule for it: private, so the node's gate would refuse it and only the rule lets
   #     either end through, and a sibling rather than the node, so it is not one of the node's own addresses. ---
   TARGET_IMAGE="$(target_image "$engine" || true)"
   TARGET_IP=""
-  local net="c93-idcheck-$RUN_ID" have_net=no worker_net=none
+  local net="c93-idcheck-$RUN_ID" worker_net=none
   if [ -n "$TARGET_IMAGE" ] && "$engine" network create "$net" >/dev/null 2>&1; then
     NETWORKS+=("$net")
-    have_net=yes
     worker_net="$net"
+    # The address the worker reaches its host at: on Docker this is an interface of the node (so the synced policy can
+    # name it), and it is where the node's internal endpoint really answers — the probe at the end of this case shows it.
+    gw="$("$engine" network inspect "$net" -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null)"
     if start_target "$engine" "$net"; then
       # Present for both phases, though only the worker placement needs it: the node that runs the baseline still has
       # the development switch on (the node-placement cases need it to fetch the echo server on loopback), so there
@@ -941,20 +955,40 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
       blocksOut="metadata: $(job_json "${meta:-x}")  private: $(job_json "${private:-x}")"
     fi
 
-    # 3. A cluster address on one of the node's own ports: refused before any rule and before any connection, so it
-    #    needs no route — and the address is the *worker's* own loopback, which only a worker holding the rules can
-    #    know to refuse. The node makes none of these connections, so its own counter must not move either.
-    local before_d after_d workerBefore did
+    # 3. A cluster address on one of the node's own ports, at the address the worker can ACTUALLY reach it on: the
+    #    network's gateway. `fetch` must fail as a cluster node (the address is in the policy the node synced, because
+    #    it is an interface of the node), not merely as a private address — and the same script probes 127.0.0.1,
+    #    where the node's ports are refused as "here". The node makes none of these connections, so its own counter
+    #    must not move either.
+    local before_d after_d workerBefore did gw_ok=n/a
+    [ -n "$gw" ] || say "  the worker network's gateway is unknown, so only the loopback refusal is asserted"
     before_d="$(metric_all c93_egress_denied_total)"
     workerBefore="$(metric_all c93_worker_egress_denied_total)"
-    did=$(submit_job "export default async () => { try { await fetch('http://127.0.0.1:$INTERNAL_PORT/health'); return { reached: true }; } catch (e) { return { reached: false, code: e.cause ? e.cause.code : e.code, why: e.cause ? e.cause.message : null }; } }")
+    did=$(submit_job "export default async () => {
+      const probe = async (url) => {
+        try { await fetch(url); return { reached: true }; }
+        catch (e) { return { reached: false, code: e.cause ? e.cause.code : e.code, why: e.cause ? e.cause.message : null }; }
+      };
+      const cluster = (r) => !!r && r.reached === false && r.code === 'egress_denied'
+        && (r.why || '').includes('resolves to one of the cluster');
+      const gatewayUrl = '$([ -n "$gw" ] && printf 'http://%s:%s/health' "$gw" "$INTERNAL_PORT")';
+      const gateway = gatewayUrl ? await probe(gatewayUrl) : null;
+      const loopback = await probe('http://127.0.0.1:$INTERNAL_PORT/health');
+      return { gatewayOk: gateway ? cluster(gateway) : null, loopbackOk: cluster(loopback), gateway, loopback };
+    }")
     [ -n "$did" ] || say "  the job was not accepted (no id came back)"
     if [ -n "$did" ]; then
       await_job "$did" >/dev/null
       refusedOut="$(job_json "$did")"
       case "$refusedOut" in
-        *'"reached":false'*'"code":"egress_denied"'*'resolves to one of the cluster'*) refused=yes ;;
+        *'"loopbackOk":true'*) refused=yes ;;
       esac
+      if [ -n "$gw" ]; then
+        gw_ok=no
+        case "$refusedOut" in
+          *'"gatewayOk":true'*) gw_ok=yes ;;
+        esac
+      fi
       after_d="$(metric_all c93_egress_denied_total)"
       [ "$before_d" = "$after_d" ] && localOnly=yes
       # The node is not in the path of these connections, so its own metrics can show this refusal only because the
@@ -994,36 +1028,48 @@ check_worker_placement() {  # check_worker_placement <engine> <label>
     say "  the worker container's own log (a no-op logger, so this is usually empty — D-175 records why):"
     "$engine" logs "$RUN_ID-w" 2>&1 | tail -6 | sed 's/^/    /'
   fi
+  if [ "$gw_ok" = no ]; then
+    say "  a script's fetch to the node's endpoint at the gateway ($gw:$INTERNAL_PORT) was refused, but not as the"
+    say "  node's own address (it wants \"resolves to one of the cluster\"):"
+    printf '%s' "$refusedOut" | head -c 1200 | sed 's/^/    /'
+    say ""
+  fi
 
   # What the deployment owes a worker placement (A7): the node's own ports must not be reachable from the worker's
-  # network. The check's node binds the API to loopback, and the rest of its ports are reported here as they are: the
-  # gate is a second line, not the first, because a container reaches its host at an address the node cannot
-  # recognise as its own — a bridge gateway, or pasta's 169.254.1.2 under rootless podman (found building this).
-  local gw=""
-  if [ "$have_net" = yes ]; then
-    gw="$("$engine" network inspect "$net" -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null)"
-  fi
+  # network. The check's node binds the API to loopback, and the rest of its ports are reported here as they are.
+  # This is the network's half of the story, and the gate's half is above: on Docker the gateway is an interface of
+  # the node, so the synced policy names it and a script's fetch is refused as a cluster node — yet the container
+  # itself, outside the gate, can still open the port. That is why the deployment has to keep the worker off the
+  # node's network rather than rely on the gate alone. (Under rootless podman the host's address is pasta's
+  # 169.254.1.2, which the node cannot name; the deployment's network is the only line there — D-177.)
   if [ -n "$gw" ]; then
     say "     the node's own ports, probed from the worker's network at the host ($gw):"
-    "$engine" run --rm --network "$net" -e GW="$gw" -e PORTS="$HTTP_PORT $METRICS_PORT $INTERNAL_PORT" \
+    gw_ports="$("$engine" run --rm --network "$net" -e GW="$gw" -e PORTS="$HTTP_PORT $METRICS_PORT $INTERNAL_PORT" \
       --entrypoint /bin/bash "$IMAGE" -c \
       'for p in $PORTS; do (exec 3<>/dev/tcp/$GW/$p) >/dev/null 2>&1 && echo "       $p OPEN — the deployment must not let a worker reach the node" || echo "       $p shut"; done' \
-      2>&1 | tail -4 | sed 's/^/    /'
+      2>&1)"
+    printf '%s\n' "$gw_ports" | tail -4 | sed 's/^/    /'
+    case "$gw_ports" in
+      *" $INTERNAL_PORT OPEN"*) gw_open=yes ;;
+      *" $INTERNAL_PORT shut"*) gw_open=no ;;
+    esac
   fi
 
   "$engine" rm -f "$RUN_ID-w" >/dev/null 2>&1 || true
   local result=FAIL
   [ "$joined" = yes ] && [ "$reached" != no ] && [ "$refused" = yes ] && [ "$blocks" = yes ] \
-    && [ "$localOnly" = yes ] && [ "$reported" = yes ] && [ "$nodeShape" != no ] && result=PASS
+    && [ "$localOnly" = yes ] && [ "$reported" = yes ] && [ "$nodeShape" != no ] && [ "$gw_ok" != no ] \
+    && result=PASS
   printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-7s | %-6s | %-7s | %-10s | %-8s | %s\n' \
     case engine rootless identity joined node-ran reached refused blocked local-only reported result
   printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-8s | %-7s | %-6s | %-7s | %-10s | %-8s | %s\n' \
-    "C5" "$label" "$(rootless_podman && echo rootless-podman || echo rootful)" "--user $(id -u):$(id -g)" \
+    "C5" "$label" "rootful" "--user $(id -u):$(id -g)" \
     "$joined" "$nodeRan" "$reached" "$refused" "$blocks" "$localOnly" "$reported" "$result"
   say "     the baseline (node placement): the node made the connection and its own socket counter moved — $nodeRan"
   say "     a refused connect it made, in the gate's own shape (D-179): $nodeShape"
   say "     the worker reached an allowed target with its own route, node counters still: $reached"
   say "     refused by the worker itself=$refused  its static set still refuses metadata and RFC1918=$blocks  (the node's own egress counter unmoved: $localOnly)"
+  say "     the node's own endpoint at the gateway: the container's network reaches it=$gw_open, a script's fetch is refused as a cluster node=$gw_ok"
   say "     the node counted what the worker refused because the worker reported it (D-176): $reported"
   [ "$result" = PASS ]
 }
@@ -1249,6 +1295,253 @@ check_cluster_placement() {  # check_cluster_placement <engine> <label> <identit
   [ "$result" = PASS ]
 }
 
+# ---------------------------------------------------------------------------------------
+# C7: the deployment the compose files install — both nodes in containers, and the compute node's
+# worker in a container of its own on a network the cluster is not on.
+# ---------------------------------------------------------------------------------------
+# C6 stands the two roles up as processes, which is what a host deployment is. The compose files
+# (install/docker/) instead run each node as a container and put a node's supply in worker containers beside it.
+# That shape has failure modes of its own: the cluster has to form between container addresses, the socket and the
+# secret have to cross a mount, and the worker must not be able to reach the node's ports. It is checked, not assumed.
+#
+# The worker is deliberately on its OWN network: it connects over the socket directory, so it needs no route to the
+# node at all. Docker drops traffic between user-defined networks, so the compute node's internal endpoint (D-151:
+# bound on every interface because peers must reach it) is unreachable from the worker's network. Two lines are
+# asserted, and they answer different questions. A job's `fetch` to the compute node's own container address is
+# refused by the gate as a cluster node — the policy the compute node synced names its own interfaces, so the gate
+# does not need the network to know the node. The container's own network is then probed from inside the worker, by
+# address rather than name, and must not reach the same port: that is the deployment's half of the "the gate is a
+# second line" story C5 tells, and the first line is that there is no route.
+check_container_cluster_placement() {  # <engine> <label> <identity flag> <identity args...>
+  local engine="$1" label="$2" flag="$3"; shift 3
+  ENGINE="$engine"
+  IMAGE="$(image_for "$engine")"
+
+  # C6's nodes still hold the standard host ports, so this case publishes the same numbers one hundred higher; the
+  # containers keep the usual numbers inside their own nets. Every helper above reads these globals, so pointing them
+  # at the published ports for the length of the case is enough (and they are put back afterwards).
+  local saved_http="$HTTP_PORT" saved_ingress="$INGRESS_PORT" saved_metrics="$METRICS_PORT"
+  HTTP_PORT=$((HTTP_PORT + 100))
+  INGRESS_PORT=$((INGRESS_PORT + 100))
+  METRICS_PORT=$((METRICS_PORT + 100))
+  local compute_metrics=$((COMPUTE_METRICS_PORT + 100))
+  local net_cluster="$RUN_ID-c7-cluster" net_workers="$RUN_ID-c7-workers"
+  local edge="$RUN_ID-c7-edge" compute="$RUN_ID-c7-compute" worker="$RUN_ID-c7-worker"
+  local state="$TMP/c7-compute"
+
+  local nodes_seen=no edge_cap=n/a compute_cap=n/a placed=no container=no isolated=n/a
+  local nodes_json="" jobOut="" pool_connected=n/a pool_spawned=n/a result=FAIL
+
+  restore_ports() {
+    HTTP_PORT="$saved_http"
+    INGRESS_PORT="$saved_ingress"
+    METRICS_PORT="$saved_metrics"
+  }
+
+  if [ ! -f "$state/secrets/secret" ]; then
+    install -d -m 0700 "$state/sockets" "$state/secrets"
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$state/secrets/secret"
+    chmod 0400 "$state/secrets/secret"
+  fi
+
+  "$engine" network create --label "$LABEL" "$net_cluster" >/dev/null \
+    || { say "  could not create the cluster network"; restore_ports; return 1; }
+  NETWORKS+=("$net_cluster")
+  "$engine" network create --label "$LABEL" "$net_workers" >/dev/null \
+    || { say "  could not create the worker network"; restore_ports; return 1; }
+  NETWORKS+=("$net_workers")
+
+  # The two nodes' shared settings. C93_DATA_DIR is set EMPTY on purpose — the image sets it to a persistent path, but
+  # a clustered node without a directory stays in memory, exactly as C6's processes do — so the containers need no
+  # durable volume and a failed run leaves nothing behind.
+  local -a cluster_env=(
+    -e C93_CLUSTERED=true
+    -e "C93_CLUSTER_MEMBERS=edge:$CLUSTER_PORT_EDGE,compute:$CLUSTER_PORT_COMPUTE"
+    -e C93_CLUSTER_TLS=off
+    -e C93_DATA_DIR=
+    -e C93_ADMIN_TOKEN="$ADMIN_TOKEN"
+    -e C93_WORKER_MODE=process
+  )
+
+  # `--network-alias` is what makes the discovery members nameable: Docker's DNS on a user-defined network answers
+  # `edge` and `compute`, which is what a compose deployment relies on (service names).
+  "$engine" run -d --name "$edge" --label "$LABEL" --network "$net_cluster" --network-alias edge \
+    --cap-drop=ALL --security-opt no-new-privileges "$@" \
+    "${cluster_env[@]}" \
+    -e C93_NODE_ID="$EDGE_NODE_ID" -e C93_ROLES=api,ingress -e C93_CAPACITY=4 \
+    -e C93_CLUSTER_PORT="$CLUSTER_PORT_EDGE" \
+    -e C93_HTTP_PORT="$HTTP_PORT" -e C93_INGRESS_PORT="$INGRESS_PORT" \
+    -e C93_METRICS_PORT="$METRICS_PORT" -e C93_INTERNAL_PORT="$INTERNAL_PORT" \
+    -e C93_ADVERTISE_HOST=edge -e C93_RATE_LIMIT_PER_MINUTE=0 -e C93_INGRESS_DOMAIN=idcheck.test \
+    -p "127.0.0.1:$HTTP_PORT:$HTTP_PORT" \
+    -p "127.0.0.1:$INGRESS_PORT:$INGRESS_PORT" \
+    -p "127.0.0.1:$METRICS_PORT:$METRICS_PORT" \
+    "$IMAGE" >/dev/null \
+    || { say "  the edge node container did not start"; restore_ports; return 1; }
+
+  if ! wait_for 240 "the containerized edge node to answer /health" \
+      curl -sf -m 2 "http://127.0.0.1:$HTTP_PORT/health"; then
+    say "  the edge node container did not answer. Its last lines:"
+    "$engine" logs "$edge" 2>&1 | tail -20 | sed 's/^/    /'
+    restore_ports
+    return 1
+  fi
+  JOB_TOKEN="$(mint_job_token "$TENANT")"
+  [ -n "$JOB_TOKEN" ] || { say "  no job token on the containerized edge node"; restore_ports; return 1; }
+
+  # The compute node's worker placement is on the node (`C93_EGRESS_PLACEMENT=node`), as in C6: what is under test is
+  # the containerized topology, and the worker placement's network needs are C5's. The worker therefore needs no
+  # network for egress, and the one it gets is only there so the case can prove it has no route to the cluster.
+  "$engine" run -d --name "$compute" --label "$LABEL" --network "$net_cluster" --network-alias compute \
+    --cap-drop=ALL --security-opt no-new-privileges "$@" \
+    "${cluster_env[@]}" \
+    -e C93_NODE_ID="$COMPUTE_NODE_ID" -e C93_ROLES=worker -e C93_CAPACITY=2 \
+    -e C93_CLUSTER_PORT="$CLUSTER_PORT_COMPUTE" \
+    -e C93_METRICS_PORT="$COMPUTE_METRICS_PORT" -e C93_INTERNAL_PORT="$COMPUTE_INTERNAL_PORT" \
+    -e C93_ADVERTISE_HOST=compute \
+    -e C93_EGRESS_PLACEMENT=node -e C93_WORKER_DEFAULT_MODE=javet \
+    -e C93_MAX_JOBS_PER_WORKER=4 -e C93_MAX_HEAP_MB=64 -e C93_WORKER_CONNECTIONS_MAX=2 \
+    -e C93_WORKER_SOCKET=/run/cluster93/workers/node.sock \
+    -e C93_WORKER_SECRET_FILE=/run/secrets/c93-worker-secret \
+    -v "$state/sockets:/run/cluster93/workers" \
+    -v "$state/secrets/secret:/run/secrets/c93-worker-secret:ro" \
+    -p "127.0.0.1:$compute_metrics:$COMPUTE_METRICS_PORT" \
+    "$IMAGE" >/dev/null \
+    || { say "  the compute node container did not start"; restore_ports; return 1; }
+
+  local scratch="$SCRATCH/$RUN_ID-c7"
+  install -d -m 0777 "$scratch/tmp" "$scratch/home"
+  "$engine" run -d --name "$worker" --label "$LABEL" --network "$net_workers" \
+    --cap-drop=ALL --security-opt no-new-privileges --read-only --pids-limit 512 "$@" \
+    -v "$state/sockets:/run/cluster93/workers" \
+    -v "$state/secrets/secret:/run/secrets/c93-worker-secret:ro" \
+    -v "$scratch/tmp:/tmp" -v "$scratch/home:/home" \
+    --entrypoint "/opt/cluster93/bin/$WORKER_BIN" \
+    "$IMAGE" ipc --socket /run/cluster93/workers/node.sock \
+      --secret-file /run/secrets/c93-worker-secret --heap-mb 64 --threads 4 >/dev/null \
+    || { say "  the compute node's worker container did not start"; restore_ports; return 1; }
+
+  if ! wait_for 240 "the containerized compute node's metrics endpoint" \
+      curl -sf -m 2 "http://127.0.0.1:$compute_metrics/metrics"; then
+    say "  the compute node container did not answer. Its last lines:"
+    "$engine" logs "$compute" 2>&1 | tail -20 | sed 's/^/    /'
+    restore_ports
+    return 1
+  fi
+
+  # Convergence: both containers have to find each other by name before a job can be placed.
+  for _ in $(seq 1 120); do
+    nodes_json="$(live_nodes)"
+    compute_cap="$(node_capacity "$nodes_json" "$COMPUTE_NODE_ID")"
+    if [ -n "$compute_cap" ]; then nodes_seen=yes; break; fi
+    sleep 0.5
+  done
+  edge_cap="$(node_capacity "$nodes_json" "$EDGE_NODE_ID")"
+
+  for _ in $(seq 1 240); do
+    [ "$(metric_at "$compute_metrics" c93_workers_connected)" = "1.0" ] && break
+    sleep 0.5
+  done
+
+  local id=""
+  id="$(submit_job)"
+  if [ -n "$id" ] && [ "$(await_job "$id")" = "SUCCEEDED" ]; then
+    jobOut="$(job_json "$id")"
+    case "$jobOut" in
+      *"\"node\":\"$COMPUTE_NODE_ID\""*)
+        case "$jobOut" in
+          *"\"node\":\"$EDGE_NODE_ID\""*) placed=no ;;
+          *) placed=yes ;;
+        esac ;;
+    esac
+    pool_connected="$(metric_at "$compute_metrics" c93_workers_connected)"
+    pool_spawned="$(metric_at "$compute_metrics" c93_workers_running)"
+    if [ "$pool_connected" = "1.0" ] && [ "$pool_spawned" = "0.0" ]; then
+      container=yes
+    fi
+  fi
+
+  # The second line, and the one that covers a script: the compute node's own address is an interface of that node,
+  # so the policy it synced names it and a job's fetch to its internal endpoint is refused as a cluster node. The
+  # worker could not route there anyway (the probe below), but this is what C5 asserts on a host's gateway, asserted
+  # here on a container's address — the gate does not depend on the network to know the node.
+  local compute_ip="" gate_ok=n/a gate_out=""
+  compute_ip="$("$engine" inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$compute" 2>/dev/null || true)"
+  if [ -n "$compute_ip" ]; then
+    local gid=""
+    gid="$(submit_job "export default async () => {
+      try { await fetch('http://$compute_ip:$COMPUTE_INTERNAL_PORT/health'); return { reached: true }; }
+      catch (e) {
+        const r = { reached: false, code: e.cause ? e.cause.code : e.code, why: e.cause ? e.cause.message : null };
+        return { ...r, clusterNode: r.code === 'egress_denied' && (r.why || '').includes('resolves to one of the cluster') };
+      }
+    }")"
+    [ -n "$gid" ] || say "  the gate probe job was not accepted (no id came back)"
+    [ -n "$gid" ] && await_job "$gid" >/dev/null
+    gate_out="$(job_json "${gid:-x}")"
+    case "$gate_out" in
+      *'"clusterNode":true'*) gate_ok=yes ;;
+      *) gate_ok=no ;;
+    esac
+  else
+    say "  could not read the compute node container's address; the gate assertion cannot run"
+  fi
+
+  # The first line of the deployment's defence: the worker's network cannot reach the cluster's. Probed from inside
+  # the worker container itself, against the compute node's address ON the cluster network — its peer name means
+  # nothing on the worker's net, so the address is what makes this an answer about routing rather than DNS. A
+  # completed connection (rc 0) is the only outcome that counts as reachable: Docker isolates two user-defined
+  # networks by dropping between them (a timeout), and a firewall that answers with a refusal is separation too.
+  local probe_rc=n/a
+  if [ -z "$compute_ip" ]; then
+    say "  could not read the compute node container's address; the isolation probe cannot run"
+    isolated=n/a
+  elif "$engine" exec "$worker" /bin/bash -c 'command -v timeout >/dev/null' >/dev/null 2>&1; then
+    probe_rc=0
+    "$engine" exec "$worker" timeout 3 /bin/bash -c \
+      "exec 3<>/dev/tcp/$compute_ip/$COMPUTE_INTERNAL_PORT" >/dev/null 2>&1 || probe_rc=$?
+    if [ "$probe_rc" = 0 ]; then
+      isolated=no
+    else
+      isolated=yes
+    fi
+  fi
+
+  if [ "$placed" != yes ] || [ "$container" != yes ]; then
+    say "  what the edge node's API reports about the cluster:"
+    printf '%s' "$nodes_json" | head -c 600 | sed 's/^/    /'
+    say ""
+    say "  the job's own record:"
+    printf '%s' "${jobOut:-<no job record — the job was not accepted or did not finish>}" | head -c 800 | sed 's/^/    /'
+    say ""
+    say "  the compute node container's last lines:"
+    "$engine" logs "$compute" 2>&1 | tail -20 | sed 's/^/    /'
+    say ""
+  fi
+  if [ "$gate_ok" = no ]; then
+    say "  a script's fetch to the compute node's own endpoint was not refused as a cluster node:"
+    printf '%s' "${gate_out:-<no job record>}" | head -c 1200 | sed 's/^/    /'
+    say ""
+  fi
+
+  "$engine" rm -f "$edge" "$compute" "$worker" >/dev/null 2>&1 || true
+
+  [ "$nodes_seen" = yes ] && [ "$edge_cap" = "0" ] && [ "$placed" = yes ] && [ "$container" = yes ] \
+    && [ "$isolated" = yes ] && [ "$gate_ok" = yes ] && result=PASS
+  printf '%-3s | %-6s | %-8s | %-22s | %-9s | %-8s | %-9s | %-9s | %-8s | %s\n' \
+    case engine rootless identity nodes edge-cap ran-there container isolated result
+  printf '%-3s | %-6s | %-8s | %-22s | %-9s | %-8s | %-9s | %-9s | %-8s | %s\n' \
+    "C7" "$engine" "rootful" "$flag" "$nodes_seen" "$edge_cap" "$placed" "$container" "$isolated" "$result"
+  say "     both nodes are containers on a cluster network the discovery members name (edge:$CLUSTER_PORT_EDGE, compute:$CLUSTER_PORT_COMPUTE): $nodes_seen"
+  say "     the edge node (api,ingress, C93_CAPACITY=4) advertises capacity 0 — the role rule: $edge_cap"
+  say "     the job submitted at the edge node's API names the compute node (which advertises ${compute_cap:-?}): $placed"
+  say "     on the compute node container: connected=$pool_connected spawned=$pool_spawned — its worker container did the work: $container"
+  say "     a script's fetch to the compute node's own endpoint is refused by the gate as a cluster node: $gate_ok"
+  say "     the worker's own network cannot reach the compute node's internal endpoint at ${compute_ip:-?}:$COMPUTE_INTERNAL_PORT (probe rc=$probe_rc): $isolated"
+  restore_ports
+  [ "$result" = PASS ]
+}
+
 # Podman rootless (D-149): the image's own user (c93, 10001:999) is mapped to the invoking host uid, which is what makes
 # the node's files — the 0600 socket and the 0400 secret — belong to the container's process. Plain `keep-id` does NOT
 # do that: it leaves the container running as the image's user while the host files appear as the invoking uid, so the
@@ -1292,6 +1585,18 @@ if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C6" ]; then
     check_cluster_placement docker rootful "--user $(id -u):$(id -g)" --user "$(id -u):$(id -g)" || FAILED=1
   else
     printf '%-3s | %-16s | %s\n' "C6" docker "SKIP (needs a rootful engine to run a container as this user)"
+    SKIPPED=$((SKIPPED + 1))
+  fi
+fi
+
+if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C7" ]; then
+  if [ "$WORKERS_OK" != 1 ]; then
+    printf '%-3s | %-16s | %s\n' "C7" docker "SKIP (needs the worker image — see the note above)"
+    SKIPPED=$((SKIPPED + 1))
+  elif have_docker && ! rootless_docker; then
+    check_container_cluster_placement docker rootful "--user $(id -u):$(id -g)" --user "$(id -u):$(id -g)" || FAILED=1
+  else
+    printf '%-3s | %-16s | %s\n' "C7" docker "SKIP (needs a rootful engine to run a container as this user)"
     SKIPPED=$((SKIPPED + 1))
   fi
 fi

@@ -216,12 +216,19 @@ network:
 - Publish the node's ports on **loopback** only — `127.0.0.1:9493:9493`, as `c93 node install --docker` does — so the
   worker's network has no route to the API, the ingress or metrics. Or put the workers on a network the node is not
   on, and firewall the rest.
-- Do **not** rely on the node's own gate for this. A container reaches its host at an address the node cannot
-  recognise as its own — the bridge gateway on Docker, pasta's `169.254.1.2` under rootless podman — so "the node's
-  own addresses" is not a complete deny list from inside a container. The network is the first line; the gate is the
-  second.
+- **Do not rely on the node's own gate for this.** The rules a worker holds *do* know the node's own interface
+  addresses and ports, so a script's `fetch`/`net`/`tls` to the API, the ingress, the internal endpoint or metrics is
+  refused as `cluster_node`, whatever the tenant is allowed. But the gate is a policy on the script's host APIs, not a
+  filter on the container's network: a shell, a native process or anything else in that container can open the same
+  connection directly, and an address that exists only inside the container's namespace (pasta's peer under rootless
+  podman) is not one the node can name. The network is the boundary for that traffic; the gate is the boundary for
+  the script.
 - Watch the **internal endpoint** and the **metrics port** in particular: neither is meant for anyone. `--case C5`
-  reports which of the node's ports a worker's network can actually reach.
+  asserts both halves where a script can really reach the node — at the worker network's gateway, a script's `fetch`
+  to the internal endpoint is refused as `cluster_node`, while a shell probe from the same container reaches the port.
+  `--case C7` runs the shape that keeps the internal endpoint unreachable — the nodes on one network, the worker on
+  another, the socket directory the only thing between them — and asserts the gate's refusal there too, against the
+  compute node's container address.
 
 ### What it looks like from here
 
@@ -251,8 +258,8 @@ network:
 `0600` socket as the right identity, whether a job round-trips on it, whether the wrong secret is refused, and which
 network property the placement's own container has — and prints a matrix. On a machine with both engines available:
 **C1 (rootless podman, `--userns=keep-id`) and C3 (rootful Docker, `--user`) pass**, C4 (a foreign uid) is refused,
-C5 (the `worker` placement) passes, and C6 (the cluster shape) passes; every `SKIP` line says what would enable it.
-**Which JS engine runs makes no difference** — the matrix is the same with
+C5 (the `worker` placement) passes, and C6 and C7 (the cluster shapes) pass; every `SKIP` line says what would enable
+it. **Which JS engine runs makes no difference** — the matrix is the same with
 `worker-javet` and with `worker-graaljs` (`C93_IDCHECK_WORKER=worker-graaljs`), because what the cases decide is the
 socket, the identity and the network rather than the engine.
 
@@ -261,7 +268,10 @@ and runs the same job twice. Under `node` the node makes the connection and **it
 `worker` the same job succeeds with that counter **standing still**, so the worker connected over the route its
 deployment gave it and the node was never in the path. It also shows the static set still refusing metadata, RFC1918
 and the cluster's own port, that the node's own refusal counter does not move, and that the node learns about the
-worker's refusals only from the worker's report (D-176).
+worker's refusals only from the worker's report (D-176). Its sharpest line is the internal endpoint: at the worker
+network's **gateway** — the address the worker can actually reach the node on, an interface of the node under rootful
+Docker — a script's `fetch` must be refused as a **cluster node**, not merely as a private address, while a shell
+probe from the same container reaches the port. The gate refuses the script; the deployment owes the network.
 
 It is safe to re-run: everything it creates is labelled with its run id, it uses its own ports and temp directories
 under `mktemp -d`, it removes the images it builds, and it never touches anything it did not create. (It keeps one
@@ -277,6 +287,19 @@ of its own spawned (the container did the work). C6 deliberately avoids the clus
 checks that its own are free first. Its members name both ports, so each node binds exactly its base and the
 communication port 100 above it and refuses to start when either is taken — what a node used to do was take the next
 free port while its peers kept joining the base, which reads as opaque TLS errors instead of a bind failure (D-185).
+
+C7 is the deployment shape with **both nodes in containers**: an edge node and a compute node on a `cluster` network
+of their own, and the worker on a `workers` network of its own, with the compute node's socket directory the only
+thing between them. It submits a job at the edge and requires the same answers as C6 (the edge advertises capacity 0,
+the job names the compute node, the container's work is what the compute node reports). It asks the gate's question
+first: a job's `fetch` to the compute node's **container address** — its internal endpoint — must be refused as a
+**cluster node**, the policy naming the node's own interfaces. Then it asks the deployment's: from inside the worker
+container it opens a connection to the same address — the address, not the name, because a name means nothing on the
+worker's network. Only a completed connection fails the case; a timeout (what Docker's drop between two user-defined
+networks looks like) or a refusal both mean the networks are separated, and the check reports `isolated=yes`. That is
+why the networks are the deployment's to arrange: the gate governs what a *script* asks for through `fetch`, `net`
+and `tls` — and refuses the node's own addresses and ports for it — while whatever else runs in that container is raw
+traffic the gate never sees.
 
 ## Join a cluster
 

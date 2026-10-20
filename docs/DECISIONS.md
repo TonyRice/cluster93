@@ -4482,3 +4482,49 @@ adding the check's C6). Nothing can recover from that: the membership is static 
 - **A warning instead:** a node nobody can join is not a usable node.
 - **Silently re-basing and advertising the new port:** peers cannot learn a port the node never told them.
 
+### D-186 — A request whose upload dies reaches the service as a failure
+**Date:** 2026-10-19 · **Refined:** 2026-10-20 · **Status:** Accepted.
+
+**Context:**
+D-184 gave a body that fails *after* its headers a way across the worker connection: a reset frame carries the host
+failure's name and code, and the worker rebuilds it. That covered everything the node produced. The other direction
+was still open: when the *client's* upload died, the node's request-body pipe ended the worker's stream
+(`err -> out.end()`), so the service got a short body and no error. A handler cannot tell that from a complete
+request — it will happily validate, store or bill half of one — and the failure the client actually experienced
+vanished at the socket.
+
+**Decision:**
+1. **The failure travels instead of the end**, through the same `resetBodyStream` path D-184 built: the worker's
+   request-body read fails rather than completing.
+2. **Classify at the boundary.** A failure that already carries a host classification keeps it. Anything else is
+   `TypeError/network_error` with `request body failed: <cause>` — the same name and code a worker-side fetch body
+   gives, so a script's `catch` sees one kind of thing whichever side of the connection died.
+3. **A cancellation is still not an error**: a plain reset (no name) stays a reset (D-184).
+4. **The client leaving mid-upload *is* that failure.** `HttpExchange.closed()` completing true is how the node learns
+   the connection died before the response (D-123), and that is the same event as a cut-off upload. When it fires
+   before the upload ended, the *request* stream is reset through the D-186 classification; the *response* stream
+   keeps the plain `CLIENT_CLOSED` reset, so the worker's `ServerResponse` still emits `'close'`. A client that
+   leaves after a complete upload stays a plain cancellation. The reset is registered only after the stream has
+   opened and its body handlers are attached: a future that is already complete runs its callback inline, and
+   registering it before `openStream` sent the reset *ahead* of the OPEN, so the worker never saw the request at
+   all.
+
+**Evidence:**
+- `NodeWorkerChannelTest.aClientUploadThatFailsMidBodyReachesTheServiceAsAFailure`: a node-side exchange whose body
+  sends one chunk and then fails with a raw `RuntimeException("Connection was closed")`; the service's body read
+  fails with `HostException`, `TypeError/network_error`, and `request body failed: …`. Against the old
+  `err -> out.end()` that read completed with the short body, so the test fails on "the service read a failure, not a
+  short body".
+- `ProcessModeParityTest.aDroppedUploadReachesTheServiceAsAFailure`: the whole path — ingress, worker process and
+  worker connection — a `POST` promising 1000 bytes whose socket is closed after four. The service's `req.text()`
+  rejects with the D-186 failure, the job's logs record it, and stopping the run returns what the handler saw. The
+  first version of this test found the ordering bug in point 4: the request was never dispatched.
+- `NodeWorkerChannelTest.aClientThatLeavesMidUploadIsAFailureAndOneThatFinishedIsACancellation` observes the two
+  `closed()` outcomes on the wire, with a frame-recording pipe: mid-upload the request stream resets with
+  `TypeError/network_error` (`request body failed: the client disconnected`), and after a whole body it resets
+  `CLIENT_CLOSED` (499) with no name. Both are `closed() == true`; only the first truncated anything, which is what
+  the `uploadEnded` flag is for.
+
+**Rejected:**
+- **Ending the stream with what arrived:** silent truncation is the bug; a short body is not a (smaller) request.
+- **A second RPC or a failure table:** the stream and its reset frame are already there (D-184).
