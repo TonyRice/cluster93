@@ -473,6 +473,9 @@ public final class Cluster93 {
                     config.maxWorkerMemoryMb() * 1024L * 1024L
             );
             workerPoolRef.set(poolManager);
+            // How the node gives connected supply back (D-187): manual release is always available, automatic is
+            // opt-in and off by default, and neither goes below the floor.
+            poolManager.releasePolicy(config.workerMin(), config.workerReleaseAbove(), config.workerReleaseCooldownMs());
             // The workers are given the rules they decide under (D-173): as each is bound, and again whenever the rules
             // change, the cluster's addresses change, or an expiry nears. A worker sent nothing refuses to connect
             // anywhere on its own. It is built even on a node that decides everything itself, because a tenant's own
@@ -597,6 +600,9 @@ public final class Cluster93 {
                         secretBox, config.diskRoot(), stores.blobs().name()),
                 queues, callbackSecrets, tenantSecrets, identity, audit, fileTree, fileLinks, packages, stores.apps(), limiter, egressPolicies,
                 security.tls() == null ? null : id -> ClusterSecurity.revoke(vertx, stores.kv(), cluster, id),
+                workerPoolRef.get() == null ? null : body -> workerPoolRef.get().releaseIdle(
+                        body.getString("workerId"), body.getString("tenant"), body.getString("reason"))
+                        .map(cluster93.runner.protocol.pool.WorkerRelease::toJson),
                 () -> readiness(nodes, instanceId, cluster)) : null;
         // The ingress and the internal endpoints authenticate each other with a secret the cluster agrees on once.
         // A node whose file backend can't be used refuses to start, saying why, rather than failing uploads later.

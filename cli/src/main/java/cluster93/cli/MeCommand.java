@@ -7,9 +7,9 @@ import picocli.CommandLine.Option;
 import java.util.ArrayList;
 import java.util.List;
 
-@Command(name = "profile", description = "Your user profile and tenant memberships. With options, change your name, display name or email.",
-        subcommands = {ProfileCommand.Passwd.class})
-final class ProfileCommand extends Base {
+@Command(name = "me", description = "Your user profile and tenant memberships. With options, change your name, display name or email.",
+        subcommands = {MeCommand.Passwd.class})
+class MeCommand extends Base {
 
     @Option(names = "--name", paramLabel = "NAME", description = "A new user name; your memberships and tokens follow.")
     String name;
@@ -79,5 +79,16 @@ final class ProfileCommand extends Base {
             out().println("Password updated.");
             return 0;
         }
+    }
+}
+
+/** The old name of {@code c93 me}, hidden and deprecated for one release (D-189). */
+@Command(name = "profile", hidden = true, description = "Deprecated: use `c93 me`.")
+final class LegacyProfileCommand extends MeCommand {
+
+    @Override
+    int execute() {
+        err().println("`c93 profile` is deprecated; use `c93 me`.");
+        return super.execute();
     }
 }

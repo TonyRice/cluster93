@@ -21,6 +21,10 @@ public class SocketWorkerHandle extends AbstractWorkerHandle {
 
     /** Set when the connection ends, however it ends: the remote closing, a transport error, or this node closing it. */
     private final AtomicBoolean connectionEnded = new AtomicBoolean(false);
+    /** Set when the node has asked this worker to leave (D-187): it is no longer placeable, and not yet closed. */
+    private final AtomicBoolean releasing = new AtomicBoolean(false);
+    private volatile String releaseReason;
+    private volatile String releaseTrigger;
     /** Closes the connection: the node's own end of it (the socket). A {@link Runnable} so a test needs no socket. */
     private final Runnable closeConnection;
 
@@ -48,8 +52,81 @@ public class SocketWorkerHandle extends AbstractWorkerHandle {
     }
 
     /**
+     * Whether the node has asked this worker to leave (D-187). Such a worker is marked unplaceable before the request
+     * is sent, so a job cannot be dispatched between the decision and the GOODBYE.
+     */
+    public boolean releasing() {
+        return releasing.get();
+    }
+
+    /** The reason this worker was released, or null when it was not. */
+    public String releaseReason() {
+        return releaseReason;
+    }
+
+    /** {@code manual} or {@code automatic}: a bounded label for the release metric (D-187). */
+    public String releaseTrigger() {
+        return releaseTrigger;
+    }
+
+    /**
+     * Marks this worker for release before anything is sent. Atomic with {@link #admitJob()}: either a job is admitted
+     * first (and the release refuses), or the release is claimed first (and no job can start). A worker with a run
+     * already on it is never released.
+     *
+     * @return whether this call claimed the release; false when it is busy, already releasing, or terminated
+     */
+    public synchronized boolean beginRelease(String reason, String trigger) {
+        if (releasing.get() || runningJobs() > 0 || state() == WorkerHandle.State.TERMINATED) {
+            return false;
+        }
+        releaseReason = reason;
+        releaseTrigger = trigger;
+        releasing.set(true);
+        return true;
+    }
+
+    /** Undoes {@link #beginRelease} when the worker turned out not to be in a releasable place after all. */
+    public synchronized void cancelRelease() {
+        if (runningJobs() == 0) {
+            releasing.set(false);
+            releaseReason = null;
+            releaseTrigger = null;
+        }
+    }
+
+    @Override
+    public synchronized boolean admitJob() {
+        // The release marks the worker unplaceable before it sends GOODBYE (D-187), so a run cannot start in between.
+        return !releasing.get() && super.admitJob();
+    }
+
+    @Override
+    public boolean hasCapacity() {
+        return !releasing.get() && super.hasCapacity();
+    }
+
+    /**
+     * Ends a released worker that did not leave on its own. This closes the connection <b>without</b> marking the
+     * handle terminated: the connection's close handler is what reaps it through its pool, and that path is what
+     * gives the memory and the connection slot back exactly once (D-187).
+     */
+    public void closeAfterRelease() {
+        if (!releasing.get() || connectionEnded.get()) {
+            return;
+        }
+        connectionEnded.set(true);
+        try {
+            closeConnection.run();
+        } catch (Exception e) {
+            LOG.debug("Could not close released worker connection {}: {}", workerId(), e.getMessage());
+        }
+    }
+
+    /**
      * Closes the connection. The worker's supervisor will start another one, which reconnects — the node cannot shed
-     * a container worker for good, which is why idle control lives with the deployment (D-166, §2.7).
+     * a container worker for good, which is why idle control lives with the deployment (D-166, §2.7). A cooperative
+     * release uses {@link #closeAfterRelease()} instead (D-187).
      */
     @Override
     public void terminate() {
@@ -71,6 +148,10 @@ public class SocketWorkerHandle extends AbstractWorkerHandle {
 
     @Override
     public String deathCause() {
-        return isAlive() ? null : "connection ended";
+        if (isAlive()) {
+            return null;
+        }
+        String reason = releaseReason;
+        return reason == null ? "connection ended" : "released by the node: " + reason;
     }
 }

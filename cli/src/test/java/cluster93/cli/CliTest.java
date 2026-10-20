@@ -196,6 +196,18 @@ class CliTest {
     }
 
     @Test
+    void releasingAWorkerWithNoIdleConnectionSaysSo() {
+        // The verb exists and reaches the route; with no worker container attached there is nothing to release (D-187).
+        Result release = cli("--url", url, "--token", ADMIN, "node", "workers", "release");
+        assertThat(release.code()).isNotZero();
+        assertThat(release.err()).contains("No idle connected worker");
+
+        Result byTenant = cli("--url", url, "--token", ADMIN, "node", "workers", "release", "--bound-tenant", "acme");
+        assertThat(byTenant.code()).isNotZero();
+        assertThat(byTenant.err()).contains("No idle connected worker bound to acme");
+    }
+
+    @Test
     void secretsAreSetFromStandardInputListedAndRemovedButNeverPrinted() throws Exception {
         loginAsNewTenant("secretive");
         Result set = cli(Map.of(), "line one\nline two\n", "secrets", "set", "pem");
@@ -478,7 +490,7 @@ class CliTest {
         // Quinn makes a CI token, renames themselves, and leaves: the token keeps working, flagged.
         config = home.resolve("quinn");
         assertThat(cli("tokens", "create", "ci", "--scope", "jobs:read").code()).isZero();
-        Result renamed = cli("profile", "--name", "quinn-r", "--display-name", "Quinn");
+        Result renamed = cli("me", "--name", "quinn-r", "--display-name", "Quinn");
         assertThat(renamed.code()).as(renamed.err()).isZero();
         assertThat(renamed.out()).contains("quinn-r (Quinn)").contains("people");
         config = pat;
@@ -513,10 +525,10 @@ class CliTest {
         assertThat(cli("whoami").out()).contains("nel in tenant pwlogin");
 
         // The password works: changing it needs the current one; a wrong one is refused.
-        Result changed = cli("profile", "passwd", "--current-password", "s3cret-pass", "--password", "new-pass");
+        Result changed = cli("me", "passwd", "--current-password", "s3cret-pass", "--password", "new-pass");
         assertThat(changed.code()).as(changed.err()).isZero();
         assertThat(changed.out()).contains("Password updated");
-        Result wrong = cli("profile", "passwd", "--current-password", "s3cret-pass", "--password", "other");
+        Result wrong = cli("me", "passwd", "--current-password", "s3cret-pass", "--password", "other");
         assertThat(wrong.code()).isNotZero();
         assertThat(wrong.err()).contains("Current password is incorrect");
     }

@@ -87,7 +87,14 @@ echo "$TOKEN" | c93 login https://cluster93.example.com
 c93 whoami                                    # tenant acme (jobs:read, jobs:write, …)
 ```
 
-The URL and token are saved in `~/.config/cluster93/config.json` (`%APPDATA%\cluster93` on Windows), readable only by you. `C93_URL` and `C93_TOKEN`, or `--url` and `--token`, override them, for CI.
+The URL and token are saved in the active profile (`~/.config/cluster93/config.json` for `default`; `~/.config/cluster93/profiles/<name>/config.json` otherwise), readable only by you. `C93_URL` and `C93_TOKEN`, or `--url` and `--token`, override them, for CI. Use one profile per cluster or dev stack:
+
+```bash
+c93 profiles create dev
+c93 --profile dev login http://localhost:9393
+c93 profiles use dev
+c93 profiles                                   # * marks the active one
+```
 
 ## Commands
 
@@ -122,7 +129,9 @@ The URL and token are saved in `~/.config/cluster93/config.json` (`%APPDATA%\clu
 | `members · members set USER --role R --group G · members rm USER` | Who's in your tenant and what they may do |
 | `roles · roles set NAME --scope S · roles rm` · `groups · groups set NAME --role R · groups rm` | Your own roles and groups |
 | `audit [--limit N] [--before ID] [--operators]` · `audit verify` | Who changed what, newest first · operators: check the audit chains for tampering |
-| `profile [--name N] [--display-name D] [--email E]` | You and your tenants; change your name or details |
+| `profile [--name N] [--display-name D] [--email E]` | **Deprecated:** use `me` |
+| `me [--name N] [--display-name D] [--email E]` | You and your tenants; change your name or details |
+| `profiles · profiles use NAME · show · create · rm` | Named connection contexts (URL, token, tenant); `--profile NAME` or `C93_PROFILE` selects one. The default profile keeps the old `config.json` ([D-189](DECISIONS.md)) |
 | `users · users rename OLD NEW · disable · enable · operator [--remove] · rm` | Operators: every user |
 | `tenants create · ls · rm · token · tokens · revoke · storage-policy` | Admin only |
 | `tenants egress TENANT [--allow TO:PORTS …] [--deny TO[:PORTS] …] [--posture public\|allow-list\|inherit] [--none]` | Admin only. A tenant's own rules: `--allow 10.0.5.20/32:5432 --allow db.internal.example:5432,6379`, `--deny *.example.com`, or `--deny 203.0.113.0/24:25`. `TO` can also be `@set` or `*`. `--allow`/`--deny` replace its rules, and `--posture` alone keeps them (D-111) |
@@ -132,6 +141,7 @@ The URL and token are saved in `~/.config/cluster93/config.json` (`%APPDATA%\clu
 | `node start · stop · restart · status · logs [--follow] · mcp · update` | Drive the node: its service unit (systemd/launchd), or the process directly. `c93 local …` is a deprecated alias for one release |
 | `node env [--set K=V] [--edit]` | Show or change the node's `node.env` (`C93_*` settings, short names accepted) |
 | `node invite ID [--host ADDR] [--key PUBLIC_KEY] --ca ca.key` · `node revoke ID` | Operator: a one-line join for a new node (also renews); revoke a node |
+| `node workers release [--worker ID] [--bound-tenant NAME] [--reason TEXT]` | Operator: ask one idle connected worker container to leave; it exits 0 (`released`, not a crash) and its supervisor decides whether to replace it ([D-187](DECISIONS.md)) |
 | `version` · `update [--cli|--node] [--version TAG]` | Show the version · update the CLI and/or the node from a signed release (`--cli`, `--node`; neither = both) |
 
 Add `--json` to any command for the API's JSON instead of a summary.

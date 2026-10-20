@@ -45,6 +45,9 @@
 #   C93_WORKER_SOCKET=/run/cluster93/workers/node.sock     the node listens here (uncommented, once enabled)
 #   C93_WORKER_SECRET_FILE=/run/secrets/c93-worker-secret  the node reads the secret from here
 #   C93_WORKER_CONNECTIONS_MAX=...                         how many connections it accepts (defaults to its workers)
+#   C93_WORKER_MIN=...                                     never release below this many (default 0)
+#   C93_WORKER_RELEASE_ABOVE=...                           automatic release above this many (default 0 = off)
+#   C93_WORKER_RELEASE_COOLDOWN_MS=...                     one automatic release per this interval (default 60000)
 #   C93_EGRESS_PLACEMENT=worker|node                       the default; the worker placement needs the network below
 #
 # Identity (D-149) — a worker must present the node's host identity, so the 0700 socket dir / 0600 socket stay tight:
@@ -74,7 +77,8 @@
 x-worker: &worker
   # Pin by DIGEST, not tag: a tag is mutable, and the deployment is what pulls it (S7).
   image: cluster93-node@sha256:REPLACE_WITH_THE_NODE_IMAGE_DIGEST
-  restart: unless-stopped
+  # A crashed worker (non-zero) must bring the container back; a released one (exit 0, D-187) must not.
+  restart: on-failure
   # S4: no capabilities, no setuid escalation, no writable root, a bounded process table, and the pool's bounds —
   # --memory/--cpus bound the POOL this container holds, not one tenant (D-166).
   cap_drop: [ALL]
@@ -126,10 +130,19 @@ services:
             --secret-file /run/secrets/c93-worker-secret \
             --heap-mb 128 --threads 4 &
         done
-        # A worker that dies (or cannot reach the node) takes the container down, and `restart` brings it back: the
-        # node cannot shed a worker itself, so keeping N alive is the supervisor's job (D-166, §2.7).
-        wait -n
-        exit 1
+        # The node can ask an idle worker to leave (D-187). Such a worker exits 0 — "released, do not restart" — so
+        # the pool shrinks by one and the container stays up while any worker remains; when the last one is released
+        # it exits 0 too, and `restart: on-failure` leaves the container down, which is the deployment getting its
+        # supply back. A worker that crashes exits non-zero and takes the container down to be replaced.
+        left=4
+        while [ "$left" -gt 0 ]; do
+          if wait -n; then
+            left=$((left - 1))
+          else
+            exit 1
+          fi
+        done
+        exit 0
     # Scale the SUPPLY by running more of these containers, or more workers in each. The node accepts whatever
     # connects, up to C93_WORKER_CONNECTIONS_MAX and its worker memory ceiling (D-169).
 

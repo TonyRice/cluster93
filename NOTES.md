@@ -141,14 +141,44 @@ One unified **`c93 cluster …`** pathway for standing up and managing Cluster93
 
 The goal is a `--help` that reads as one story — set up a master, set up a dev node, run a node in Docker, set up a cluster — instead of four names for a node and three places to configure one. It should audit the whole pathway (CLI surface, node deploy for a real cluster, the setup wizard, docs) rather than patch it.
 
-### Open questions (settle when this is picked up)
-- Does `c93 cluster` absorb `c93 node`, or does `node` stay the per-machine command while `cluster` orchestrates several?
-- Is the Docker route a CLI verb (`c93 cluster docker …`) that drives Compose, or generated compose/env a user runs?
-- What happens to `c93 local` — drop the alias, or keep it as the explicit "dev node" verb?
-- How does it interact with W1's profile split (`scripts/local.sh dev|master`): does the CLI shell out to a profile, or take over the orchestration?
-- Where do the three "install pathways" share code — `c93 node install` (release fetch + layout) is the one implementation today; does the Docker route reuse the same artifacts?
+### Settled 2026-10-20 (D-188–D-191)
+The open questions above are answered; this capture is now a pointer to the decisions and the work order.
 
-**Related:** Phase 11 consolidation (W1, W5) already removes some of the duplication; this is the bigger follow-up.
+- **`c93` stays the tenant/client command** (`run`, `jobs`, `apps`, …); **`c93 cluster` is the operator front
+  door** (CA, inventory, membership, status/doctor, `nodes`, and the moved `tenants`/`users`/`audit`);
+  **`c93 node` is one machine** (install/lifecycle/join/local worker supply); **`c93 dev` is the only checkout
+  node**. `node` is not folded into `cluster`: they answer different questions and own different state.
+- **`scripts/local.sh` is ported to `c93 dev` and deleted.** `c93 dev` merges the old `master`/`dev` profiles
+  (persistent data until `reset`, seeded tenant/admin/console, MCP). `c93 node setup` and the shell-out are
+  removed. The `master` profile is not kept as a second concept.
+- **Profiles are first-class.** `c93 me` owns user identity (the old `profile` command); `c93 profiles` manages
+  connection contexts (`default`, `dev`, `prod`, …), selected by `--profile`/`C93_PROFILE`/`current-profile`.
+  The legacy `config.json` is the `default` profile; `dev` never clobbers a production login.
+- **Checkout is the temporary default install source.** `c93 node install` inside a checkout builds from it;
+  `--release`/`--version` force a release, and the default flips when releases are ready. `--docker` already
+  builds from the checkout by default.
+- **One node plus N local worker containers is `node` work.** `c93 node install --docker --workers N` and
+  `node workers scale` create worker supply for one node joining an existing cluster; a whole local cluster
+  (`N` node containers) is a later `c93 cluster up --docker` convenience. Swarm is a separate fixed-node spike.
+
+**Command surface:**
+
+```
+c93                     tenant/client
+c93 cluster             init, status, doctor, invite, revoke, nodes, tenants, users, audit
+c93 node                install, uninstall, join, start/stop/restart/status/logs/env,
+                        workers release, workers scale
+c93 dev                 up, status, logs, down, reset, build, seed, test-examples
+c93 profiles            list, use, show, create, rm
+c93 me                  user identity (was c93 profile)
+```
+
+**Work order:** `~/.opencode/plan/c93-cluster-pathway.md` (local, untracked) in five phases: profiles/help,
+cluster inventory + admin moves, node modes/join/worker containers, `c93 dev` + `local.sh` removal, docs and
+verification.
+
+**Related:** Phase 11 consolidation (W1, W5) removed some duplication; this is the bigger follow-up. Release
+images, local multi-node Compose, and Swarm are explicitly later tracks.
 
 ---
 

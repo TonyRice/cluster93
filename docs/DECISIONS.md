@@ -4528,3 +4528,284 @@ vanished at the socket.
 **Rejected:**
 - **Ending the stream with what arrived:** silent truncation is the bug; a short body is not a (smaller) request.
 - **A second RPC or a failure table:** the stream and its reset frame are already there (D-184).
+
+### D-187 — An idle connected worker is released cooperatively, and its supervisor decides
+**Date:** 2026-10-20 · **Status:** Accepted and **built** (evidence at the end). Extends D-166, D-167 and D-172;
+uses D-176's report and D-171's connection bound. The build contract was
+`.agents/workorders/b2-worker-release.md`.
+
+**Context:**
+D-166 made supply the deployment's: a worker container connects to the node's socket and the node binds it to a
+tenant. The node has no pid, did not create the container, and cannot refuse a connection without the supervisor
+reconnecting (D-171 item 4). D-172 then made an idle worker reusable across tenants, which removes the common reason
+to want one gone — a warm worker for tenant A no longer blocks tenant B — but it does not give a deployment back
+capacity it no longer needs. The two existing ways to remove a connected worker are both wrong for this:
+`SocketWorkerHandle.terminate()` closes the socket and the supervisor immediately reconnects, so it is a restart, not
+a release; and D-156's reaping exists to free a worker-count slot for a spawn — a slot a connected worker does not
+hold — and it also ends the worker by closing the connection. A deployment that provisioned four
+containers still cannot be told "this node wants three", and an operator cannot ask for one to go without guessing
+which is idle.
+
+**Decision:**
+1. **A release is a cooperative request, not a termination.** The node sends the existing GOODBYE frame with a reason
+   (`{"reason": "over capacity for this node"}`) to one **idle** worker — zero running jobs or services — and marks it
+   not placeable at once, so a job cannot be dispatched between the decision and the frame. No new frame is needed.
+2. **The worker leaves deliberately.** On GOODBYE it flushes what it has not yet reported (D-176), then exits **0**
+   itself, rather than waiting for the node to close the connection. Exit 0 is the contract: *released, do not
+   restart*; any non-zero exit is still a crash. The node does not kill a connected worker; after a grace period it
+   closes the socket, and a worker that ignored the request may reconnect — it is not punished.
+3. **A release is a preference, and the deployment decides.** The node cannot express "this container", only "this
+   worker" (it has no container identity). A supervisor that honours the release leaves the worker down, or moves
+   capacity elsewhere; one that restarts it gets a new connection, which is a legal answer. The shipped compose
+   wrapper therefore treats a released worker as a shrink, not a failure, and exits 0 when its last worker is gone.
+4. **Selection is idle-only and fair.** Unbound workers first, then the longest-idle bound worker; never one with a
+   run in flight; never below a floor (`C93_WORKER_MIN`, default 0). D-172's reuse is tried before release: a worker
+   that another tenant can use is offered, not shed.
+5. **Two triggers, one mechanism.** An operator can release one idle worker explicitly; automatic release is opt-in
+   and off by default (`C93_WORKER_RELEASE_ABOVE`, 0 = off), shedding at most one worker per cooldown
+   (`C93_WORKER_RELEASE_COOLDOWN_MS`, default 60000) while the node's connected workers exceed the threshold. A worker
+   that connected inside the cooldown is not released, so a supervisor that restarts on release cannot make the node
+   flap.
+6. **Accounting is on the close, exactly once.** The worker's memory reservation and connection slot are freed when
+   the connection ends, not when GOODBYE is sent (the report still needs the connection). A released worker's death
+   cause is `released by the node: <reason>`, and `c93_workers_released_total{reason}` counts it; the ordinary
+   "connection ended" stays for every other close.
+7. **The operator surface is an admin API, with a CLI verb on top.** `POST /v1/cluster/workers/release` (admin
+   scope), body `{"workerId": "..."}`, `{"tenant": "..."}` or empty for "one idle worker"; `c93 node workers release`
+   wraps it. The verb is provisional: the unified `c93 cluster` pathway (NOTES.md) will place it, and it must not grow
+   a second owner before then.
+
+**Alternatives considered:**
+- **Close the connection (what `terminate()` does).** Not a decision: the supervisor reconnects, so the node's
+  preference is lost and the worker's log shows a disconnect rather than a release. Rejected.
+- **A new RELEASE frame.** GOODBYE already means an orderly close and already carries a JSON body; a second frame
+  with the same meaning is one more thing both ends must keep in step. Rejected.
+- **The node kills the process.** It has no pid for a connected worker, and D-166/D-167 put container lifecycle in
+  the deployment's hands. Rejected.
+- **The deployment watches node metrics and scales itself.** Works, and stays available; rejected as *the* mechanism
+  because it reimplements "which worker is idle" from gauges, cannot name a victim, and leaves no reason on the
+  worker or the job. It remains a valid outer loop.
+- **Per-tenant containers.** Rejected by D-166; not reopened here.
+
+**Consequences:**
+- **The exit code becomes protocol.** 0 from a GOODBYE is "released"; 0 after EOF (node shutdown) is also a clean
+  exit, and `restart: on-failure` correctly leaves both down. A crash stays non-zero.
+- **The shipped compose wrapper changes.** With four workers in one container, `wait -n; exit 1` turns a release into
+  a restart. It must keep the container alive while workers remain, count a 0 as a shrink, and exit 0 when none are
+  left. `restart: unless-stopped` becomes `on-failure`; the guide shows the systemd/s6 equivalents.
+- **Automatic release is dangerous without an honouring supervisor.** The cooldown and the default-off setting bound
+  the damage; the guide says plainly that automatic release plus a restart-always supervisor is a loop.
+- **A release can race with work.** Marking the worker not placeable before sending GOODBYE is what makes it safe; a
+  run already dispatched means the worker is not idle and is not chosen.
+- **Releasing does not change isolation.** The tenant boundary and the run-level authorisation are untouched; this is
+  supply management, not a security control.
+- **The node-wide count and memory still move on close**, so a released worker is not counted as capacity the node
+  can place on — the next job waits for supply, which is the point.
+
+**Verification (planned; see the work order):**
+- an idle connected worker is released, exits 0 and does not reconnect; a busy worker is never chosen; the floor is
+  respected;
+- a worker that ignores GOODBYE is closed after the grace period and may reconnect;
+- a supervising wrapper does not restart a released worker but does restart a crashed one;
+- counts and memory drop exactly once; `WorkerRebindTest` still passes (reuse before release);
+- C8 in `scripts/worker-isolation-check.sh`: a real container, a job, idle, release, exit 0, no reconnect, then a
+  busy worker left alone.
+
+**Evidence (2026-10-20, built):** Implemented as `.agents/workorders/b2-worker-release.md`; two details were refined
+while building. (1) **A disconnect is not a release.** The worker exits **0** only when GOODBYE completed
+`WorkerDaemon.released()`; when the connection ends without one (the node stopped, or the post-grace close of a worker
+that ignored GOODBYE) it exits **1**. The Consequences paragraph above says "0 after EOF … `restart: on-failure`
+correctly leaves both down" — that was wrong for a node restart: supply would stay down when the node came back.
+Exiting non-zero makes the supervisor restart the worker, which reconnects; `restart: on-failure` is still the right
+setting, and only a release leaves a container down. (2) **The metric label is bounded.** The counter is
+`c93_workers_released_total{trigger="manual"|"automatic"}` rather than `{reason}`: a `reason` is free text from the
+operator (and reaches the worker's death cause and the API response), so using it as a label would create a series
+per typo. Verified end to end: `SocketWorkerHandleTest` (busy refused, unplaceable before GOODBYE, release does not
+mark it terminated, death cause), `NodeWorkerChannelTest` (the D-176 report arrives before `released()`),
+`WorkerSocketSourceTest` over a real UDS (unbound/bound selection, longest-idle, floor, anonymous busy, automatic
+one-per-cooldown, memory freed once on the close), `WorkerReleaseApiTest` (admin-only, 200/404/409, the counter),
+`CliTest`, and C8 with both `worker-javet` and `worker-graaljs` containers (idle → exit 0, no reconnect; busy → 409
+`worker_busy`, job SUCCEEDED, worker stays; then idle release → exit 0).
+
+---
+
+### D-188 — The CLI has four scopes: client, cluster, node, dev
+**Date:** 2026-10-20 · **Status:** Accepted (planned; work order `c93-cluster-pathway.md`)
+
+**Context:**
+The CLI grew around four different jobs: tenant/client commands (`run`, `jobs`, `apps`, …), one machine's node
+lifecycle (`c93 node`), the cluster's CA and membership (`c93 cluster init`, plus `invite`/`revoke` under `node`),
+and checkout development (`scripts/local.sh` with `master`/`dev` profiles, plus `c93 node setup` shelling out to
+it). The help told four names for a node and admin commands sat beside tenant ones, while the only real cluster
+operations were `init`. `c93 local` was already a hidden alias, but `scripts/local.sh` remained a parallel
+orchestrator with its own state and login handling.
+
+**Decision:**
+1. **`c93` is the tenant/client command.** `run`, `jobs`, `apps`, `services`, `files`, `secrets`, `queues`,
+   `packages`, `storage`, `domains`, `egress`, `callbacks`, `tokens`, `members`, `roles`, `groups`, `invites`,
+   `me`, `profiles`, `mcp`, `version`, and `update` stay there.
+2. **`c93 cluster` is the operator/admin front door.** It owns `init`, `status`, `doctor`, `invite`, `revoke`,
+   `nodes`, and the admin commands moved from root: `tenants`, `users`, `audit`. `init`/`invite` use `ca.key`;
+   API operations use the active profile's admin token.
+3. **`c93 node` is one machine.** Install/uninstall, local lifecycle, `join`, local worker supply, `workers
+   release`. It never owns cluster topology.
+4. **`c93 dev` is the checkout stack.** Build, start, seed, status, logs, down, reset. It is not a service-managed
+   install.
+5. **Moving is not breaking immediately.** Root `tenants`/`users`/`audit`, `node invite`/`revoke`, and
+   `c93 profile` remain hidden aliases for one release with a one-line deprecation. `c93 local` becomes a hidden
+   alias of `c93 dev`. `c93 node setup` is removed.
+6. **Help tells the story.** The root groups become Developer & Applications, Platform Resources, Identity &
+   Access (`me`, `profiles`), Cluster (`cluster`, `node`, `dev`, `update`), and Tools & Automation. Every command
+   accepts `-h/--help`; today `c93 node --help` and `c93 cluster --help` exit 2.
+
+**Alternatives:**
+- **Fold `node` into `cluster`.** Rejected: starting/stopping a local node would then need cluster credentials and
+  `cluster status` would be ambiguous about which machine it means. The scopes answer different questions and own
+  different state.
+- **Make root `c93` the cluster command.** Rejected: it would push `run`/`jobs`/`apps` into a subgroup and break
+  the tenant/client story for no gain.
+- **Keep `scripts/local.sh` as the dev implementation, hidden behind a CLI wrapper.** Rejected: it preserves two
+  state models, two login writers, and a shell dependency a release CLI cannot satisfy.
+
+**Consequences:**
+- `TenantsCommand`, `UsersCommand`, and `AuditCommand` mount under `ClusterCommand`; root aliases delegate.
+- `node invite`/`revoke` delegate to cluster; `node setup` and `runScript`/`findScript` disappear.
+- Docs, tests, and help groups move in the same release; aliases are tested, not just documented.
+- No server API change is required: the moved commands use their existing routes, and `cluster` reads
+  `GET /v1/nodes` plus local certificate files.
+
+**Verification (planned):** `MainHelpTest` locks the groups and the hidden aliases; `CliTest` exercises both the
+new location and the alias; a tenant token gets a clear 403 from `cluster status`; `c93 node --help` exits 0.
+
+---
+
+### D-189 — Profiles are the connection/context boundary
+**Date:** 2026-10-20 · **Status:** Accepted (planned)
+
+**Context:**
+The CLI has one saved login, `~/.config/cluster93/config.json`. `scripts/local.sh` writes the same file after
+seeding a dev stack, so using a dev stack overwrites a production login. Multiple clusters, a dev stack, and a
+production node cannot coexist. The only "profile" command today is the user's identity (`/v1/me`), which makes
+the word ambiguous.
+
+**Decision:**
+1. **A profile is a named connection context** — URL, token, tenant — plus optional local metadata: a dev stack
+   (`dataDir`, ports, engine, pid) or a cluster bundle path. It is not a tenant, not a user, and not a node.
+2. **`c93 me` owns user identity.** The existing `profile` command is renamed to `me`; `c93 profile` stays as a
+   hidden one-release alias. `/v1/me` and its behavior are unchanged.
+3. **`c93 profiles` manages contexts:** `list`, `use`, `show`, `create`, `rm`.
+4. **Selection precedence:** `--profile NAME` → `C93_PROFILE` → `current-profile` → `default`.
+5. **Storage:** `profiles/<name>/config.json` holds URL/token/tenant at `0600`; `profiles/<name>/profile.json`
+   holds non-secret metadata. The legacy root `config.json` remains the `default` profile's file, so existing
+   logins and tests keep working. New non-default profiles never touch it.
+6. **`c93 dev up` uses/creates profile `dev` and makes it active.** It saves the seeded login there and never
+   clobbers `default`.
+7. **A cluster bundle is referenced, not embedded.** `cluster init` records the inventory path in the active
+   profile's `profile.json`; `ca.key` is never copied into a profile.
+
+**Alternatives:**
+- **Keep one global login and tell users to log in again when switching.** Rejected: the dev path would still
+  destroy a production login by default.
+- **Use environment variables only.** Rejected: `C93_URL`/`C93_TOKEN` are already supported for one-off use, but
+  a developer should not have to re-export them for every shell.
+- **Rename the command to `contexts`.** Accepted as a possible alias, but `profiles` is the user's word and `me`
+  frees it cleanly.
+
+**Consequences:**
+- `Config.resolve/load/save/forget` become profile-aware; every direct caller is audited, not just `Main.api()`.
+- Legacy `config.json` is read as `default`; a save for `default` keeps writing it for compatibility.
+- `c93 login` writes the active profile; `logout` clears that profile's token.
+- Tests cover precedence, isolation, legacy fallback, `use`/`rm`, and `--profile` on a real command.
+
+**Verification (planned):** a profile's token is never read while another is active; `c93 dev up` leaves
+`default`'s token untouched; `profiles list` marks the active one; `profiles rm` refuses the active/default.
+
+---
+
+### D-190 — Checkout is the temporary default install source, and `scripts/local.sh` is retired
+**Date:** 2026-10-20 · **Status:** Accepted (planned)
+
+**Context:**
+`c93 node install` fetches a signed release; `scripts/local.sh` builds and runs from the checkout; `c93 node
+setup` shells out to it. Releases are not ready to depend on right now, and the script is 1,046 lines with its own
+state, env, seed, console, MCP, and update logic. Its `master` and `dev` profiles are two versions of the same
+checkout-launched process (neither is a service), differing in data directory, admin password, and update notice.
+
+**Decision:**
+1. **Temporary mode default.** `c93 node install` run inside a checkout builds from that checkout. Outside a
+   checkout it uses a release; `--checkout` and `--release`/`--version` force either mode. `--docker` already
+   builds from the checkout when no image/version is given. When releases are ready, the default flips to release
+   and `--checkout` becomes explicit.
+2. **`c93 dev` is the only checkout node.** It merges the old `master` and `dev` behaviors: persistent data until
+   an explicit `reset`, fixed dev token, seeded tenant/admin/console, MCP, and no service unit.
+3. **`c93 node install --checkout` is a service-managed source install.** It builds the server jar, ensures the
+   worker binaries, lays out the normal user/system layout, writes `node.env` and the unit, and starts.
+4. **`scripts/local.sh` is deleted.** No shim. All references in README, guides, tests, and helper scripts are
+   replaced with `c93 dev`/`c93 node`.
+5. **`node setup` is removed**, along with the `development` branch of `node status` and the `runScript`/
+   `findScript` shell-out. With no installed node, `node status` points to `c93 dev up`.
+
+**Alternatives:**
+- **Keep `master` as a second checkout profile.** Rejected: it is the same process with a longer-lived data dir;
+  `c93 dev` with persistent data and `reset` is one concept, not two.
+- **Keep a one-release shim.** Rejected by the user: the goal is one pathway. The old commands fail with a clear
+  message and the docs/changelog carry the migration.
+- **Make release the default now.** Rejected: releases are not ready; it would make the default path unusable.
+
+**Consequences:**
+- Checkout install can be slow (native worker builds); it reuses current `bin/worker-*` when they are fresh and
+  prints progress when it must build.
+- Tests that injected a fake `scripts/local.sh` (`UpdateCommandTest`, `VersionCommandTest`, `NodeCommandTest`) are
+  rewritten around the new commands.
+- `scripts/worker-isolation-check.sh` failure messages and `scripts/migrate-home.sh` stop naming `local.sh`.
+- The flip to release later is one default change plus a docs paragraph.
+
+**Verification (planned):** in a checkout, `node install --no-start` lays out a node from source; outside, it
+selects release; `--checkout`/`--release` override; `c93 dev up/status/down/reset` covers the old dev/master
+flows; no live reference to `scripts/local.sh` remains.
+
+---
+
+### D-191 — A node may own local worker containers, but not a cluster
+**Date:** 2026-10-20 · **Status:** Accepted (planned)
+
+**Context:**
+The common compute-host shape is one Cluster93 node that joins an existing cluster, with several worker containers
+on the same host supplying that node (D-166/D-167; the compose worker template). A different shape is several
+node containers making up a whole local cluster. `c93 node install --docker` currently creates one node only, and
+`docker-compose.yml`/`scripts/demo.sh` create a multi-node demo with no CLI path. Putting `--nodes N` on `node`
+would make one command own both a machine and a cluster.
+
+**Decision:**
+1. **`c93 node install --docker --workers N` creates one node plus N worker services** in one compose project.
+   The node and workers share the socket directory and the pre-shared secret; each worker gets its own scratch
+   mounts. Worker services use D-187's shrink-on-0 loop and `restart: on-failure`.
+2. **`--compute`/`--roles worker`** makes the node a compute node (no public API/ingress) that joins an existing
+   cluster. `--join LINE` writes `C93_JOIN`; `c93 node join LINE` does the same for an existing install.
+3. **`c93 node workers add/rm/scale N`** re-renders and applies the local worker services. It never changes
+   cluster membership.
+4. **`c93 cluster up/generate --docker -n N` is a separate, later convenience** for a whole local cluster. It is
+   not the everyday compute-host command and is not part of this work order.
+5. **The compose generator is shared.** `NodeInstall` renders the node and worker services; the
+   `compose.workers.tmpl` stays a reference/docs artifact. No second renderer.
+
+**Alternatives:**
+- **`c93 node install --docker --nodes N`.** Rejected: N nodes is cluster topology; it would make `node` own a
+  cluster and blur credentials/state.
+- **Fold the worker-container shape into `cluster`.** Rejected: worker containers have no cluster identity; they
+  are supply to one node's socket. A compute host should not need cluster admin credentials to scale them.
+- **Keep one container with N worker processes (the current template).** Still supported, but it gives the
+  deployment one supervisor and one failure domain; N worker containers give per-worker supervision and are the
+  shape D-187's release loop was verified against.
+
+**Consequences:**
+- `node install --docker` gains `--workers`, `--compute`/`--roles`, `--join`, and `--egress-placement`; the
+  compose project gains worker services, per-worker scratch dirs, the secret/socket mounts, and the release
+  wrapper.
+- `node workers scale` edits only the local compose project and never calls the cluster API.
+- The node's `C93_WORKER_CONNECTIONS_MAX` is raised to at least the worker count.
+- Release image publishing remains a separate track; checkout image builds work today.
+
+**Verification (planned):** a generated compose project with one node and N workers validates
+(`compose config -q`); `node workers scale` adds/removes services; a job submitted at an existing cluster's edge
+runs on the compute node's worker container; D-187's C8 behavior is unchanged.

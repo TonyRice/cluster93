@@ -119,8 +119,8 @@ done
 # Validate the case name here, not at the end: a name no case matches would run nothing and let the summary print
 # "Every case this host can run passed" — which is the one thing a check must never say about work it did not do.
 case "$WANT_CASE" in
-  ""|C1|C3|C4|C5|C6|C7) ;;
-  *) echo "Unknown case: ${WANT_CASE} (cases: C1, C3, C4, C5, C6, C7)" >&2; exit 2 ;;
+  ""|C1|C3|C4|C5|C6|C7|C8) ;;
+  *) echo "Unknown case: ${WANT_CASE} (cases: C1, C3, C4, C5, C6, C7, C8)" >&2; exit 2 ;;
 esac
 
 say() { printf '%s\n' "$*"; }
@@ -184,10 +184,18 @@ trap cleanup EXIT INT TERM
 
 # A worker binary older than the worker sources cannot do what this version asks: an older one does not know
 # --secret-file, so it presents no secret and the node refuses it — the right answer, for the wrong reason. Say so
-# rather than report a deployment failure the deployment did not cause.
+# rather than report a deployment failure the deployment did not cause. Only the sources the worker binary actually
+# contains are compared: the pool and server sides of runner-protocol are node-only, so a change there does not make
+# `bin/worker-*` stale.
 workers_are_current() {
   [ -x "$ROOT/bin/$WORKER_BIN" ] || return 1
-  [ -z "$(find "$ROOT/worker/src" "$ROOT/runner-protocol/src/main" "$ROOT/runtime-js/src/main" \
+  [ -z "$(find "$ROOT/worker/src" \
+      "$ROOT/runner-protocol/src/main/java/cluster93/runner/protocol/client" \
+      "$ROOT/runner-protocol/src/main/java/cluster93/runner/protocol/frame" \
+      "$ROOT/runner-protocol/src/main/java/cluster93/runner/protocol/message" \
+      "$ROOT/runner-protocol/src/main/java/cluster93/runner/protocol/transport" \
+      "$ROOT/runner-protocol/src/main/java/cluster93/runner/protocol/flow" \
+      "$ROOT/runtime-js/src/main" \
       -type f -newer "$ROOT/bin/$WORKER_BIN" 2>/dev/null | head -1)" ]
 }
 rootless_docker() { docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q 'name=rootless'; }
@@ -218,6 +226,10 @@ describe_cases() {
   say "      install. The worker reaches the node only over the socket directory. A script's fetch to the compute"
   say "      node's own endpoint is refused by the gate (cluster node), AND the worker's network cannot reach it"
   say "      (probed from inside the worker container) — the gate's line and the deployment's, asserted separately."
+  say "  C8  giving supply back (D-187)                rootful docker; a worker container runs the compose template's"
+  say "      shrink-on-0 loop. Releasing an idle worker must end the container with exit 0, not restart it, and move"
+  say "      the node's release counter; releasing a worker with a job on it must be refused (409 worker_busy), the job"
+  say "      must finish, and the worker must stay. Then the same worker, idle, is released and the container leaves 0."
 }
 
 # ---------------------------------------------------------------------------------------
@@ -1542,6 +1554,157 @@ check_container_cluster_placement() {  # <engine> <label> <identity flag> <ident
   [ "$result" = PASS ]
 }
 
+# C8: giving supply back (D-187). A worker container runs the same loop the compose template ships: four workers
+# shrink one at a time on a 0 exit, and the container exits 0 when the last one is released. This case runs one worker
+# per container so the container's own exit status is the worker's, and asserts both halves of the contract — an idle
+# release leaves with 0 and does not come back; a busy release is refused, the job completes, and the worker stays.
+start_release_container() {  # start_release_container <name> <engine> <identity args...>
+  local name="$1" engine="$2"; shift 2
+  local scratch="$SCRATCH/$RUN_ID-$name"
+  install -d -m 0777 "$scratch/tmp" "$scratch/home"
+  # This is install/docker/compose.workers.tmpl's loop, with `left=1`. Keep them in step: a 0 from `wait -n` is a
+  # released worker (shrink), anything else is a crash (take the container down, non-zero).
+  local wrapper='set -e
+/opt/cluster93/bin/'"$WORKER_BIN"' ipc --socket /run/cluster93/workers/node.sock --secret-file /run/secrets/c93-worker-secret --heap-mb 64 --threads 4 &
+left=1
+while [ "$left" -gt 0 ]; do
+  if wait -n; then
+    left=$((left - 1))
+  else
+    exit 1
+  fi
+done
+exit 0'
+  "$engine" run -d \
+    --name "$RUN_ID-$name" \
+    --label "$LABEL" \
+    --network none \
+    --cap-drop=ALL \
+    --security-opt no-new-privileges \
+    --read-only \
+    --pids-limit 512 \
+    "$@" \
+    -v "$TMP/sockets:/run/cluster93/workers" \
+    -v "$TMP/secrets/secret:/run/secrets/c93-worker-secret:ro" \
+    -v "$scratch/tmp:/tmp" \
+    -v "$scratch/home:/home" \
+    --entrypoint /bin/bash \
+    "$IMAGE" -c "$wrapper" >/dev/null
+}
+
+release_call() {  # release_call <body>: prints the HTTP status, leaves the body in $TMP/release.json
+  curl -s -m 10 -o "$TMP/release.json" -w '%{http_code}' \
+    -X POST "http://127.0.0.1:$HTTP_PORT/v1/cluster/workers/release" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' -d "$1"
+}
+
+container_exit_code() {  # container_exit_code <name>: the exit code once it has stopped, else empty
+  local name="$1" running
+  running="$("$ENGINE" inspect -f '{{.State.Running}}' "$RUN_ID-$name" 2>/dev/null || echo gone)"
+  [ "$running" = "false" ] || return 1
+  "$ENGINE" inspect -f '{{.State.ExitCode}}' "$RUN_ID-$name" 2>/dev/null
+}
+
+check_worker_release() {  # check_worker_release <engine> <rootless> <identity flag> <identity args...>
+  local engine="$1" rootless="$2" flag="$3"; shift 3
+  ENGINE="$engine"
+  IMAGE="$(image_for "$engine")"
+  local before idle=no exit0=no counted=no busy=no job=no norestart=no result=FAIL
+  before="$(metric c93_workers_connected)"
+  local want="$(( ${before%.*} + 1 )).0"
+  local seen_before; seen_before="$(metric_all c93_workers_released_total)"
+
+  start_release_container release "$engine" "$@" || { say "  C8: the idle worker container did not start"; return 1; }
+  if wait_for_metric c93_workers_connected "$want" 360; then idle=yes; fi
+
+  if [ "$idle" = yes ]; then
+    local status; status="$(release_call '{"reason":"idle release check"}')"
+    if [ "$status" = 200 ] && grep -q '"workerId"' "$TMP/release.json"; then idle=yes; else idle=no; fi
+  fi
+
+  # The released worker exits 0. The container is this test's supervisor, so 0 is the whole "do not restart" contract.
+  local code=""
+  if [ "$idle" = yes ]; then
+    for _ in $(seq 1 120); do
+      if code="$(container_exit_code release)"; then break; fi
+      sleep 0.5
+    done
+    [ "$code" = "0" ] && exit0=yes
+  fi
+  # ... and it does not come back: a supervisor that restarted it would connect again within this window.
+  if [ "$exit0" = yes ] && wait_for_metric c93_workers_connected "$before" 20; then
+    sleep 2
+    [ "$(metric c93_workers_connected)" = "$before" ] && norestart=yes
+  fi
+  # The node counted it once, by trigger (D-187). Compare the whole series: another label would mean a different event.
+  local seen_after; seen_after="$(metric_all c93_workers_released_total)"
+  [ -n "$seen_after" ] && [ "$seen_after" != "$seen_before" ] && \
+    printf '%s' "$seen_after" | grep -q 'trigger="manual"' && counted=yes
+
+  # Busy: a job is on the worker. The node must refuse to release it, the job must finish, and the connection must stay.
+  if [ "$norestart" = yes ]; then
+    start_release_container busy "$engine" "$@" || { say "  C8: the busy worker container did not start"; return 1; }
+    if wait_for_metric c93_workers_connected "$want" 360; then
+      local jid; jid="$(submit_job 'export default async () => { await new Promise(r => setTimeout(r, 10000)); return { done: true }; }')"
+      if [ -n "$jid" ]; then
+        for _ in $(seq 1 120); do
+          case "$(job_json "$jid")" in
+            *'"status":"RUNNING"'*) job=running; break ;;
+            *'"status":"SUCCEEDED"'*) job=done; break ;;
+          esac
+          sleep 0.25
+        done
+        if [ "$job" = running ]; then
+          local busy_status; busy_status="$(release_call '{}')"
+          if [ "$busy_status" = 409 ] && grep -q '"code":"worker_busy"' "$TMP/release.json"; then busy=yes; fi
+        fi
+        [ "$(await_job "$jid")" = "SUCCEEDED" ] && [ "$busy" = yes ] && job=yes || job=no
+        [ "$(metric c93_workers_connected)" = "$want" ] || job=no
+      else
+        job=no
+      fi
+    fi
+
+    # Once idle again the same worker can be released, and the container leaves 0 with it.
+    if [ "$job" = yes ]; then
+      local idle_status=""
+      for _ in $(seq 1 20); do
+        idle_status="$(release_call '{"reason":"idle after the job"}')"
+        [ "$idle_status" = 200 ] && break
+        sleep 0.25
+      done
+      if [ "$idle_status" = 200 ]; then
+        for _ in $(seq 1 120); do
+          if code="$(container_exit_code busy)"; then break; fi
+          sleep 0.5
+        done
+        [ "$code" = "0" ] && wait_for_metric c93_workers_connected "$before" 20 && job=yes
+      else
+        job=no
+      fi
+    fi
+  fi
+
+  if [ "$exit0" != yes ] || [ "$counted" != yes ] || [ "$norestart" != yes ] || [ "$busy" != yes ] || [ "$job" != yes ]; then
+    say "  --- why C8 did not pass ---"
+    say "  the idle container's state: $("$ENGINE" inspect -f 'running={{.State.Running}} exit={{.State.ExitCode}}' "$RUN_ID-release" 2>/dev/null || echo gone)"
+    say "  the busy container's state: $("$ENGINE" inspect -f 'running={{.State.Running}} exit={{.State.ExitCode}}' "$RUN_ID-busy" 2>/dev/null || echo gone)"
+    say "  the release answer: $(cat "$TMP/release.json" 2>/dev/null | head -c 400)"
+    say "  connected=$(metric c93_workers_connected), released: $(metric_all c93_workers_released_total | tr '\n' ' ')"
+    say "  the node's last release lines:"
+    grep -aE "Releasing worker|Released|released|GOODBYE" "$TMP/node.log" | tail -6 | sed 's/^/    /'
+    say "  the idle container's output (last 8 lines):"
+    "$ENGINE" logs "$RUN_ID-release" 2>&1 | tail -8 | sed 's/^/    /'
+  fi
+  "$ENGINE" rm -f "$RUN_ID-release" "$RUN_ID-busy" >/dev/null 2>&1 || true
+  [ "$exit0" = yes ] && [ "$counted" = yes ] && [ "$norestart" = yes ] && [ "$busy" = yes ] && [ "$job" = yes ] && result=PASS
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-5s | %-5s | %-3s | %-9s | %s\n' \
+    case engine rootless identity idle exit0 busy job norestart result
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-5s | %-5s | %-3s | %-9s | %s\n' \
+    "C8" "$engine" "rootful" "$flag" "$idle" "$exit0" "$busy" "$job" "$norestart" "$result"
+  [ "$result" = PASS ]
+}
+
 # Podman rootless (D-149): the image's own user (c93, 10001:999) is mapped to the invoking host uid, which is what makes
 # the node's files — the 0600 socket and the 0400 secret — belong to the container's process. Plain `keep-id` does NOT
 # do that: it leaves the container running as the image's user while the host files appear as the invoking uid, so the
@@ -1553,6 +1716,17 @@ check_container_cluster_placement() {  # <engine> <label> <identity flag> <ident
 # tells C3 (and the cases built on it) to skip instead of failing obscurely under an engine they were not written for.
 run_case_if "$(rootless_podman && echo 1 || echo 0)" C1 podman rootless-podman "--userns=keep-id:uid=10001,gid=999" --userns=keep-id:uid=10001,gid=999
 run_case_if "$( { have_docker && ! rootless_docker; } && echo 1 || echo 0)" C3 docker rootful "--user $(id -u):$(id -g)" --user "$(id -u):$(id -g)"
+if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C8" ]; then
+  if [ "$WORKERS_OK" != 1 ]; then
+    printf '%-3s | %-16s | %s\n' "C8" docker "SKIP (needs the worker image — see the note above)"
+    SKIPPED=$((SKIPPED + 1))
+  elif have_docker && ! rootless_docker; then
+    check_worker_release docker rootful "--user $(id -u):$(id -g)" --user "$(id -u):$(id -g)" || FAILED=1
+  else
+    printf '%-3s | %-16s | %s\n' "C8" docker "SKIP (needs a rootful engine to run a container as this user)"
+    SKIPPED=$((SKIPPED + 1))
+  fi
+fi
 if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C4" ]; then
   if [ "$WORKERS_OK" != 1 ]; then
     printf '%-3s | %-16s | %s\n' "C4" docker "SKIP (needs the worker image — see the note above)"

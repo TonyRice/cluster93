@@ -42,7 +42,7 @@ import java.util.stream.Collectors;
         subcommands = {NodeCommand.Install.class, NodeCommand.Uninstall.class, NodeCommand.Setup.class,
                 NodeCommand.Start.class, NodeCommand.Stop.class, NodeCommand.Restart.class, NodeCommand.Status.class,
                 NodeCommand.Logs.class, NodeCommand.Mcp.class, NodeCommand.Update.class, NodeCommand.Env.class,
-                NodeCommand.Invite.class, NodeCommand.Revoke.class})
+                NodeCommand.Invite.class, NodeCommand.Revoke.class, NodeCommand.Workers.class})
 final class NodeCommand extends Base {
 
     static final String DEFAULT_NODE_ID = "local-master";
@@ -1099,7 +1099,7 @@ final class NodeCommand extends Base {
             boolean installed = NodeInstall.isInstalled(io);
             String base = installed ? NodeService.httpBase(config) : httpBase(config);
             String admin = installed ? config.get("C93_ADMIN_TOKEN") : config.get("ADMIN_TOKEN");
-            Config login = Config.load(io);
+            Config login = Config.load(io, profile());
             String url = login != null && login.url() != null && !login.url().isBlank()
                     ? login.url()
                     : base;
@@ -1264,6 +1264,54 @@ final class NodeCommand extends Base {
                 out().println("To let it back in, invite it again: c93 node invite " + nodeId + " --ca ./cluster-tls/ca.key");
             }
             return 0;
+        }
+    }
+
+    @Command(name = "workers", description = "Worker supply on this node: ask an idle connected worker to leave.",
+            subcommands = {NodeCommand.Workers.Release.class})
+    static final class Workers extends Base {
+
+        @Override
+        int execute() {
+            spec.commandLine().usage(out());
+            return 0;
+        }
+
+        @Command(name = "release", description = "Ask one idle connected worker to leave. It exits 0, and its supervisor decides "
+                + "whether to replace it (D-187).")
+        static final class Release extends Base {
+
+            @Option(names = "--worker", paramLabel = "ID", description = "Release this connected worker (by the id in `c93 node status`).")
+            String workerId;
+
+            @Option(names = "--bound-tenant", paramLabel = "TENANT", description = "Release an idle worker bound to this tenant.")
+            String tenant;
+
+            @Option(names = "--reason", paramLabel = "TEXT", defaultValue = "over capacity for this node",
+                    description = "Why it is being released; it is the worker's death cause and the API's response.")
+            String reason;
+
+            @Override
+            int execute() {
+                ObjectNode body = Json.object();
+                if (workerId != null) {
+                    body.put("workerId", workerId);
+                }
+                if (tenant != null) {
+                    body.put("tenant", tenant);
+                }
+                body.put("reason", reason);
+                JsonNode result = api().post("/v1/cluster/workers/release", body);
+                if (!printedJson(result)) {
+                    JsonNode released = result.path("released");
+                    String boundTo = released.path("tenant").isTextual()
+                            ? " (tenant " + released.path("tenant").asText() + ")" : "";
+                    out().println("Released " + released.path("workerId").asText() + boundTo + ": "
+                            + released.path("reason").asText());
+                    out().println("The worker exits 0 (released, not crashed); its supervisor decides whether to replace it.");
+                }
+                return 0;
+            }
         }
     }
 

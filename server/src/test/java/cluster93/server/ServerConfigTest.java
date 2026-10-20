@@ -88,6 +88,30 @@ class ServerConfigTest {
     }
 
     @Test
+    @DisplayName("Automatic release is off by default, with a floor and a cooldown when it is on (D-187)")
+    void workerReleaseSettings() {
+        ServerConfig defaults = ServerConfig.fromEnv(Map.of());
+        assertThat(defaults.workerMin()).as("the node may give every worker back unless told otherwise").isZero();
+        assertThat(defaults.workerReleaseAbove()).as("automatic release is opt-in").isZero();
+        assertThat(defaults.workerReleaseCooldownMs()).isEqualTo(60_000L);
+
+        ServerConfig configured = ServerConfig.fromEnv(Map.of(
+                "C93_WORKER_MIN", "1",
+                "C93_WORKER_RELEASE_ABOVE", "6",
+                "C93_WORKER_RELEASE_COOLDOWN_MS", "1234"));
+        assertThat(configured.workerMin()).isEqualTo(1);
+        assertThat(configured.workerReleaseAbove()).isEqualTo(6);
+        assertThat(configured.workerReleaseCooldownMs()).isEqualTo(1234L);
+
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_WORKER_MIN", "-1")))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("C93_WORKER_MIN");
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_WORKER_RELEASE_ABOVE", "-1")))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("C93_WORKER_RELEASE_ABOVE");
+        assertThatThrownBy(() -> ServerConfig.fromEnv(Map.of("C93_WORKER_RELEASE_COOLDOWN_MS", "-1")))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("C93_WORKER_RELEASE_COOLDOWN_MS");
+    }
+
+    @Test
     @DisplayName("The per-tenant CPU ceiling and the cgroup switches are their own settings (D-158)")
     void cgroupSettings() {
         // CPU is unlimited by default — a ceiling is the operator's call.

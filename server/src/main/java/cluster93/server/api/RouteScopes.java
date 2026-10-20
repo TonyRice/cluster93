@@ -93,6 +93,7 @@ final class RouteScopes {
             rule("DELETE", "/v1/tenants/" + SEG + "/tokens/" + SEG, "revokeTenantToken", Who.ADMIN, null),
             rule("POST", "/v1/admin/rotate", "rotateAdminToken", Who.ADMIN, null),
             rule("POST", "/v1/cluster/nodes/" + SEG + "/revoke", "revokeNode", Who.ADMIN, null),
+            json("POST", "/v1/cluster/workers/release", "releaseWorker", Who.ADMIN, null, SMALL),
             rule("GET", "/v1/tenants/" + SEG + "/storage-policy", "getStoragePolicy", Who.ADMIN, null),
             json("PUT", "/v1/tenants/" + SEG + "/storage-policy", "putStoragePolicy", Who.ADMIN, null, SMALL),
             rule("GET", "/v1/tenants/" + SEG + "/egress-policy", "getTenantEgressPolicy", Who.ADMIN, null),

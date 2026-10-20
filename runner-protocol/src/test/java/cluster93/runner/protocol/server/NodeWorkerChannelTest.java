@@ -605,6 +605,31 @@ class NodeWorkerChannelTest {
     }
 
     @Test
+    void aReleasedWorkerReportsItsRefusalsBeforeItLeaves() throws Exception {
+        DuplexPipe pipe = new DuplexPipe();
+        List<String> refusals = new ArrayList<>();
+        NodeWorkerChannel nodeChannel = new NodeWorkerChannel("worker-8", pipe.nodeToWorker, pipe.workerToNode)
+                .egressReports((workerId, tenant, reason, count) ->
+                        refusals.add(workerId + " " + tenant + " " + reason + " x" + count));
+        WorkerClientConnection workerConn = new WorkerClientConnection(pipe.workerToNode, pipe.nodeToWorker);
+        ScriptRuntime unused = (execution, logs, state, host) -> {
+            throw new AssertionError("a release does not dispatch a run");
+        };
+        WorkerDaemon daemon = new WorkerDaemon(workerConn, unused, "mock-engine");
+        daemon.start();
+        nodeChannel.awaitHello().toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+        nodeChannel.bind("acme", new JsonObject(), new JsonObject()).toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+        // What the worker refused while it was deciding egress itself (D-176) must still reach the node on the way out
+        // (D-187): the release is the last moment the connection exists.
+        daemon.accounting().denied("acme", "connect_rate");
+        nodeChannel.goodbye("over capacity for this node").toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+        daemon.released().toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+        assertThat(refusals).containsExactly("worker-8 acme connect_rate x1");
+    }
+
+    @Test
     void ignoresAnEgressReportForATenantTheWorkerIsNotBoundTo() throws Exception {
         DuplexPipe pipe = new DuplexPipe();
         List<String> refusals = new ArrayList<>();

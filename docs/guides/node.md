@@ -236,7 +236,8 @@ network:
   `c93_workers_running` counts the worker **processes** the node spawned — 0 when the deployment supplies them all.
 - A worker that dies fails its in-flight jobs and names the tenant and job; **why** its container died (an OOM, a
   kill) is the deployment's to read from the container's exit status, so the node says only that the connection
-  ended (D-159) rather than inventing a cause.
+  ended (D-159) rather than inventing a cause. A connection the node **released** (D-187) is the exception: its death
+  cause is `released by the node: <reason>`, and `c93_workers_released_total{trigger}` counts it.
 - **The node checks its own socket at startup and refuses to run if it cannot hold it.** The socket must be `0600`
   in a directory no other user can write to (a sticky one like `/tmp` is fine). If it cannot be — an odd mount, a
   filesystem that hides Unix permissions, a directory someone loosened — the node fails to start with the path and
@@ -247,10 +248,23 @@ network:
   worker declares (`--heap-mb` × `--threads` plus overhead), because the container's own `--memory` is the
   deployment's (D-169). A connection that would exceed `C93_MAX_WORKER_MEMORY_MB` is refused, with the reason in the
   node's log.
-- **Idle control is the deployment's.** The node cannot shed an open worker — closing its socket only makes the
-  supervisor start another — so size the pool with the worker count and the container's limits. What it *can* do is
-  put an idle worker back to work: a worker with nothing running on it is re-bound to whichever tenant has work, so one
-  container serves tenants in turn instead of one of them sitting warm while another starts a process (D-172).
+- **Idle control is the deployment's, but the node can ask.** A worker with nothing running on it is first put back
+  to work: it is re-bound to whichever tenant has work, so one container serves tenants in turn instead of one of
+  them sitting warm while another starts a process (D-172). When the node really has more supply than it needs, it
+  **releases** one idle worker (D-187): it marks the worker unplaceable, sends `GOODBYE` with a reason, and the
+  worker reports what it refused and exits **0**. Exit 0 means *released, do not restart*; a non-zero exit is still
+  a crash. A worker that loses the node (EOF, not GOODBYE) exits **1**, so the supervisor starts another and it
+  reconnects when the node is back. The node never kills a connected worker — after a grace period it closes the
+  socket of one that ignores the request, and that worker may reconnect (it is not punished); if it then restarts,
+  it exits non-zero like any disconnect. Ask for one with
+  `c93 node workers release [--worker ID] [--bound-tenant NAME] [--reason TEXT]`; automatic release is opt-in and off by
+  default (`C93_WORKER_RELEASE_ABOVE`, one per `C93_WORKER_RELEASE_COOLDOWN_MS`, never below `C93_WORKER_MIN`).
+  **The supervisor decides.** The shipped compose template starts four workers, counts a 0 as a shrink, keeps the
+  container while any remain, and exits 0 when the last one is released; `restart: on-failure` leaves it down, which
+  is how a container is given back. A supervisor that restarts a released worker is answering with a new connection
+  — legal, but automatic release plus a restart-always supervisor is a loop, so keep automatic off unless the
+  supervisor honours exit 0. For a systemd unit, `Restart=on-failure` has the same meaning (it does not restart on
+  0); for s6, the `finish` script must not restart on 0.
 
 ### Verifying it on a real engine
 
@@ -258,8 +272,9 @@ network:
 `0600` socket as the right identity, whether a job round-trips on it, whether the wrong secret is refused, and which
 network property the placement's own container has — and prints a matrix. On a machine with both engines available:
 **C1 (rootless podman, `--userns=keep-id`) and C3 (rootful Docker, `--user`) pass**, C4 (a foreign uid) is refused,
-C5 (the `worker` placement) passes, and C6 and C7 (the cluster shapes) pass; every `SKIP` line says what would enable
-it. **Which JS engine runs makes no difference** — the matrix is the same with
+C5 (the `worker` placement) passes, C6 and C7 (the cluster shapes) pass, and C8 (release: a container exits 0 on a
+release, does not reconnect, and a busy worker is refused while its job finishes) passes; every `SKIP` line says what
+would enable it. **Which JS engine runs makes no difference** — the matrix is the same with
 `worker-javet` and with `worker-graaljs` (`C93_IDCHECK_WORKER=worker-graaljs`), because what the cases decide is the
 socket, the identity and the network rather than the engine.
 

@@ -32,7 +32,7 @@ class MainHelpTest {
         CATEGORIES.put("Platform Resources",
                 List.of("files", "secrets", "queues", "packages", "storage", "domains", "egress", "callbacks"));
         CATEGORIES.put("Identity & Access",
-                List.of("login", "logout", "whoami", "profile", "tokens", "members", "roles", "groups", "invites"));
+                List.of("login", "logout", "whoami", "me", "profiles", "tokens", "members", "roles", "groups", "invites"));
         CATEGORIES.put("Cluster & Node", List.of("cluster", "node", "update", "tenants", "users", "audit"));
         CATEGORIES.put("Tools & Automation", List.of("mcp", "version", "help"));
     }
@@ -94,6 +94,14 @@ class MainHelpTest {
     }
 
     @Test
+    void theHelpFlagWorksOnSubcommands() {
+        assertThat(run("node", "--help")).contains("Usage: c93 node");
+        assertThat(run("cluster", "--help")).contains("Usage: c93 cluster");
+        assertThat(run("profiles", "--help")).contains("Usage: c93 profiles");
+        assertThat(run("me", "--help")).contains("Usage: c93 me");
+    }
+
+    @Test
     void theHelpHasNoInternalDecisionTags() {
         assertThat(run("--help")).as("internal decision tags like '(D-070)' stay out of the help").doesNotContain("(D-");
     }
@@ -108,6 +116,6 @@ class MainHelpTest {
                 total++;
             }
         }
-        assertThat(total).as("all 31 subcommands are grouped").isEqualTo(31);
+        assertThat(total).as("all 32 subcommands are grouped").isEqualTo(32);
     }
 }

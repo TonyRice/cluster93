@@ -265,6 +265,15 @@ public class NodeWorkerChannel {
     }
 
     /**
+     * Asks the worker to leave cooperatively (D-187): it reports what it refused (D-176) and then exits 0, which the
+     * deployment reads as "released, do not restart". This is a request, not a close — the node still owns the socket
+     * and closes it after a grace period if the worker ignores the frame.
+     */
+    public Future<Void> goodbye(String reason) {
+        return send(Frame.control(FrameType.GOODBYE, new JsonObject().put("reason", reason)));
+    }
+
+    /**
      * Sends a BIND message, making {@code tenantId} the tenant this worker serves. Called on a fresh worker and again
      * when an idle one is handed to another tenant (D-172); {@link #run} refuses a run whose tenant does not match the
      * binding in force, so a run dispatched under the old tenant cannot execute after the move.

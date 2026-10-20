@@ -84,6 +84,34 @@ class SocketWorkerHandleTest {
         assertThat(handle.reservedBytes()).isEqualTo(1024L);
     }
 
+    @Test
+    @DisplayName("A release is refused while a job is running, marks the worker unplaceable once idle, and names itself (D-187)")
+    void aReleaseIsIdleOnlyAndNamesItselfInTheDeathCause() {
+        AtomicInteger closed = new AtomicInteger();
+        NodeWorkerChannel channel = new NodeWorkerChannel("worker-c8", new TenantWorkerPoolTest.FakeStream(),
+                new TenantWorkerPoolTest.FakeStream());
+        SocketWorkerHandle handle = new SocketWorkerHandle(8L, closed::incrementAndGet, channel, 4, 1024L);
+        handle.bind("acme", new JsonObject(), new JsonObject());
+        assertThat(handle.admitJob()).isTrue();
+
+        assertThat(handle.beginRelease("over capacity", "manual"))
+                .as("a worker with a job on it is never released").isFalse();
+        assertThat(handle.releasing()).isFalse();
+
+        handle.jobFinished();
+        assertThat(handle.beginRelease("over capacity", "manual")).isTrue();
+        assertThat(handle.releasing()).isTrue();
+        assertThat(handle.hasCapacity()).as("marked unplaceable before GOODBYE is sent").isFalse();
+        assertThat(handle.admitJob()).as("no job may start after the decision").isFalse();
+
+        handle.closeAfterRelease();
+        assertThat(closed.get()).isEqualTo(1);
+        assertThat(handle.deathCause()).isEqualTo("released by the node: over capacity");
+        assertThat(handle.state())
+                .as("the close handler, not closeAfterRelease, is what reaps it and frees its books")
+                .isEqualTo(WorkerHandle.State.BOUND);
+    }
+
     private static SocketWorkerHandle newHandle(long reservedBytes) {
         NodeWorkerChannel channel = new NodeWorkerChannel("worker-c1", new TenantWorkerPoolTest.FakeStream(),
                 new TenantWorkerPoolTest.FakeStream());

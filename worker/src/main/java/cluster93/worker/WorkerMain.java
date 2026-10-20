@@ -278,11 +278,15 @@ public final class WorkerMain {
         daemon.start().toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
 
         CountDownLatch latch = new CountDownLatch(1);
+        // A disconnect and a release both end this process, but they are not the same to the deployment: a release
+        // exits 0 ("released, do not restart", D-187), while the node going away exits non-zero so the supervisor
+        // starts another worker that reconnects when the node is back. Only GOODBYE completes released().
         conn.setErrorHandler(err -> latch.countDown());
+        daemon.released().onComplete(ar -> latch.countDown());
         latch.await();
-        // The node closed the connection (EOF or GOODBYE): exit explicitly so no zombie worker is left behind (D-128).
+        boolean released = daemon.released().succeeded();
         System.out.flush();
-        System.exit(0);
+        System.exit(released ? 0 : 1);
     }
 
     /** How many times {@code ipc --socket} tries the node's socket before giving up, and how it backs off (§2.3). */

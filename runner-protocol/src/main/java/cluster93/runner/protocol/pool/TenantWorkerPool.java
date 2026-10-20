@@ -589,6 +589,61 @@ public class TenantWorkerPool {
     }
 
     /**
+     * The connected worker this pool would release first (D-187), without taking it out of the warm queue: the manager
+     * marks it unplaceable and then calls {@link #removeIdle}. Unbound and spawned workers are not candidates — the
+     * node owns a spawned process' lifecycle, while a connected one is the deployment's supply. Longest-idle wins; a
+     * worker that connected after {@code notBefore} is skipped so a supervisor that restarts on release cannot make
+     * the node flap.
+     */
+    synchronized SocketWorkerHandle idleConnectedForRelease(String tenantId, java.time.Instant notBefore) {
+        SocketWorkerHandle best = null;
+        for (Map.Entry<String, List<WorkerHandle>> entry : tenantWarmQueue.entrySet()) {
+            if (tenantId != null && !tenantId.equals(entry.getKey())) {
+                continue;
+            }
+            for (WorkerHandle worker : entry.getValue()) {
+                if (!(worker instanceof SocketWorkerHandle connected) || !connected.isAlive()
+                        || connected.releasing() || connected.runningJobs() > 0) {
+                    continue;
+                }
+                if (notBefore != null && connected.createdAt().isAfter(notBefore)) {
+                    continue;
+                }
+                if (best == null || connected.lastUsedAt().isBefore(best.lastUsedAt())) {
+                    best = connected;
+                }
+            }
+        }
+        return best;
+    }
+
+    /** Takes an idle worker out of the warm queue so it cannot be handed work while it is being released (D-187). */
+    synchronized boolean removeIdle(WorkerHandle worker) {
+        List<WorkerHandle> warm = tenantWarmQueue.get(worker.boundTenantId());
+        return warm != null && warm.remove(worker);
+    }
+
+    /**
+     * Whether this pool has the worker on its books, active or warm. The manager uses it to find a closing worker's
+     * pool rather than assuming the default mode: a connected worker can be bound to a tenant's non-default engine
+     * pool, and its memory reservation must be released there (D-187's accounting is on the close).
+     */
+    synchronized boolean owns(WorkerHandle worker) {
+        if (activeWorkers.containsKey(worker.workerId()) || jobsInFlight.containsKey(worker.workerId())) {
+            return true;
+        }
+        if (warmUnboundQueue.contains(worker)) {
+            return true;
+        }
+        for (List<WorkerHandle> warm : tenantWarmQueue.values()) {
+            if (warm.contains(worker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Serves one more waiting claim, on this pool's context, when any are queued. A claim can be satisfied by taking a
      * free job slot on a shared worker ({@link #acquire}, step 1) without freeing anything, so serving it may leave room
      * for a claim queued behind it. Without this drain, the claim just served was the last one until something

@@ -79,6 +79,10 @@ import java.util.UUID;
  *                      its contents in {@code HELLO} and the node validates it. Null accepts whatever reaches the
  *                      socket, which is warned about — the 0700 dir and 0600 socket are then the only binding
  * @param workerConnectionsMax how many worker connections the node accepts at once (D-166); 0 is unbounded
+ * @param workerMin     never release a connected worker below this many (D-187); 0 lets the node give them all back
+ * @param workerReleaseAbove automatic release begins when connected workers exceed this (D-187); 0 is off
+ * @param workerReleaseCooldownMs how long between automatic releases, and the minimum age of a connection that may be
+ *                      released (D-187)
  * @param consoleDomain the host the web console answers on (docs/design/apps-and-console.md); null disables console-host handling
  * @param consoleAllowedCidrs client CIDRs allowed to reach the console host; empty means no network restriction
  */
@@ -152,6 +156,9 @@ public record ServerConfig(
         Path workerSocket,
         Path workerSecretFile,
         int workerConnectionsMax,
+        int workerMin,
+        int workerReleaseAbove,
+        long workerReleaseCooldownMs,
         Set<String> roles,
         Set<String> capabilities,
         String consoleDomain,
@@ -186,6 +193,17 @@ public record ServerConfig(
         if (workerConnectionsMax < 0) {
             throw new IllegalArgumentException("C93_WORKER_CONNECTIONS_MAX must be 0 (unbounded) or more (it was "
                     + workerConnectionsMax + ")");
+        }
+        if (workerMin < 0) {
+            throw new IllegalArgumentException("C93_WORKER_MIN must be 0 or more (it was " + workerMin + ")");
+        }
+        if (workerReleaseAbove < 0) {
+            throw new IllegalArgumentException("C93_WORKER_RELEASE_ABOVE must be 0 (off) or more (it was "
+                    + workerReleaseAbove + ")");
+        }
+        if (workerReleaseCooldownMs < 0) {
+            throw new IllegalArgumentException("C93_WORKER_RELEASE_COOLDOWN_MS must be 0 or more (it was "
+                    + workerReleaseCooldownMs + ")");
         }
         if (workerSocket != null && !"process".equals(workerMode)) {
             throw new IllegalArgumentException("C93_WORKER_SOCKET needs C93_WORKER_MODE=process: the socket accepts "
@@ -347,6 +365,11 @@ public record ServerConfig(
                 // How many worker connections the node accepts at once. Defaults to the node's worker count, the same
                 // quantity the memory ceiling is derived from, so a deployment is bounded out of the box (D-166).
                 Integer.parseInt(env.getOrDefault("C93_WORKER_CONNECTIONS_MAX", String.valueOf(maxWorkers))),
+                // How the node gives connected supply back (D-187): a floor it never releases below, an opt-in
+                // automatic threshold (0 is off), and the cooldown that also ages a connection before it is eligible.
+                Integer.parseInt(env.getOrDefault("C93_WORKER_MIN", "0")),
+                Integer.parseInt(env.getOrDefault("C93_WORKER_RELEASE_ABOVE", "0")),
+                Long.parseLong(env.getOrDefault("C93_WORKER_RELEASE_COOLDOWN_MS", "60000")),
                 parseSet(env.getOrDefault("C93_ROLES", String.join(",", ROLES))),
                 parseSet(env.getOrDefault("C93_CAPABILITIES", "")),
                 // The console's host binding and the networks allowed to reach it (docs/design/apps-and-console.md).

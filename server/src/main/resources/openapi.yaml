@@ -1468,6 +1468,54 @@ paths:
                   stopped: { type: boolean }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/cluster/workers/release:
+    post:
+      operationId: releaseWorker
+      tags: [admin]
+      summary: Ask one idle connected worker to leave; it exits 0 and its supervisor decides whether to replace it (D-187)
+      description: |
+        The node sends GOODBYE with a reason to a worker with no run on it, marks it unplaceable first, and frees its
+        memory and connection slot when the connection ends. A worker with a run on it is refused (409). With no
+        `workerId` or `tenant`, the node picks an unbound worker first, then the longest-idle bound one, and never goes
+        below `C93_WORKER_MIN`. The worker exits 0, which means "released, do not restart"; a non-zero exit is still a
+        crash. A supervisor that restarts the worker answers with a new connection, which is a legal answer.
+      security:
+        - bearer: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workerId:
+                  type: string
+                  description: Release this connected worker, if it is idle.
+                tenant:
+                  type: string
+                  description: Release an idle worker bound to this tenant.
+                reason:
+                  type: string
+                  description: The reason the worker records and its death cause names.
+      responses:
+        '200':
+          description: The worker was asked to leave.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [released]
+                properties:
+                  released:
+                    type: object
+                    required: [workerId, reason, trigger]
+                    properties:
+                      workerId: { type: string }
+                      tenant: { type: [string, "null"] }
+                      reason: { type: string }
+                      trigger: { type: string, enum: [manual, automatic] }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/callbacks/secret:
     get:
       operationId: getCallbackSecret

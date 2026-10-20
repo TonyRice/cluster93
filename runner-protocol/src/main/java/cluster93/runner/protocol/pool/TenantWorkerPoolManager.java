@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -88,6 +89,20 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     private int maxWorkerConnections;
     /** The pre-shared secret a connecting worker must present (D-147, D-168); null means none is required. */
     private String workerSecret;
+    /** Never release a connected worker below this many (D-187): the deployment's floor, not the node's cap. */
+    private int minWorkers;
+    /** Automatic release begins when connected workers exceed this; 0 is off (D-187). */
+    private int releaseAbove;
+    /** How long between automatic releases, and how old a connection must be before it may be released (D-187). */
+    private long releaseCooldownMs = 60_000L;
+    /** How long a released worker has to leave before the node closes the socket itself (D-187). */
+    private long releaseGraceMs = 2_000L;
+    /** The automatic-release timer, or -1 when automatic release is off. */
+    private long releaseTimer = -1L;
+    /** Grace timers for workers that were asked to leave, so a node shutdown can cancel them (D-187). */
+    private final java.util.Set<Long> releaseGraceTimers = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** The pool that owns a worker being released, so the close frees its books there even after the warm queue dropped it. */
+    private final Map<String, TenantWorkerPool> releasingPools = new java.util.concurrent.ConcurrentHashMap<>();
 
     public TenantWorkerPoolManager(Vertx vertx, Map<String, String> modeBinaries, String defaultMode) {
         this(vertx, modeBinaries, defaultMode, 1, 8, 8, 4, 128, TenantWorkerPool.ReusePolicy.FRESH_PER_JOB, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL);
@@ -416,6 +431,15 @@ public class TenantWorkerPoolManager implements NodeArbiter {
         // Open workers belong to no pool, so no pool closes them: close them here.
         List<SocketWorkerHandle> open;
         synchronized (this) {
+            if (releaseTimer != -1L) {
+                vertx.cancelTimer(releaseTimer);
+                releaseTimer = -1L;
+            }
+            for (Long timer : releaseGraceTimers) {
+                vertx.cancelTimer(timer);
+            }
+            releaseGraceTimers.clear();
+            releasingPools.clear();
             open = new ArrayList<>(openWorkers);
             openWorkers.clear();
             connections.clear();
@@ -477,6 +501,210 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     /** How many connections have claimed no tenant yet. */
     public synchronized int openWorkerCount() {
         return openWorkers.size();
+    }
+
+    /**
+     * Sets the release policy (D-187). Automatic release is off unless {@code releaseAbove} is positive; it then
+     * releases at most one idle worker per cooldown while the node holds more connections than the threshold. The
+     * floor applies to every release, manual or automatic.
+     */
+    public synchronized TenantWorkerPoolManager releasePolicy(int minWorkers, int releaseAbove, long cooldownMs) {
+        this.minWorkers = Math.max(0, minWorkers);
+        this.releaseAbove = Math.max(0, releaseAbove);
+        this.releaseCooldownMs = Math.max(0L, cooldownMs);
+        if (releaseTimer != -1L) {
+            vertx.cancelTimer(releaseTimer);
+            releaseTimer = -1L;
+        }
+        if (this.releaseAbove > 0) {
+            // One tick per cooldown is the "at most one per cooldown" rule; 50 ms keeps a test's cooldown from
+            // turning the timer into a spin while a real deployment's default is a minute.
+            long period = Math.max(50L, this.releaseCooldownMs);
+            releaseTimer = vertx.setPeriodic(period, id -> releaseAboveThreshold());
+        }
+        return this;
+    }
+
+    /** How long a released worker has to leave on its own before the node closes its socket (D-187). */
+    public synchronized TenantWorkerPoolManager releaseGraceMs(long graceMs) {
+        this.releaseGraceMs = Math.max(0L, graceMs);
+        return this;
+    }
+
+    /**
+     * Asks one connected worker to leave (D-187). With an id, that worker; with a tenant, one of its idle workers;
+     * with neither, one idle worker (unbound first, then the longest-idle bound one). A worker with a run on it is
+     * never chosen, and the node never goes below {@code C93_WORKER_MIN}. The failure is a
+     * {@link WorkerRelease.Refused} with a code the API maps to a status.
+     */
+    public Future<WorkerRelease> releaseIdle(String workerId, String tenantId, String reason) {
+        return shed(workerId, tenantId, reason, "manual", false);
+    }
+
+    /** The automatic path: the same mechanism, one per timer tick, and fresh connections are skipped. */
+    private void releaseAboveThreshold() {
+        try {
+            synchronized (this) {
+                if (connectedWorkerCount() <= releaseAbove) {
+                    return;
+                }
+                // Reuse before release (D-172, D-187): a tenant is already waiting for capacity, so an idle worker
+                // may be the one it is about to be handed. Let the arbiter do that first; the next tick can shed.
+                String waiting = rotation.next();
+                if (waiting != null) {
+                    TenantWorkerPool waitingPool = tenantPools.get(waiting);
+                    if (waitingPool != null && waitingPool.hasPending()) {
+                        return;
+                    }
+                }
+                // One outstanding release at a time: until the connection actually ends the count still includes it,
+                // and a second tick must not read that as "still above the threshold" and shed another.
+                for (SocketWorkerHandle connection : connections) {
+                    if (connection.releasing()) {
+                        return;
+                    }
+                }
+            }
+            shed(null, null, "over capacity for this node", "automatic", true)
+                    .onFailure(err -> {
+                        if (!(err instanceof WorkerRelease.Refused)) {
+                            LOG.warn("Automatic worker release failed: {}", String.valueOf(err.getMessage()));
+                        }
+                    });
+        } catch (RuntimeException e) {
+            LOG.warn("Automatic worker release failed: {}", String.valueOf(e.getMessage()));
+        }
+    }
+
+    private synchronized Future<WorkerRelease> shed(String workerId, String tenantId, String reason, String trigger,
+                                                   boolean respectCooldown) {
+        String why = reason == null || reason.isBlank() ? "over capacity for this node" : reason.trim();
+        // The floor is about what remains, so a worker already on its way out does not count toward it. Otherwise two
+        // manual releases could each pass the check while the first is still closing and leave the node below the
+        // floor (D-187).
+        int leaving = 0;
+        for (SocketWorkerHandle connection : connections) {
+            if (connection.releasing()) {
+                leaving++;
+            }
+        }
+        int staying = connectedWorkerCount() - leaving;
+        if (staying > 0 && staying - 1 < minWorkers) {
+            return Future.failedFuture(new WorkerRelease.Refused("below_floor",
+                    "Releasing a worker would go below C93_WORKER_MIN=" + minWorkers + " (held: "
+                            + connectedWorkerCount() + ", leaving: " + leaving + ")"));
+        }
+
+        SocketWorkerHandle victim = null;
+        if (workerId != null) {
+            for (SocketWorkerHandle candidate : connections) {
+                if (candidate.workerId().equals(workerId)) {
+                    victim = candidate;
+                    break;
+                }
+            }
+            if (victim == null) {
+                return Future.failedFuture(new WorkerRelease.Refused("worker_unknown", "No connected worker " + workerId));
+            }
+            if (tenantId != null && !tenantId.equals(victim.boundTenantId())) {
+                return Future.failedFuture(new WorkerRelease.Refused("worker_unknown",
+                        "Worker " + workerId + (victim.boundTenantId() == null
+                                ? " is not bound to a tenant"
+                                : " is bound to " + victim.boundTenantId() + ", not " + tenantId)));
+            }
+            if (!victim.beginRelease(why, trigger)) {
+                return Future.failedFuture(new WorkerRelease.Refused("worker_busy",
+                        "Worker " + workerId + " is not idle (or is already being released)"));
+            }
+            if (victim.boundTenantId() == null) {
+                if (!openWorkers.remove(victim)) {
+                    victim.cancelRelease();
+                    return Future.failedFuture(new WorkerRelease.Refused("worker_busy",
+                            "Worker " + workerId + " is not idle"));
+                }
+            } else {
+                TenantWorkerPool owner = null;
+                for (TenantWorkerPool pool : tenantPools.values()) {
+                    if (pool.removeIdle(victim)) {
+                        owner = pool;
+                        break;
+                    }
+                }
+                if (owner == null) {
+                    victim.cancelRelease();
+                    return Future.failedFuture(new WorkerRelease.Refused("worker_busy",
+                            "Worker " + workerId + " is not idle"));
+                }
+                releasingPools.put(victim.workerId(), owner);
+            }
+        } else {
+            Instant notBefore = respectCooldown && releaseCooldownMs > 0
+                    ? Instant.now().minusMillis(releaseCooldownMs) : null;
+            // Unbound workers first: they are the ones the next tenant has not claimed, and releasing one costs no
+            // tenant a rebind. A named tenant excludes them by definition.
+            if (tenantId == null) {
+                java.util.Iterator<SocketWorkerHandle> open = openWorkers.iterator();
+                while (open.hasNext()) {
+                    SocketWorkerHandle candidate = open.next();
+                    if (!candidate.isAlive() || candidate.releasing()) {
+                        continue;
+                    }
+                    if (notBefore != null && candidate.createdAt().isAfter(notBefore)) {
+                        continue;
+                    }
+                    if (candidate.beginRelease(why, trigger)) {
+                        open.remove();
+                        victim = candidate;
+                        break;
+                    }
+                }
+            }
+            if (victim == null) {
+                // Longest-idle bound worker across every tenant's pool, not just the first pool that has one.
+                TenantWorkerPool victimPool = null;
+                for (TenantWorkerPool pool : tenantPools.values()) {
+                    SocketWorkerHandle candidate = pool.idleConnectedForRelease(tenantId, notBefore);
+                    if (candidate != null && (victim == null || candidate.lastUsedAt().isBefore(victim.lastUsedAt()))) {
+                        victim = candidate;
+                        victimPool = pool;
+                    }
+                }
+                if (victim != null) {
+                    if (!victim.beginRelease(why, trigger) || victimPool == null || !victimPool.removeIdle(victim)) {
+                        victim.cancelRelease();
+                        return Future.failedFuture(new WorkerRelease.Refused("no_idle_worker",
+                                "The idle worker chosen for release was taken by work first"));
+                    }
+                    releasingPools.put(victim.workerId(), victimPool);
+                }
+            }
+            if (victim == null) {
+                if (tenantId == null && connectedWorkerCount() > 0) {
+                    // There is supply, but every connection has work on it (or is between claims). Saying "busy" is
+                    // more useful to an operator than "nothing idle", and it is the same 409 refusal (D-187).
+                    return Future.failedFuture(new WorkerRelease.Refused("worker_busy",
+                            "All " + connectedWorkerCount() + " connected worker(s) are busy; none is idle"));
+                }
+                return Future.failedFuture(new WorkerRelease.Refused("no_idle_worker",
+                        tenantId == null ? "No idle connected worker to release"
+                                : "No idle connected worker bound to " + tenantId));
+            }
+        }
+
+        SocketWorkerHandle released = victim;
+        String tenant = released.boundTenantId();
+        released.channel().goodbye(why).onFailure(err -> LOG.warn(
+                "Could not ask worker {} to leave: {}", released.workerId(), String.valueOf(err.getMessage())));
+        // The worker normally exits 0 at once; this closes the socket of one that ignored the request (D-187).
+        if (releaseGraceMs >= 0) {
+            long timer = vertx.setTimer(releaseGraceMs, id -> {
+                releaseGraceTimers.remove(id);
+                released.closeAfterRelease();
+            });
+            releaseGraceTimers.add(timer);
+        }
+        LOG.info("Releasing worker {} (tenant {}, {}): {}", released.workerId(), tenant, trigger, why);
+        return Future.succeededFuture(new WorkerRelease(released.workerId(), tenant, why, trigger));
     }
 
     /**
@@ -563,7 +791,14 @@ public class TenantWorkerPoolManager implements NodeArbiter {
     private synchronized void onWorkerConnectionClosed(SocketWorkerHandle handle) {
         handle.connectionEnded();
         connections.remove(handle);
-        if (openWorkers.remove(handle)) {
+        if (handle.releasing()) {
+            Metrics.of(vertx).workerReleased(handle.releaseTrigger() == null ? "manual" : handle.releaseTrigger());
+        }
+        String tenant = handle.boundTenantId();
+        if (tenant == null) {
+            // Unbound, whether or not it is still in openWorkers: a released worker was taken out of that queue
+            // before GOODBYE was sent, but its reservation is still the manager's to give back (D-187).
+            openWorkers.remove(handle);
             if (memoryBudget != null) {
                 memoryBudget.release(handle.reservedBytes());
             }
@@ -571,10 +806,21 @@ public class TenantWorkerPoolManager implements NodeArbiter {
                     handle.workerId(), handle.reservedBytes() / (1024 * 1024));
             return;
         }
-        String tenant = handle.boundTenantId();
-        TenantWorkerPool pool = tenant == null ? null : poolFor(tenant, null);
+        TenantWorkerPool pool = releasingPools.remove(handle.workerId());
+        if (pool == null) {
+            for (TenantWorkerPool candidate : tenantPools.values()) {
+                if (candidate.owns(handle)) {
+                    pool = candidate;
+                    break;
+                }
+            }
+        }
+        if (pool == null) {
+            pool = poolFor(tenant, null);
+        }
         if (pool != null) {
-            pool.poison(handle, "worker connection ended");
+            String cause = handle.deathCause();
+            pool.poison(handle, cause == null ? "worker connection ended" : cause);
         }
     }
 

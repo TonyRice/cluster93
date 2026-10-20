@@ -90,6 +90,16 @@ public final class Metrics implements Shareable {
     }
 
     /**
+     * A connected worker the node asked to leave (D-187), by trigger. The trigger is bounded ({@code manual} or
+     * {@code automatic}) rather than the free-text reason: a reason is for the worker's death cause and the API
+     * response, while this label must not grow a series per operator typo.
+     */
+    public void workerReleased(String trigger) {
+        Counter.builder("c93.workers.released").description("Worker containers released cooperatively by the node")
+                .tag("trigger", trigger).register(registry).increment();
+    }
+
+    /**
      * Registers the per-tenant worker gauges, read live from {@code state} on each scrape. Register once per tenant:
      * Micrometer keeps the first meter for a name and tag set, so calling this again does nothing. The caller must
      * hold {@code state} strongly for as long as the gauges should read (a weak reference otherwise reports NaN).

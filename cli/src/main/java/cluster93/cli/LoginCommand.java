@@ -30,7 +30,7 @@ final class LoginCommand extends Base {
 
     @Override
     int execute() throws Exception {
-        Config saved = Config.load(io());
+        Config saved = Config.load(io(), profile());
         String base = url != null ? strip(url) : saved != null && saved.url() != null ? saved.url() : root().config().url();
         if (base == null) {
             throw new CliException("Which cluster? Run: c93 login <url>", 2);
@@ -90,9 +90,9 @@ final class LoginCommand extends Base {
 
     private int save(Config config) {
         JsonNode who = new Api(config).get("/v1/whoami");
-        config.save(io());
+        config.save(io(), profile());
         out().println("Logged in to " + config.url() + " as " + WhoamiCommand.describe(who) + ".");
-        out().println("Saved to " + io().configDir().resolve(Config.FILE));
+        out().println("Saved to " + Config.file(io(), profile()));
         return 0;
     }
 

@@ -79,6 +79,8 @@ public final class ApiVerticle extends VerticleBase {
     private final java.security.SecureRandom auditIds = new java.security.SecureRandom();
     /** Revokes a node's certificate (D-066); null when the cluster doesn't use node certificates. */
     private final java.util.function.Function<String, Future<JsonObject>> revokeNode;
+    /** Releases one idle connected worker (D-187); null when this node runs no process workers. */
+    private final java.util.function.Function<JsonObject, Future<JsonObject>> releaseWorker;
     /** Why this node shouldn't take traffic yet; empty when it should. */
     private final java.util.function.Supplier<Future<List<String>>> notReady;
     /** Marks the MCP tools' own calls to this API, which the tool call already counted (D-047). */
@@ -100,9 +102,11 @@ public final class ApiVerticle extends VerticleBase {
                        cluster93.core.packages.PackageStore packages, cluster93.core.apps.AppStore apps,
                        cluster93.core.auth.RateLimiter limiter, cluster93.core.host.egress.EgressPolicies egressPolicies,
                        java.util.function.Function<String, Future<JsonObject>> revokeNode,
+                       java.util.function.Function<JsonObject, Future<JsonObject>> releaseWorker,
                        java.util.function.Supplier<Future<List<String>>> notReady) {
         this.apps = apps;
         this.revokeNode = revokeNode;
+        this.releaseWorker = releaseWorker;
         this.notReady = notReady;
         this.queues = queues;
         this.callbackSecrets = callbackSecrets;
@@ -196,6 +200,24 @@ public final class ApiVerticle extends VerticleBase {
                 return;
             }
             revokeNode.apply(id).onSuccess(ctx::json).onFailure(ctx::fail);
+        });
+        router.post("/v1/cluster/workers/release").handler(ctx -> {
+            if (releaseWorker == null) {
+                error(ctx, 409, "not_available",
+                        "This node runs no process workers (C93_WORKER_MODE), so it has none to release");
+                return;
+            }
+            JsonObject body = ctx.body() == null || ctx.body().buffer() == null || ctx.body().buffer().length() == 0
+                    ? new JsonObject() : ctx.body().asJsonObject();
+            releaseWorker.apply(body)
+                    .onSuccess(released -> ctx.json(new JsonObject().put("released", released)))
+                    .onFailure(err -> {
+                        if (err instanceof cluster93.runner.protocol.pool.WorkerRelease.Refused refused) {
+                            error(ctx, refused.status(), refused.code(), refused.getMessage());
+                        } else {
+                            ctx.fail(err);
+                        }
+                    });
         });
         router.get("/v1/callbacks/secret").handler(ctx -> callbackSecrets.secret(ctx.get("tenant"))
                 .onSuccess(secret -> ctx.json(new JsonObject().put("secret", secret))).onFailure(ctx::fail));

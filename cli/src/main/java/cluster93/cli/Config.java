@@ -18,8 +18,15 @@ public record Config(String url, String token, String tenant) {
         this(url, token, null);
     }
 
+    /** The active profile's configuration: flags, then environment, then the saved login. */
     public static Config resolve(Io io, String urlFlag, String tokenFlag, String tenantFlag) {
-        Config saved = load(io);
+        return resolve(io, ProfileStore.active(io, null), urlFlag, tokenFlag, tenantFlag);
+    }
+
+    /** One profile's configuration: flags, then environment, then that profile's saved login. */
+    public static Config resolve(Io io, String profile, String urlFlag, String tokenFlag, String tenantFlag) {
+        String selected = profile == null || profile.isBlank() ? ProfileStore.active(io, null) : ProfileStore.valid(profile);
+        Config saved = load(io, selected);
         String url = first(urlFlag, io.env().get("C93_URL"), saved == null ? null : saved.url());
         String token = first(tokenFlag, io.env().get("C93_TOKEN"), saved == null ? null : saved.token());
         String tenant = first(tenantFlag, io.env().get("C93_TENANT"), saved == null ? null : saved.tenant());
@@ -37,7 +44,12 @@ public record Config(String url, String token, String tenant) {
     }
 
     public static Config load(Io io) {
-        Path file = io.configDir().resolve(FILE);
+        return load(io, ProfileStore.active(io, null));
+    }
+
+    /** One profile's saved login, or null when it has none. */
+    public static Config load(Io io, String profile) {
+        Path file = ProfileStore.configFile(io, profile);
         if (!Files.exists(file)) {
             return null;
         }
@@ -51,16 +63,26 @@ public record Config(String url, String token, String tenant) {
         }
     }
 
+    /** The file this profile's login lives in; the default profile keeps the legacy root path when it exists. */
+    public static Path file(Io io, String profile) {
+        return ProfileStore.configFile(io, profile);
+    }
+
     /** Saved readable by the user only: it holds a token. */
     public void save(Io io) {
-        Path file = io.configDir().resolve(FILE);
+        save(io, ProfileStore.active(io, null));
+    }
+
+    /** Saves this login into one profile, creating the directory and the file 0600. */
+    public void save(Io io, String profile) {
+        Path file = ProfileStore.configFile(io, profile);
         ObjectNode json = Json.object().put("url", url).put("token", token);
         if (tenant != null) {
             json.put("tenant", tenant);
         }
         try {
-            Files.createDirectories(io.configDir());
-            Path temporary = io.configDir().resolve(FILE + ".tmp");
+            Files.createDirectories(file.getParent());
+            Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
             Files.deleteIfExists(temporary);
             if (FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
                 Files.createFile(temporary, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
@@ -73,8 +95,21 @@ public record Config(String url, String token, String tenant) {
     }
 
     public static boolean forget(Io io) {
+        return forget(io, ProfileStore.active(io, null));
+    }
+
+    /** Forgets one profile's login; the default profile clears both the legacy and the modern file if both exist. */
+    public static boolean forget(Io io, String profile) {
         try {
-            return Files.deleteIfExists(io.configDir().resolve(FILE));
+            Path file = ProfileStore.configFile(io, profile);
+            boolean removed = Files.deleteIfExists(file);
+            if (ProfileStore.DEFAULT.equals(ProfileStore.valid(profile))) {
+                Path modern = ProfileStore.dir(io, profile).resolve(FILE);
+                if (!modern.equals(file)) {
+                    removed |= Files.deleteIfExists(modern);
+                }
+            }
+            return removed;
         } catch (IOException e) {
             throw new CliException("Can't remove the saved login: " + e.getMessage());
         }

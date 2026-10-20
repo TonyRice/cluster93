@@ -62,6 +62,14 @@ public interface WorkerHandle {
     /** Whether this worker is bound and has room for another job (D-155). */
     boolean hasCapacity();
 
+    /**
+     * Whether the node has asked this worker to leave (D-187). Only a connected worker the deployment supplied can be
+     * released; a spawned process has no supervisor to honour it, so the default is false.
+     */
+    default boolean releasing() {
+        return false;
+    }
+
     boolean isAlive();
 
     /**

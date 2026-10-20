@@ -15,8 +15,17 @@ abstract class Base implements Callable<Integer> {
     @Spec
     CommandSpec spec;
 
+    @picocli.CommandLine.Option(names = {"-h", "--help"}, usageHelp = true,
+            description = "Show this help message and exit.")
+    boolean helpRequested;
+
     Main root() {
         return (Main) spec.root().userObject();
+    }
+
+    /** The active connection profile (D-189). */
+    String profile() {
+        return root().profileName();
     }
 
     Api api() {

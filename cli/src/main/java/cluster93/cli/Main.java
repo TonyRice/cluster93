@@ -19,7 +19,7 @@ import java.util.Properties;
         description = "Run sandboxed JavaScript jobs and services on a Cluster93 cluster.",
         subcommands = {LoginCommand.class, LogoutCommand.class, WhoamiCommand.class, RunCommand.class, JobsCommand.class,
                 ServicesCommand.class, DomainsCommand.class, FilesCommand.class, QueuesCommand.class, CallbacksCommand.class, SecretsCommand.class, PackagesCommand.class, DeployCommand.class, AppsCommand.class, StorageCommand.class, EgressCommand.class, ClusterCommand.class, NodeCommand.class, TokensCommand.class, TenantsCommand.class,
-                MembersCommand.class, RolesCommand.class, GroupsCommand.class, InvitesCommand.class, UsersCommand.class, AuditCommand.class, ProfileCommand.class,
+                MembersCommand.class, RolesCommand.class, GroupsCommand.class, InvitesCommand.class, UsersCommand.class, AuditCommand.class, MeCommand.class, LegacyProfileCommand.class, ProfilesCommand.class,
                 McpCommand.class, LocalCommand.class, VersionCommand.class, UpdateCommand.class, UpgradeCommand.class, CommandLine.HelpCommand.class})
 public final class Main implements Runnable {
 
@@ -35,7 +35,7 @@ public final class Main implements Runnable {
             new Group("Platform Resources",
                     List.of("files", "secrets", "queues", "packages", "storage", "domains", "egress", "callbacks")),
             new Group("Identity & Access",
-                    List.of("login", "logout", "whoami", "profile", "tokens", "members", "roles", "groups", "invites")),
+                    List.of("login", "logout", "whoami", "me", "profiles", "tokens", "members", "roles", "groups", "invites")),
             new Group("Cluster & Node", List.of("cluster", "node", "update", "tenants", "users", "audit")),
             new Group("Tools & Automation", List.of("mcp", "version", "help")));
 
@@ -51,6 +51,10 @@ public final class Main implements Runnable {
     @Option(names = "--tenant", scope = ScopeType.INHERIT, description = "Tenant name (default: C93_TENANT, then the saved login).")
     String tenant;
 
+    @Option(names = "--profile", scope = ScopeType.INHERIT, paramLabel = "NAME",
+            description = "Connection profile (default: C93_PROFILE, then the saved profile, then `default`).")
+    String profile;
+
     final Io io;
 
     Main(Io io) {
@@ -63,7 +67,12 @@ public final class Main implements Runnable {
     }
 
     Config config() {
-        return Config.resolve(io, url, token, tenant);
+        return Config.resolve(io, profileName(), url, token, tenant);
+    }
+
+    /** The profile this invocation uses: {@code --profile}, {@code C93_PROFILE}, the marker, then {@code default}. */
+    String profileName() {
+        return ProfileStore.active(io, profile);
     }
 
     Api api() {

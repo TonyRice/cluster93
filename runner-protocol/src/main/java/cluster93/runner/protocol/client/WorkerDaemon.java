@@ -22,6 +22,7 @@ import cluster93.runner.protocol.message.ResultRunMessage;
 import cluster93.runner.protocol.message.RunMessage;
 import cluster93.runner.protocol.message.StateMessage;
 import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.json.JsonObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,6 +69,8 @@ public class WorkerDaemon {
     /** How often a worker tells the node what it refused on its own (D-176), unless a test says otherwise. */
     static final long REPORT_INTERVAL_MS = 5_000L;
     private long reportTimer = -1L;
+    /** Completed when the node releases this worker (D-187): the process then ends deliberately, with status 0. */
+    private final Promise<Void> released = Promise.promise();
 
     private final Map<Integer, RunningExecution> activeRuns = new ConcurrentHashMap<>();
     private final Map<Integer, RemoteHostApis> hostsByChannel = new ConcurrentHashMap<>();
@@ -120,13 +123,30 @@ public class WorkerDaemon {
             case STOP -> onStop(frame);
             case CANCEL -> onCancel(frame);
             case EVENT -> onEvent(frame);
-            case GOODBYE -> {
-                // The node is going away; tell it what it has not been told yet while there is still a connection (D-176).
-                reportRefusals();
-                LOG.info("Worker received GOODBYE from node");
-            }
+            case GOODBYE -> onGoodbye(frame);
             default -> LOG.warn("Worker received unhandled frame {}", frame.type());
         }
+    }
+
+    /**
+     * The node is releasing this worker (D-187). Tell it what it has not been told yet while there is still a
+     * connection (D-176), then complete {@link #released()} so the process can exit 0 deliberately — waiting for the
+     * node to close the socket would make a release look like a disconnection, and would lose the report if the node
+     * went away first.
+     */
+    private void onGoodbye(Frame frame) {
+        String reason = frame.json() == null ? null : frame.json().getString("reason");
+        if (reason == null || reason.isBlank()) {
+            reason = "released by the node";
+        }
+        stopReporting();
+        LOG.info("Worker received GOODBYE from node: {}", reason);
+        reportRefusals().onComplete(ar -> released.tryComplete());
+    }
+
+    /** Completed when the node asked this worker to leave (D-187); never when the node simply went away. */
+    public Future<Void> released() {
+        return released.future();
     }
 
     private void onBind(Frame frame) {
@@ -186,18 +206,27 @@ public class WorkerDaemon {
      * without this its metrics would show only what it refused itself — and a worker that loses its connection loses
      * the report with it, which is why the tally is not cleared by sending it.
      */
-    private void reportRefusals() {
+    private Future<Void> reportRefusals() {
         WorkerClientConnection connectionOn = connection;
         String tenant = boundTenantId;
         if (connectionOn == null || tenant == null) {
-            return;
+            return Future.succeededFuture();
         }
         Map<String, Long> denied = accounting.drainDenials();
         if (denied.isEmpty()) {
-            return;
+            return Future.succeededFuture();
         }
-        connectionOn.send(new cluster93.runner.protocol.message.AccountMessage(tenant, denied).toFrame())
+        return connectionOn.send(new cluster93.runner.protocol.message.AccountMessage(tenant, denied).toFrame())
                 .onFailure(err -> LOG.debug("Could not report egress refusals to the node: {}", String.valueOf(err.getMessage())));
+    }
+
+    /** Stops the periodic refusal report; a released worker is about to exit and has nothing left to report (D-187). */
+    private void stopReporting() {
+        long timer = reportTimer;
+        reportTimer = -1L;
+        if (timer != -1L && vertx != null) {
+            vertx.cancelTimer(timer);
+        }
     }
 
     /**

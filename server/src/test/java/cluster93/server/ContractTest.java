@@ -183,6 +183,8 @@ class ContractTest {
         calls.check("request", "POST", "/v1/bus/nobody-listens/request?timeoutMs=500", tenant, new JsonObject());
 
         calls.check("revokeNode", "POST", "/v1/cluster/nodes/node9/revoke", admin, null);
+        // Embedded in this test's node, but the route exists and refuses with a typed 409: nothing is connected (D-187).
+        calls.check("releaseWorker", "POST", "/v1/cluster/workers/release", admin, new JsonObject());
         calls.check("getCallbackSecret", "GET", "/v1/callbacks/secret", tenant, null);
         calls.check("rotateCallbackSecret", "POST", "/v1/callbacks/secret/rotate", tenant, null);
         calls.check("putSecret", "PUT", "/v1/secrets/db-url", tenant, new JsonObject().put("value", "postgres://u:p@db/app"));

@@ -6,6 +6,48 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **The CLI has connection profiles, a `me` command, and working `--help` on every command** (D-189, phase 1 of the
+  unified pathway):
+  - `c93 profiles` lists named contexts; `profiles use/create/show/rm` manage them. `--profile NAME` or
+    `C93_PROFILE` selects one for a single invocation (precedence: flag, env, `current-profile`, `default`).
+  - Each non-default profile stores its URL/token/tenant at `~/.config/cluster93/profiles/<name>/config.json`
+    (0600). The legacy root `config.json` remains the `default` profile, so existing logins and CI keep working.
+    A dev stack will use profile `dev` instead of overwriting a production login.
+  - `c93 me` is the user-identity command; `c93 profile` is its hidden one-release alias with a deprecation line.
+    `/v1/me` and its behavior are unchanged.
+  - `-h/--help` now works on every command (`c93 node --help`, `c93 cluster --help`, …); previously they exited 2
+    with “Unknown option”.
+  - The help groups list `me` and `profiles` under Identity & Access.
+  - `ProfilesCommandTest` covers create/use/list/rm, the legacy default, `--profile`/`C93_PROFILE` precedence, and
+    cluster-bundle metadata; `MainHelpTest` covers the new groups and the help flag.
+
+- **An idle worker container can be given back without a restart** (D-187, completing the B2 decision left open by
+  D-166/D-171):
+  - The node now has a cooperative release for the supply a deployment connects: `POST /v1/cluster/workers/release`
+    (admin only; `{"workerId": …}`, `{"tenant": …}` or `{}`) and `c93 node workers release`. The node marks one idle
+    worker unplaceable, sends `GOODBYE` with a reason, and the worker reports what it refused (D-176) and exits **0**
+    — *released, do not restart*. A run on it means it is never chosen; a worker that ignores the request is closed
+    after a grace period and may reconnect.
+  - Selection is unbound first, then the longest-idle bound worker, never below `C93_WORKER_MIN` (0 by default).
+    Automatic release is opt-in and off by default (`C93_WORKER_RELEASE_ABOVE`; one per
+    `C93_WORKER_RELEASE_COOLDOWN_MS`, default 60 s; a connection younger than the cooldown is skipped so a
+    restart-on-release supervisor cannot make the node flap). D-172's reuse is still tried first.
+  - The memory reservation and connection slot move on the close, exactly once, and the death cause is
+    `released by the node: <reason>`. `c93_workers_released_total{trigger="manual"|"automatic"}` counts it; the
+    free-text reason stays in the log, death cause and API response rather than becoming a metric label.
+  - **A disconnect is non-zero.** Only a completed GOODBYE exits 0; if the node goes away, the worker exits 1 so the
+    supervisor starts another that reconnects when the node returns. The shipped compose wrapper keeps its container
+    alive while any worker remains, counts a 0 as a shrink, exits 0 when the last one is released, and `restart` is
+    now `on-failure` (a crash still restarts; a release does not). `docs/guides/node.md` gives the systemd/s6
+    equivalents and warns that automatic release plus a restart-always supervisor is a loop.
+  - `WorkerSocketSourceTest` drives a real UDS worker through unbound/bound selection, the floor, an anonymous busy
+    refusal, automatic release and the books moving once; `NodeWorkerChannelTest` checks the report is flushed before
+    the release; `SocketWorkerHandleTest` checks the busy refusal and the death cause; `WorkerReleaseApiTest` checks
+    admin-only, 200/404/409 and the counter; `CliTest` runs the verb. Case **C8** of
+    `scripts/worker-isolation-check.sh` runs a real worker container through the template's shrink-on-0 loop: idle →
+    exit 0 and no reconnect; busy → `409 worker_busy`, the job completes and the worker stays; then idle → exit 0.
+    Verified with both `worker-javet` and `worker-graaljs`.
+
 - **A request whose upload dies reaches the service as a failure, not as a short body** (D-186, closes the other
   half of D-184):
   - A client that aborts mid-upload had its failure end the worker's request stream (`err -> out.end()`). The service

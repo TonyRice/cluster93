@@ -38,6 +38,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The node's <b>listening</b> worker source (D-166, D-167): a deployment creates the worker containers, they connect
@@ -285,6 +286,90 @@ class WorkerSocketSourceTest {
         assertThat(handle.channel().acceptsEgressPolicy()).as("it never said it could apply one").isFalse();
         assertThat(built.get()).as("the node does not even build a policy for it").isZero();
         assertThat(handle.isAlive()).as("and a frame it cannot parse was never sent to it").isTrue();
+    }
+
+    @Test
+    @DisplayName("An idle connected worker is released cooperatively: GOODBYE, exit 0, and its books move once (D-187)")
+    void anIdleConnectedWorkerIsReleased() throws Exception {
+        // Keep an idle worker warm rather than retiring it: D-187 releases a worker the pool would otherwise reuse.
+        manager = new TenantWorkerPoolManager(vertx, Map.of(), "javet", 0, 4, 8, 4, 64,
+                TenantWorkerPool.ReusePolicy.REUSE_SAME_TENANT, new WorkerCgroups(), NodeRpcAuthorizer.ALLOW_ALL,
+                1L * 1024 * 1024 * 1024).releaseGraceMs(100);
+        await(manager.listenForWorkers(socketPath, "s3cret", 8));
+
+        // A real worker, as a container runs it, so the release is decided on the worker side too.
+        NetSocket socket = await(client.connect(socketPath));
+        sockets.add(socket);
+        var connection = new cluster93.runner.protocol.client.WorkerClientConnection(socket, socket);
+        var engine = new cluster93.runtime.javet.JavetScriptRuntime(vertx, 64, 2);
+        var daemon = new cluster93.runner.protocol.client.WorkerDaemon(connection, engine, "javet", "s3cret", 64, 2);
+        await(daemon.start());
+        awaitUntil("the worker to become an open worker", () -> manager.openWorkerCount() == 1);
+
+        WorkerHandle handle = await(manager.acquire("acme", null));
+        manager.release("acme", null, handle); // the run-level signal, as if its last job had finished
+        awaitUntil("the worker to be warm", () -> manager.workersWarm() == 1);
+        assertThat(manager.workersMemoryUsed()).isPositive();
+
+        WorkerRelease released = await(manager.releaseIdle(null, "acme", "over capacity for this node"));
+
+        assertThat(released.workerId()).isEqualTo(handle.workerId());
+        assertThat(released.tenant()).isEqualTo("acme");
+        assertThat(released.trigger()).isEqualTo("manual");
+        // The worker's side of the contract: GOODBYE completes released(), which is what makes WorkerMain exit 0.
+        await(daemon.released());
+        awaitUntil("the released worker to leave", () -> manager.connectedWorkerCount() == 0);
+        assertThat(manager.workersMemoryUsed()).as("freed exactly once, on the close").isZero();
+        assertThat(handle.deathCause()).isEqualTo("released by the node: over capacity for this node");
+    }
+
+    @Test
+    @DisplayName("A worker that has been taken for work is not idle, and the floor is respected (D-187)")
+    void aBusyWorkerAndTheFloorAreRefused() throws Exception {
+        manager = manager(1L * 1024 * 1024 * 1024).releaseGraceMs(100);
+        await(manager.listenForWorkers(socketPath, "s3cret", 8));
+
+        NetSocket socket = await(client.connect(socketPath));
+        sockets.add(socket);
+        var connection = new cluster93.runner.protocol.client.WorkerClientConnection(socket, socket);
+        var engine = new cluster93.runtime.javet.JavetScriptRuntime(vertx, 64, 2);
+        var daemon = new cluster93.runner.protocol.client.WorkerDaemon(connection, engine, "javet", "s3cret", 64, 2);
+        await(daemon.start());
+        awaitUntil("the worker to become an open worker", () -> manager.openWorkerCount() == 1);
+
+        WorkerHandle handle = await(manager.acquire("acme", null));
+
+        assertThatThrownBy(() -> await(manager.releaseIdle(null, null, "not idle")))
+                .cause().isInstanceOf(WorkerRelease.Refused.class)
+                .satisfies(cause -> assertThat(((WorkerRelease.Refused) cause).code()).isEqualTo("worker_busy"));
+        assertThatThrownBy(() -> await(manager.releaseIdle(handle.workerId(), null, "not idle")))
+                .cause().isInstanceOf(WorkerRelease.Refused.class)
+                .satisfies(cause -> assertThat(((WorkerRelease.Refused) cause).code()).isEqualTo("worker_busy"));
+        assertThat(handle.releasing()).as("a refused release is undone").isFalse();
+        assertThat(manager.connectedWorkerCount()).isEqualTo(1);
+
+        manager.releasePolicy(1, 0, 0);
+        assertThatThrownBy(() -> await(manager.releaseIdle(null, null, "below the floor")))
+                .cause().isInstanceOf(WorkerRelease.Refused.class)
+                .satisfies(cause -> assertThat(((WorkerRelease.Refused) cause).code()).isEqualTo("below_floor"));
+    }
+
+    @Test
+    @DisplayName("Automatic release sheds one worker past the threshold and stops there (D-187)")
+    void automaticReleaseShedsOnePastTheThreshold() throws Exception {
+        manager = manager(1L * 1024 * 1024 * 1024).releasePolicy(0, 1, 100).releaseGraceMs(100);
+        await(manager.listenForWorkers(socketPath, "s3cret", 8));
+
+        await(connectAndSayHello("s3cret", 64, 4));
+        await(connectAndSayHello("s3cret", 64, 4));
+        awaitUntil("both connections to become workers", () -> manager.connectedWorkerCount() == 2);
+
+        awaitUntil("one automatic release", () -> manager.connectedWorkerCount() == 1);
+        Thread.sleep(400);
+        assertThat(manager.connectedWorkerCount())
+                .as("one per cooldown, and only while above the threshold").isEqualTo(1);
+        assertThat(manager.workersMemoryUsed()).as("the released worker's reservation is given back").isEqualTo(
+                (64L * 4 + 128L) * 1024L * 1024L);
     }
 
     private TenantWorkerPoolManager manager(long maxWorkerMemoryBytes) {
