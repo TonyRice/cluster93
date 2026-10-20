@@ -4406,3 +4406,79 @@ case it lists (javet and graaljs).
 - **Deleting the rootless probe with it:** the probe is what makes the remaining cases honest under an engine they
   don't target, and `node.meta` records it for the guide's advice.
 
+### D-184 — A body stream that fails after its headers says what failed, not just that it did
+**Date:** 2026-10-19 · **Status:** Accepted. Closes the gap D-181 left open.
+
+**Context:**
+D-181 made a host failure carry its name, code and host detail whenever it travelled as a rejection or as an error
+stream opened in place of a result (D-132's shape, D-179's for a refused connect). A response body that fails *after*
+its headers had no such channel: the node reset the data stream with code `502` and the raw message, so the worker's
+body read raised a `StreamResetException` and the script saw `Error/host_error` with "Stream reset (code 502)" in it.
+The same fetch made on the worker's side is `TypeError/network_error` — so the placement still showed through, on
+exactly the failure mode D-180 was about, and D-181's own wording ("a body failing mid-fetch is a TypeError like its
+twin") was true only for the worker-placed fetch.
+
+**Decision:**
+1. **A reset carries the host failure's `name` and `code`** when there was one (`ResetStreamMessage`'s optional
+   `errorName`/`hostCode`). They are absent for every ordinary reset, so a peer that knows nothing of them sees the
+   frame it always did.
+2. **The node's body pipes use it** — fetch responses, socket data, and an upgraded service response (one helper,
+   `resetBodyStream`). A classified failure keeps its name and code; anything else resets as before.
+3. **The worker rebuilds the same failure**: `HostException(name, code, reason)`, which `JsError` turns into the same
+   `TypeError/network_error` a worker-side fetch gives. A reset *without* a name stays a reset — a cancellation is not
+   an error and must not be dressed as one.
+
+**Evidence:**
+- `StreamMultiplexerTest.testStreamResetCarriesHostFailure`: the name, code and reason survive the round trip.
+- `NodeWorkerChannelTest.aFetchBodyThatFailsMidStreamKeepsItsNameAndCode`: a raw peer declares 64 bytes, sends 16 and
+  closes. The fetch succeeds (`status: 200`) and the worker's body read fails with `HostException`,
+  `TypeError/network_error`, the fetch's own words, and no "Stream reset" — against the old code that read was a
+  `StreamResetException`.
+
+**Rejected:**
+- **A second error stream:** the request stream is spent by then, and opening one beside an already-delivering body
+  makes the ordering of "these bytes" and "this failure" ambiguous.
+- **A table of stream failures the worker polls:** state to leak and another round trip for something the reset frame
+  already carries.
+- **Encoding name and code into the reason string:** every reader would parse prose, and the message would stop being
+  the script's own.
+
+### D-185 — A cluster node binds exactly two ports, or refuses to start
+**Date:** 2026-10-19 · **Status:** Accepted.
+
+**Context:**
+Ignite's discovery and communication SPIs default to a *range*: when the base port is held, the node takes the next
+free one. That is fine when peers are told a range too — the shorthand `C93_CLUSTER_MEMBERS=host` (no port) is
+documented as "probe from the cluster port upwards". It is a trap when peers are told exact ports: a stray node
+holding `5701` made a statically addressed node bind `5702` while every member joined `5701`, and the operator saw
+`invalid stream header` or SSL-alert failures from one side and a healthy-looking node on the other (found while
+adding the check's C6). Nothing can recover from that: the membership is static by design.
+
+**Decision:**
+1. **The member syntax decides.** A cluster is *statically addressed* when members name their ports (`host:port`)
+   and none names a range; every node then binds exactly its base and the communication port 100 above it, with
+   **no fallback**.
+2. **Check both ports before Ignite starts** in that case, and fail with a message naming `C93_CLUSTER_PORT`, the
+   port that is held, and the fix (free it, or give the node and its peers another base). The cause is kept for the
+   "address already in use" detail.
+3. **The shorthand form keeps the probe range** (a bare host, or an explicit `host:port..port` range): peers are told
+   the range too, so a node that moves to the next free port is still found — it is the one shape where moving is
+   honest.
+4. **The node's own-port set follows the same rule** (`Cluster93.nodePorts`): two ports for a statically addressed
+   cluster, the range otherwise, so development-mode egress blocks what the node can actually bind.
+
+**Evidence:**
+- `IgniteClusterTest.aHeldClusterPortStopsTheNodeWithAnActionableMessage`: with explicit members, holding `24610`
+  stops the start with `IllegalStateException` naming the setting and the discovery port; against the old
+  configuration the start would have succeeded on `24611` (the test would then fail for the opposite reason).
+- `DurabilityTest` now runs a three-node cluster on one host with **one base each** and every base in members —
+  the statically addressed shape — and survives a full restart; the same-base shorthand tests (e.g. `ClusterTest`,
+  two nodes, one base, bare-host members) are untouched and still pass, which is the other half of the evidence.
+
+**Rejected:**
+- **One rule for both forms:** exact-only would break the documented shorthand (and every same-host dev cluster);
+  range-only is the bug.
+- **Keeping the range and relying on Ignite's bind failure:** the drift is the bug, not the message.
+- **A warning instead:** a node nobody can join is not a usable node.
+- **Silently re-basing and advertising the new port:** peers cannot learn a port the node never told them.
+

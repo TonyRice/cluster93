@@ -6,6 +6,30 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **A body that fails mid-stream says what failed, wherever it was decided** (D-184, closes D-181's remaining gap):
+  - A fetch body — or a socket's data, or a service's response — that dies *after* its headers had no channel to
+    report on: the node reset the data stream with `502` and the raw message, so the worker read
+    `Stream reset (code 502): …` and the script saw `Error/host_error`. The same fetch made on the worker's side was
+    `TypeError/network_error`. The placement showed through again, on exactly the failure mode D-180 was about.
+  - A reset now optionally carries the host failure's `name` and `code`; absent for an ordinary reset, so the frame a
+    peer that knows nothing of them sees is unchanged. The worker's body stream rebuilds the same `HostException` a
+    call would have failed with, and a reset without them stays a reset (a cancellation is not an error).
+  - `StreamMultiplexerTest` pins the round trip. `NodeWorkerChannelTest.aFetchBodyThatFailsMidStreamKeepsItsNameAndCode`
+    runs it end to end: a raw peer declares 64 bytes, sends 16 and closes; the fetch succeeds, and the worker's body
+    read fails with `TypeError/network_error` and the fetch's own words, not "Stream reset".
+
+- **A statically addressed cluster node binds its port or refuses to start** (D-185):
+  - Ignite's default is to take the next free port when its base is held. With `C93_CLUSTER_MEMBERS` naming exact
+    ports — the production shape, and the one C6 uses — the node then "started" where no peer looked for it, and what
+    an operator saw was `invalid stream header` or SSL-alert failures from a cluster whose members were on different
+    ports.
+  - The member syntax now decides: when members name their ports and none names a range, discovery and communication
+    bind exactly with no fallback, and both are checked before Ignite starts — a held port stops the node with a
+    message naming `C93_CLUSTER_PORT`, the port, and the fix. The shorthand form (a bare host, or an explicit
+    `host:port..port` range, probed upwards) keeps its range, because there the peers search it too.
+  - `IgniteClusterTest.aHeldClusterPortStopsTheNodeWithAnActionableMessage` pins the refusal; `DurabilityTest` now
+    runs three nodes on one host, one base each and all bases in members, the statically addressed shape.
+
 - **The isolation check runs the engines a deployment asks for, not every engine that exists** (D-183):
   - `C2` (rootless Docker, container uid 0) is removed from `scripts/worker-isolation-check.sh`. It has never run —
     there is no rootless daemon on the build host, and no deployment the guides or compose files describe uses one —

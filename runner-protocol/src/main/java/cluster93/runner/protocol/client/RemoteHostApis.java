@@ -31,6 +31,7 @@ import cluster93.runner.protocol.message.EventMessage;
 import cluster93.runner.protocol.message.OpenStreamMessage;
 import cluster93.runner.protocol.message.ReplyMessage;
 import cluster93.runner.protocol.message.ResultMessage;
+import cluster93.runner.protocol.stream.StreamMultiplexer;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
@@ -853,7 +854,18 @@ public final class RemoteHostApis implements HostApis {
         ReadStreamBodyStream(ReadStream<Buffer> in) {
             this.in = in;
             this.in.pause();
-            this.in.exceptionHandler(err -> onError.accept(err));
+            // A reset that carries a host failure's name and code becomes that same failure (D-184): a fetch body that
+            // died mid-stream reads as TypeError/network_error here, exactly as it would have on the worker's side,
+            // instead of as "Stream reset (code 502)" (D-181's remaining gap).
+            this.in.exceptionHandler(err -> onError.accept(hostFailure(err)));
+        }
+
+        private static Throwable hostFailure(Throwable err) {
+            if (err instanceof StreamMultiplexer.StreamResetException reset && reset.errorName() != null) {
+                return new HostException(reset.errorName(),
+                        reset.hostCode() == null ? "host_error" : reset.hostCode(), reset.reason());
+            }
+            return err;
         }
 
         /** Adds an error callback that always runs, alongside any the body consumer registers. */

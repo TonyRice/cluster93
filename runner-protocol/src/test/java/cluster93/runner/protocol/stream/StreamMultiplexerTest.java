@@ -143,6 +143,41 @@ class StreamMultiplexerTest {
     }
 
     @Test
+    @DisplayName("A reset that carries a host failure's name and code keeps them (D-184)")
+    void testStreamResetCarriesHostFailure() throws Exception {
+        AtomicReferenceHolder<StreamMultiplexer> clientRef = new AtomicReferenceHolder<>();
+        AtomicReferenceHolder<StreamMultiplexer> serverRef = new AtomicReferenceHolder<>();
+
+        StreamMultiplexer client = new StreamMultiplexer(frame -> {
+            serverRef.get().handleFrame(frame);
+            return io.vertx.core.Future.succeededFuture();
+        });
+        StreamMultiplexer server = new StreamMultiplexer(frame -> {
+            clientRef.get().handleFrame(frame);
+            return io.vertx.core.Future.succeededFuture();
+        });
+
+        clientRef.set(client);
+        serverRef.set(server);
+
+        int streamId = 78;
+        ReadStream<Buffer> serverIn = server.createInputStream(streamId);
+        CompletableFuture<Throwable> errorFuture = new CompletableFuture<>();
+        serverIn.exceptionHandler(errorFuture::complete);
+
+        client.createOutputStream(streamId);
+        client.resetStream(streamId, "fetch failed: Connection was closed", 502,
+                "TypeError", "network_error");
+
+        Throwable thrown = errorFuture.get(5, TimeUnit.SECONDS);
+        assertInstanceOf(StreamMultiplexer.StreamResetException.class, thrown);
+        StreamMultiplexer.StreamResetException reset = (StreamMultiplexer.StreamResetException) thrown;
+        assertEquals("TypeError", reset.errorName());
+        assertEquals("network_error", reset.hostCode());
+        assertEquals("fetch failed: Connection was closed", reset.reason());
+    }
+
+    @Test
     @DisplayName("Multiple concurrent streams operate concurrently without cross-talk")
     void testMultipleConcurrentStreams() throws Exception {
         AtomicReferenceHolder<StreamMultiplexer> clientRef = new AtomicReferenceHolder<>();

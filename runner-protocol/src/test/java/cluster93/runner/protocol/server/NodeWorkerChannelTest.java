@@ -201,6 +201,76 @@ class NodeWorkerChannelTest {
     }
 
     @Test
+    void aFetchBodyThatFailsMidStreamKeepsItsNameAndCode() throws Exception {
+        // A peer that declares 64 bytes, sends 16, and closes. The fetch itself succeeds — its headers arrived — and
+        // its body fails afterwards, when the response stream is already open. That is the one failure D-181 could not
+        // carry: there is no second stream to report on, so before D-184 the worker read a bare 502 reset and the
+        // script saw Error/host_error with "Stream reset" in it, while the same fetch made on the worker's side was
+        // TypeError/network_error. The placement must not show through here either.
+        java.net.ServerSocket peer = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress());
+        Thread serving = new Thread(() -> {
+            try (java.net.Socket socket = peer.accept()) {
+                var out = socket.getOutputStream();
+                out.write(("HTTP/1.1 200 OK\r\nContent-Length: 64\r\nConnection: close\r\n\r\n"
+                        + "0123456789abcdef").getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                out.flush();
+            } catch (java.io.IOException ignored) {
+                // The test's own close, or the client's once the failure is all it needs.
+            }
+        }, "mid-body-peer");
+        serving.setDaemon(true);
+        serving.start();
+        try {
+            DuplexPipe pipe = new DuplexPipe();
+            NodeWorkerChannel nodeChannel = new NodeWorkerChannel("worker-1", pipe.nodeToWorker, pipe.workerToNode);
+            WorkerClientConnection workerConn = new WorkerClientConnection(pipe.workerToNode, pipe.nodeToWorker);
+
+            java.util.concurrent.atomic.AtomicReference<HostApis> workerHostApis =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            ScriptRuntime mockRuntime = (execution, logs, state, host) -> {
+                workerHostApis.set(host);
+                return new RunningExecution() {
+                    @Override public Future<ExecutionResult> result() { return Promise.<ExecutionResult>promise().future(); }
+                    @Override public void stop(String reason, Duration grace) {}
+                    @Override public void cancel(String reason) {}
+                };
+            };
+            new WorkerDaemon(workerConn, mockRuntime, "mock-engine").start();
+            nodeChannel.awaitHello().toCompletionStage().toCompletableFuture().get(2, TimeUnit.SECONDS);
+            nodeChannel.bind("tenant-a", new JsonObject(), new JsonObject()).toCompletionStage().toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+
+            // The node makes this fetch (the `node` placement): loopback is allowed for the test's own peer.
+            NodeHostApis hostApis = new NodeHostApis(new NodeHostApis.Node(vertx, new SharedDataKvStore(vertx),
+                    new FetchClient(vertx, new EgressPolicy(true)), null), "tenant-a", "job-1", false);
+            Execution execution = new Execution("job-1", "tenant-a", "export default () => 42;", new JsonObject(),
+                    Duration.ofMinutes(1), JobContext.firstAttempt("job-1", cluster93.core.job.OrphanPolicy.FAIL));
+            nodeChannel.run(1, execution, hostApis, (level, line) -> { }, cluster93.core.runtime.StateSink.DISCARD);
+
+            HostApis worker = workerHostApis.get();
+            assertThat(worker).as("the node asked this worker to run the job").isNotNull();
+            var response = worker.fetch().fetch(new JsonObject()
+                            .put("url", "http://127.0.0.1:" + peer.getLocalPort() + "/"))
+                    .toCompletionStage().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertThat(response.meta().getInteger("status")).as("the response itself arrived").isEqualTo(200);
+
+            java.util.concurrent.CompletableFuture<Throwable> outcome = new java.util.concurrent.CompletableFuture<>();
+            response.body().handler(chunk -> { }, () -> outcome.complete(null), outcome::complete);
+            response.body().resume();
+
+            Throwable failure = outcome.get(10, TimeUnit.SECONDS);
+            assertThat(failure).as("the body was cut short, so it reported a failure").isNotNull();
+            assertThat(failure).isInstanceOf(HostException.class);
+            assertThat(((HostException) failure).errorName()).as("the name a script reads").isEqualTo("TypeError");
+            assertThat(((HostException) failure).code()).as("and the code").isEqualTo("network_error");
+            assertThat(failure.getMessage()).as("the failure's own words, not the reset's")
+                    .contains("fetch failed").doesNotContain("Stream reset");
+        } finally {
+            peer.close();
+        }
+    }
+
+    @Test
     void rejectsUnauthorizedRpcMethod() throws Exception {
         DuplexPipe pipe = new DuplexPipe();
         NodeWorkerChannel nodeChannel = new NodeWorkerChannel("worker-1", pipe.nodeToWorker, pipe.workerToNode);

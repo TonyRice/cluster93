@@ -35,15 +35,28 @@ class DurabilityTest {
         TestIgnite.stopAllExceptShared();
     }
 
-    private IgniteSettings settings(String node, int clusterSize) {
-        return new IgniteSettings(node, data.resolve(node), 23500, List.of("127.0.0.1"), 1, 128, Duration.ofSeconds(1), clusterSize);
+    /** Each node binds exactly its base and the port 100 above it (D-185), so nodes sharing a host need one base each. */
+    private static final int BASE = 23500;
+    /** More than the communication offset (100), so one node's communication port is never another's discovery port. */
+    private static final int STEP = 200;
+
+    private IgniteSettings settings(String node, int clusterSize, int port, List<String> members) {
+        return new IgniteSettings(node, data.resolve(node), port, members, 1, 128, Duration.ofSeconds(1), clusterSize);
     }
 
     /** Ignite nodes join each other, so start them in parallel the way a real cluster boots. */
     private List<IgniteCluster> startAll(String... nodes) {
+        // Every node is told every base: the node that binds 23700 is found at 23700, never at 23500 plus whatever
+        // Ignite would have picked if the port were taken.
+        List<String> members = new ArrayList<>();
+        for (int i = 0; i < nodes.length; i++) {
+            members.add("127.0.0.1:" + (BASE + i * STEP));
+        }
         List<CompletableFuture<IgniteCluster>> starting = new ArrayList<>();
-        for (String node : nodes) {
-            starting.add(CompletableFuture.supplyAsync(() -> IgniteCluster.start(settings(node, nodes.length))));
+        for (int i = 0; i < nodes.length; i++) {
+            String node = nodes[i];
+            int port = BASE + i * STEP;
+            starting.add(CompletableFuture.supplyAsync(() -> IgniteCluster.start(settings(node, nodes.length, port, members))));
         }
         List<IgniteCluster> started = starting.stream().map(CompletableFuture::join).toList();
         IgniteStores.createTables(started.getFirst());

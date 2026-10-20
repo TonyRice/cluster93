@@ -109,8 +109,17 @@ public class StreamMultiplexer {
      * @return Future completed when frame is sent
      */
     public Future<Void> resetStream(int streamId, String reason, int errorCode) {
+        return resetStream(streamId, reason, errorCode, null, null);
+    }
+
+    /**
+     * Sends a 0x33 RESET frame that also carries a host failure's name and code (D-184), so the peer can rebuild the
+     * same error a call would have failed with instead of reporting a bare reset. A stream that dies after its
+     * headers — a fetch body, a socket's data, an HTTP response — has no other way to say what failed.
+     */
+    public Future<Void> resetStream(int streamId, String reason, int errorCode, String errorName, String hostCode) {
         cleanupStream(streamId);
-        ResetStreamMessage msg = new ResetStreamMessage(streamId, reason, errorCode);
+        ResetStreamMessage msg = new ResetStreamMessage(streamId, reason, errorCode, errorName, hostCode);
         return frameSender.apply(msg.toFrame());
     }
 
@@ -154,11 +163,11 @@ public class StreamMultiplexer {
                 ResetStreamMessage reset = ResetStreamMessage.fromFrame(frame);
                 InputStreamHandler in = inStreams.remove(streamId);
                 if (in != null) {
-                    in.onError(new StreamResetException(reset.reason(), reset.errorCode()));
+                    in.onError(new StreamResetException(reset.reason(), reset.errorCode(), reset.errorName(), reset.hostCode()));
                 }
                 OutputStreamHandler out = outStreams.remove(streamId);
                 if (out != null) {
-                    out.onError(new StreamResetException(reset.reason(), reset.errorCode()));
+                    out.onError(new StreamResetException(reset.reason(), reset.errorCode(), reset.errorName(), reset.hostCode()));
                 }
                 cleanupStream(streamId);
                 return true;
@@ -464,17 +473,45 @@ public class StreamMultiplexer {
 
     /**
      * Exception thrown when an active stream is terminated via 0x33 RESET.
+     *
+     * <p>{@link #errorName()} and {@link #hostCode()} are present only when a host failure caused the reset (D-184);
+     * the reader then rebuilds the same {@code HostException} the peer's call failed with.
      */
     public static class StreamResetException extends RuntimeException {
+        private final String reason;
         private final int errorCode;
+        private final String errorName;
+        private final String hostCode;
 
         public StreamResetException(String reason, int errorCode) {
+            this(reason, errorCode, null, null);
+        }
+
+        StreamResetException(String reason, int errorCode, String errorName, String hostCode) {
             super("Stream reset (code " + errorCode + "): " + reason);
+            this.reason = reason;
             this.errorCode = errorCode;
+            this.errorName = errorName;
+            this.hostCode = hostCode;
         }
 
         public int errorCode() {
             return errorCode;
+        }
+
+        /** Why the stream was reset, without the framing this exception adds. */
+        public String reason() {
+            return reason;
+        }
+
+        /** The host failure's name (e.g. {@code TypeError}), or null when the reset was not a host failure. */
+        public String errorName() {
+            return errorName;
+        }
+
+        /** The host failure's code (e.g. {@code network_error}), or null when the reset was not a host failure. */
+        public String hostCode() {
+            return hostCode;
         }
     }
 }

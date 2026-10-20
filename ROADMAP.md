@@ -4,7 +4,7 @@
 **Author / Organization:** Adam & Lynn Incorporated <tony@adamnlynn.com>  
 **License:** MPL-2.0  
 **Repository:** `git@github.com:TonyRice/cluster93.git` (`main`)  
-**Last Updated:** 2026-10-13  
+**Last Updated:** 2026-10-19  
 
 ---
 
@@ -103,6 +103,20 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
   advertising 0 against its own `C93_CAPACITY=4`). Still queued with this: the deferred scale-up/down decision (D-172
   changes that arithmetic: an idle worker can now be re-used, not just shed), the per-tenant-container tier D-166 keeps
   open, and the egress leftovers above.
+
+- **Landed (2026-10-19) — the two bugs the egress work left open (D-184, D-185):** a response body that failed
+  *after* its headers carried only a `502` reset across the worker connection, so a node-placed fetch whose body died
+  read `Stream reset (code 502)` and the script saw `Error/host_error` while the same fetch made on the worker's side
+  was `TypeError/network_error` — D-181's remaining gap, and the placement showing through again. A reset now carries
+  the host failure's `name` and `code` (optional, so an ordinary reset is unchanged), the node's three body pipes use
+  it, and the worker rebuilds the same `HostException`; a reset without them still stays a reset, because a
+  cancellation is not an error (`StreamMultiplexerTest`, and `NodeWorkerChannelTest` end to end against a raw peer
+  that declares 64 bytes, sends 16 and closes). Separately, Ignite's default of taking the next free port made a
+  statically addressed node bind where no peer looked: it "started" on 5702 while every member joined 5701, and the
+  cluster failed with opaque TLS errors. The member syntax now decides — exact ports bind exactly, with both ports
+  checked before Ignite starts and a message naming `C93_CLUSTER_PORT`; the probe form (bare host or explicit range)
+  keeps its range, because there the peers search it too. `DurabilityTest` now runs three nodes on one host with one
+  base each (the exact shape), and the same-base shorthand clusters are untouched.
 
 ### Phase 5: Architecture Documentation & Javadoc Aggregation (COMPLETE)
 - **Task 5.1 — Master Documentation (`DOCUMENTATION.md`):**

@@ -15,6 +15,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The standalone-activation rules: a single node must activate itself instead of stalling on a baseline it never
@@ -76,6 +77,24 @@ class IgniteClusterTest {
             assertThat(cluster.active()).isTrue();
         } finally {
             cluster.stop();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void aHeldClusterPortStopsTheNodeWithAnActionableMessage() throws Exception {
+        // Ignite's default is to take the next free port when the base is held, which leaves the node running where no
+        // peer joins it: the peers fail with SSL errors against whatever holds the base (D-185). The node must refuse
+        // to start instead, and say which setting and port are at fault. The members name their ports: that is the
+        // statically addressed shape where moving is the bug (a bare host keeps the probe range, and is still found).
+        int held = 24610;
+        try (java.net.ServerSocket taken = new java.net.ServerSocket(held, 1, java.net.InetAddress.getLoopbackAddress())) {
+            assertThatThrownBy(() -> IgniteCluster.start(new IgniteSettings("local-master", null, held,
+                    List.of("127.0.0.1:" + held), 0, 128, Duration.ofSeconds(1), 1)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("C93_CLUSTER_PORT " + held)
+                    .hasMessageContaining("discovery port " + held)
+                    .hasMessageContaining("already in use");
         }
     }
 

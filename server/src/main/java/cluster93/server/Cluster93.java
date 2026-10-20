@@ -252,10 +252,18 @@ public final class Cluster93 {
         if (config.metricsPort() > 0) {
             ports.add(config.metricsPort());
         }
-        // IgniteCluster's ranges: discovery from the cluster port, communication 100 above it, 10 ports each.
-        for (int i = 0; i < 10; i++) {
-            ports.add(config.clusterPort() + i);
-            ports.add(config.clusterPort() + 100 + i);
+        // IgniteCluster's ports: two in a statically addressed cluster (discovery at the cluster port, communication
+        // 100 above it), or the probe range when members are named without ports or as a range (D-185).
+        boolean exact = config.clusterMembers().stream().noneMatch(m -> m.contains(".."))
+                && config.clusterMembers().stream().anyMatch(m -> m.contains(":"));
+        if (exact) {
+            ports.add(config.clusterPort());
+            ports.add(config.clusterPort() + 100);
+        } else {
+            for (int i = 0; i < 10; i++) {
+                ports.add(config.clusterPort() + i);
+                ports.add(config.clusterPort() + 100 + i);
+            }
         }
         ports.remove(0);
         return ports;

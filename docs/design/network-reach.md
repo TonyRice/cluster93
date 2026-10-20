@@ -40,7 +40,7 @@ Every outbound connection a script causes (`fetch`, `http`, `net`, `tls`, and `d
    - an address any live node advertises (its internal endpoint's host, resolved);
    - any address of this node's own network interfaces, including loopback.
 
-   Every port, because the event bus listens on a random one, and nothing on a node is meant for scripts. **Development is the one exception:** with `C93_EGRESS_ALLOW_PRIVATE=true`, loopback and the node's interfaces are refused only on the node's own ports (API, ingress, internal, metrics, and the cluster's discovery and communication ranges), so a developer can still reach a mock server on `localhost:3000`.
+   Every port, because the event bus listens on a random one, and nothing on a node is meant for scripts. **Development is the one exception:** with `C93_EGRESS_ALLOW_PRIVATE=true`, loopback and the node's interfaces are refused only on the node's own ports (API, ingress, internal, metrics, and the cluster's ports — discovery at the cluster port, communication 100 above it, and the probe range when members are named without ports), so a developer can still reach a mock server on `localhost:3000`.
 2. **Public unicast: allowed.**
 3. **Private or reserved:** allowed only if
    - the tenant's egress policy has a matching rule, or

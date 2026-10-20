@@ -274,8 +274,9 @@ discovering each other — attaches **one** container to the **compute** node's 
 node's API. It passes when the edge node advertises capacity **0** by the role rule, the compute node is the only
 candidate, the job's own record names the **compute** node, and the compute node reports a connected worker with none
 of its own spawned (the container did the work). C6 deliberately avoids the cluster's default discovery ports and
-checks that its own are free first: Ignite does not fail when a port is taken — it takes the next one in its range, and
-the peers are still told to join the first, which is whatever holds it.
+checks that its own are free first. Its members name both ports, so each node binds exactly its base and the
+communication port 100 above it and refuses to start when either is taken — what a node used to do was take the next
+free port while its peers kept joining the base, which reads as opaque TLS errors instead of a bind failure (D-185).
 
 ## Join a cluster
 

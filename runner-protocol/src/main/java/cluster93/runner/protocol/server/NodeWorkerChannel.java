@@ -639,7 +639,7 @@ public class NodeWorkerChannel {
                 socket.data().handler(
                         chunk -> out.write(chunk),
                         () -> out.end(),
-                        err -> streamMultiplexer.resetStream(dataStreamId, String.valueOf(err.getMessage()), 502));
+                        err -> resetBodyStream(dataStreamId, err));
                 socket.data().resume();
             });
         });
@@ -660,9 +660,23 @@ public class NodeWorkerChannel {
             response.body().handler(
                     chunk -> out.write(chunk),
                     () -> out.end(),
-                    err -> streamMultiplexer.resetStream(dataStreamId, String.valueOf(err.getMessage()), 502));
+                    err -> resetBodyStream(dataStreamId, err));
             response.body().resume();
         });
+    }
+
+    /**
+     * Ends a body stream that failed <em>after</em> it opened, carrying the host failure's name and code (D-184). A
+     * fetch whose body dies mid-stream has already sent its headers, so there is no second stream to report on: without
+     * this the worker would read a bare {@code 502} reset and hand the script {@code Error/host_error} with "Stream
+     * reset" in it, while the same fetch made on the worker's side is {@code TypeError/network_error} (D-181's
+     * remaining gap). An unclassified failure keeps the reset as it was.
+     */
+    private void resetBodyStream(int streamId, Throwable error) {
+        String message = error != null && error.getMessage() != null ? error.getMessage() : "the body failed";
+        streamMultiplexer.resetStream(streamId, message, 502,
+                error instanceof HostException host ? host.errorName() : null,
+                error instanceof HostException host ? host.code() : null);
     }
 
     /**
@@ -926,7 +940,7 @@ public class NodeWorkerChannel {
                 socket.data().handler(
                         chunk -> out.write(chunk),
                         () -> out.end(),
-                        err -> streamMultiplexer.resetStream(streamId, String.valueOf(err.getMessage()), 502));
+                        err -> resetBodyStream(streamId, err));
                 socket.data().resume();
                 return;
             }

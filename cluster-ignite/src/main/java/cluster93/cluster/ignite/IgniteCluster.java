@@ -46,7 +46,10 @@ public final class IgniteCluster {
     public static final int PARTITIONS = 256;
     /** Smallest durable region that holds every table's partition metadata with room for data (D-038). */
     public static final int MIN_DATA_MEMORY_MB = 128;
+    /** How far a bare-host member may be probed (D-185): only the shorthand form, where peers search the range too. */
     static final int DISCOVERY_PORT_RANGE = 10;
+    static final int COMMUNICATION_PORT_RANGE = 20;
+    /** The ports above the discovery port: communication. */
     static final int COMMUNICATION_OFFSET = 100;
 
     private final Ignite ignite;
@@ -62,6 +65,14 @@ public final class IgniteCluster {
         if (settings.dataMemoryMb() < MIN_DATA_MEMORY_MB) {
             throw new IllegalArgumentException("C93_DATA_MEMORY_MB must be at least " + MIN_DATA_MEMORY_MB
                     + " (it was " + settings.dataMemoryMb() + "): smaller regions can't hold the tables' metadata");
+        }
+        // Statically addressed (every member names its port): bind exactly that port, or refuse to start (D-185).
+        // Ignite's default is to try the next one, which puts the node where no peer looks — it bound 5702 while every
+        // member joined 5701, and what the operator saw was opaque TLS errors rather than a bind failure. The shorthand
+        // form (a bare host, probed upwards) keeps the range: there the peers search it too, so moving is not a lie.
+        if (exactPorts(settings)) {
+            requireFree(settings, settings.discoveryPort(), "discovery");
+            requireFree(settings, settings.discoveryPort() + COMMUNICATION_OFFSET, "communication");
         }
         System.setProperty("IGNITE_UPDATE_NOTIFIER", "false");
         System.setProperty("IGNITE_NO_ASCII", "true");
@@ -82,6 +93,36 @@ public final class IgniteCluster {
                     + "Set C93_DATA_DIR for durable storage.", settings.dataMemoryMb());
         }
         return new IgniteCluster(ignite, settings);
+    }
+
+    /**
+     * Whether the cluster is statically addressed: members name their ports (so peers expect exactly those ports), and
+     * none names a range. A bare host — or a {@code host:port..port} range — instead says "probe this host upwards",
+     * and is the one form where moving to the next free port is not a mismatch (D-185).
+     */
+    static boolean exactPorts(IgniteSettings settings) {
+        return settings.members().stream().noneMatch(m -> m.contains(".."))
+                && settings.members().stream().anyMatch(m -> m.contains(":"));
+    }
+
+    /**
+     * Fails before Ignite starts when one of the node's two ports is taken (D-185) — the statically addressed case,
+     * where a moved port is one no peer will look at. What an operator would otherwise see is SSL or
+     * {@code invalid stream header} errors from a cluster whose members are on different ports. The message names the
+     * setting, the port and the fix; the cause is kept for the "address already in use" detail.
+     */
+    private static void requireFree(IgniteSettings settings, int port, String role) {
+        try (java.net.ServerSocket probe = new java.net.ServerSocket()) {
+            // As Ignite binds it: reuse lets a lingering TIME_WAIT socket through, while an active listener still fails.
+            probe.setReuseAddress(true);
+            probe.bind(new java.net.InetSocketAddress(port), 1);
+        } catch (IOException e) {
+            throw new IllegalStateException("C93_CLUSTER_PORT " + settings.discoveryPort()
+                    + " is unusable: this node's " + role + " port " + port + " is already in use ("
+                    + e.getMessage() + "). A node binds exactly its base and the communication port "
+                    + COMMUNICATION_OFFSET + " above it, and peers must list the same base — free the port, or give "
+                    + "this node and every peer another base.", e);
+        }
     }
 
     /**
@@ -191,8 +232,11 @@ public final class IgniteCluster {
                         .setInitialSize(32L * 1024 * 1024).setMaxSize(256L * 1024 * 1024))
                 .setDataRegionConfigurations(durable);
 
+        boolean exact = exactPorts(settings);
         List<String> addresses = settings.members().stream()
-                .map(m -> m.contains(":") ? m : m + ":" + settings.discoveryPort() + ".." + (settings.discoveryPort() + DISCOVERY_PORT_RANGE - 1))
+                .map(m -> m.contains(":") ? m
+                        : exact ? m + ":" + settings.discoveryPort()
+                        : m + ":" + settings.discoveryPort() + ".." + (settings.discoveryPort() + DISCOVERY_PORT_RANGE - 1))
                 .toList();
         IgniteConfiguration configuration = new IgniteConfiguration()
                 .setIgniteInstanceName("cluster93-" + settings.nodeId())
@@ -207,11 +251,12 @@ public final class IgniteCluster {
                 .setDiscoverySpi(new TcpDiscoverySpi()
                         .setJoinTimeout(settings.joinTimeout().toMillis())
                         .setLocalPort(settings.discoveryPort())
-                        .setLocalPortRange(DISCOVERY_PORT_RANGE)
+                        // No fallback when peers expect this exact port; the shorthand form keeps the range (D-185).
+                        .setLocalPortRange(exact ? 0 : DISCOVERY_PORT_RANGE)
                         .setIpFinder(new TcpDiscoveryVmIpFinder().setAddresses(addresses)))
                 .setCommunicationSpi(new TcpCommunicationSpi()
                         .setLocalPort(settings.discoveryPort() + COMMUNICATION_OFFSET)
-                        .setLocalPortRange(20))
+                        .setLocalPortRange(exact ? 0 : COMMUNICATION_PORT_RANGE))
                 // Ignite's thin-client/JDBC/ODBC connector (10800) and its REST command protocol (11211) are on by
                 // default, unauthenticated, on every interface. Cluster93 uses neither, so neither listens (D-065).
                 .setClientConnectorConfiguration(null)
