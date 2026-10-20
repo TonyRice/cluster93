@@ -323,10 +323,10 @@ A node starts as a single-node cluster. To join others, sign it a certificate wi
 [cluster guide](cluster.md)):
 
 ```bash
-c93 cluster init --nodes node1,node2 --out ./cluster-tls          # once, on your machine
-c93 node invite node2 --host 10.0.0.12 --ca ./cluster-tls/ca.key  # a one-line join
-C93_JOIN=c93_nodebundle_… c93 node restart                        # on node2
-c93 node revoke node2                                             # force it out for good
+c93 cluster init --nodes node1,node2 --out ./cluster-tls   # once, on your machine
+c93 cluster invite node2 --host 10.0.0.12                  # a one-line join
+C93_JOIN=c93_nodebundle_… c93 node restart                 # on node2
+c93 cluster revoke node2                                   # force it out for good
 ```
 
 Set `C93_CLUSTER_TLS` and `C93_CLUSTER_MEMBERS` alongside the rest in `node.env`.

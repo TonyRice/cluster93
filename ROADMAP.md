@@ -185,8 +185,9 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
   `c93 dev` for a checkout stack — with profiles and no `scripts/local.sh`.
 - **Phase 1 — profiles and help (DONE 2026-10-20):** `c93 me` (user identity), `c93 profiles` (connection
   contexts), `--profile`/`C93_PROFILE`, legacy `config.json` as `default`, and `-h/--help` on every command.
-- **Phase 2 — cluster:** `cluster init` writes a `cluster.json` inventory; `status`/`doctor` reconcile it with
-  `/v1/nodes`; `invite`/`revoke`; `tenants`/`users`/`audit` move under `cluster` with hidden root aliases.
+- **Phase 2 — cluster (DONE 2026-10-20):** `cluster init` writes a `cluster.json` inventory; `status`/`doctor`
+  reconcile it with `/v1/nodes`; `invite`/`revoke` update it; `tenants`/`users`/`audit` moved under `cluster` with
+  hidden root aliases.
 - **Phase 3 — node:** checkout is the temporary default install source (`--checkout`/`--release`/`--version`);
   `node join`; one node plus N local worker containers (`node install --docker --workers N`,
   `node workers scale`); `--compute`.

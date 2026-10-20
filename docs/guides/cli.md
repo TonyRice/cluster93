@@ -128,19 +128,19 @@ c93 profiles                                   # * marks the active one
 | `invites create --role R [--group G] [--user U]` · `invites ls · rm` | Invite people. The code is printed once. Operators: `--tenant T` (a first owner) or `--operator` |
 | `members · members set USER --role R --group G · members rm USER` | Who's in your tenant and what they may do |
 | `roles · roles set NAME --scope S · roles rm` · `groups · groups set NAME --role R · groups rm` | Your own roles and groups |
-| `audit [--limit N] [--before ID] [--operators]` · `audit verify` | Who changed what, newest first · operators: check the audit chains for tampering |
+| `cluster audit [--limit N] [--before ID] [--operators]` · `cluster audit verify` | Who changed what, newest first · operators: check the audit chains for tampering (`c93 audit …` remains a hidden alias for one release) |
 | `profile [--name N] [--display-name D] [--email E]` | **Deprecated:** use `me` |
 | `me [--name N] [--display-name D] [--email E]` | You and your tenants; change your name or details |
 | `profiles · profiles use NAME · show · create · rm` | Named connection contexts (URL, token, tenant); `--profile NAME` or `C93_PROFILE` selects one. The default profile keeps the old `config.json` ([D-189](DECISIONS.md)) |
-| `users · users rename OLD NEW · disable · enable · operator [--remove] · rm` | Operators: every user |
-| `tenants create · ls · rm · token · tokens · revoke · storage-policy` | Admin only |
-| `tenants egress TENANT [--allow TO:PORTS …] [--deny TO[:PORTS] …] [--posture public\|allow-list\|inherit] [--none]` | Admin only. A tenant's own rules: `--allow 10.0.5.20/32:5432 --allow db.internal.example:5432,6379`, `--deny *.example.com`, or `--deny 203.0.113.0/24:25`. `TO` can also be `@set` or `*`. `--allow`/`--deny` replace its rules, and `--posture` alone keeps them (D-111) |
+| `cluster users · rename OLD NEW · disable · enable · operator [--remove] · rm` | Operators: every user (`c93 users …` remains a hidden alias for one release) |
+| `cluster tenants create · ls · rm · token · tokens · revoke · storage-policy` | Admin only (`c93 tenants …` remains as a hidden alias for one release) |
+| `cluster tenants egress TENANT [--allow TO:PORTS …] [--deny TO[:PORTS] …] [--posture public\|allow-list\|inherit] [--none]` | Admin only. A tenant's own rules: `--allow 10.0.5.20/32:5432 --allow db.internal.example:5432,6379`, `--deny *.example.com`, or `--deny 203.0.113.0/24:25`. `TO` can also be `@set` or `*`. `--allow`/`--deny` replace its rules, and `--posture` alone keeps them (D-111) |
 | `mcp` | The MCP stdio bridge for AI agents ([MCP guide](mcp.md)) |
-| `cluster init --nodes a,b,c [--host a=10.0.0.11]` | Operator: create the cluster's CA and a join line per node. `ca.key` stays with you ([cluster guide](cluster.md)) |
+| `cluster init --nodes a,b,c [--host a=10.0.0.11] [--api URL]` · `cluster status [--check]` · `cluster doctor` · `cluster nodes` | Operator: create the CA, joins and `cluster.json` inventory; reconcile it with the live nodes; check certificates and drift ([cluster guide](cluster.md)) |
 | `node install [--system] [--dir DIR] [--version TAG] [--no-start]` · `node uninstall [--purge]` | Install a node from a signed release (program + `node.env` + a service unit) and start it, or remove it ([node guide](node.md)) |
 | `node start · stop · restart · status · logs [--follow] · mcp · update` | Drive the node: its service unit (systemd/launchd), or the process directly. `c93 local …` is a deprecated alias for one release |
 | `node env [--set K=V] [--edit]` | Show or change the node's `node.env` (`C93_*` settings, short names accepted) |
-| `node invite ID [--host ADDR] [--key PUBLIC_KEY] --ca ca.key` · `node revoke ID` | Operator: a one-line join for a new node (also renews); revoke a node |
+| `cluster invite ID [--host ADDR] [--key PUBLIC_KEY]` · `cluster revoke ID` | Operator: a one-line join for a new node (also renews), and record/revoke it in the inventory. `node invite/revoke` remain hidden aliases for one release |
 | `node workers release [--worker ID] [--bound-tenant NAME] [--reason TEXT]` | Operator: ask one idle connected worker container to leave; it exits 0 (`released`, not a crash) and its supervisor decides whether to replace it ([D-187](DECISIONS.md)) |
 | `version` · `update [--cli|--node] [--version TAG]` | Show the version · update the CLI and/or the node from a signed release (`--cli`, `--node`; neither = both) |
 

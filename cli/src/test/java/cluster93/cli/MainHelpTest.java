@@ -33,7 +33,7 @@ class MainHelpTest {
                 List.of("files", "secrets", "queues", "packages", "storage", "domains", "egress", "callbacks"));
         CATEGORIES.put("Identity & Access",
                 List.of("login", "logout", "whoami", "me", "profiles", "tokens", "members", "roles", "groups", "invites"));
-        CATEGORIES.put("Cluster & Node", List.of("cluster", "node", "update", "tenants", "users", "audit"));
+        CATEGORIES.put("Cluster & Node", List.of("cluster", "node", "update"));
         CATEGORIES.put("Tools & Automation", List.of("mcp", "version", "help"));
     }
 
@@ -88,6 +88,8 @@ class MainHelpTest {
         String help = run("--help");
         assertThat(help).as("no single flat 'Commands:' list at the top level").doesNotContain("Commands:");
         assertThat(help).as("the deprecated alias is hidden").doesNotContain("  local ");
+        assertThat(help).as("moved admin commands are hidden at the root")
+                .doesNotContain("  tenants ").doesNotContain("  users ").doesNotContain("  audit ");
 
         String node = run("node");
         assertThat(node).contains("Commands:").contains("status").contains("start").contains("setup");
@@ -99,6 +101,13 @@ class MainHelpTest {
         assertThat(run("cluster", "--help")).contains("Usage: c93 cluster");
         assertThat(run("profiles", "--help")).contains("Usage: c93 profiles");
         assertThat(run("me", "--help")).contains("Usage: c93 me");
+    }
+
+    @Test
+    void theClusterGroupListsTheMovedAdminCommands() {
+        String cluster = run("cluster", "--help");
+        assertThat(cluster).contains("tenants").contains("users").contains("audit")
+                .contains("status").contains("doctor").contains("invite").contains("revoke");
     }
 
     @Test
@@ -116,6 +125,6 @@ class MainHelpTest {
                 total++;
             }
         }
-        assertThat(total).as("all 32 subcommands are grouped").isEqualTo(32);
+        assertThat(total).as("all 29 root subcommands are grouped").isEqualTo(29);
     }
 }

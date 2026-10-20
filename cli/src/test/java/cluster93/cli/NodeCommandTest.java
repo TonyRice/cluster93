@@ -305,7 +305,8 @@ class NodeCommandTest {
 
         assertThat(result.code()).isZero();
         assertThat(result.out()).contains("status").contains("start").contains("stop").contains("logs")
-                .contains("mcp").contains("install").contains("invite").contains("revoke");
+                .contains("mcp").contains("install");
+        assertThat(result.out()).as("membership moved to c93 cluster").doesNotContain("invite").doesNotContain("revoke");
     }
 
     @Test

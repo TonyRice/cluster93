@@ -4809,3 +4809,49 @@ would make one command own both a machine and a cluster.
 **Verification (planned):** a generated compose project with one node and N workers validates
 (`compose config -q`); `node workers scale` adds/removes services; a job submitted at an existing cluster's edge
 runs on the compute node's worker container; D-187's C8 behavior is unchanged.
+
+---
+
+### D-192 — The cluster inventory lives beside the CA, and the live API stays the authority
+**Date:** 2026-10-20 · **Status:** Accepted and built (phase 2)
+
+**Context:**
+`c93 cluster init` wrote `ca.key`, `ca.crt` and one `.join` per node, then forgot everything. `cluster status` and
+`doctor` need to know which nodes were configured, with which addresses and certificate expiry, while the live
+membership is already authoritative at `GET /v1/nodes`. Without a configured set, "a node is missing" and "a node
+was never invited" are indistinguishable, and `invite`/`revoke` leave no operator-side record.
+
+**Decision:**
+1. **`cluster.json` lives in the CA directory** (`./cluster-tls` by default), so the cluster's identity bundle stays
+   together. `cluster init --out` writes it; `--file` overrides; the active profile records the bundle path.
+2. **It holds references, not secrets:** CA cert/key paths, node ids/addresses, certificate and join filenames,
+   expiry, revoked flag, and the API URL. The `.join` files still hold node private keys and stay owner-only; the
+   inventory itself contains no private key material.
+3. **The live API remains authoritative for membership.** `status` reconciles inventory (configured) with
+   `/v1/nodes` (live), naming missing, unlisted, revoked-but-live and expired-certificate cases. `nodes` shows only
+   the live set. `status --check` exits non-zero on drift.
+4. **`doctor` checks both sides:** CA/cert files, join/cert presence, expiry (fail when expired, warn inside 90
+   days), duplicate/live drift, and API reachability. It does not SSH.
+5. **`invite` and `revoke` update the inventory.** Invite writes the node's public `.crt` and `.join`, decodes the
+   certificate expiry, and appends the node; revoke marks it after the API accepts the revocation. If no inventory
+   exists, invite creates one beside the CA and revoke leaves the API effect alone.
+6. **No global cluster registry.** A profile points at a bundle; a project can keep its own `cluster-tls`.
+
+**Alternatives:**
+- **Derive everything from the certificate files.** Rejected: addresses, join lines and revocation state are not in
+  the certificate alone, and parsing the directory cannot tell a removed node from one never invited.
+- **Keep it only in the cluster's shared data.** Rejected: `cluster init` runs before any node exists, and the
+  operator needs the inventory when the cluster is down.
+- **A global `~/.config/cluster93/clusters/` registry.** Rejected: it separates the inventory from the CA it
+  describes and makes portable bundles harder. A profile pointer is enough.
+
+**Consequences:**
+- `cluster init` additionally writes `cluster.json` and each node's public `.crt`.
+- `cluster status/doctor` can distinguish configured-but-missing from live-but-unlisted; `--json` carries both.
+- `cluster invite/revoke` keep the file current; `node invite/revoke` remain hidden one-release aliases.
+- The inventory is a small JSON file (no new YAML dependency).
+
+**Verification (built):** `ClusterCommandTest` covers init (files, addresses, expiry, profile pointer), status with a
+fake `/v1/nodes` (missing/unlisted, `--check`), invite (join line, `.crt`, `.join`, inventory), revoke (API then
+inventory), doctor (fail/clean), and the admin command locations. `CliTest` still passes through the hidden
+`node invite/revoke` aliases.

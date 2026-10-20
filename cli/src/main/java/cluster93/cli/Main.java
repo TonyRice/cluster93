@@ -36,7 +36,7 @@ public final class Main implements Runnable {
                     List.of("files", "secrets", "queues", "packages", "storage", "domains", "egress", "callbacks")),
             new Group("Identity & Access",
                     List.of("login", "logout", "whoami", "me", "profiles", "tokens", "members", "roles", "groups", "invites")),
-            new Group("Cluster & Node", List.of("cluster", "node", "update", "tenants", "users", "audit")),
+            new Group("Cluster & Node", List.of("cluster", "node", "update")),
             new Group("Tools & Automation", List.of("mcp", "version", "help")));
 
     @Option(names = "--json", scope = ScopeType.INHERIT, description = "Print the API's JSON instead of a summary.")
@@ -103,7 +103,18 @@ public final class Main implements Runnable {
     private static CommandLine commandLine(Main main) {
         CommandLine commandLine = new CommandLine(main);
         categorizeSubcommands(commandLine);
+        hideDeprecatedAliases(commandLine);
         return commandLine;
+    }
+
+    /** The root aliases keep working for one release but no longer appear in the root help (D-188). */
+    private static void hideDeprecatedAliases(CommandLine commandLine) {
+        for (String name : List.of("tenants", "users", "audit")) {
+            CommandLine alias = commandLine.getSubcommands().get(name);
+            if (alias != null) {
+                alias.getCommandSpec().usageMessage().hidden(true);
+            }
+        }
     }
 
     /**

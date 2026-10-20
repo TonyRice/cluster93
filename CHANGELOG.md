@@ -6,6 +6,22 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **`c93 cluster` now manages the cluster, not just the CA** (D-188, D-192, phase 2 of the unified pathway):
+  - `cluster init` writes a `cluster.json` inventory beside the CA, plus each node's public `.crt` and `.join`.
+    The inventory records node addresses, certificate expiry, join path, revocation and the API URL; it contains
+    references only, never a private key. The active profile records the bundle path.
+  - `cluster status` reconciles configured nodes with `/v1/nodes` (missing, unlisted, revoked-but-live, expired
+    certificates), with `--json` and `--check`. `cluster nodes` shows the live set. `cluster doctor` checks the CA,
+    certificate/join files, expiry (fail when expired, warn inside 90 days), API reachability and membership drift.
+  - `cluster invite` signs a node certificate, writes its `.crt`/`.join`, prints the join line and updates the
+    inventory; `cluster revoke` marks it after the API accepts the revocation. `node invite/revoke` remain hidden
+    aliases for one release.
+  - `tenants`, `users` and `audit` moved under `c93 cluster`; the root spellings remain executable as hidden aliases
+    for one release but no longer appear in the root help.
+  - `ClusterCommandTest` covers init/inventory/profile pointer, status drift and `--check`, invite, revoke, doctor,
+    and the admin command locations; `MainHelpTest` locks the new root groups and the hidden aliases; `CliTest`
+    exercises the old `node invite/revoke` spellings.
+
 - **The CLI has connection profiles, a `me` command, and working `--help` on every command** (D-189, phase 1 of the
   unified pathway):
   - `c93 profiles` lists named contexts; `profiles use/create/show/rm` manage them. `--profile NAME` or
