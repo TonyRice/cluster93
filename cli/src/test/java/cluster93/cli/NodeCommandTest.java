@@ -306,7 +306,8 @@ class NodeCommandTest {
         assertThat(result.code()).isZero();
         assertThat(result.out()).contains("status").contains("start").contains("stop").contains("logs")
                 .contains("mcp").contains("install");
-        assertThat(result.out()).as("membership moved to c93 cluster").doesNotContain("invite").doesNotContain("revoke");
+        assertThat(result.out()).as("membership moved to c93 cluster")
+                .doesNotContainPattern("(?m)^  invite ").doesNotContainPattern("(?m)^  revoke ");
     }
 
     @Test
@@ -449,7 +450,7 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isWindows()).isFalse();
         publish(null, releaseKey.getPrivate());
 
-        Result result = run("node", "install", "--dir", nodeDir().toString(), "--no-start");
+        Result result = run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start");
 
         assertThat(result.code()).as(result.err()).isZero();
         assertThat(nodeDir().resolve("c93.jar")).exists();
@@ -476,7 +477,7 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isWindows()).isFalse();
         publish(null, releaseKey.getPrivate());
 
-        Result result = run("--json", "node", "install", "--dir", nodeDir().toString(), "--no-start");
+        Result result = run("--json", "node", "install", "--release", "--dir", nodeDir().toString(), "--no-start");
 
         assertThat(result.code()).as(result.err()).isZero();
         com.fasterxml.jackson.databind.JsonNode json = Json.parse(result.out());
@@ -489,7 +490,7 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isWindows()).isFalse();
         publish("worker-javet.gz", releaseKey.getPrivate());
 
-        Result result = run("node", "install", "--dir", nodeDir().toString(), "--no-start");
+        Result result = run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start");
 
         assertThat(result.code()).isNotZero();
         assertThat(result.err()).contains("Checksum mismatch").contains("worker-javet.gz");
@@ -500,7 +501,7 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isWindows()).isFalse();
         publish(null, newKey().getPrivate());
 
-        Result result = run("node", "install", "--dir", nodeDir().toString(), "--no-start");
+        Result result = run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start");
 
         assertThat(result.code()).isNotZero();
         assertThat(result.err()).contains("isn't signed by the c93 release key");
@@ -511,12 +512,12 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isWindows()).isFalse();
         publish(null, null);
 
-        Result refused = run("node", "install", "--dir", nodeDir().toString(), "--no-start");
+        Result refused = run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start");
         assertThat(refused.code()).isNotZero();
         assertThat(refused.err()).contains("an unsigned one isn't installed");
 
         env.put("C93_INSECURE_SKIP_SIGNATURE", "1");
-        Result skipped = run("node", "install", "--dir", nodeDir().toString(), "--no-start");
+        Result skipped = run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start");
         assertThat(skipped.code()).as(skipped.err()).isZero();
         assertThat(skipped.err()).contains("not checking the release's signature");
     }
@@ -525,13 +526,13 @@ class NodeCommandTest {
     void asecondInstallWithoutForceIsRefused() throws Exception {
         assumeThat(NodeInstall.isWindows()).isFalse();
         publish(null, releaseKey.getPrivate());
-        assertThat(run("node", "install", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
+        assertThat(run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
 
-        Result again = run("node", "install", "--dir", nodeDir().toString(), "--no-start");
+        Result again = run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start");
         assertThat(again.code()).isNotZero();
         assertThat(again.err()).contains("already installed").contains("--force");
 
-        assertThat(run("node", "install", "--dir", nodeDir().toString(), "--no-start", "--force").code()).isZero();
+        assertThat(run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start", "--force").code()).isZero();
     }
 
     @Test
@@ -539,7 +540,7 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isWindows()).isFalse();
         assumeThat(NodeInstall.isMac()).isFalse();
         publish(null, releaseKey.getPrivate());
-        assertThat(run("node", "install", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
+        assertThat(run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
 
         env.put("PATH", stubSystemctl().toString());
         Path calls = work.resolve("systemctl.calls");
@@ -558,7 +559,7 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isWindows()).isFalse();
         assumeThat(NodeInstall.isMac()).isFalse();
         publish(null, releaseKey.getPrivate());
-        assertThat(run("node", "install", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
+        assertThat(run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
 
         env.put("PATH", emptyPath().toString());
 
@@ -576,7 +577,7 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isWindows()).isFalse();
         assumeThat(NodeInstall.isMac()).isFalse();
         publish(null, releaseKey.getPrivate());
-        assertThat(run("node", "install", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
+        assertThat(run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
 
         env.put("PATH", stubSystemctl().toString());
         Result status = run("node", "status");
@@ -588,7 +589,7 @@ class NodeCommandTest {
     void installRecordsWhereTheNodeLivesSoTheLifecycleVerbsFindIt() throws Exception {
         assumeThat(NodeInstall.isWindows()).isFalse();
         publish(null, releaseKey.getPrivate());
-        assertThat(run("node", "install", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
+        assertThat(run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
 
         // `--dir` isn't derivable from the config path, so the lifecycle verbs read it back from node.meta.
         NodeInstall.Layout layout = NodeInstall.installedLayout(io());
@@ -605,7 +606,7 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isWindows()).isFalse();
         publish(null, releaseKey.getPrivate());
 
-        assertThat(run("node", "install", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
+        assertThat(run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
         NodeInstall.Layout layout = layout();
         assertThat(layout.dataDir()).exists();
         assertThat(layout.envFile()).exists();
@@ -620,7 +621,7 @@ class NodeCommandTest {
         assertThat(NodeInstall.metaFile(layout)).doesNotExist();
         assertThat(layout.dataDir()).as("data is kept without --purge").exists();
 
-        assertThat(run("node", "install", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
+        assertThat(run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
         assertThat(run("node", "uninstall", "--dir", nodeDir().toString(), "--purge").code()).isZero();
         assertThat(layout.dataDir()).as("--purge removes the data").doesNotExist();
     }
@@ -629,7 +630,7 @@ class NodeCommandTest {
     void envShowsAndSetsTheConfiguration() throws Exception {
         assumeThat(NodeInstall.isWindows()).isFalse();
         publish(null, releaseKey.getPrivate());
-        assertThat(run("node", "install", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
+        assertThat(run("node", "install", "--release", "--dir", nodeDir().toString(), "--no-start").code()).isZero();
 
         Result shown = run("node", "env");
         assertThat(shown.code()).as(shown.err()).isZero();
@@ -652,7 +653,7 @@ class NodeCommandTest {
     @Test
     void installRefusesASystemInstallOnMacOrWindows() {
         if (NodeInstall.isMac() || NodeInstall.isWindows()) {
-            Result refused = run("node", "install", "--system", "--no-start");
+            Result refused = run("node", "install", "--release", "--system", "--no-start");
             assertThat(refused.code()).isEqualTo(2);
             assertThat(refused.err()).contains("system install");
         }
@@ -663,7 +664,7 @@ class NodeCommandTest {
         assumeThat(NodeInstall.isLinux()).isTrue();
         assumeThat(NodeService.isRoot()).as("only meaningful as a non-root user").isFalse();
 
-        Result refused = run("node", "install", "--system", "--no-start");
+        Result refused = run("node", "install", "--release", "--system", "--no-start");
 
         assertThat(refused.code()).isEqualTo(2);
         assertThat(refused.err()).contains("must run as root");

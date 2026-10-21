@@ -4723,7 +4723,7 @@ the word ambiguous.
 ---
 
 ### D-190 — Checkout is the temporary default install source, and `scripts/local.sh` is retired
-**Date:** 2026-10-20 · **Status:** Accepted (planned)
+**Date:** 2026-10-20 · **Status:** Accepted; checkout install and join built (phase 3). `c93 dev`/`local.sh` removal is phase 4.
 
 **Context:**
 `c93 node install` fetches a signed release; `scripts/local.sh` builds and runs from the checkout; `c93 node
@@ -4760,14 +4760,15 @@ checkout-launched process (neither is a service), differing in data directory, a
 - `scripts/worker-isolation-check.sh` failure messages and `scripts/migrate-home.sh` stop naming `local.sh`.
 - The flip to release later is one default change plus a docs paragraph.
 
-**Verification (planned):** in a checkout, `node install --no-start` lays out a node from source; outside, it
-selects release; `--checkout`/`--release` override; `c93 dev up/status/down/reset` covers the old dev/master
-flows; no live reference to `scripts/local.sh` remains.
+**Verification:** `NodeInstallPhase3Test` covers a checkout install (copied jar/workers, `C93_ROLES`,
+`C93_JOIN`, process mode, unit and `version=checkout`) and `node join --no-restart`. `NodeCommandTest` exercises the
+release path explicitly with `--release`. `c93 dev` and the `local.sh` deletion are phase 4; until then `node setup`
+still exists as the transition.
 
 ---
 
 ### D-191 — A node may own local worker containers, but not a cluster
-**Date:** 2026-10-20 · **Status:** Accepted (planned)
+**Date:** 2026-10-20 · **Status:** Accepted and built (phase 3).
 
 **Context:**
 The common compute-host shape is one Cluster93 node that joins an existing cluster, with several worker containers
@@ -4806,9 +4807,11 @@ would make one command own both a machine and a cluster.
 - The node's `C93_WORKER_CONNECTIONS_MAX` is raised to at least the worker count.
 - Release image publishing remains a separate track; checkout image builds work today.
 
-**Verification (planned):** a generated compose project with one node and N workers validates
-(`compose config -q`); `node workers scale` adds/removes services; a job submitted at an existing cluster's edge
-runs on the compute node's worker container; D-187's C8 behavior is unchanged.
+**Verification:** `NodeInstallPhase3Test` renders one service per worker (socket/secret/scratch mounts,
+`restart: on-failure`, the shrink-on-0 wrapper with Compose-escaped dollars, egress vs `network_mode: none`).
+`node install --docker --workers N` writes the secret, socket dir and scratch dirs and validates the compose project;
+`node workers scale/add/rm` re-renders and applies it. A real-engine job on a compute node remains the Phase 3
+manual smoke.
 
 ---
 

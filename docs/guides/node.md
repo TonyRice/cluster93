@@ -26,13 +26,37 @@ c93 node install --version v2.1.0   # a specific release (default: the latest)
 sudo c93 node install --system      # a system-wide node (Linux, root)
 ```
 
-`install` fetches the release assets, **checks `SHA256SUMS` against the release's signature** (the key
-is built into the CLI, D-069) and then every file against `SHA256SUMS`, gunzips the native workers into
-`bin/`, writes `node.env` and a service unit, and — unless `--no-start` — starts the node.
+### Checkout, release, or container
+
+Until releases are the default, `c93 node install` **inside a checkout builds from that checkout** (D-190). Outside
+one it uses a release. The choice is explicit:
+
+```bash
+c93 node install --checkout       # build this tree, copy the jar/workers, install the unit
+c93 node install --release        # a release even inside a checkout
+c93 node install --version v2.1.0 # a specific release
+c93 node install --docker         # one node container; builds from the checkout unless --image/--version
+```
+
+A release install **checks `SHA256SUMS` against the release's signature** (the key is built into the CLI, D-069),
+then every file against `SHA256SUMS`, gunzips the native workers into `bin/`, writes `node.env` and a service unit,
+and — unless `--no-start` — starts the node. Checkout installs build only what is missing and reuse the existing
+`server/target/c93.jar` and `bin/worker-*`.
 
 Assets come from `C93_RELEASES` (default `TonyRice/cluster93`) on GitHub Releases. A mirror can serve
 them instead with `C93_INSTALL_URL`; `C93_INSECURE_SKIP_SIGNATURE=1` skips the signature check (HTTPS
 alone), as in the shell installer.
+
+### Joining and role shortcuts
+
+```bash
+c93 cluster invite node2 --host 10.0.0.12
+c93 node install --checkout --join "$(cat cluster-tls/node2.join)" --members node1,node2   # at install
+c93 node join c93_nodebundle_… --members node1,node2                                      # or later; restarts
+```
+
+`--compute` is shorthand for `--roles worker` (no API/ingress on a private compute host); `--roles` takes a
+comma-separated list.
 
 ### From the shell installer
 
@@ -122,6 +146,20 @@ This is **host isolation, not tenant isolation**: a container holds a tenant-agn
 may share one. Guests stay separated by the engine — a fresh context per job — exactly as before. Supply is **per
 node** rather than per cluster, which is what a cluster across hosts turns into a topology question — see
 [Worker containers in a cluster](#worker-containers-in-a-cluster).
+
+### Local worker containers from the CLI
+
+On a Docker install, the CLI can create the worker supply for one node (D-191):
+
+```bash
+c93 node install --docker --compute --workers 4 --join "$(cat cluster-tls/node2.join)"
+c93 node workers scale 6      # or add/rm
+```
+
+The node and its workers share the socket directory and the generated `worker.secret`; each worker has its own
+scratch mounts. Worker services use the D-187 shrink-on-0 loop and `restart: on-failure`, so a release leaves a
+worker down instead of restarting it. Choose `--egress-placement node` to give the workers no network at all
+(`network_mode: none`); the default `worker` placement gives them an egress network.
 
 ### Enabling it
 

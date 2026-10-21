@@ -240,6 +240,12 @@ final class NodeInstall {
      */
     static ObjectNode install(Io io, boolean system, Path dir, String version, boolean force, boolean quiet)
             throws IOException, InterruptedException {
+        return install(io, system, dir, version, null, null, force, quiet);
+    }
+
+    /** The release install, with optional role/join overrides for a compute node. */
+    static ObjectNode install(Io io, boolean system, Path dir, String version, String roles, String join,
+                              boolean force, boolean quiet) throws IOException, InterruptedException {
         if (system && isWindows()) {
             throw new CliException("A system install is Linux only; Windows nodes run in Docker or WSL2", 2);
         }
@@ -292,6 +298,12 @@ final class NodeInstall {
         }
 
         Map<String, String> config = defaultConfig(io, layout);
+        if (roles != null && !roles.isBlank()) {
+            config.put("C93_ROLES", roles);
+        }
+        if (join != null && !join.isBlank()) {
+            config.put("C93_JOIN", join);
+        }
         // A node that would fight one already running on this host is refused here, naming the ports (D-146).
         refuseIfPortsHeld(io, hostPorts(config), force);
         writeEnv(layout, config);
@@ -319,6 +331,74 @@ final class NodeInstall {
                 .put("system", layout.system())
                 .put("unitFile", layout.unitFile() == null ? "" : layout.unitFile().toString());
         return result;
+    }
+
+    /**
+     * Lays out a node from this checkout (D-190): build what is missing, copy the jar and native workers into the
+     * normal install layout, write node.env/unit and record it. This is a service-managed node, not `c93 dev`.
+     */
+    static ObjectNode installCheckout(Io io, boolean system, Path dir, String roles, String join, boolean force,
+                                      boolean quiet) throws IOException, InterruptedException {
+        if (system && isWindows()) {
+            throw new CliException("A system install is Linux only; Windows nodes run in Docker or WSL2", 2);
+        }
+        if (system && isMac()) {
+            throw new CliException("macOS has a per-user LaunchAgent only; there is no system install", 2);
+        }
+        if (system && !NodeService.isRoot()) {
+            throw new CliException("A --system install must run as root (try: sudo c93 node install --checkout --system)", 2);
+        }
+        Layout layout = system ? systemLayout() : userLayout(io, dir);
+        if (Files.exists(layout.envFile()) && !force) {
+            throw new CliException("A node is already installed (" + layout.envFile() + "); use --force to replace it");
+        }
+        refuseIfAlsoInstalled(layout, (system ? userLayout(io, null) : systemLayout()).envFile(), force);
+
+        Path root = Checkout.require(io);
+        Checkout.ensureBuilt(io, root, quiet);
+        Files.createDirectories(layout.programDir());
+        Files.createDirectories(layout.programDir().resolve("bin"));
+        Files.createDirectories(layout.dataDir());
+        if (layout.logDir() != null) {
+            Files.createDirectories(layout.logDir());
+        }
+        Files.copy(Checkout.serverJar(root), layout.programDir().resolve(SERVER_JAR), StandardCopyOption.REPLACE_EXISTING);
+        for (String worker : List.of(WORKER_JAVET_BIN, WORKER_GRAALJS_BIN)) {
+            Path source = root.resolve("bin").resolve(worker);
+            Path target = layout.programDir().resolve("bin").resolve(worker);
+            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+            target.toFile().setExecutable(true, false);
+        }
+
+        Map<String, String> config = defaultConfig(io, layout);
+        if (roles != null && !roles.isBlank()) {
+            config.put("C93_ROLES", roles);
+        }
+        if (join != null && !join.isBlank()) {
+            config.put("C93_JOIN", join);
+        }
+        refuseIfPortsHeld(io, hostPorts(config), force);
+        writeEnv(layout, config);
+        if (layout.unitFile() != null) {
+            Files.createDirectories(layout.unitFile().getParent());
+            Files.writeString(layout.unitFile(), renderUnit(io, layout, config));
+        }
+        writeMeta(layout, "checkout");
+        if (system) {
+            provisionSystemUser(io, layout);
+        }
+        if (!quiet) {
+            io.out().println("Installed a checkout node into " + layout.programDir());
+            io.out().println("Wrote " + layout.envFile() + (layout.unitFile() == null ? "" : " and " + layout.unitFile()));
+        }
+        return Json.object()
+                .put("checkout", true)
+                .put("source", root.toString())
+                .put("programDir", layout.programDir().toString())
+                .put("envFile", layout.envFile().toString())
+                .put("dataDir", layout.dataDir().toString())
+                .put("system", system)
+                .put("unitFile", layout.unitFile() == null ? "" : layout.unitFile().toString());
     }
 
     /** Removes a node's program files and unit; {@code purge} also removes its data. */
@@ -456,6 +536,12 @@ final class NodeInstall {
      */
     static String renderCompose(Layout layout, Map<String, String> config, String engine, String image,
                                 String bindAddress, boolean publishCluster) {
+        return renderCompose(layout, config, engine, image, bindAddress, publishCluster, 0, null);
+    }
+
+    /** The compose project, including one service per local worker container when {@code workers > 0} (D-191). */
+    static String renderCompose(Layout layout, Map<String, String> config, String engine, String image,
+                                String bindAddress, boolean publishCluster, int workers, String egressPlacement) {
         String nodeId = config.get("C93_NODE_ID");
         String project = "cluster93-" + nodeId;
         String user = layout.system() ? "10001:10001" : currentUidGid();
@@ -493,16 +579,79 @@ final class NodeInstall {
         // cannot bind-mount the file — it mounts this directory. Mounted unconditionally so enabling container
         // workers is an env change (`C93_WORKER_SOCKET` in node.env) rather than another install.
         compose.append("      - \"").append(workerSocketDir(layout)).append(":/run/cluster93/workers\"\n");
+        if (workers > 0) {
+            compose.append("      - \"").append(workerSecretFile(layout)).append(":/run/secrets/c93-worker-secret:ro\"\n");
+        }
         compose.append("    healthcheck:\n");
         compose.append("      test: [\"CMD\", \"bash\", \"-c\", \"exec 3<>/dev/tcp/localhost/9393 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3\"]\n");
         compose.append("      interval: 5s\n");
         compose.append("      retries: 12\n");
+        if (workers > 0) {
+            appendWorkerServices(compose, layout, config, image, workers, egressPlacement);
+        }
         return compose.toString();
+    }
+
+    /** One worker service per container, each with its own scratch dirs and the D-187 shrink-on-0 wrapper. */
+    private static void appendWorkerServices(StringBuilder compose, Layout layout, Map<String, String> config,
+                                             String image, int workers, String egressPlacement) {
+        String user = layout.system() ? "10001:10001" : currentUidGid();
+        String workerEngine = config.getOrDefault("C93_WORKER_DEFAULT_MODE", "graaljs");
+        String binary = "worker-" + ("javet".equalsIgnoreCase(workerEngine) ? "javet" : "graaljs");
+        boolean egress = !"node".equalsIgnoreCase(egressPlacement);
+        for (int i = 1; i <= workers; i++) {
+            String name = "worker-" + i;
+            compose.append("  ").append(name).append(":\n");
+            compose.append("    image: ").append(image).append("\n");
+            compose.append("    restart: on-failure\n");
+            compose.append("    user: \"").append(user).append("\"\n");
+            compose.append("    depends_on: [node]\n");
+            compose.append("    cap_drop: [ALL]\n");
+            compose.append("    security_opt: [no-new-privileges:true]\n");
+            compose.append("    read_only: true\n");
+            compose.append("    pids_limit: 512\n");
+            if (egress) {
+                compose.append("    networks: [egress]\n");
+            } else {
+                compose.append("    network_mode: none\n");
+            }
+            compose.append("    volumes:\n");
+            compose.append("      - \"").append(workerSocketDir(layout)).append(":/run/cluster93/workers\"\n");
+            compose.append("      - \"").append(workerSecretFile(layout)).append(":/run/secrets/c93-worker-secret:ro\"\n");
+            Path scratch = layout.dataDir().resolve("workers").resolve(name);
+            compose.append("      - \"").append(scratch.resolve("tmp")).append(":/tmp\"\n");
+            compose.append("      - \"").append(scratch.resolve("home")).append(":/home\"\n");
+            compose.append("    entrypoint: [\"/bin/bash\", \"-c\"]\n");
+            compose.append("    command:\n");
+            compose.append("      - |\n");
+            compose.append("        set -e\n");
+            compose.append("        /opt/cluster93/bin/").append(binary).append(" ipc \\\n");
+            compose.append("          --socket /run/cluster93/workers/node.sock \\\n");
+            compose.append("          --secret-file /run/secrets/c93-worker-secret \\\n");
+            compose.append("          --heap-mb 128 --threads 4 &\n");
+            compose.append("        left=1\n");
+            compose.append("        while [ \"$$left\" -gt 0 ]; do\n");
+            compose.append("          if wait -n; then left=$$((left - 1)); else exit 1; fi\n");
+            compose.append("        done\n");
+            compose.append("        exit 0\n");
+        }
+        if (egress) {
+            compose.append("networks:\n");
+            compose.append("  egress:\n");
+            compose.append("    driver: bridge\n");
+        }
     }
 
     /** Records a container install: the engine, its rootless-ness, the image, and both data-dir paths. */
     static void writeContainerMeta(Layout layout, String engine, String rootless, String image, String version,
                                    String nodeId) throws IOException {
+        writeContainerMeta(layout, engine, rootless, image, version, nodeId, 0, null, null, true);
+    }
+
+    /** Records the compose parameters `node workers scale` needs to re-render without guessing. */
+    static void writeContainerMeta(Layout layout, String engine, String rootless, String image, String version,
+                                   String nodeId, int workers, String egressPlacement, String bindAddress,
+                                   boolean publishCluster) throws IOException {
         writeMeta(layout, version);
         StringBuilder extra = new StringBuilder();
         extra.append("kind=container\n");
@@ -515,6 +664,10 @@ final class NodeInstall {
         extra.append("host_data_dir=").append(layout.dataDir()).append('\n');
         extra.append("in_container_data_dir=/var/lib/cluster93\n");
         extra.append("project=cluster93-").append(nodeId).append('\n');
+        extra.append("workers=").append(workers).append('\n');
+        extra.append("egress_placement=").append(egressPlacement == null ? "" : egressPlacement).append('\n');
+        extra.append("bind_address=").append(bindAddress == null ? "" : bindAddress).append('\n');
+        extra.append("publish_cluster=").append(publishCluster).append('\n');
         Path file = metaFile(layout);
         Files.writeString(file, Files.readString(file) + extra);
         restrict(file);
@@ -725,6 +878,15 @@ final class NodeInstall {
     static ObjectNode installContainer(Io io, boolean system, Path dir, String requestedEngine, String image,
                                        String version, Path tlsDir, String bindAddress, boolean publishCluster,
                                        boolean force, boolean quiet) throws IOException, InterruptedException {
+        return installContainer(io, system, dir, requestedEngine, image, version, tlsDir, bindAddress,
+                publishCluster, force, quiet, 0, null, null, null);
+    }
+
+    /** The container install, optionally with N local worker containers and a compute role (D-191). */
+    static ObjectNode installContainer(Io io, boolean system, Path dir, String requestedEngine, String image,
+                                       String version, Path tlsDir, String bindAddress, boolean publishCluster,
+                                       boolean force, boolean quiet, int workers, String egressPlacement,
+                                       String join, String roles) throws IOException, InterruptedException {
         if (system && !NodeService.isRoot()) {
             throw new CliException("A --system install must run as root (try: sudo c93 node install --docker --system)", 2);
         }
@@ -740,6 +902,23 @@ final class NodeInstall {
 
         String nodeId = defaultNodeId();
         Map<String, String> config = containerConfig(nodeId);
+        if (roles != null && !roles.isBlank()) {
+            config.put("C93_ROLES", roles);
+        }
+        if (join != null && !join.isBlank()) {
+            config.put("C93_JOIN", join);
+        }
+        if (egressPlacement != null && !egressPlacement.isBlank()) {
+            config.put("C93_EGRESS_PLACEMENT", egressPlacement);
+        }
+        if (workers > 0) {
+            config.remove("# C93_WORKER_SOCKET");
+            config.remove("# C93_WORKER_SECRET_FILE");
+            config.put("C93_WORKER_SOCKET", "/run/cluster93/workers/node.sock");
+            config.put("C93_WORKER_SECRET_FILE", "/run/secrets/c93-worker-secret");
+            config.put("C93_WORKER_MODE", "process");
+            config.put("C93_WORKER_CONNECTIONS_MAX", String.valueOf(workers + 1));
+        }
         // Check the ports before building an image: a clash with a running node (a dev master, say, which no install
         // kind knows about) should fail in a second, not after a multi-hundred-megabyte build.
         refuseIfPortsHeld(io, hostPorts(config), force);
@@ -770,6 +949,10 @@ final class NodeInstall {
             // to be that user's; only root can give it away, which is what `--system` already requires (S1.7).
             giveToContainerUser(socketDir);
         }
+        if (workers > 0) {
+            ensureWorkerSecret(layout);
+            prepareWorkerScratch(layout, workers);
+        }
         writeEnv(layout, config);
 
         Path caHome = null;
@@ -786,7 +969,8 @@ final class NodeInstall {
         }
 
         Files.writeString(layout.composeFile(),
-                renderCompose(layout, config, engine.name(), imageRef, bindAddress, publishCluster));
+                renderCompose(layout, config, engine.name(), imageRef, bindAddress, publishCluster, workers,
+                        egressPlacement));
         // Validate the render with the engine's own parser before anything starts, so a bad path or a typo in the
         // generated YAML fails here with a clear message rather than at `up` (§1.9).
         if (NodeService.validateCompose(io, layout) != 0) {
@@ -794,7 +978,8 @@ final class NodeInstall {
         }
         // "unknown" is honest: the daemon didn't answer, so rootless-ness is not established (D-145).
         String rootless = engine.rootless() == null ? "unknown" : engine.rootless().toString();
-        writeContainerMeta(layout, engine.name(), rootless, imageRef, version0, nodeId);
+        writeContainerMeta(layout, engine.name(), rootless, imageRef, version0, nodeId, workers, egressPlacement,
+                bindAddress, publishCluster);
         if (system) {
             provisionSystemUser(io, layout);
         }
@@ -815,6 +1000,7 @@ final class NodeInstall {
                 .put("envFile", layout.envFile().toString())
                 .put("composeFile", layout.composeFile().toString())
                 .put("dataDir", layout.dataDir().toString())
+                .put("workers", workers)
                 .put("system", system);
     }
 
@@ -1262,6 +1448,42 @@ final class NodeInstall {
         return layout.envFile().getParent().resolve("workers");
     }
 
+    /** The pre-shared secret a container node and its worker services mount read-only (D-168). */
+    static Path workerSecretFile(Layout layout) {
+        return layout.envFile().getParent().resolve("worker.secret");
+    }
+
+    /** Writes the pre-shared worker secret if it is missing, and gives it to the container's user on a system install. */
+    static void ensureWorkerSecret(Layout layout) throws IOException {
+        Files.createDirectories(workerSecretFile(layout).getParent());
+        if (!Files.isRegularFile(workerSecretFile(layout))) {
+            ProfileStore.writeAtomically(workerSecretFile(layout), generateToken() + "\n");
+        }
+        if (layout.system()) {
+            giveToContainerUser(workerSecretFile(layout));
+        }
+    }
+
+    /** Creates the per-worker scratch dirs a compose worker service mounts at /tmp and /home. */
+    static void prepareWorkerScratch(Layout layout, int workers) throws IOException {
+        for (int i = 1; i <= workers; i++) {
+            Path scratch = layout.dataDir().resolve("workers").resolve("worker-" + i);
+            Files.createDirectories(scratch.resolve("tmp"));
+            Files.createDirectories(scratch.resolve("home"));
+            openScratch(scratch.resolve("tmp"));
+            openScratch(scratch.resolve("home"));
+        }
+    }
+
+    /** A worker container's scratch dir: the engine unpacks and executes native libraries there, so it must be writable. */
+    private static void openScratch(Path dir) {
+        try {
+            Files.setPosixFilePermissions(dir, java.nio.file.attribute.PosixFilePermissions.fromString("rwxrwxrwx"));
+        } catch (IOException | UnsupportedOperationException ignored) {
+            // not POSIX: the createDirectories default is all we can do
+        }
+    }
+
     /** {@link #workerSocketDir} at 0700: only the node's user may reach the socket, which the kernel enforces (S3). */
     private static void restrictDir(Path dir) {
         try {
@@ -1272,7 +1494,7 @@ final class NodeInstall {
     }
 
     /** Best effort: hand a directory to the container's own user, which only an install running as root can do. */
-    private static void giveToContainerUser(Path dir) {
+    static void giveToContainerUser(Path dir) {
         try {
             Files.setAttribute(dir, "unix:uid", 10001);
             Files.setAttribute(dir, "unix:gid", 10001);

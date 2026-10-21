@@ -6,6 +6,22 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **One node, checkout by default, and local worker containers from the CLI** (D-190, D-191, phase 3):
+  - `c93 node install` inside a checkout now builds from that checkout; `--release`/`--version` force a release and
+    `--checkout` forces source. The install copies the jar and native workers into the normal layout, writes
+    `node.env`/unit, and records `version=checkout`. Outside a checkout the default remains the signed release.
+  - `--join` writes a cluster join line at install time and turns on clustered/TLS mode; `--members` records the
+    discovery members. `c93 node join LINE [--members ...]` updates an existing node's `node.env` and
+    restarts/recreates it (`--no-restart` for automation). `--compute` is shorthand for `--roles worker`;
+    `--roles` takes a comma-separated list.
+  - `c93 node install --docker --workers N` creates one node plus N worker services with a shared socket directory,
+    a generated `worker.secret`, per-worker scratch mounts, the D-187 shrink-on-0 wrapper and
+    `restart: on-failure`. `--egress-placement node` gives them `network_mode: none`. `node workers scale N`
+    (and `add`/`rm`) re-renders, validates and applies the compose project.
+  - The generated compose escapes `$` for Compose, so the shrink loop sees `$left` inside the container.
+  - `NodeInstallPhase3Test` covers checkout install, join, and the worker-service render (both egress placements);
+    `NodeCommandTest` still covers the release install/signature path by passing `--release`.
+
 - **`c93 cluster` now manages the cluster, not just the CA** (D-188, D-192, phase 2 of the unified pathway):
   - `cluster init` writes a `cluster.json` inventory beside the CA, plus each node's public `.crt` and `.join`.
     The inventory records node addresses, certificate expiry, join path, revocation and the API URL; it contains

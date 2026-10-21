@@ -188,9 +188,10 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
 - **Phase 2 — cluster (DONE 2026-10-20):** `cluster init` writes a `cluster.json` inventory; `status`/`doctor`
   reconcile it with `/v1/nodes`; `invite`/`revoke` update it; `tenants`/`users`/`audit` moved under `cluster` with
   hidden root aliases.
-- **Phase 3 — node:** checkout is the temporary default install source (`--checkout`/`--release`/`--version`);
-  `node join`; one node plus N local worker containers (`node install --docker --workers N`,
-  `node workers scale`); `--compute`.
+- **Phase 3 — node (DONE 2026-10-20):** checkout is the temporary default install source
+  (`--checkout`/`--release`/`--version`); `node join`; one node plus N local worker containers
+  (`node install --docker --workers N`, `node workers scale`); `--compute`. `node setup`/`local.sh` removal is
+  Phase 4.
 - **Phase 4 — dev:** port `scripts/local.sh` to `c93 dev up/status/logs/down/reset/build/seed/test-examples`;
   delete the script, `c93 local`, `node setup`, and the shell-out paths.
 - **Phase 5 — docs:** README, node/cluster/CLI guides, migration notes, full verify.

@@ -40,7 +40,7 @@ GraalVM `native-image` can't cross-compile, so each binary is built on its own p
 
 ### Run a node
 
-The CLI installs a whole node too — `c93 node install` fetches a signed release, lays out the tree,
+The CLI installs a whole node too — `c93 node install` builds from the checkout by default, or fetches a signed release with `--release`, lays out the tree,
 writes `node.env` and a service unit, and starts it. See the [node guide](node.md). The shell installer
 can hand over to it directly: `… | sh -s -- --node [--system]`.
 
@@ -137,11 +137,12 @@ c93 profiles                                   # * marks the active one
 | `cluster tenants egress TENANT [--allow TO:PORTS …] [--deny TO[:PORTS] …] [--posture public\|allow-list\|inherit] [--none]` | Admin only. A tenant's own rules: `--allow 10.0.5.20/32:5432 --allow db.internal.example:5432,6379`, `--deny *.example.com`, or `--deny 203.0.113.0/24:25`. `TO` can also be `@set` or `*`. `--allow`/`--deny` replace its rules, and `--posture` alone keeps them (D-111) |
 | `mcp` | The MCP stdio bridge for AI agents ([MCP guide](mcp.md)) |
 | `cluster init --nodes a,b,c [--host a=10.0.0.11] [--api URL]` · `cluster status [--check]` · `cluster doctor` · `cluster nodes` | Operator: create the CA, joins and `cluster.json` inventory; reconcile it with the live nodes; check certificates and drift ([cluster guide](cluster.md)) |
-| `node install [--system] [--dir DIR] [--version TAG] [--no-start]` · `node uninstall [--purge]` | Install a node from a signed release (program + `node.env` + a service unit) and start it, or remove it ([node guide](node.md)) |
+| `node install [--checkout\|--release] [--version TAG] [--docker] [--join LINE] [--roles ROLE,ROLE\|--compute] [--no-start]` · `node uninstall [--purge]` | Install one machine's node (checkout by default inside a checkout, release otherwise) and start it; `--docker` adds `--workers N` local worker containers ([node guide](node.md), D-190/D-191) |
 | `node start · stop · restart · status · logs [--follow] · mcp · update` | Drive the node: its service unit (systemd/launchd), or the process directly. `c93 local …` is a deprecated alias for one release |
 | `node env [--set K=V] [--edit]` | Show or change the node's `node.env` (`C93_*` settings, short names accepted) |
 | `cluster invite ID [--host ADDR] [--key PUBLIC_KEY]` · `cluster revoke ID` | Operator: a one-line join for a new node (also renews), and record/revoke it in the inventory. `node invite/revoke` remain hidden aliases for one release |
-| `node workers release [--worker ID] [--bound-tenant NAME] [--reason TEXT]` | Operator: ask one idle connected worker container to leave; it exits 0 (`released`, not a crash) and its supervisor decides whether to replace it ([D-187](DECISIONS.md)) |
+| `node join LINE [--members HOST,HOST]` | Write a join line (and cluster members) to `node.env` and restart/recreate the node |
+| `node workers release [--worker ID] [--bound-tenant NAME] [--reason TEXT]` · `node workers scale N` · `add [N]` · `rm [N]` | Ask one idle connected worker to leave (D-187), or resize the local worker containers of a Docker install (D-191) |
 | `version` · `update [--cli|--node] [--version TAG]` | Show the version · update the CLI and/or the node from a signed release (`--cli`, `--node`; neither = both) |
 
 Add `--json` to any command for the API's JSON instead of a summary.

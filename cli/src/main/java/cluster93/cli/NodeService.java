@@ -155,10 +155,15 @@ final class NodeService {
     }
 
     /** Runs {@code <engine> compose -p <project> -f <compose> …} for a container node. */
-    private static int compose(Io io, Target target, String... args) {
+    static int compose(Io io, Target target, String... args) {
         List<String> command = composeCommand(io, target.layout());
         command.addAll(List.of(args));
         return run(io, command.toArray(String[]::new), false);
+    }
+
+    /** Applies a container install's compose project, removing services that are no longer rendered. */
+    static int applyCompose(Io io, NodeInstall.Layout layout) {
+        return compose(io, target(io, layout), "up", "-d", "--remove-orphans");
     }
 
     /** The container's log through the engine, so `c93 node logs` works the same way everywhere. */

@@ -40,7 +40,7 @@ import java.util.stream.Collectors;
         subcommands = {NodeCommand.Install.class, NodeCommand.Uninstall.class, NodeCommand.Setup.class,
                 NodeCommand.Start.class, NodeCommand.Stop.class, NodeCommand.Restart.class, NodeCommand.Status.class,
                 NodeCommand.Logs.class, NodeCommand.Mcp.class, NodeCommand.Update.class, NodeCommand.Env.class,
-                NodeCommand.Invite.class, NodeCommand.Revoke.class, NodeCommand.Workers.class})
+                NodeCommand.Join.class, NodeCommand.Invite.class, NodeCommand.Revoke.class, NodeCommand.Workers.class})
 final class NodeCommand extends Base {
 
     static final String DEFAULT_NODE_ID = "local-master";
@@ -328,8 +328,8 @@ final class NodeCommand extends Base {
     // install / uninstall
     // ----------------------------------------------------------------------
 
-    @Command(name = "install", description = "Install a node from a release: fetch and check the artifacts, lay out "
-            + "the tree, write node.env and a service unit, and start it.")
+    @Command(name = "install", description = "Install this machine's node: build the checkout (the default inside one), "
+            + "fetch a release, or run it as a container; write node.env and a unit/compose file, and start it.")
     static final class Install extends Base {
 
         @Option(names = "--system", description = "Install for the whole machine (Linux, root): /opt/cluster93, a cluster93 user, a system unit.")
@@ -350,6 +350,30 @@ final class NodeCommand extends Base {
         @Option(names = "--docker", description = "Install the node as a container: a compose file and an image, instead of a service unit (D-141).")
         boolean docker;
 
+        @Option(names = "--checkout", description = "Build this node from the current checkout (the default inside a checkout).")
+        boolean checkout;
+
+        @Option(names = "--release", description = "Install a release even when run from a checkout.")
+        boolean release;
+
+        @Option(names = "--join", paramLabel = "LINE", description = "A join line from `c93 cluster invite`; written to node.env.")
+        String join;
+
+        @Option(names = "--members", paramLabel = "HOST,HOST", description = "With --join: the cluster's discovery members, written to C93_CLUSTER_MEMBERS.")
+        String members;
+
+        @Option(names = "--roles", split = ",", paramLabel = "ROLE,ROLE", description = "The roles this node plays (default: api,ingress,worker,data,console).")
+        List<String> roles;
+
+        @Option(names = "--compute", description = "Shortcut for --roles worker: a private compute node with no API or ingress.")
+        boolean compute;
+
+        @Option(names = "--workers", paramLabel = "N", defaultValue = "0", description = "With --docker: run N local worker containers beside the node (D-191).")
+        int workers;
+
+        @Option(names = "--egress-placement", paramLabel = "worker|node", description = "With --docker --workers: whether worker containers decide egress (need a network) or the node does (network none).")
+        String egressPlacement;
+
         @Option(names = "--engine", paramLabel = "NAME", description = "The container engine to use: docker (the default) or podman.")
         String engine;
 
@@ -368,11 +392,48 @@ final class NodeCommand extends Base {
         @Override
         int execute() throws Exception {
             Io io = io();
-            if (docker) {
-                return container(io);
+            if (checkout && release) {
+                throw new CliException("--checkout and --release are mutually exclusive", 2);
             }
-            ObjectNode result = NodeInstall.install(io, system, dir, version, force, json());
+            if (checkout && version != null) {
+                throw new CliException("--checkout builds the current tree; it cannot take --version", 2);
+            }
+            if (!docker && image != null) {
+                throw new CliException("--image is for --docker; use --checkout or a release for a process node", 2);
+            }
+            if (!docker && workers > 0) {
+                throw new CliException("--workers needs --docker: it creates local worker containers", 2);
+            }
+            if (!docker && egressPlacement != null) {
+                throw new CliException("--egress-placement is for --docker --workers", 2);
+            }
+            if (workers < 0) {
+                throw new CliException("--workers must be 0 or more", 2);
+            }
+            if (join != null && !cluster93.tls.NodeBundle.looksLikeOne(join.strip())) {
+                throw new CliException("--join takes a c93_nodebundle_… or c93_nodecert_… line", 2);
+            }
+            String nodeRoles = compute ? "worker" : roles == null || roles.isEmpty() ? null : String.join(",", roles);
+            if (docker) {
+                return container(io, nodeRoles);
+            }
+            boolean checkoutMode = checkout || (!release && version == null && Checkout.root(io) != null);
+            ObjectNode result = checkoutMode
+                    ? NodeInstall.installCheckout(io, system, dir, nodeRoles, join, force, json())
+                    : NodeInstall.install(io, system, dir, version, nodeRoles, join, force, json());
             NodeInstall.Layout layout = system ? NodeInstall.systemLayout() : NodeInstall.userLayout(io, dir);
+            if (join != null || members != null) {
+                Map<String, String> config = new LinkedHashMap<>(parseKeyValues(Files.readString(layout.envFile())));
+                config.put("C93_CLUSTERED", "true");
+                config.put("C93_CLUSTER_TLS", "required");
+                if (join != null) {
+                    config.put("C93_JOIN", join);
+                }
+                if (members != null) {
+                    config.put("C93_CLUSTER_MEMBERS", members);
+                }
+                NodeInstall.writeEnv(layout, config);
+            }
             if (!noStart) {
                 int code = NodeService.start(io, NodeService.target(io, layout), !json());
                 result.put("started", code == 0);
@@ -393,9 +454,9 @@ final class NodeCommand extends Base {
         }
 
         /** The container pathway: lay out the compose node, then start it unless {@code --no-start} (D-141). */
-        private int container(Io io) throws Exception {
+        private int container(Io io, String nodeRoles) throws Exception {
             ObjectNode result = NodeInstall.installContainer(io, system, dir, engine, image, version, tlsDir,
-                    publishAddress, !noPublishClusterPorts, force, json());
+                    publishAddress, !noPublishClusterPorts, force, json(), workers, egressPlacement, join, nodeRoles);
             NodeInstall.Layout layout = NodeInstall.containerLayout(io, system, dir);
             if (!noStart) {
                 int code = NodeService.start(io, NodeService.target(io, layout), !json());
@@ -1210,6 +1271,51 @@ final class NodeCommand extends Base {
     // operator: invite / revoke
     // ----------------------------------------------------------------------
 
+    @Command(name = "join", description = "Join this node to an existing cluster with a join line from `c93 cluster invite`.")
+    static final class Join extends Base {
+
+        @Parameters(paramLabel = "LINE", description = "The c93_nodebundle_… or c93_nodecert_… line.")
+        String line;
+
+        @Option(names = "--no-restart", description = "Write node.env but do not restart the node.")
+        boolean noRestart;
+
+        @Option(names = "--members", paramLabel = "HOST,HOST", description = "The cluster's discovery members, written to C93_CLUSTER_MEMBERS.")
+        String members;
+
+        @Override
+        int execute() throws Exception {
+            if (line == null || !cluster93.tls.NodeBundle.looksLikeOne(line.strip())) {
+                throw new CliException("That is not a join line (expected c93_nodebundle_… or c93_nodecert_…)", 2);
+            }
+            Io io = io();
+            NodeInstall.Layout layout = NodeInstall.installedLayout(io);
+            if (!Files.isRegularFile(layout.envFile())) {
+                throw new CliException("No installed node at " + layout.envFile()
+                        + ". Run `c93 node install` first.", 2);
+            }
+            Map<String, String> config = new LinkedHashMap<>(parseKeyValues(Files.readString(layout.envFile())));
+            config.put("C93_JOIN", line.strip());
+            config.put("C93_CLUSTERED", "true");
+            config.put("C93_CLUSTER_TLS", "required");
+            if (members != null && !members.isBlank()) {
+                config.put("C93_CLUSTER_MEMBERS", members);
+            }
+            NodeInstall.writeEnv(layout, config);
+            if (!noRestart) {
+                NodeService.restart(io, NodeService.target(io, layout));
+            }
+            if (json()) {
+                Output.json(out(), Json.object().put("node", config.getOrDefault("C93_NODE_ID", ""))
+                        .put("joined", true).put("restarted", !noRestart));
+                return 0;
+            }
+            out().println("Saved the join line to " + layout.envFile() + ".");
+            out().println(noRestart ? "Restart the node when ready: c93 node restart" : "Restarted the node.");
+            return 0;
+        }
+    }
+
     @Command(name = "invite", hidden = true, description = "Deprecated: use `c93 cluster invite`.")
     static final class Invite extends Base {
         @Parameters(paramLabel = "ID", description = "The node's id (C93_NODE_ID).")
@@ -1242,14 +1348,109 @@ final class NodeCommand extends Base {
         }
     }
 
-    @Command(name = "workers", description = "Worker supply on this node: ask an idle connected worker to leave.",
-            subcommands = {NodeCommand.Workers.Release.class})
+    @Command(name = "workers", description = "Worker supply on this node: local containers, or ask an idle connected worker to leave.",
+            subcommands = {NodeCommand.Workers.Release.class, NodeCommand.Workers.Scale.class,
+                    NodeCommand.Workers.Add.class, NodeCommand.Workers.Remove.class})
     static final class Workers extends Base {
 
         @Override
         int execute() {
             spec.commandLine().usage(out());
             return 0;
+        }
+
+        @Command(name = "scale", description = "Set how many local worker containers this Docker install runs (D-191).")
+        static final class Scale extends Base {
+
+            @Parameters(paramLabel = "N", description = "The new worker count.")
+            int count;
+
+            @Override
+            int execute() throws Exception {
+                return resize(this, count);
+            }
+        }
+
+        @Command(name = "add", description = "Add local worker containers to this Docker install.")
+        static final class Add extends Base {
+
+            @Parameters(paramLabel = "N", arity = "0..1", defaultValue = "1", description = "How many to add (default 1).")
+            int count;
+
+            @Override
+            int execute() throws Exception {
+                return resize(this, current(this) + count);
+            }
+        }
+
+        @Command(name = "rm", description = "Remove local worker containers from this Docker install.")
+        static final class Remove extends Base {
+
+            @Parameters(paramLabel = "N", arity = "0..1", defaultValue = "1", description = "How many to remove (default 1).")
+            int count;
+
+            @Override
+            int execute() throws Exception {
+                return resize(this, Math.max(0, current(this) - count));
+            }
+        }
+
+        /** Re-renders the compose project with a new worker count, validates it, and applies it. */
+        private static int resize(Base base, int target) throws IOException {
+            Io io = base.io();
+            NodeInstall.Layout layout = NodeInstall.installedLayout(io);
+            if (!layout.container()) {
+                throw new CliException("Local worker containers need a `c93 node install --docker` node.", 2);
+            }
+            if (!Files.isRegularFile(layout.envFile())) {
+                throw new CliException("No installed node at " + layout.envFile(), 2);
+            }
+            if (target < 0) {
+                throw new CliException("The worker count cannot be negative.", 2);
+            }
+            Map<String, String> meta = loadKeyValues(NodeInstall.metaFile(layout));
+            String image = meta.getOrDefault("image", "");
+            if (image.isBlank()) {
+                throw new CliException("This container install has no image recorded; reinstall it.", 2);
+            }
+            Map<String, String> config = new LinkedHashMap<>(parseKeyValues(Files.readString(layout.envFile())));
+            config.keySet().removeIf(key -> key.startsWith("# C93_WORKER"));
+            if (target > 0) {
+                config.put("C93_WORKER_SOCKET", "/run/cluster93/workers/node.sock");
+                config.put("C93_WORKER_SECRET_FILE", "/run/secrets/c93-worker-secret");
+                config.put("C93_WORKER_MODE", "process");
+                config.put("C93_WORKER_CONNECTIONS_MAX", String.valueOf(target + 1));
+                NodeInstall.ensureWorkerSecret(layout);
+                NodeInstall.prepareWorkerScratch(layout, target);
+            }
+            String engine = meta.getOrDefault("engine", NodeService.engine(layout));
+            String bind = meta.getOrDefault("bind_address", "0.0.0.0");
+            boolean publish = Boolean.parseBoolean(meta.getOrDefault("publish_cluster", "true"));
+            String egress = meta.get("egress_placement");
+            Files.writeString(layout.composeFile(), NodeInstall.renderCompose(layout, config, engine, image, bind,
+                    publish, target, egress));
+            NodeInstall.writeEnv(layout, config);
+            if (NodeService.validateCompose(io, layout) != 0) {
+                throw new CliException("The generated compose file didn't validate: " + layout.composeFile());
+            }
+            NodeInstall.writeContainerMeta(layout, engine, meta.getOrDefault("engine_rootless", "unknown"), image,
+                    meta.getOrDefault("version", "local"), config.getOrDefault("C93_NODE_ID", ""), target, egress,
+                    bind, publish);
+            int code = NodeService.applyCompose(io, layout);
+            if (base.json()) {
+                Output.json(base.out(), Json.object().put("workers", target).put("applied", code == 0)
+                        .put("composeFile", layout.composeFile().toString()));
+            } else if (code == 0) {
+                base.out().println("Workers: " + target + " (" + layout.composeFile() + ")");
+            } else {
+                throw new CliException("The compose project failed to apply; see the engine output above.", 1);
+            }
+            return code == 0 ? 0 : 1;
+        }
+
+        private static int current(Base base) {
+            NodeInstall.Layout layout = NodeInstall.installedLayout(base.io());
+            return Integer.parseInt(loadKeyValues(NodeInstall.metaFile(layout)).getOrDefault("workers", "0"));
         }
 
         @Command(name = "release", description = "Ask one idle connected worker to leave. It exits 0, and its supervisor decides "
