@@ -28,7 +28,7 @@ class MainHelpTest {
     private static final Map<String, List<String>> CATEGORIES = new LinkedHashMap<>();
 
     static {
-        CATEGORIES.put("Developer & Applications", List.of("apps", "deploy", "run", "jobs", "services"));
+        CATEGORIES.put("Developer & Applications", List.of("apps", "deploy", "run", "jobs", "services", "dev"));
         CATEGORIES.put("Platform Resources",
                 List.of("files", "secrets", "queues", "packages", "storage", "domains", "egress", "callbacks"));
         CATEGORIES.put("Identity & Access",
@@ -91,8 +91,11 @@ class MainHelpTest {
         assertThat(help).as("moved admin commands are hidden at the root")
                 .doesNotContain("  tenants ").doesNotContain("  users ").doesNotContain("  audit ");
 
+        String dev = run("dev");
+        assertThat(dev).contains("Commands:").contains("up").contains("status");
+
         String node = run("node");
-        assertThat(node).contains("Commands:").contains("status").contains("start").contains("setup");
+        assertThat(node).contains("Commands:").contains("status").contains("start").contains("join");
     }
 
     @Test
@@ -125,6 +128,6 @@ class MainHelpTest {
                 total++;
             }
         }
-        assertThat(total).as("all 29 root subcommands are grouped").isEqualTo(29);
+        assertThat(total).as("all 30 root subcommands are grouped").isEqualTo(30);
     }
 }

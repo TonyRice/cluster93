@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * {@code c93 update [--cli] [--node]} (D-138): the front door for updating. {@code --cli} replaces the binary or jar
  * after checking the release's signature and checksum; {@code --node} updates the node; with neither, both run. The
- * node side is a checkout in these tests (a fake {@code scripts/local.sh} records its invocation), so nothing rebuilds.
+ * node side without an installed node now points at {@code c93 dev build}.
  */
 class UpdateCommandTest {
 
@@ -36,7 +36,6 @@ class UpdateCommandTest {
     private KeyPair releaseKey;
     private Path releasePem;
     private Path checkout;
-    private Path nodeCalls;
 
     record Result(int code, String out, String err) {
     }
@@ -46,13 +45,8 @@ class UpdateCommandTest {
         releaseKey = InstallScriptTest.newKey();
         releasePem = Files.writeString(work.resolve("release.pem"), InstallScriptTest.pem(releaseKey));
         releases = Files.createDirectories(work.resolve("releases"));
-        nodeCalls = work.resolve("node-update.calls");
-        // A fake checkout, so `--node` takes the source path instead of running the real scripts/local.sh.
+        // A checkout-shaped directory for the node update fallback.
         checkout = Files.createDirectories(work.resolve("checkout"));
-        Files.createDirectories(checkout.resolve("scripts"));
-        Path script = Files.writeString(checkout.resolve("scripts").resolve("local.sh"),
-                "#!/bin/sh\necho \"$*\" >> \"" + nodeCalls + "\"\n");
-        script.toFile().setExecutable(true);
 
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
@@ -113,7 +107,7 @@ class UpdateCommandTest {
         assertThat(result.code()).as(result.err()).isZero();
         assertThat(result.out()).contains(UpgradeCommand.CLI_JAR).contains("signature and checksum checked");
         assertThat(Files.readString(target)).isEqualTo("new cli jar");
-        assertThat(nodeCalls).as("--cli alone leaves the node alone").doesNotExist();
+
     }
 
     @Test
@@ -123,9 +117,9 @@ class UpdateCommandTest {
 
         Result result = run("update", "--to", target.toString());
 
-        assertThat(result.code()).as(result.err()).isZero();
+        assertThat(result.code()).as(result.err()).isNotZero();
         assertThat(Files.readString(target)).as("the CLI was updated").isEqualTo("new cli jar");
-        assertThat(Files.readString(nodeCalls)).as("the node update ran too").contains("update");
+        assertThat(result.err()).contains("c93 dev build");
     }
 
     @Test
@@ -134,8 +128,8 @@ class UpdateCommandTest {
 
         Result result = run("update", "--node");
 
-        assertThat(result.code()).as(result.err()).isZero();
-        assertThat(Files.readString(nodeCalls)).contains("update");
+        assertThat(result.code()).as(result.err()).isNotZero();
+        assertThat(result.err()).contains("c93 dev build");
         assertThat(Files.readString(target)).as("the CLI was not touched").isEqualTo("old cli jar");
     }
 
@@ -143,8 +137,8 @@ class UpdateCommandTest {
     void theNodeUpdateAliasStillWorks() throws Exception {
         Result result = run("node", "update");
 
-        assertThat(result.code()).as(result.err()).isZero();
-        assertThat(Files.readString(nodeCalls)).contains("update");
+        assertThat(result.code()).as(result.err()).isNotZero();
+        assertThat(result.err()).contains("c93 dev build");
     }
 
     @Test

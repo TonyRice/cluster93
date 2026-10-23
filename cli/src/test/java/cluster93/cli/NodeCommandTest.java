@@ -104,8 +104,9 @@ class NodeCommandTest {
     @Test
     void repoRootResolvesFromTheEnvFileWhenTheWorkingDirectoryIsElsewhere() throws Exception {
         Path checkout = home.resolve("checkout");
-        Files.createDirectories(checkout.resolve("scripts"));
-        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        Files.createDirectories(checkout.resolve("server"));
+        Files.createDirectories(checkout.resolve("worker"));
+        Files.writeString(checkout.resolve("pom.xml"), "<project/>");
         Files.writeString(Path.of(env.get("C93_HOME")).resolve("local.env"), "REPO_ROOT=\"" + checkout + "\"\n");
 
         assertThat(NodeCommand.repoRoot(io())).isEqualTo(checkout);
@@ -114,8 +115,9 @@ class NodeCommandTest {
     @Test
     void repoRootResolvesFromNodeMetaWhenTheEnvFileIsMissing() throws Exception {
         Path checkout = home.resolve("checkout");
-        Files.createDirectories(checkout.resolve("scripts"));
-        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        Files.createDirectories(checkout.resolve("server"));
+        Files.createDirectories(checkout.resolve("worker"));
+        Files.writeString(checkout.resolve("pom.xml"), "<project/>");
         Files.createDirectories(Path.of(env.get("C93_HOME")));
         Files.writeString(Path.of(env.get("C93_HOME")).resolve("node.meta"), "repo_root=" + checkout + "\n");
 
@@ -125,8 +127,9 @@ class NodeCommandTest {
     @Test
     void repoRootPrefersTheEnvironmentOverride() throws Exception {
         Path checkout = home.resolve("checkout");
-        Files.createDirectories(checkout.resolve("scripts"));
-        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        Files.createDirectories(checkout.resolve("server"));
+        Files.createDirectories(checkout.resolve("worker"));
+        Files.writeString(checkout.resolve("pom.xml"), "<project/>");
         env.put("C93_REPO", checkout.toString());
 
         assertThat(NodeCommand.repoRoot(io())).isEqualTo(checkout);
@@ -137,7 +140,7 @@ class NodeCommandTest {
         Result result = run("node", "status");
 
         assertThat(result.code()).isZero();
-        assertThat(result.out()).contains("No local master node is set up").contains("c93 node install");
+        assertThat(result.out()).contains("No node is installed").contains("c93 dev up").contains("c93 node install");
     }
 
     @Test
@@ -238,7 +241,7 @@ class NodeCommandTest {
 
         assertThat(result.code()).isZero();
         assertThat(result.out()).contains("Update Available").contains(head)
-                .contains("scripts/local.sh update").contains("c93 update --node");
+                .contains("c93 dev build").contains("c93 update --node");
     }
 
     @Test
@@ -316,7 +319,7 @@ class NodeCommandTest {
 
         Result status = run("local", "status");
         assertThat(status.code()).as(status.err()).isZero();
-        assertThat(status.out()).contains("Local master node");
+        assertThat(status.out()).as("c93 local now means c93 dev").contains("Cluster93 development stack");
 
         Result bare = run("local");
         assertThat(bare.code()).isZero();
@@ -327,7 +330,7 @@ class NodeCommandTest {
     @Test
     void helpAndBadArgumentsBehave() {
         assertThat(run("--help").out()).contains("node").contains("Install, run, and manage");
-        assertThat(run("node").out()).contains("status").contains("start").contains("setup");
+        assertThat(run("node").out()).contains("status").contains("start").contains("join");
 
         Result badLines = run("node", "logs", "--lines", "not-a-number");
         assertThat(badLines.code()).isEqualTo(2);

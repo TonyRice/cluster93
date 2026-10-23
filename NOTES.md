@@ -134,8 +134,8 @@ Standing up a cluster means knowing which of the three to reach for, and the *wa
 ### The idea
 One unified **`c93 cluster …`** pathway for standing up and managing Cluster93, with explicit, first-class routes:
 
-- **Master node** — the permanent node a machine (or a checkout) owns. Today: `c93 node install` / `scripts/local.sh setup`.
-- **Dev node** — a throwaway local stack for development. Today: `scripts/local.sh dev` (W1 folded `dev.sh` into the profile-aware orchestrator).
+- **Master node** — the permanent node a machine (or a checkout) owns. At capture time: `c93 node install` / `scripts/local.sh setup`.
+- **Dev node** — a throwaway local stack for development. At capture time: `scripts/local.sh dev` (W1 folded `dev.sh` into the profile-aware orchestrator).
 - **Docker node** — run a node as a container, driven from the CLI rather than hand-edited Compose. Today: `docker-compose.yml` + `scripts/demo.sh` only.
 - **Cluster** — the multi-node story: `cluster init` (CA + one-line joins), then each node joins; `invite`/`revoke` belong to the same group instead of a separate `node` group.
 

@@ -165,6 +165,6 @@ C93_INGRESS_PORT=off
   `data` node that joins and takes partitions), then redeploy the old nodes with narrowed roles. A node
   that stops being a worker simply advertises capacity 0; in-flight jobs on it finish (or are reaped by
   the orphan policy, `docs/scripting/job-context.md`).
-- **Local development** is unchanged: `scripts/local.sh dev start` runs one `api,ingress,worker,data` node
+- **Local development** is unchanged: `c93 dev up` runs one `api,ingress,worker,data` node
   with an explicit `C93_DATA_DIR` under `$HOME/.cluster93/data`, so the single node is durable
   and exercises the same code paths as a tiered production cluster.

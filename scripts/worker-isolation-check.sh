@@ -66,7 +66,7 @@ C6_NODE_PID=""
 # Apache Ignite on JDK 21 needs these module opens: without them a CLUSTERED node fails at startup with
 # InaccessibleObjectException ("java.nio.DirectByteBuffer.address field is unavailable"). The single-node cases above
 # never start Ignite — a node is clustered only when C93_CLUSTERED is set — which is why nothing here needed it before.
-# The set is scripts/local.sh's IGNITE_JVM_ARGS, the node-from-a-checkout list (the same opens pom.xml's ignite.jvm.args
+# The set is the checkout node's IGNITE_JVM_ARGS list (the same opens pom.xml's ignite.jvm.args
 # and the node image's JDK_JAVA_OPTIONS carry), and it is passed the way the image passes it, through JDK_JAVA_OPTIONS.
 NODE_JVM_OPENS=(
   --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED

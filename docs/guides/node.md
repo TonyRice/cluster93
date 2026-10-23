@@ -14,6 +14,22 @@ c93 node logs --follow
 
 A node needs **Java 21+**. There is no Windows node: on Windows a node is Docker or WSL2 (see below).
 
+### Checkout development
+
+For work on the repository itself, `c93 dev` is the checkout stack — no service unit, no release:
+
+```bash
+c93 dev up                       # build if needed, start, seed, save the dev profile
+c93 run examples/js/01-hello-job.js
+c93 dev status
+c93 dev logs --follow
+c93 dev down                     # data is kept
+c93 dev reset --yes              # stop and delete the data
+```
+
+Data lives at `~/.cluster93/dev-data`; the login is the `dev` profile, so it never overwrites a production login.
+`c93 local …` remains a hidden alias for one release.
+
 ## Install
 
 ### From the CLI

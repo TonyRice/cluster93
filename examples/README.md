@@ -3,8 +3,7 @@
 Runnable Cluster93 scripts, organised by language. Start the dev stack first:
 
 ```bash
-scripts/local.sh dev start
-scripts/local.sh dev seed
+c93 dev up
 ```
 
 ## JavaScript (`js/`)
@@ -29,7 +28,7 @@ scripts/local.sh dev seed
 Run every example (the jobs *and* the service) with:
 
 ```bash
-scripts/local.sh dev test-examples
+c93 dev test-examples
 ```
 
 ## Python (`python/`)

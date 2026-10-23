@@ -32,12 +32,12 @@ import java.util.stream.Collectors;
  * ({@code start}/{@code stop}/{@code restart}/{@code status}/{@code logs}/{@code mcp}/{@code update}/{@code env}), and
  * the operator's {@code invite}/{@code revoke} (D-134).
  *
- * <p>Two on-disk shapes are understood, with no behaviour lost in the move out of {@code c93 local}: an
- * <em>installed</em> node ({@code node.env} + a service unit, driven through {@link NodeService}), and the
- * <em>development master</em> a checkout owns ({@code $C93_HOME/local.env} + {@code scripts/local.sh}).
+ * <p>An <em>installed</em> node ({@code node.env} + a service unit, driven through {@link NodeService}) is the
+ * permanent shape. A checkout stack is {@code c93 dev}; the old {@code $C93_HOME/local.env} state is read only as a
+ * one-release compatibility path.
  */
 @Command(name = "node", description = "Install, run, and manage a Cluster93 node, and manage cluster membership.",
-        subcommands = {NodeCommand.Install.class, NodeCommand.Uninstall.class, NodeCommand.Setup.class,
+        subcommands = {NodeCommand.Install.class, NodeCommand.Uninstall.class,
                 NodeCommand.Start.class, NodeCommand.Stop.class, NodeCommand.Restart.class, NodeCommand.Status.class,
                 NodeCommand.Logs.class, NodeCommand.Mcp.class, NodeCommand.Update.class, NodeCommand.Env.class,
                 NodeCommand.Join.class, NodeCommand.Invite.class, NodeCommand.Revoke.class, NodeCommand.Workers.class})
@@ -184,7 +184,7 @@ final class NodeCommand extends Base {
         addRepoCandidate(candidates, loadMeta(io).get("repo_root"));
         for (String candidate : candidates) {
             Path path = Path.of(candidate).toAbsolutePath();
-            if (Files.isDirectory(path) && Files.isRegularFile(path.resolve("scripts").resolve("local.sh"))) {
+            if (Checkout.isCheckout(path)) {
                 return path;
             }
         }
@@ -200,35 +200,6 @@ final class NodeCommand extends Base {
         String value = value(candidate);
         if (value != null) {
             candidates.add(value);
-        }
-    }
-
-    static Path findScript(Io io) {
-        Path root = repoRoot(io);
-        if (root == null) {
-            return null;
-        }
-        Path script = root.resolve("scripts").resolve("local.sh");
-        return Files.isRegularFile(script) ? script : null;
-    }
-
-    /** Delegates to {@code scripts/local.sh}; returns -1 when the script can't be found (caller falls back). */
-    static int runScript(Io io, String... args) {
-        Path script = findScript(io);
-        if (script == null) {
-            return -1;
-        }
-        List<String> command = new ArrayList<>();
-        command.add(script.toString());
-        command.addAll(List.of(args));
-        try {
-            Process process = new ProcessBuilder(command).inheritIO().start();
-            return process.waitFor();
-        } catch (IOException e) {
-            throw new CliException("Couldn't run " + script + ": " + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new CliException("Interrupted while running " + script);
         }
     }
 
@@ -583,8 +554,9 @@ final class NodeCommand extends Base {
                 return installed(io);
             }
             if (!Files.isRegularFile(envFile(io))) {
-                out().println("No local master node is set up.");
-                out().println("Run: scripts/local.sh setup, or install one with: c93 node install");
+                out().println("No node is installed on this machine.");
+                out().println("For a checkout stack, run: c93 dev up");
+                out().println("For a permanent node, run: c93 node install");
                 return 0;
             }
             return development(io);
@@ -721,7 +693,7 @@ final class NodeCommand extends Base {
                 out().println();
                 if (update) {
                     out().println("\u26a0\ufe0f  Update Available! Running build: " + installed + ", Current repo HEAD: " + head
-                            + ". Run 'scripts/local.sh update' or 'c93 update --node'.");
+                            + ". Run 'c93 dev build' or 'c93 update --node'.");
                 }
                 if (cliUpdate) {
                     out().println("\u26a0\ufe0f  Update Available! Current CLI build: " + Main.shortCommit(cliCommit)
@@ -882,11 +854,7 @@ final class NodeCommand extends Base {
             if (NodeInstall.isInstalled(io)) {
                 return NodeService.start(io, NodeService.target(io, NodeInstall.installedLayout(io)));
             }
-            int code = runScript(io, "start");
-            if (code >= 0) {
-                return code;
-            }
-            return launchDirect(io);
+            throw new CliException("No installed node. For a checkout stack, use: c93 dev up", 2);
         }
     }
 
@@ -899,11 +867,7 @@ final class NodeCommand extends Base {
             if (NodeInstall.isInstalled(io)) {
                 return NodeService.stop(io, NodeService.target(io, NodeInstall.installedLayout(io)), true);
             }
-            int code = runScript(io, "stop");
-            if (code >= 0) {
-                return code;
-            }
-            return stopLocal(io);
+            throw new CliException("No installed node. For a checkout stack, use: c93 dev down", 2);
         }
     }
 
@@ -916,12 +880,7 @@ final class NodeCommand extends Base {
             if (NodeInstall.isInstalled(io)) {
                 return NodeService.restart(io, NodeService.target(io, NodeInstall.installedLayout(io)));
             }
-            int code = runScript(io, "restart");
-            if (code >= 0) {
-                return code;
-            }
-            stopLocal(io);
-            return launchDirect(io);
+            throw new CliException("No installed node. For a checkout stack, use: c93 dev down && c93 dev up", 2);
         }
     }
 
@@ -961,11 +920,11 @@ final class NodeCommand extends Base {
     static int launchDirect(Io io) {
         Map<String, String> config = loadConfig(io);
         if (config.isEmpty()) {
-            throw new CliException("No configuration at " + envFile(io) + ". Run: scripts/local.sh setup");
+            throw new CliException("No configuration at " + envFile(io) + ". Run: c93 dev up (checkout) or c93 node install");
         }
         Path jar = serverJar(io);
         if (!Files.isRegularFile(jar)) {
-            throw new CliException("No server jar at " + jar + ". Run: scripts/local.sh setup");
+            throw new CliException("No server jar at " + jar + ". Run: c93 dev up (checkout) or c93 node install");
         }
         if (runningProcess(io).isPresent()) {
             out(io).println("Already running.");
@@ -1209,29 +1168,13 @@ final class NodeCommand extends Base {
     }
 
     // ----------------------------------------------------------------------
-    // setup / update
+    // update
     // ----------------------------------------------------------------------
-
-    @Command(name = "setup", description = "Run the guided node onboarding (scripts/local.sh setup).")
-    static final class Setup extends Base {
-
-        @Option(names = {"-y", "--yes"}, description = "Accept every default without prompting.")
-        boolean yes;
-
-        @Override
-        int execute() {
-            int code = runScript(io(), yes ? new String[] {"setup", "--yes"} : new String[] {"setup"});
-            if (code < 0) {
-                throw new CliException("scripts/local.sh wasn't found; run it from a checkout of the repository.");
-            }
-            return code;
-        }
-    }
 
     /**
      * Updates the node: an installed node is re-fetched from the signed release (and restarted if it was running); a
-     * checkout rebuilds from source via {@code scripts/local.sh update}. Shared by {@code c93 update --node} and the
-     * hidden {@code c93 node update} alias (D-138).
+     * a checkout stack is built by {@code c93 dev build}; a legacy checkout update script is still honoured for the
+     * one-release transition. Shared by {@code c93 update --node} and the hidden {@code c93 node update} alias (D-138).
      */
     static int updateNode(Io io, String version, boolean json) throws Exception {
         if (NodeInstall.isInstalled(io)) {
@@ -1247,12 +1190,7 @@ final class NodeCommand extends Base {
             }
             return 0;
         }
-        int code = runScript(io, "update");
-        if (code < 0) {
-            throw new CliException("No installed node, and scripts/local.sh wasn't found; "
-                    + "run it from a checkout, or install a node with `c93 node install`.");
-        }
-        return code;
+        throw new CliException("No installed node. For a checkout stack, use: c93 dev build && c93 dev down && c93 dev up.", 2);
     }
 
     @Command(name = "update", hidden = true, description = "Deprecated alias of `c93 update --node`.")

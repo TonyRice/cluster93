@@ -6,6 +6,18 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **`c93 dev` replaces `scripts/local.sh`, and `node setup` is gone** (D-190, phase 4):
+  - `c93 dev up` builds what is missing, starts one checkout node, seeds the `dev` tenant/admin/console, saves the
+    login in the `dev` profile, and writes the MCP config. `c93 dev status/logs/down/reset/build/seed/test-examples`
+    cover the old dev/master flows; data persists at `~/.cluster93/dev-data` until `reset --yes`.
+  - The dev stack gets its own API/ingress/metrics/internal and Ignite ports (`--http-port`, `--ingress-port`,
+    `--metrics-port`, `--internal-port`, `--cluster-port`), so it can run beside an installed node.
+  - `scripts/local.sh` is deleted. `c93 local` is now a hidden alias of `c93 dev`; `node setup` is removed and
+    `node status` points at `c93 dev up` when no node is installed. `c93 update --node` points a checkout at
+    `c93 dev build` instead of shelling out.
+  - `examples/` and the README use `c93 dev`; `DevCommandTest` covers build/status, the local alias, reset and the
+    non-interactive reset refusal. A real smoke run built, seeded, ran a job, stopped and reset the stack.
+
 - **One node, checkout by default, and local worker containers from the CLI** (D-190, D-191, phase 3):
   - `c93 node install` inside a checkout now builds from that checkout; `--release`/`--version` force a release and
     `--checkout` forces source. The install copies the jar and native workers into the normal layout, writes

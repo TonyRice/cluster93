@@ -1057,7 +1057,7 @@ final class NodeInstall {
         if (!held.isEmpty()) {
             throw new CliException("These ports are already in use: "
                     + held.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", "))
-                    + ". Stop whatever holds them (scripts/local.sh stop, or c93 node stop), or pass --force to "
+                    + ". Stop whatever holds them (c93 dev down, or c93 node stop), or pass --force to "
                     + "install anyway.");
         }
     }

@@ -1,6 +1,6 @@
 // 01 — A basic job.
 //
-// Run it (from the repo root, after `scripts/local.sh dev start` and `scripts/local.sh dev seed`):
+// Run it (from the repo root, after `c93 dev up`):
 //   c93 run examples/js/01-hello-job.js --input '{"name":"Ada"}'
 //
 // A job script exports a default async function; it receives the job's input and its context.

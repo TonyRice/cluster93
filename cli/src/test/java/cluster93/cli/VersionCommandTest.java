@@ -129,8 +129,9 @@ class VersionCommandTest {
     void versionIsGracefulOutsideAGitRepository() throws Exception {
         // A repo-root candidate without a .git directory: detection finds the checkout, but no HEAD.
         Path checkout = home.resolve("checkout");
-        Files.createDirectories(checkout.resolve("scripts"));
-        Files.writeString(checkout.resolve("scripts").resolve("local.sh"), "#!/usr/bin/env bash\n");
+        Files.createDirectories(checkout.resolve("server"));
+        Files.createDirectories(checkout.resolve("worker"));
+        Files.writeString(checkout.resolve("pom.xml"), "<project/>");
         env.put("C93_REPO", checkout.toString());
 
         Result result = run("--json", "version");

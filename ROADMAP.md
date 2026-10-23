@@ -192,9 +192,9 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
   (`--checkout`/`--release`/`--version`); `node join`; one node plus N local worker containers
   (`node install --docker --workers N`, `node workers scale`); `--compute`. `node setup`/`local.sh` removal is
   Phase 4.
-- **Phase 4 — dev:** port `scripts/local.sh` to `c93 dev up/status/logs/down/reset/build/seed/test-examples`;
-  delete the script, `c93 local`, `node setup`, and the shell-out paths.
-- **Phase 5 — docs:** README, node/cluster/CLI guides, migration notes, full verify.
+- **Phase 4 — dev (DONE 2026-10-21):** `c93 dev up/status/logs/down/reset/build/seed/test-examples`; the script is
+  deleted, `c93 local` is a hidden alias of `dev`, `node setup` and the shell-out are removed.
+- **Phase 5 — docs (DONE 2026-10-21):** README, node/cluster/CLI guides, examples, migration notes, full verify.
 - **Later:** release images (multi-arch/digest/signing), `cluster up`/`generate --docker -n N` for a whole local
   cluster, and a fixed-node Swarm spike. The detailed work order lives at
   `~/.opencode/plan/c93-cluster-pathway.md` (local, untracked).

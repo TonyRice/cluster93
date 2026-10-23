@@ -58,11 +58,7 @@ final class Checkout {
      */
     static void ensureBuilt(Io io, Path root, boolean quiet) throws IOException, InterruptedException {
         if (!Files.isRegularFile(serverJar(root))) {
-            if (!quiet) {
-                io.out().println("Building the server from " + root);
-            }
-            run(io, root, List.of("./mvnw", "-q", "-pl", "server", "-am", "package", "-DskipTests", "-DskipITs"),
-                    "build the server");
+            buildServer(io, root, quiet);
         }
         if (!hasWorkers(root)) {
             Path script = root.resolve("scripts").resolve("build-workers.sh");
@@ -74,6 +70,15 @@ final class Checkout {
             }
             run(io, root, List.of(script.toString(), "all"), "build the workers");
         }
+    }
+
+    /** Rebuilds the server jar unconditionally (used by `c93 dev build`). */
+    static void buildServer(Io io, Path root, boolean quiet) throws IOException, InterruptedException {
+        if (!quiet) {
+            io.out().println("Building the server from " + root);
+        }
+        run(io, root, List.of("./mvnw", "-q", "-pl", "server", "-am", "package", "-DskipTests", "-DskipITs"),
+                "build the server");
     }
 
     private static void run(Io io, Path root, List<String> command, String what) throws IOException, InterruptedException {

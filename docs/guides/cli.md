@@ -100,6 +100,7 @@ c93 profiles                                   # * marks the active one
 
 | | |
 |---|---|
+| `dev up · status · logs [-f] · down · reset --yes · build · seed · test-examples` | Build and run a throwaway checkout stack with its own `dev` profile and data ([node guide](node.md#checkout-development)) |
 | `run hello.js --input '{"name":"x"}'` | Run a script and follow it. Logs go to **stderr**, the output to **stdout**, and the exit code is 0 only if it succeeded. `-d` returns the job id at once |
 | `run … --env NAME=value --env-secret NAME=secret` | Set the script's `process.env`; a secret is read when it runs, and masked in its log ([host APIs](../scripting/host-apis.md#processenv-configuration-you-declare)). `services deploy` takes the same flags |
 | `run … --callback URL [--callback-data JSON]` | POST the signed result to `URL` when the job ends ([callbacks guide](callbacks.md)) |
@@ -138,7 +139,7 @@ c93 profiles                                   # * marks the active one
 | `mcp` | The MCP stdio bridge for AI agents ([MCP guide](mcp.md)) |
 | `cluster init --nodes a,b,c [--host a=10.0.0.11] [--api URL]` · `cluster status [--check]` · `cluster doctor` · `cluster nodes` | Operator: create the CA, joins and `cluster.json` inventory; reconcile it with the live nodes; check certificates and drift ([cluster guide](cluster.md)) |
 | `node install [--checkout\|--release] [--version TAG] [--docker] [--join LINE] [--roles ROLE,ROLE\|--compute] [--no-start]` · `node uninstall [--purge]` | Install one machine's node (checkout by default inside a checkout, release otherwise) and start it; `--docker` adds `--workers N` local worker containers ([node guide](node.md), D-190/D-191) |
-| `node start · stop · restart · status · logs [--follow] · mcp · update` | Drive the node: its service unit (systemd/launchd), or the process directly. `c93 local …` is a deprecated alias for one release |
+| `node start · stop · restart · status · logs [--follow] · mcp · update` | Drive the node: its service unit (systemd/launchd), or the process directly. `c93 local …` is now a hidden alias of `c93 dev …` for one release |
 | `node env [--set K=V] [--edit]` | Show or change the node's `node.env` (`C93_*` settings, short names accepted) |
 | `cluster invite ID [--host ADDR] [--key PUBLIC_KEY]` · `cluster revoke ID` | Operator: a one-line join for a new node (also renews), and record/revoke it in the inventory. `node invite/revoke` remain hidden aliases for one release |
 | `node join LINE [--members HOST,HOST]` | Write a join line (and cluster members) to `node.env` and restart/recreate the node |

@@ -4723,7 +4723,7 @@ the word ambiguous.
 ---
 
 ### D-190 — Checkout is the temporary default install source, and `scripts/local.sh` is retired
-**Date:** 2026-10-20 · **Status:** Accepted; checkout install and join built (phase 3). `c93 dev`/`local.sh` removal is phase 4.
+**Date:** 2026-10-20 · **Status:** Accepted and built (phases 3–4).
 
 **Context:**
 `c93 node install` fetches a signed release; `scripts/local.sh` builds and runs from the checkout; `c93 node
@@ -4762,8 +4762,9 @@ checkout-launched process (neither is a service), differing in data directory, a
 
 **Verification:** `NodeInstallPhase3Test` covers a checkout install (copied jar/workers, `C93_ROLES`,
 `C93_JOIN`, process mode, unit and `version=checkout`) and `node join --no-restart`. `NodeCommandTest` exercises the
-release path explicitly with `--release`. `c93 dev` and the `local.sh` deletion are phase 4; until then `node setup`
-still exists as the transition.
+release path explicitly with `--release`. `DevCommandTest` covers build/status, the `local` alias and reset; a real
+`c93 dev up` smoke run built, seeded, ran a job, stopped and reset. `scripts/local.sh` is deleted and `node setup`
+is removed.
 
 ---
 

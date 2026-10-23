@@ -81,7 +81,7 @@ rename_file() {
 say "--- home files (rewritten in place, then moved) ---"
 rewrite "$OLD_HOME/local.env"
 rewrite "$OLD_HOME/mcp.json"
-# node.meta is regenerated from the current checkout by `c93 local update` (write_meta),
+# node.meta is regenerated from the current checkout by `c93 dev build` (write_meta),
 # so it is left alone rather than half-rewritten here.
 rename_file "$OLD_HOME/automately.pid" "$OLD_HOME/c93.pid"
 
@@ -102,7 +102,7 @@ fi
 
 say
 if [ "$APPLY" = 1 ]; then
-    say "done. Restart any running node: c93 local restart"
+    say "done. Restart any running node: c93 dev down && c93 dev up"
 else
     say "dry run complete. Re-run with --apply to make the changes."
 fi

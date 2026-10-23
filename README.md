@@ -108,77 +108,49 @@ The automated demo spins up a 3-node cluster and demonstrates live failover:
 
 ## Quickstart
 
-### Local Development (Zero Docker, Single Command)
+### Local checkout stack
 
-To run a throwaway local single-node cluster directly on your machine without Docker (the `dev` profile of the checkout orchestrator):
+One command builds what is missing, starts a single node, seeds the `dev` tenant and an operator login, and makes
+the `dev` profile active:
 
 ```bash
-# 1. Build the server, GraalVM native CLI, and worker isolates
-scripts/local.sh dev build
-
-# 2. Start the dev cluster in the background (persists to ~/.cluster93/dev-data)
-scripts/local.sh dev start
-
-# 3. Create the 'dev' tenant, mint a full-access token, configure ~/.config/cluster93/config.json, and print MCP config
-scripts/local.sh dev seed
-
-# 4. Run any JavaScript ES-module job via the native CLI
+c93 dev up
 c93 run examples/js/01-hello-job.js
-
-# 5. Run the full curated test suite covering jobs, steps, KV, event bus, queues, and VFS
-scripts/local.sh dev test-examples
-
-# Check cluster health and status
-scripts/local.sh dev status
-
-# Stop the local server
-scripts/local.sh dev stop
+c93 dev status
+c93 dev logs --follow
+c93 dev test-examples
+c93 dev down
 ```
 
-Data is stored persistently at `$HOME/.cluster93/dev-data` (customizable via `scripts/local.sh dev start --data-dir <path>`). The native `c93` binary is installed directly into `~/.local/bin/c93` (and `bin/c93`).
+- **Data:** `~/.cluster93/dev-data` (persistent until `c93 dev reset --yes`).
+- **Ports:** API `9393`, ingress/console `9394`, metrics `9395`.
+- **Profile:** `c93 dev up` saves the operator login in the `dev` profile; `c93 profiles use dev` selects it later.
+- **Build only:** `c93 dev build` (server, and the worker binaries if they are missing).
+- **Re-seed:** `c93 dev seed` (idempotent).
+- **`c93 local …`** remains a hidden alias of `c93 dev …` for one release.
 
----
+No Docker, no releases, no shell orchestrator.
 
-### Dedicated Local Master Node (Onboarding Wizard)
+### A permanent node
 
-For a permanent single-node cluster on your own machine — the API, ingress, worker and data roles in one durable process — use the guided installer. It asks for the essentials (or takes the defaults with `--yes`), builds whatever is missing, starts the node, seeds a tenant, saves the login and prints the MCP configuration:
+For a machine that should keep a node as a service, install it rather than running a checkout stack:
 
 ```bash
-scripts/local.sh setup          # interactive onboarding wizard
-scripts/local.sh setup --yes    # accept every default, non-interactive
+c93 node install                 # inside a checkout: build source; otherwise: the latest release
+c93 node install --release       # force a release even inside a checkout
+c93 node install --docker        # one node container; --workers N adds local worker containers
+c93 node status
 ```
 
-State is written where you'd expect:
-
-| File | What it holds |
-|---|---|
-| `~/.cluster93/local.env` | Node ID, roles, data/log directories, ports, worker mode, admin token, tenant (mode `0600`) |
-| `~/.cluster93/node.meta` | Build provenance: install time, git commit and branch, version, server jar, CLI binary |
-| `~/.config/cluster93/config.json` | The saved login (`c93 whoami` works immediately) |
-| `~/.cluster93/mcp.json` | Ready-to-paste MCP configuration for AI agents |
-
-Every operation is also available from the CLI, so you never need to remember the script's paths:
+A node joins an existing cluster with a line from `c93 cluster invite`:
 
 ```bash
-c93 node status         # PID, /health, /v1/nodes, and an update check
-c93 node start
-c93 node stop
-c93 node restart
-c93 node logs --follow
-c93 node mcp            # Claude Code, Cursor, Antigravity, and the stdio bridge
+c93 cluster init --nodes node1,node2,node3 --api http://node1:9393
+c93 cluster invite node2 --host 10.0.0.12
+c93 node install --checkout --join "$(cat cluster-tls/node2.join)" --members node1,node3
 ```
 
-(`c93 local …` still works as a deprecated alias of `c93 node …` for one release.)
-
-`status` compares the commit the running build came from against the checkout's `git HEAD` and flags any drift, so a stale node is never a mystery:
-
-```text
-⚠️  Update Available! Running build: 666cefa9…, Current repo HEAD: 8d4b1c02…. Run 'scripts/local.sh update' or 'c93 update --node'.
-```
-
-`scripts/local.sh update` rebuilds the server jar and worker from the current checkout, rewrites the provenance in `node.meta`, and restarts the node if it was running.
-
----
+`c93 node setup` and `scripts/local.sh` are gone; a checkout is `c93 dev`, a permanent node is `c93 node install`.
 
 ### Docker Quickstart (3-Node Resilient Cluster)
 

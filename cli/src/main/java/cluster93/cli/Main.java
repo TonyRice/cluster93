@@ -20,7 +20,7 @@ import java.util.Properties;
         subcommands = {LoginCommand.class, LogoutCommand.class, WhoamiCommand.class, RunCommand.class, JobsCommand.class,
                 ServicesCommand.class, DomainsCommand.class, FilesCommand.class, QueuesCommand.class, CallbacksCommand.class, SecretsCommand.class, PackagesCommand.class, DeployCommand.class, AppsCommand.class, StorageCommand.class, EgressCommand.class, ClusterCommand.class, NodeCommand.class, TokensCommand.class, TenantsCommand.class,
                 MembersCommand.class, RolesCommand.class, GroupsCommand.class, InvitesCommand.class, UsersCommand.class, AuditCommand.class, MeCommand.class, LegacyProfileCommand.class, ProfilesCommand.class,
-                McpCommand.class, LocalCommand.class, VersionCommand.class, UpdateCommand.class, UpgradeCommand.class, CommandLine.HelpCommand.class})
+                McpCommand.class, DevCommand.class, LocalCommand.class, VersionCommand.class, UpdateCommand.class, UpgradeCommand.class, CommandLine.HelpCommand.class})
 public final class Main implements Runnable {
 
     /**
@@ -31,7 +31,7 @@ public final class Main implements Runnable {
     }
 
     private static final List<Group> GROUPS = List.of(
-            new Group("Developer & Applications", List.of("apps", "deploy", "run", "jobs", "services")),
+            new Group("Developer & Applications", List.of("apps", "deploy", "run", "jobs", "services", "dev")),
             new Group("Platform Resources",
                     List.of("files", "secrets", "queues", "packages", "storage", "domains", "egress", "callbacks")),
             new Group("Identity & Access",
