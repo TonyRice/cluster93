@@ -345,11 +345,29 @@ final class NodeCommand extends Base {
         @Option(names = "--egress-placement", paramLabel = "worker|node", description = "With --docker --workers: whether worker containers decide egress (need a network) or the node does (network none).")
         String egressPlacement;
 
+        @Option(names = "--http-port", paramLabel = "PORT", description = "With --docker: the node's API port (default 9393).")
+        int httpPort;
+
+        @Option(names = "--ingress-port", paramLabel = "PORT", description = "With --docker: the node's ingress port (default 9394).")
+        int ingressPort;
+
+        @Option(names = "--metrics-port", paramLabel = "PORT", description = "With --docker: the node's metrics port (default 9395).")
+        int metricsPort;
+
+        @Option(names = "--internal-port", paramLabel = "PORT", description = "With --docker: the node's internal port (default 9396).")
+        int internalPort;
+
+        @Option(names = "--cluster-port", paramLabel = "PORT", description = "With --docker: the Ignite discovery base port (default 5701).")
+        int clusterPort;
+
         @Option(names = "--engine", paramLabel = "NAME", description = "The container engine to use: docker (the default) or podman.")
         String engine;
 
         @Option(names = "--image", paramLabel = "IMAGE", description = "The node image to run, instead of one built from the checkout.")
         String image;
+
+        @Option(names = "--node-id", paramLabel = "ID", description = "The node's id (default: the host name).")
+        String nodeId;
 
         @Option(names = "--tls-dir", paramLabel = "DIR", description = "Certificates from an existing cluster (node.crt, node.key, ca.crt), instead of generating a size-1 cluster's.")
         Path tlsDir;
@@ -426,8 +444,15 @@ final class NodeCommand extends Base {
 
         /** The container pathway: lay out the compose node, then start it unless {@code --no-start} (D-141). */
         private int container(Io io, String nodeRoles) throws Exception {
+            Map<String, String> ports = new LinkedHashMap<>();
+            if (httpPort > 0) ports.put("C93_HTTP_PORT", String.valueOf(httpPort));
+            if (ingressPort > 0) ports.put("C93_INGRESS_PORT", String.valueOf(ingressPort));
+            if (metricsPort > 0) ports.put("C93_METRICS_PORT", String.valueOf(metricsPort));
+            if (internalPort > 0) ports.put("C93_INTERNAL_PORT", String.valueOf(internalPort));
+            if (clusterPort > 0) ports.put("C93_CLUSTER_PORT", String.valueOf(clusterPort));
             ObjectNode result = NodeInstall.installContainer(io, system, dir, engine, image, version, tlsDir,
-                    publishAddress, !noPublishClusterPorts, force, json(), workers, egressPlacement, join, nodeRoles);
+                    publishAddress, !noPublishClusterPorts, force, json(), workers, egressPlacement, join, nodeRoles,
+                    ports, nodeId);
             NodeInstall.Layout layout = NodeInstall.containerLayout(io, system, dir);
             if (!noStart) {
                 int code = NodeService.start(io, NodeService.target(io, layout), !json());

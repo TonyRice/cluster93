@@ -190,8 +190,8 @@ Umbrella: one install path, one update surface, one checkout orchestrator, one b
   hidden root aliases.
 - **Phase 3 — node (DONE 2026-10-20):** checkout is the temporary default install source
   (`--checkout`/`--release`/`--version`); `node join`; one node plus N local worker containers
-  (`node install --docker --workers N`, `node workers scale`); `--compute`. `node setup`/`local.sh` removal is
-  Phase 4.
+  (`node install --docker --workers N`, `node workers scale`); `--compute`; C9 checks it on a real engine.
+  `node setup`/`local.sh` removal is Phase 4.
 - **Phase 4 — dev (DONE 2026-10-21):** `c93 dev up/status/logs/down/reset/build/seed/test-examples`; the script is
   deleted, `c93 local` is a hidden alias of `dev`, `node setup` and the shell-out are removed.
 - **Phase 5 — docs (DONE 2026-10-21):** README, node/cluster/CLI guides, examples, migration notes, full verify.

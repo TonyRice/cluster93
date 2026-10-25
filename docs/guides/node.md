@@ -51,7 +51,7 @@ one it uses a release. The choice is explicit:
 c93 node install --checkout       # build this tree, copy the jar/workers, install the unit
 c93 node install --release        # a release even inside a checkout
 c93 node install --version v2.1.0 # a specific release
-c93 node install --docker         # one node container; builds from the checkout unless --image/--version
+c93 node install --docker         # one node container; builds from the checkout unless --image/--version (--node-id, --http-port … for a second node)
 ```
 
 A release install **checks `SHA256SUMS` against the release's signature** (the key is built into the CLI, D-069),
@@ -326,9 +326,9 @@ network:
 `0600` socket as the right identity, whether a job round-trips on it, whether the wrong secret is refused, and which
 network property the placement's own container has — and prints a matrix. On a machine with both engines available:
 **C1 (rootless podman, `--userns=keep-id`) and C3 (rootful Docker, `--user`) pass**, C4 (a foreign uid) is refused,
-C5 (the `worker` placement) passes, C6 and C7 (the cluster shapes) pass, and C8 (release: a container exits 0 on a
-release, does not reconnect, and a busy worker is refused while its job finishes) passes; every `SKIP` line says what
-would enable it. **Which JS engine runs makes no difference** — the matrix is the same with
+C5 (the `worker` placement) passes, C6 and C7 (the cluster shapes) pass, C8 (release: a container exits 0 on a
+release, does not reconnect, and a busy worker is refused while its job finishes) passes, and C9 (one node plus two
+worker containers, a job, then `node workers scale 1`) passes; every `SKIP` line says what would enable it. **Which JS engine runs makes no difference** — the matrix is the same with
 `worker-javet` and with `worker-graaljs` (`C93_IDCHECK_WORKER=worker-graaljs`), because what the cases decide is the
 socket, the identity and the network rather than the engine.
 

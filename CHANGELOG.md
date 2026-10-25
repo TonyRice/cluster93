@@ -6,6 +6,15 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
 
 ## [Unreleased]
 
+- **C9 proves the CLI's one-node-plus-worker-containers install** (D-191):
+  - `node install --docker --node-id … --workers 2 --http-port … --cluster-port …` writes and starts a node and
+    two worker services on its own ports; two workers connect, a job runs with `c93_workers_running` still 0, and
+    `node workers scale 1` leaves one connected.
+  - `node install --docker` gained `--node-id` and explicit API/ingress/metrics/internal/Ignite ports so a
+    container node can run beside another node on the host.
+  - `scripts/worker-isolation-check.sh --case C9` runs it against a real Docker engine; the compose worker
+    renderer remains covered by `NodeInstallPhase3Test`.
+
 - **`c93 dev` replaces `scripts/local.sh`, and `node setup` is gone** (D-190, phase 4):
   - `c93 dev up` builds what is missing, starts one checkout node, seeds the `dev` tenant/admin/console, saves the
     login in the `dev` profile, and writes the MCP config. `c93 dev status/logs/down/reset/build/seed/test-examples`

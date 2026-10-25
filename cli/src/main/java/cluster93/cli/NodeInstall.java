@@ -491,6 +491,8 @@ final class NodeInstall {
         config.put("C93_HTTP_PORT", "9393");
         config.put("C93_INGRESS_PORT", "9394");
         config.put("C93_METRICS_PORT", "9395");
+        config.put("C93_INTERNAL_PORT", "9396");
+        config.put("C93_CLUSTER_PORT", "5701");
         // The image ships bin/worker-*, so a container node runs its workers as processes by default (D-142).
         config.put("C93_WORKER_MODE", "process");
         config.put("C93_WORKER_DEFAULT_MODE", "graaljs");
@@ -562,16 +564,21 @@ final class NodeInstall {
         compose.append("    read_only: true\n");
         compose.append("    tmpfs: [/tmp]\n");
         compose.append("    pids_limit: 2048\n");
+        String http = config.getOrDefault("C93_HTTP_PORT", "9393");
+        String ingress = config.getOrDefault("C93_INGRESS_PORT", "9394");
+        String metrics = config.getOrDefault("C93_METRICS_PORT", "9395");
+        String internal = config.getOrDefault("C93_INTERNAL_PORT", "9396");
+        String cluster = config.getOrDefault("C93_CLUSTER_PORT", "5701");
         compose.append("    ports:\n");
-        compose.append("      - \"").append(bindAddress).append(":9393:9393\"\n");
-        compose.append("      - \"").append(bindAddress).append(":9394:9394\"\n");
-        compose.append("      - \"").append(bindAddress).append(":9395:9395\"\n");
+        compose.append("      - \"").append(bindAddress).append(":").append(http).append(":").append(http).append("\"\n");
+        compose.append("      - \"").append(bindAddress).append(":").append(ingress).append(":").append(ingress).append("\"\n");
+        compose.append("      - \"").append(bindAddress).append(":").append(metrics).append(":").append(metrics).append("\"\n");
         if (publishCluster) {
-            compose.append("      - \"").append(bindAddress).append(":5701:5701\"\n");
-            compose.append("      - \"").append(bindAddress).append(":5801:5801\"\n");
+            compose.append("      - \"").append(bindAddress).append(":").append(cluster).append(":").append(cluster).append("\"\n");
+            compose.append("      - \"").append(bindAddress).append(":").append(Integer.parseInt(cluster) + 100).append(":").append(Integer.parseInt(cluster) + 100).append("\"\n");
         }
-        // 9396 stays cluster-internal: mTLS-protected, and peers reach it over the docker network.
-        compose.append("    expose: [\"9396\"]\n");
+        // The internal endpoint stays cluster-internal: mTLS-protected, and peers reach it over the docker network.
+        compose.append("    expose: [\"").append(internal).append("\"]\n");
         compose.append("    volumes:\n");
         compose.append("      - \"").append(layout.dataDir()).append(":/var/lib/cluster93\"\n");
         compose.append("      - \"").append(layout.tlsDir()).append(":/tls:ro\"\n");
@@ -583,7 +590,7 @@ final class NodeInstall {
             compose.append("      - \"").append(workerSecretFile(layout)).append(":/run/secrets/c93-worker-secret:ro\"\n");
         }
         compose.append("    healthcheck:\n");
-        compose.append("      test: [\"CMD\", \"bash\", \"-c\", \"exec 3<>/dev/tcp/localhost/9393 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3\"]\n");
+        compose.append("      test: [\"CMD\", \"bash\", \"-c\", \"exec 3<>/dev/tcp/localhost/").append(http).append(" && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3\"]\n");
         compose.append("      interval: 5s\n");
         compose.append("      retries: 12\n");
         if (workers > 0) {
@@ -887,6 +894,16 @@ final class NodeInstall {
                                        String version, Path tlsDir, String bindAddress, boolean publishCluster,
                                        boolean force, boolean quiet, int workers, String egressPlacement,
                                        String join, String roles) throws IOException, InterruptedException {
+        return installContainer(io, system, dir, requestedEngine, image, version, tlsDir, bindAddress,
+                publishCluster, force, quiet, workers, egressPlacement, join, roles, Map.of(), null);
+    }
+
+    /** The full container install, with a node id and explicit port overrides for a node beside another on the host. */
+    static ObjectNode installContainer(Io io, boolean system, Path dir, String requestedEngine, String image,
+                                       String version, Path tlsDir, String bindAddress, boolean publishCluster,
+                                       boolean force, boolean quiet, int workers, String egressPlacement,
+                                       String join, String roles, Map<String, String> overrides, String requestedNodeId)
+            throws IOException, InterruptedException {
         if (system && !NodeService.isRoot()) {
             throw new CliException("A --system install must run as root (try: sudo c93 node install --docker --system)", 2);
         }
@@ -900,8 +917,9 @@ final class NodeInstall {
         // not the invoking user's, so there is nothing to look up from there.
         refuseIfAlsoInstalled(layout, layout.system() ? null : systemLayout().envFile(), force);
 
-        String nodeId = defaultNodeId();
+        String nodeId = requestedNodeId == null || requestedNodeId.isBlank() ? defaultNodeId() : requestedNodeId.trim();
         Map<String, String> config = containerConfig(nodeId);
+        config.putAll(overrides);
         if (roles != null && !roles.isBlank()) {
             config.put("C93_ROLES", roles);
         }

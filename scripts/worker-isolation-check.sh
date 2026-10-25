@@ -98,6 +98,17 @@ PULL=0
 WANT_CASE=""
 NAMED_IMAGE=""
 IMAGE=""
+# C9 drives the CLI's own docker install; it needs the shaded CLI jar the checkout built.
+CLI_JAR="$ROOT/cli/target/cluster93-cli.jar"
+# C9 uses its own ports so it can run beside the main node and any installed node.
+C9_HTTP=9693
+C9_INGRESS=9694
+C9_METRICS=9695
+C9_INTERNAL=9696
+C9_CLUSTER=5791
+C9_CONFIG=""
+C9_DATA=""
+C9_PROJECT=""
 # The worker command the containers run: whichever engine this checkout actually has in bin/ (a build may hold one),
 # overridable to check a specific engine (C93_IDCHECK_WORKER=worker-graaljs).
 WORKER_BIN="${C93_IDCHECK_WORKER:-worker-javet}"
@@ -119,8 +130,8 @@ done
 # Validate the case name here, not at the end: a name no case matches would run nothing and let the summary print
 # "Every case this host can run passed" — which is the one thing a check must never say about work it did not do.
 case "$WANT_CASE" in
-  ""|C1|C3|C4|C5|C6|C7|C8) ;;
-  *) echo "Unknown case: ${WANT_CASE} (cases: C1, C3, C4, C5, C6, C7, C8)" >&2; exit 2 ;;
+  ""|C1|C3|C4|C5|C6|C7|C8|C9) ;;
+  *) echo "Unknown case: ${WANT_CASE} (cases: C1, C3, C4, C5, C6, C7, C8, C9)" >&2; exit 2 ;;
 esac
 
 say() { printf '%s\n' "$*"; }
@@ -169,6 +180,9 @@ cleanup() {
     kill "$C6_NODE_PID" 2>/dev/null || true
     for _ in $(seq 1 20); do kill -0 "$C6_NODE_PID" 2>/dev/null || break; sleep 0.25; done
     kill -9 "$C6_NODE_PID" 2>/dev/null || true
+  fi
+  if [ -n "$C9_PROJECT" ] && [ -n "$C9_CONFIG" ] && [ -f "$C9_CONFIG/compose.yaml" ]; then
+    "$ENGINE" compose -p "$C9_PROJECT" -f "$C9_CONFIG/compose.yaml" down -v --remove-orphans >/dev/null 2>&1 || true
   fi
   if [ -n "$TMP" ] && [ -d "$TMP" ]; then
     # The node holds the socket directory; it is gone by now. Temp dirs only — never a user or system path.
@@ -230,6 +244,9 @@ describe_cases() {
   say "      shrink-on-0 loop. Releasing an idle worker must end the container with exit 0, not restart it, and move"
   say "      the node's release counter; releasing a worker with a job on it must be refused (409 worker_busy), the job"
   say "      must finish, and the worker must stay. Then the same worker, idle, is released and the container leaves 0."
+  say "  C9  one node + local worker containers       rootful docker; c93 node install --docker --workers 2 --node-id …"
+  say "      on its own ports. The node answers, two worker containers connect, a job runs with no spawned process,"
+  say "      then node workers scale 1 leaves one connected."
 }
 
 # ---------------------------------------------------------------------------------------
@@ -1554,6 +1571,76 @@ check_container_cluster_placement() {  # <engine> <label> <identity flag> <ident
   [ "$result" = PASS ]
 }
 
+# C9: the CLI's docker install with local worker containers (D-191). One node, two worker services, its own
+# ports; a job must run on a connected worker (no spawned process), and `node workers scale` must resize it.
+check_worker_containers() {  # check_worker_containers <engine> <rootless> <identity flag> <identity args...>
+  local engine="$1" rootless="$2" flag="$3"; shift 3
+  ENGINE="$engine"
+  IMAGE="$(image_for "$engine")"
+  C9_CONFIG="$TMP/c9/config"
+  C9_DATA="$TMP/c9/data"
+  local node="c9-$RUN_ID"
+  C9_PROJECT="cluster93-$node"
+  install -d -m 0700 "$C9_CONFIG" "$C9_DATA"
+  local cli=(java -jar "$CLI_JAR")
+  local result=FAIL node_ok=no workers=no job=no scale=no
+  ( cd "$ROOT" && C93_CONFIG_DIR="$C9_CONFIG" C93_SKIP_PORT_CHECK=1 "${cli[@]}" node install --docker --force       --node-id "$node" --image "$IMAGE" --workers 2       --http-port "$C9_HTTP" --ingress-port "$C9_INGRESS" --metrics-port "$C9_METRICS"       --internal-port "$C9_INTERNAL" --cluster-port "$C9_CLUSTER"       --publish-address 127.0.0.1 --no-publish-cluster-ports ) >"$TMP/c9/install.log" 2>&1 || true
+  if wait_for 120 "the C9 node's health" curl -sf -m 2 "http://127.0.0.1:$C9_HTTP/health" >/dev/null; then node_ok=yes; fi
+
+  local admin token
+  admin=$(sed -n 's/^C93_ADMIN_TOKEN=//p' "$C9_CONFIG/node.env" 2>/dev/null | head -1)
+  if [ "$node_ok" = yes ]; then
+    curl -s -m 10 -X POST "http://127.0.0.1:$C9_HTTP/v1/tenants" -H "Authorization: Bearer $admin"       -H 'Content-Type: application/json' -d "{\"name\":\"$TENANT\"}" >/dev/null || true
+    token=$(curl -s -m 10 -X POST "http://127.0.0.1:$C9_HTTP/v1/tenants/$TENANT/tokens" -H "Authorization: Bearer $admin"       -H 'Content-Type: application/json' -d '{"name":"c9","scopes":["*"]}'       | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    for _ in $(seq 1 120); do
+      [ "$(metric_at "$C9_METRICS" c93_workers_connected)" = "2.0" ] && break
+      sleep 0.5
+    done
+    [ "$(metric_at "$C9_METRICS" c93_workers_connected)" = "2.0" ] && workers=yes
+  fi
+
+  if [ -n "${token:-}" ] && [ "$workers" = yes ]; then
+    local id
+    id=$(curl -s -m 10 -X POST "http://127.0.0.1:$C9_HTTP/v1/jobs"       -H "Authorization: Bearer $token" -H "X-Cluster93-Tenant: $TENANT" -H 'Content-Type: application/json'       -d '{"script":"export default () => ({c9:true})","timeoutMs":15000}'       | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    if [ -n "$id" ]; then
+      for _ in $(seq 1 60); do
+        case "$(curl -sf -m 5 "http://127.0.0.1:$C9_HTTP/v1/jobs/$id" -H "Authorization: Bearer $token" -H "X-Cluster93-Tenant: $TENANT")" in
+          *'"status":"SUCCEEDED"'*) job=yes; break ;;
+          *'"status":"FAILED"'*|*'"status":"TIMED_OUT"'*) break ;;
+        esac
+        sleep 0.5
+      done
+      [ "$(metric_at "$C9_METRICS" c93_workers_running)" = "0.0" ] || job=no
+    fi
+  fi
+
+  if [ "$job" = yes ]; then
+    ( cd "$ROOT" && C93_CONFIG_DIR="$C9_CONFIG" "${cli[@]}" node workers scale 1 ) >"$TMP/c9/scale.log" 2>&1 || true
+    for _ in $(seq 1 120); do
+      [ "$(metric_at "$C9_METRICS" c93_workers_connected)" = "1.0" ] && break
+      sleep 0.5
+    done
+    [ "$(metric_at "$C9_METRICS" c93_workers_connected)" = "1.0" ] && scale=yes
+  fi
+
+  if [ "$node_ok" != yes ] || [ "$workers" != yes ] || [ "$job" != yes ] || [ "$scale" != yes ]; then
+    say "  --- why C9 did not pass ---"
+    say "  node health=$node_ok workers=$workers job=$job scale=$scale"
+    say "  install output (last 12 lines):"; tail -12 "$TMP/c9/install.log" 2>/dev/null | sed 's/^/    /'
+    say "  connected=$(metric_at "$C9_METRICS" c93_workers_connected) spawned=$(metric_at "$C9_METRICS" c93_workers_running)"
+    say "  compose:"; "$ENGINE" compose -p "$C9_PROJECT" -f "$C9_CONFIG/compose.yaml" ps 2>&1 | sed 's/^/    /' || true
+  fi
+  if [ -n "$C9_PROJECT" ] && [ -f "$C9_CONFIG/compose.yaml" ]; then
+    "$ENGINE" compose -p "$C9_PROJECT" -f "$C9_CONFIG/compose.yaml" down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+  [ "$node_ok" = yes ] && [ "$workers" = yes ] && [ "$job" = yes ] && [ "$scale" = yes ] && result=PASS
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-7s | %-3s | %-5s | %s\n' \
+    case engine rootless identity node workers job scale result
+  printf '%-3s | %-6s | %-8s | %-22s | %-5s | %-7s | %-3s | %-5s | %s\n' \
+    "C9" "$engine" "rootful" "$flag" "$node_ok" "$workers" "$job" "$scale" "$result"
+  [ "$result" = PASS ]
+}
+
 # C8: giving supply back (D-187). A worker container runs the same loop the compose template ships: four workers
 # shrink one at a time on a 0 exit, and the container exits 0 when the last one is released. This case runs one worker
 # per container so the container's own exit status is the worker's, and asserts both halves of the contract — an idle
@@ -1727,6 +1814,18 @@ if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C8" ]; then
     SKIPPED=$((SKIPPED + 1))
   fi
 fi
+if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C9" ]; then
+  if [ "$WORKERS_OK" != 1 ] || [ ! -f "$CLI_JAR" ]; then
+    printf '%-3s | %-16s | %s\n' "C9" docker "SKIP (needs the worker image and the shaded CLI jar — see the note above)"
+    SKIPPED=$((SKIPPED + 1))
+  elif have_docker && ! rootless_docker; then
+    check_worker_containers docker rootful "--user $(id -u):$(id -g)" --user "$(id -u):$(id -g)" || FAILED=1
+  else
+    printf '%-3s | %-16s | %s\n' "C9" docker "SKIP (needs a rootful engine to run containers as this user)"
+    SKIPPED=$((SKIPPED + 1))
+  fi
+fi
+
 if [ "$WANT_CASE" = "" ] || [ "$WANT_CASE" = "C4" ]; then
   if [ "$WORKERS_OK" != 1 ]; then
     printf '%-3s | %-16s | %s\n' "C4" docker "SKIP (needs the worker image — see the note above)"

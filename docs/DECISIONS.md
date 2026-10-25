@@ -4811,8 +4811,8 @@ would make one command own both a machine and a cluster.
 **Verification:** `NodeInstallPhase3Test` renders one service per worker (socket/secret/scratch mounts,
 `restart: on-failure`, the shrink-on-0 wrapper with Compose-escaped dollars, egress vs `network_mode: none`).
 `node install --docker --workers N` writes the secret, socket dir and scratch dirs and validates the compose project;
-`node workers scale/add/rm` re-renders and applies it. A real-engine job on a compute node remains the Phase 3
-manual smoke.
+`node workers scale/add/rm` re-renders and applies it. **C9** runs it on a real Docker engine: a node with two worker
+containers on its own ports, two connections, a job with no spawned process, then `scale 1` leaves one connected.
 
 ---
 
