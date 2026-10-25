@@ -100,7 +100,7 @@ c93 profiles                                   # * marks the active one
 
 | | |
 |---|---|
-| `dev up · status · logs [-f] · down · reset --yes · build · seed · test-examples` | Build and run a throwaway checkout stack with its own `dev` profile and data ([node guide](node.md#checkout-development)) |
+| `dev up · status · logs [-f] · down · reset --yes · build · seed · test-examples` | Build and run a throwaway checkout stack with its own `dev` profile and data; `c93 cluster dev …` points at the same command ([node guide](node.md#checkout-development)) |
 | `run hello.js --input '{"name":"x"}'` | Run a script and follow it. Logs go to **stderr**, the output to **stdout**, and the exit code is 0 only if it succeeded. `-d` returns the job id at once |
 | `run … --env NAME=value --env-secret NAME=secret` | Set the script's `process.env`; a secret is read when it runs, and masked in its log ([host APIs](../scripting/host-apis.md#processenv-configuration-you-declare)). `services deploy` takes the same flags |
 | `run … --callback URL [--callback-data JSON]` | POST the signed result to `URL` when the job ends ([callbacks guide](callbacks.md)) |

@@ -29,6 +29,11 @@ final class DevService {
     static final int DEFAULT_HTTP_PORT = 9393;
     static final int DEFAULT_INGRESS_PORT = 9394;
     static final int DEFAULT_METRICS_PORT = 9395;
+    static final int FALLBACK_HTTP_PORT = 9493;
+    static final int FALLBACK_INGRESS_PORT = 9494;
+    static final int FALLBACK_METRICS_PORT = 9495;
+    static final int FALLBACK_INTERNAL_PORT = 9496;
+    static final int FALLBACK_CLUSTER_PORT = 5751;
 
     record State(Path dataDir, int httpPort, int ingressPort, int metricsPort, int internalPort, int clusterPort,
                  String engine) {
@@ -128,6 +133,24 @@ final class DevService {
     int up(State requested, boolean noSeed, boolean json) throws Exception {
         State state = requested;
         Checkout.ensureBuilt(io, root, json);
+        // A node installed on the usual 9393/9394/9395/5701 range is the normal case; the dev stack runs beside it
+        // on the next range rather than reporting a health check from the other process. Explicit ports still fail
+        // clearly when they are taken.
+        List<Integer> held = NodeInstall.portsInUse(ports(state));
+        if (!held.isEmpty() && defaults(state)) {
+            State fallback = new State(state.dataDir(), FALLBACK_HTTP_PORT, FALLBACK_INGRESS_PORT,
+                    FALLBACK_METRICS_PORT, FALLBACK_INTERNAL_PORT, FALLBACK_CLUSTER_PORT, state.engine());
+            if (NodeInstall.portsInUse(ports(fallback)).isEmpty()) {
+                state = fallback;
+                if (!json) {
+                    io.out().println("Ports 9393/9394/9395/9396/5701 are in use; using 9493/9494/9495/9496/5751.");
+                }
+            }
+        }
+        if (!NodeInstall.portsInUse(ports(state)).isEmpty()) {
+            throw new CliException("These dev ports are already in use: " + ports(state)
+                    + ". Stop the other node, or pass --http-port/--ingress-port/--metrics-port/--internal-port/--cluster-port.", 2);
+        }
         writeEnv(state);
         NodeService.Target target = NodeService.target(io, layout(state));
         if (!NodeService.running(io, target)) {
@@ -138,6 +161,7 @@ final class DevService {
         } else if (!json) {
             io.out().println("Already running at " + state.url());
         }
+        requireOurHealth(state);
         if (!noSeed) {
             seed(state, json);
         }
@@ -276,25 +300,54 @@ final class DevService {
         ProfileStore.writeAtomically(NodeCommand.mcpFile(io), Json.pretty(mcp) + System.lineSeparator());
     }
 
+    private static List<Integer> ports(State state) {
+        return List.of(state.httpPort(), state.ingressPort(), state.metricsPort(), state.internalPort(),
+                state.clusterPort(), state.clusterPort() + 100);
+    }
+
+    private static boolean defaults(State state) {
+        return state.httpPort() == DEFAULT_HTTP_PORT && state.ingressPort() == DEFAULT_INGRESS_PORT
+                && state.metricsPort() == DEFAULT_METRICS_PORT && state.internalPort() == 9396
+                && state.clusterPort() == 5701;
+    }
+
+    /** The health payload, or null when nothing answers there. */
+    private static JsonNode health(String url) {
+        try {
+            HttpResponse<String> response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build()
+                    .send(HttpRequest.newBuilder(URI.create(url + "/health")).timeout(Duration.ofSeconds(2)).GET().build(),
+                            HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() == 200 ? Json.parse(response.body()) : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     int status(State state, boolean json) {
         NodeService.Target target = NodeService.target(io, layout(state));
         boolean running = NodeService.running(io, target);
         long pid = NodeService.pidOf(io, target);
-        boolean health = NodeCommand.awaitHealth(state.url(), 2);
+        JsonNode health = running ? health(state.url()) : null;
+        boolean ours = health != null && "UP".equals(health.path("status").asText())
+                && "local-dev".equals(health.path("node").asText());
+        String healthText = ours ? "ok" : !running ? "not running"
+                : health == null ? "unreachable" : "another node (" + health.path("node").asText() + ")";
         String nodes = "";
-        try {
-            JsonNode answer = new Api(new Config(state.url(), io.env().getOrDefault("C93_DEV_ADMIN_TOKEN", DEFAULT_TOKEN)))
-                    .get("/v1/nodes");
-            List<String> ids = new ArrayList<>();
-            answer.path("nodes").forEach(node -> ids.add(node.path("id").asText("")));
-            nodes = String.join(", ", ids);
-        } catch (CliException ignored) {
-            // leave blank when the stack is not up yet
+        if (ours) {
+            try {
+                JsonNode answer = new Api(new Config(state.url(), io.env().getOrDefault("C93_DEV_ADMIN_TOKEN", DEFAULT_TOKEN)))
+                        .get("/v1/nodes");
+                List<String> ids = new ArrayList<>();
+                answer.path("nodes").forEach(node -> ids.add(node.path("id").asText("")));
+                nodes = String.join(", ", ids);
+            } catch (CliException ignored) {
+                // leave blank when the stack is not up yet
+            }
         }
         if (json) {
             Output.json(io.out(), Json.object().put("profile", PROFILE).put("url", state.url())
                     .put("ingress", state.ingress()).put("dataDir", state.dataDir().toString())
-                    .put("running", running).put("pid", pid).put("health", health ? "ok" : "unreachable")
+                    .put("running", running).put("pid", pid).put("health", healthText)
                     .put("nodes", nodes));
             return 0;
         }
@@ -305,9 +358,19 @@ final class DevService {
         io.out().println("  Console:        " + state.ingress());
         io.out().println("  Worker engine:  " + state.engine());
         io.out().println("  PID:            " + (pid > 0 ? pid + (running ? " (running)" : "") : "(not running)"));
-        io.out().println("  health:         " + (health ? "ok" : "unreachable"));
+        io.out().println("  health:         " + healthText);
         io.out().println("  nodes:          " + (nodes.isBlank() ? "-" : nodes));
         return 0;
+    }
+
+    /** Fails if the endpoint is answering as some other node; used after a start. */
+    private void requireOurHealth(State state) {
+        JsonNode health = health(state.url());
+        if (health == null || !"local-dev".equals(health.path("node").asText())) {
+            throw new CliException("The dev stack at " + state.url() + " did not answer as local-dev"
+                    + (health == null ? "" : " (it is " + health.path("node").asText() + ")")
+                    + "; see " + state.dataDir().resolve("logs/server.log"));
+        }
     }
 
     int logs(State state, int lines, boolean follow) throws IOException, InterruptedException {

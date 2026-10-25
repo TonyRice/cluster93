@@ -28,7 +28,7 @@ c93 dev reset --yes              # stop and delete the data
 ```
 
 Data lives at `~/.cluster93/dev-data`; the login is the `dev` profile, so it never overwrites a production login.
-`c93 local …` remains a hidden alias for one release.
+`c93 cluster dev …` and `c93 local …` are convenience aliases for the same command.
 
 ## Install
 

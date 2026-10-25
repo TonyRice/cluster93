@@ -183,6 +183,7 @@ class ClusterCommandTest {
         assertThat(run("cluster", "tenants", "--help").out()).contains("Usage: c93 cluster tenants");
         assertThat(run("cluster", "users", "--help").out()).contains("Usage: c93 cluster users");
         assertThat(run("cluster", "audit", "--help").out()).contains("Usage: c93 cluster audit");
+        assertThat(run("cluster", "dev", "--help").out()).contains("Usage: c93 cluster dev");
     }
 
     private static void respond(HttpExchange exchange, String body) throws IOException {

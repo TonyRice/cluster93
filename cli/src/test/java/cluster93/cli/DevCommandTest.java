@@ -64,6 +64,14 @@ class DevCommandTest {
     }
 
     @Test
+    void clusterDevIsTheSameStack() throws Exception {
+        checkout();
+        Result status = run("cluster", "dev", "status");
+        assertThat(status.code()).as(status.err()).isZero();
+        assertThat(status.out()).contains("Cluster93 development stack");
+    }
+
+    @Test
     void localIsTheDeprecatedAliasOfDev() throws Exception {
         checkout();
         Result bare = run("local");

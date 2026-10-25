@@ -4650,7 +4650,7 @@ orchestrator with its own state and login handling.
 3. **`c93 node` is one machine.** Install/uninstall, local lifecycle, `join`, local worker supply, `workers
    release`. It never owns cluster topology.
 4. **`c93 dev` is the checkout stack.** Build, start, seed, status, logs, down, reset. It is not a service-managed
-   install.
+   install. `c93 cluster dev …` is a convenience alias for the same command.
 5. **Moving is not breaking immediately.** Root `tenants`/`users`/`audit`, `node invite`/`revoke`, and
    `c93 profile` remain hidden aliases for one release with a one-line deprecation. `c93 local` becomes a hidden
    alias of `c93 dev`. `c93 node setup` is removed.

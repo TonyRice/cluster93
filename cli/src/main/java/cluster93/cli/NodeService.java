@@ -279,6 +279,7 @@ final class NodeService {
         Path log = target.layout().logDir() != null
                 ? target.layout().logDir().resolve("server.log")
                 : target.layout().dataDir().resolve("server.log");
+        Process process = null;
         try {
             Files.createDirectories(log.getParent());
             ProcessBuilder builder = new ProcessBuilder(NodeCommand.javaBinary(io), "-jar", jar.toString());
@@ -287,7 +288,7 @@ final class NodeService {
             environment.putAll(target.config());
             builder.redirectOutput(log.toFile());
             builder.redirectErrorStream(true);
-            Process process = builder.start();
+            process = builder.start();
             Files.writeString(pidFile(target.layout()), Long.toString(process.pid()));
             if (print) {
                 io.out().println("Started pid " + process.pid() + " (log " + log + ")");
@@ -297,12 +298,25 @@ final class NodeService {
         }
         String base = httpBase(target.config());
         if (NodeCommand.awaitHealth(base, 30)) {
+            if (!process.isAlive()) {
+                throw new CliException("The node exited during startup (is another node already listening on "
+                        + base + "?); last log lines:\n" + tail(log));
+            }
             if (print) {
                 io.out().println("Up at " + base + " (health OK)");
             }
             return 0;
         }
         throw new CliException("The node didn't answer " + base + "/health within 30s; see " + log);
+    }
+
+    private static String tail(Path log) {
+        try {
+            java.util.List<String> lines = Files.readAllLines(log);
+            return String.join("\n", lines.subList(Math.max(0, lines.size() - 12), lines.size()));
+        } catch (IOException e) {
+            return "(no log: " + e.getMessage() + ")";
+        }
     }
 
     private static int directStop(Io io, Target target, boolean print) {

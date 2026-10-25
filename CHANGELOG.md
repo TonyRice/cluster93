@@ -16,6 +16,7 @@ Versions follow [SemVer](https://semver.org/); see [VERSIONING.md](VERSIONING.md
     renderer remains covered by `NodeInstallPhase3Test`.
 
 - **`c93 dev` replaces `scripts/local.sh`, and `node setup` is gone** (D-190, phase 4):
+  - `c93 cluster dev …` is a convenience alias for the same stack; `c93 dev` remains the documented command.
   - `c93 dev up` builds what is missing, starts one checkout node, seeds the `dev` tenant/admin/console, saves the
     login in the `dev` profile, and writes the MCP config. `c93 dev status/logs/down/reset/build/seed/test-examples`
     cover the old dev/master flows; data persists at `~/.cluster93/dev-data` until `reset --yes`.

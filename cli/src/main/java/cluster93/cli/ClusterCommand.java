@@ -22,7 +22,7 @@ import java.util.Map;
 @Command(name = "cluster", description = "Run and manage a Cluster93 cluster: certificates, membership, nodes, tenants, users and audit.",
         subcommands = {ClusterCommand.Init.class, ClusterCommand.Status.class, ClusterCommand.Nodes.class,
                 ClusterCommand.Doctor.class, ClusterCommand.Invite.class, ClusterCommand.Revoke.class,
-                TenantsCommand.class, UsersCommand.class, AuditCommand.class})
+                DevCommand.class, TenantsCommand.class, UsersCommand.class, AuditCommand.class})
 final class ClusterCommand extends Base {
 
     @Override

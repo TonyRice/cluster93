@@ -110,7 +110,7 @@ class MainHelpTest {
     void theClusterGroupListsTheMovedAdminCommands() {
         String cluster = run("cluster", "--help");
         assertThat(cluster).contains("tenants").contains("users").contains("audit")
-                .contains("status").contains("doctor").contains("invite").contains("revoke");
+                .contains("status").contains("doctor").contains("invite").contains("revoke").contains("dev");
     }
 
     @Test
