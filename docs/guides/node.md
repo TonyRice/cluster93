@@ -411,4 +411,4 @@ node socket.
 
 - [The `c93` CLI](cli.md)
 - [Running a cluster: node certificates](cluster.md)
-- [Quickstart: a local node with Docker](../../README.md#quickstart)
+- [Quickstart: a local three-node cluster with Docker](../../README.md#three-node-docker-cluster)
